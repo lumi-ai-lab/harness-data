@@ -11,6 +11,9 @@
 __pycache__/
 *.py[cod]
 
+# Local Claude hook state
+.claude/hooks/state/
+
 # Local logs and temp files
 *.log
 *.tmp

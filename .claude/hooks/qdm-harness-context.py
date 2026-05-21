@@ -133,7 +133,9 @@ def build_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: 
     parts.append("- needs_clarification=false\n")
     parts.append("- 必须走 qdm-cmr-cli，禁止把泛问经营概览路由到 qdm-indicators-cli。\n")
     parts.append("- 必须允许多次 CMR 查询，不能只做一句话摘要。\n")
-    parts.append("- 推荐至少查询 overview、indicators、tree --values，并补充 area、category、trend。\n")
+    parts.append("- 必须完成 overview、indicators、tree --values、area、category、trend 六个模块的成功取数。\n")
+    parts.append("- 完成六个模块后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再生成最终报告。\n")
+    parts.append("- 在 signal 成功并收到 `spec/business-report.md` 完整注入前，禁止输出最终报告正文。\n")
     parts.append("- 对支持 `--ai` 的 qdm-cmr-cli 查询默认追加 `--ai`；`tree --values` 当前不追加。\n")
     parts.append("- 章节顺序固定，按模板输出 1 到 9。\n")
     parts.append("- 模板显式规定的章节、指标归属、指标组和表格结构优先级高于模型自由组织。\n")
@@ -152,6 +154,7 @@ def build_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: 
     parts.append('"$QDM_CMR_CLI" report business area <cli_filter> --ai\n')
     parts.append('"$QDM_CMR_CLI" report business category <cli_filter> --ai\n')
     parts.append('"$QDM_CMR_CLI" report business trend <cli_filter> --ai\n')
+    parts.append("python3 .claude/hooks/before-report-signal.py business-overview\n")
     parts.append("```\n")
     parts.append("其中 `<cli_filter>` 使用时间解析 JSON 中的 `cli_filter`。\n")
 

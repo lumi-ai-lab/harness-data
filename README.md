@@ -13,6 +13,7 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 - `intents/`：意图契约与槽位归一化规则。
 - `routing/`：CLI 路由规则。
 - `playbooks/`：分析流程与必要证据来源。
+- `spec/`：经营分析指标归属和业务知识权威说明。
 - `templates/`：报告骨架与输出约束。
 
 ## 最小可用版本边界
@@ -21,6 +22,7 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 - 命中该意图后，智能体必须使用 `qdm-cmr-cli`。
 - 报告结构固定，具体数值必须来自 CLI 输出。
 - 模板明确规定的章节、指标归属、指标组和表格结构，优先级高于模型自行组织的结构。
+- 六个必需模块可并行取数；全部成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再输出最终报告。
 - 缺失值应直接省略，不要单独列出。
 
 ## 运行约束处理流程示例：“昨天的经营情况”
@@ -402,17 +404,21 @@ QDM_CAS_CLI=/Users/pengmd/c/qdm/cas-cli/dist/cas-cli
 +---------------+             +---------------+
 ```
 
-推荐命令骨架：
+推荐并行命令骨架：
 
 ```bash
 source config/qdm-cli-paths.env
-"$QDM_CMR_CLI" report business overview --date 2026-05-20 --ai
-"$QDM_CMR_CLI" report business indicators --date 2026-05-20 --ai
-"$QDM_CMR_CLI" report business tree --values --date 2026-05-20
-"$QDM_CMR_CLI" report business area --date 2026-05-20 --ai
-"$QDM_CMR_CLI" report business category --date 2026-05-20 --ai
-"$QDM_CMR_CLI" report business trend --date 2026-05-20 --ai
+
+"$QDM_CMR_CLI" report business overview --date 2026-05-20 --ai &
+"$QDM_CMR_CLI" report business indicators --date 2026-05-20 --ai &
+"$QDM_CMR_CLI" report business tree --values --date 2026-05-20 &
+"$QDM_CMR_CLI" report business area --date 2026-05-20 --ai &
+"$QDM_CMR_CLI" report business category --date 2026-05-20 --ai &
+"$QDM_CMR_CLI" report business trend --date 2026-05-20 --ai &
+wait
 ```
+
+这六个必要模块没有业务顺序依赖，可以并行执行；只有 `wait` 确认整体成功后，才执行 `python3 .claude/hooks/before-report-signal.py business-overview`。`table` 仍然只是可选补充，不进入六模块门禁。
 
 各模块分工：
 
