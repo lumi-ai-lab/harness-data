@@ -39,6 +39,11 @@ BUSINESS_OVERVIEW_RE = re.compile(
     r"(经营|业务表现|整体表现|营业|销售).*(情况|分析|表现|报告|复盘|概览|怎么样)"
     r"|((情况|表现|报告|复盘|概览|怎么样).*(经营|业务表现|整体表现|营业|销售))"
 )
+STORE_OVERVIEW_RE = re.compile(
+    r"(门店|开店|闭店|坪效|人效|门店利润|门店净利润|门店管理|门店运营|门店规模|门店健康)"
+    r".*(情况|分析|表现|报告|复盘|概览|怎么样|效率|利润|规模|健康度)?"
+    r"|((情况|表现|报告|复盘|概览|怎么样).*(门店|开店|闭店|坪效|人效|门店利润|门店净利润|门店管理|门店运营|门店规模|门店健康))"
+)
 
 
 def month_delta(date_str: str, delta: int) -> str | None:
@@ -121,6 +126,19 @@ def append_file(parts: list[str], title: str, path: Path) -> None:
         parts.append(path.read_text(encoding="utf-8"))
 
 
+def build_store_filter(date_info: dict[str, object]) -> dict[str, object]:
+    cli_filter = str(date_info.get("cli_filter") or "")
+    store_filter = {
+        **date_info,
+        "cli_filter": f"{cli_filter} --area-type 管理区域 --area CN00 --category-type 大分类 --category 00",
+        "area_label": "全国（不含港澳）",
+        "area_defaulted": True,
+        "category_label": "全品类",
+        "category_fixed": True,
+    }
+    return store_filter
+
+
 def build_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: dict[str, object]) -> str:
     parts: list[str] = []
     parts.append("# QDM 经营分析深度报告上下文\n\n")
@@ -136,6 +154,8 @@ def build_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: 
     parts.append("- 必须完成 overview、indicators、tree --values、area、category、trend 六个模块的成功取数。\n")
     parts.append("- 完成六个模块后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再生成最终报告。\n")
     parts.append("- 在 signal 成功并收到 `spec/business-report.md` 完整注入前，禁止输出最终报告正文。\n")
+    parts.append("- 最终报告必须直接作为本轮助手回复正文输出，禁止创建、写入或保存任何报告文件。\n")
+    parts.append("- 除非用户明确要求导出文件，否则不得使用 Write/Edit/重定向/tee/heredoc 等方式把报告写入 .md、output/ 或其他本地文件。\n")
     parts.append("- 对支持 `--ai` 的 qdm-cmr-cli 查询默认追加 `--ai`；`tree --values` 当前不追加。\n")
     parts.append("- 章节顺序固定，按模板输出 1 到 9。\n")
     parts.append("- 模板显式规定的章节、指标归属、指标组和表格结构优先级高于模型自由组织。\n")
@@ -166,19 +186,66 @@ def build_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: 
     return "".join(parts)
 
 
+def build_store_context(prompt: str, project_dir: Path, harness_dir: Path, date_info: dict[str, object]) -> str:
+    store_filter = build_store_filter(date_info)
+    parts: list[str] = []
+    parts.append("# QDM 门店管理深度报告上下文\n\n")
+    parts.append("本轮用户 prompt 命中 `store_overview`。这不是普通摘要，而是固定结构的门店管理深度报告。\n\n")
+    parts.append(f"时间与过滤条件解析 JSON：`{json.dumps(store_filter, ensure_ascii=False, separators=(',', ':'))}`\n\n")
+    parts.append("必须使用解析出的 CLI 过滤条件执行 CMR 查询。若用户未给时间，默认昨天；若用户未给区域，默认全国（不含港澳）；品类固定为全品类。\n\n")
+    parts.append("强制约束：\n\n")
+    parts.append("- query_type=store_overview\n")
+    parts.append("- report=store\n")
+    parts.append("- needs_clarification=false\n")
+    parts.append("- 必须走 qdm-cmr-cli，禁止把门店管理报告路由到 qdm-indicators-cli。\n")
+    parts.append("- 必须使用 `qdm-cmr-cli report store overview --ai` 作为主取数入口。\n")
+    parts.append("- 默认全国全品类场景只要求完成 `overview` 必需模块；不要主动拆开调用 `indicators`、`area`、`category`、`trend`。\n")
+    parts.append("- 只有在用户指定非全国区域、overview 口径异常、区域子指标明细不足或需要校验图谱时，才允许补充 `inspect`、`tree --values` 或 `table`。\n")
+    parts.append("- 完成 `overview` 后，必须先执行 `python3 .claude/hooks/before-report-signal.py store-overview`，再生成最终报告。\n")
+    parts.append("- 在 signal 成功并收到 `spec/store-report.md` 完整注入前，禁止输出最终报告正文。\n")
+    parts.append("- 最终报告必须直接作为本轮助手回复正文输出，禁止创建、写入或保存任何报告文件。\n")
+    parts.append("- 除非用户明确要求导出文件，否则不得使用 Write/Edit/重定向/tee/heredoc 等方式把报告写入 .md、output/ 或其他本地文件。\n")
+    parts.append("- 品类口径固定为全品类，不得生成品类下钻分析。\n")
+    parts.append("- 区域口径默认全国（不含港澳），区域支持下钻但必须以 CLI 返回为准。\n")
+    parts.append("- 章节顺序固定，按模板输出 1 到 9。\n")
+    parts.append("- 模板显式规定的章节、指标归属、指标组和表格结构优先级高于模型自由组织。\n")
+    parts.append("- 如果模板有固定指标清单，报告必须优先遵循该清单，不得随意移动指标到其他章节。\n")
+    parts.append("- 模板未覆盖的 CLI 返回指标，才允许按语义补充到最匹配章节。\n")
+    parts.append("- 诊断格式固定为“现象 -> 影响 -> 推断”。\n")
+    parts.append("- 数值、同比、环比、排名、阈值必须来自 CLI 输出。\n")
+    parts.append("- 推断只能基于已返回数据做有限判断。\n")
+    parts.append("CLI 路径配置：先读取当前项目的 `config/qdm-cli-paths.env`，使用其中的 `$QDM_CMR_CLI`。\n\n")
+    parts.append("建议命令骨架：\n\n")
+    parts.append("```bash\n")
+    parts.append("source config/qdm-cli-paths.env\n")
+    parts.append('"$QDM_CMR_CLI" report store overview <cli_filter> --ai\n')
+    parts.append("python3 .claude/hooks/before-report-signal.py store-overview\n")
+    parts.append("```\n")
+    parts.append("其中 `<cli_filter>` 使用时间与过滤条件解析 JSON 中的 `cli_filter`。\n")
+
+    append_file(parts, "Intent Spec", harness_dir / "intents" / "store-overview.md")
+    append_file(parts, "Routing Rules", harness_dir / "routing" / "qdm-cli-routing.md")
+    append_file(parts, "Analysis Playbook", harness_dir / "playbooks" / "store-overview-analysis.md")
+    append_file(parts, "Report Template", harness_dir / "templates" / "store-overview-report.md")
+
+    return "".join(parts)
+
+
 def main() -> int:
     raw = sys.stdin.read()
     prompt = parse_prompt(raw)
     if not prompt:
         return 0
-    if not BUSINESS_OVERVIEW_RE.search(prompt):
-        return 0
-
     project_dir = resolve_project_dir()
     harness_dir = resolve_harness_dir(project_dir)
     current_date = os.environ.get("QDM_HARNESS_CURRENT_DATE") or dt.date.today().isoformat()
     date_info = build_date_info(prompt, current_date)
-    context = build_context(prompt, project_dir, harness_dir, date_info)
+    if STORE_OVERVIEW_RE.search(prompt):
+        context = build_store_context(prompt, project_dir, harness_dir, date_info)
+    elif BUSINESS_OVERVIEW_RE.search(prompt):
+        context = build_context(prompt, project_dir, harness_dir, date_info)
+    else:
+        return 0
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",

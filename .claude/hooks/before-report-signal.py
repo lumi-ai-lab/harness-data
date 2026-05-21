@@ -5,10 +5,11 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] != "business-overview":
-        sys.stderr.write("usage: before-report-signal.py business-overview\n")
+    allowed_reports = {"business-overview", "store-overview"}
+    if len(sys.argv) != 2 or sys.argv[1] not in allowed_reports:
+        sys.stderr.write("usage: before-report-signal.py business-overview|store-overview\n")
         return 2
-    sys.stdout.write("QDM_BEFORE_REPORT_SIGNAL business-overview\n")
+    sys.stdout.write(f"QDM_BEFORE_REPORT_SIGNAL {sys.argv[1]}\n")
     return 0
 
 

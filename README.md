@@ -1,6 +1,6 @@
 # QDM 运行约束数据
 
-本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前第一个最小可用版本覆盖泛经营概览类问题，例如“查看昨天的经营情况”，并将其稳定转换为固定结构的深度经营分析报告。
+本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前版本覆盖泛经营概览类问题和门店管理类问题，例如“查看昨天的经营情况”“昨天的门店管理情况”，并将其稳定转换为固定结构的深度分析报告。
 
 运行时行为由 `/Users/pengmd/c/qdm/harness-data/.claude/hooks/qdm-harness-context.py` 实现。
 
@@ -13,16 +13,17 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 - `intents/`：意图契约与槽位归一化规则。
 - `routing/`：CLI 路由规则。
 - `playbooks/`：分析流程与必要证据来源。
-- `spec/`：经营分析指标归属和业务知识权威说明。
+- `spec/`：报告指标归属和业务知识权威说明。
 - `templates/`：报告骨架与输出约束。
 
 ## 最小可用版本边界
 
-- 仅覆盖泛经营概览类问题。
+- 覆盖泛经营概览类问题和门店管理类问题。
 - 命中该意图后，智能体必须使用 `qdm-cmr-cli`。
 - 报告结构固定，具体数值必须来自 CLI 输出。
 - 模板明确规定的章节、指标归属、指标组和表格结构，优先级高于模型自行组织的结构。
-- 六个必需模块可并行取数；全部成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再输出最终报告。
+- 经营分析六个必需模块可并行取数；全部成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再输出最终报告。
+- 门店管理默认只要求 `report store overview --ai`；成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py store-overview`，再输出最终报告。
 - 缺失值应直接省略，不要单独列出。
 
 ## 运行约束处理流程示例：“昨天的经营情况”

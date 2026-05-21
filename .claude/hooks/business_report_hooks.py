@@ -10,6 +10,18 @@ from typing import Any
 
 REPORT_NAME = "business-overview"
 REQUIRED_MODULES = ("overview", "indicators", "tree", "area", "category", "trend")
+REPORT_CONFIGS: dict[str, dict[str, Any]] = {
+    "business-overview": {
+        "report": "business",
+        "required_modules": REQUIRED_MODULES,
+        "spec_path": Path("spec/business-report.md"),
+    },
+    "store-overview": {
+        "report": "store",
+        "required_modules": ("overview",),
+        "spec_path": Path("spec/store-report.md"),
+    },
+}
 
 
 def resolve_project_dir() -> Path:
@@ -75,6 +87,36 @@ def extract_business_module(command: str) -> str | None:
     return modules[0] if modules else None
 
 
+def extract_report_modules(command: str, report_name: str) -> list[str]:
+    config = REPORT_CONFIGS.get(report_name)
+    if not config:
+        return []
+    report = str(config["report"])
+    required_modules = tuple(config["required_modules"])
+    normalized = normalize_command(command)
+    lowered = normalized.lower()
+    module_pattern = "|".join(re.escape(module) for module in required_modules)
+    matches = list(re.finditer(rf"\breport\s+{re.escape(report)}\s+({module_pattern})\b", lowered))
+    modules: list[str] = []
+    for index, match in enumerate(matches):
+        module = match.group(1)
+        segment_end = matches[index + 1].start() if index + 1 < len(matches) else len(lowered)
+        segment = lowered[match.start() : segment_end]
+        if module == "tree" and "--values" not in segment:
+            continue
+        if module not in modules:
+            modules.append(module)
+    return modules
+
+
+def extract_signal_report(command: str) -> str | None:
+    normalized = " ".join(command.split())
+    for report_name in REPORT_CONFIGS:
+        if f"before-report-signal.py {report_name}" in normalized:
+            return report_name
+    return None
+
+
 def load_state(project_dir: Path, session_id: str) -> dict[str, Any]:
     path = state_path(project_dir, session_id)
     if not path.is_file():
@@ -132,6 +174,17 @@ def record_module(payload: dict[str, Any], module: str) -> bool:
     return True
 
 
-def missing_modules(report_state: dict[str, Any]) -> list[str]:
+def record_report_module(payload: dict[str, Any], report_name: str, module: str) -> bool:
+    report_state = get_report_state(payload, report_name)
+    modules = report_state.setdefault("recorded_modules", [])
+    if module in modules:
+        return False
+    modules.append(module)
+    return True
+
+
+def missing_modules(report_state: dict[str, Any], report_name: str = REPORT_NAME) -> list[str]:
+    config = REPORT_CONFIGS.get(report_name, REPORT_CONFIGS[REPORT_NAME])
+    required_modules = tuple(config["required_modules"])
     recorded = set(report_state.get("recorded_modules", []))
-    return [module for module in REQUIRED_MODULES if module not in recorded]
+    return [module for module in required_modules if module not in recorded]
