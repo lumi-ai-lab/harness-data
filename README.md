@@ -296,6 +296,7 @@ depth: deep_report
 | - needs_clarification=false                       |
 | - 必须走 qdm-cmr-cli                              |
 | - 推荐查询 overview/indicators/tree/area/...      |
+| - 支持 --ai 的 CMR 查询默认使用 AI 压缩输出       |
 | - 章节顺序固定为 1 到 9                           |
 | - 数值必须来自 CLI                                |
 +-------------------------+-------------------------+
@@ -405,12 +406,12 @@ QDM_CAS_CLI=/Users/pengmd/c/qdm/cas-cli/dist/cas-cli
 
 ```bash
 source config/qdm-cli-paths.env
-"$QDM_CMR_CLI" report business overview --date 2026-05-20
-"$QDM_CMR_CLI" report business indicators --date 2026-05-20
+"$QDM_CMR_CLI" report business overview --date 2026-05-20 --ai
+"$QDM_CMR_CLI" report business indicators --date 2026-05-20 --ai
 "$QDM_CMR_CLI" report business tree --values --date 2026-05-20
-"$QDM_CMR_CLI" report business area --date 2026-05-20
-"$QDM_CMR_CLI" report business category --date 2026-05-20
-"$QDM_CMR_CLI" report business trend --date 2026-05-20
+"$QDM_CMR_CLI" report business area --date 2026-05-20 --ai
+"$QDM_CMR_CLI" report business category --date 2026-05-20 --ai
+"$QDM_CMR_CLI" report business trend --date 2026-05-20 --ai
 ```
 
 各模块分工：
@@ -554,7 +555,8 @@ config/qdm-cli-paths.env:
     |
     v
 qdm-cmr-cli:
-  report business overview/indicators/tree/area/category/trend
+  report business overview/indicators/area/category/trend --ai
+  report business tree --values
     |
     v
 playbooks/business-overview-analysis.md:

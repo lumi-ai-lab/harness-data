@@ -7,13 +7,13 @@
 推荐命令族：
 
 ```bash
-qdm-cmr-cli report business overview --date <YYYY-MM-DD>
-qdm-cmr-cli report business indicators --date <YYYY-MM-DD>
-qdm-cmr-cli report business area --date <YYYY-MM-DD>
-qdm-cmr-cli report business category --date <YYYY-MM-DD>
-qdm-cmr-cli report business trend --date <YYYY-MM-DD>
+qdm-cmr-cli report business overview --date <YYYY-MM-DD> --ai
+qdm-cmr-cli report business indicators --date <YYYY-MM-DD> --ai
+qdm-cmr-cli report business area --date <YYYY-MM-DD> --ai
+qdm-cmr-cli report business category --date <YYYY-MM-DD> --ai
+qdm-cmr-cli report business trend --date <YYYY-MM-DD> --ai
 qdm-cmr-cli report business tree --values --date <YYYY-MM-DD>
-qdm-cmr-cli table --report business --date <YYYY-MM-DD> ...
+qdm-cmr-cli table --report business --date <YYYY-MM-DD> ... --ai
 ```
 
 ## 禁止路由
@@ -34,4 +34,5 @@ qdm-cmr-cli table --report business --date <YYYY-MM-DD> ...
 - 至少查询 `overview`、`indicators`、`tree --values`。
 - 为支撑三大拆解线，优先补充 `area`、`category`、`trend`。
 - 只有需要更细颗粒度佐证时才调用 `table`。
+- 对支持 `--ai` 的 CMR 查询，默认使用 AI 压缩输出以节省上下文 token；`tree --values` 当前不在支持清单内，继续使用默认 JSON 输出。
 - 对 CLI 未返回的数据，不得自行估算。

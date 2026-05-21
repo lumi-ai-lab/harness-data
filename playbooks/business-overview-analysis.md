@@ -12,7 +12,7 @@
 
 ## 必要查询模块
 
-使用 `qdm-cmr-cli report business`，按用户时间口径补充日期、周或月过滤。
+使用 `qdm-cmr-cli report business`，按用户时间口径补充日期、周或月过滤。对支持 `--ai` 的模块默认追加 `--ai`，降低上下文 token 消耗；`tree --values` 保持默认 JSON 输出。
 
 - `overview`: 全局概览，确认报告对象、时间口径和整体表现。
 - `indicators`: 核心指标总览，提取主要指标值、同比、环比、阈值或达成情况。
