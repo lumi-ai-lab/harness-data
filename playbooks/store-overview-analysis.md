@@ -9,7 +9,7 @@
 1. 门店规模与健康度
 2. 门店盈利与运营效率
 
-最终报告版式、章节顺序、指标归属和表格结构以 `templates/store-overview-report.md` 为准。
+最终报告版式、章节顺序和表格结构在 signal 后由二阶段注入的 template 决定。
 
 ## 适用边界
 
@@ -40,7 +40,7 @@
 
 ## 查询原则
 
-默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <cli_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑 `templates/store-overview-report.md` 和 `templates/store-demo.md` 的核心报告生成。
+默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <cli_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑核心报告取数。`overview` 成功后，下一步必须立即执行 `before-report-signal.py store-overview`。
 
 Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tree --values`、`indicators`、`area`、`trend` 或 `table`。只有在以下情况才允许补充探索：
 
@@ -52,7 +52,7 @@ Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tre
 
 ## 推荐查询方式
 
-使用 `qdm-cmr-cli report store overview --ai` 作为门店管理报表主取数入口。该命令一次返回 compact 的 `indicators`、`area`、`category`、`trend`；对“昨天的门店管理情况（全品类、全国维度）”这类报告，已经可以覆盖 `templates/store-overview-report.md` 和 `templates/store-demo.md` 中需要的所有核心指标值、同比、环比、区域和趋势基础证据。
+使用 `qdm-cmr-cli report store overview --ai` 作为门店管理报表主取数入口。该命令一次返回 compact 的 `indicators`、`area`、`category`、`trend`；对“昨天的门店管理情况（全品类、全国维度）”这类报告，已经可以覆盖核心指标值、同比、环比、区域和趋势基础证据。
 
 默认推荐命令：
 
@@ -213,8 +213,11 @@ source config/qdm-cli-paths.env
 
 ## 报告生成约束
 
-- 最终报告必须使用 `templates/store-overview-report.md`。
-- 章节顺序保持 1 到 9。
+- `overview` 成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py store-overview`。
+- `overview` 成功后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- signal 前不读取、不打开、不猜测、不使用 template。
+- 最终报告必须使用 signal 后二阶段注入的 template。
+- 章节顺序保持 signal 后 template 的结构。
 - 第二章只展示营业门店数、门店净利润两项一级核心指标。
 - 第三章只放门店规模与健康度指标。
 - 第四章只放门店盈利与运营效率指标。

@@ -24,26 +24,28 @@ def load_module(name: str, path: Path):
     return module
 
 
-hooks = load_module("store_report_hooks", HOOKS_DIR / "business_report_hooks.py")
+hooks = load_module("member_report_hooks", HOOKS_DIR / "business_report_hooks.py")
 
 
-class StoreReportHookTests(unittest.TestCase):
+class MemberReportHookTests(unittest.TestCase):
     def tearDown(self) -> None:
         if STATE_DIR.exists():
             shutil.rmtree(STATE_DIR.parent, ignore_errors=True)
 
-    def test_extract_store_module(self) -> None:
+    def test_extract_member_module(self) -> None:
         command = (
-            'source config/qdm-cli-paths.env && "$QDM_CMR_CLI" report store overview '
-            "--date 2026-05-21 --area-type 管理区域 --area CN00 "
-            "--category-type 大分类 --category 00 --ai"
+            'source config/qdm-cli-paths.env && "$QDM_CMR_CLI" report user overview '
+            "--date 2026-05-21 --area-type 管理区域 --area CN00 --ai"
         )
-        self.assertEqual(hooks.extract_report_modules(command, "store-overview"), ["overview"])
-        self.assertEqual(hooks.extract_report_modules(command, "business-overview"), [])
-        self.assertEqual(hooks.extract_signal_report("python3 .claude/hooks/before-report-signal.py store-overview"), "store-overview")
+        self.assertEqual(hooks.extract_report_modules(command, "member-overview"), ["overview"])
+        self.assertEqual(hooks.extract_report_modules(command, "store-overview"), [])
+        self.assertEqual(
+            hooks.extract_signal_report("python3 .claude/hooks/before-report-signal.py member-overview"),
+            "member-overview",
+        )
 
-    def test_posttool_records_store_overview_and_injects_template_after_signal(self) -> None:
-        session_id = "sess-store-1"
+    def test_posttool_records_member_overview_and_injects_template_after_signal(self) -> None:
+        session_id = "sess-member-1"
         env = os.environ.copy()
         env["CLAUDE_PROJECT_DIR"] = str(ROOT)
 
@@ -63,41 +65,41 @@ class StoreReportHookTests(unittest.TestCase):
             )
 
         run_posttool(
-            '"$QDM_CMR_CLI" report store overview --date 2026-05-21 '
-            "--area-type 管理区域 --area CN00 --category-type 大分类 --category 00 --ai"
+            '"$QDM_CMR_CLI" report user overview --date 2026-05-21 '
+            "--area-type 管理区域 --area CN00 --ai"
         )
 
         signal = subprocess.run(
-            [sys.executable, str(HOOKS_DIR / "before-report-signal.py"), "store-overview"],
+            [sys.executable, str(HOOKS_DIR / "before-report-signal.py"), "member-overview"],
             text=True,
             capture_output=True,
             env=env,
             check=True,
         )
-        self.assertEqual(signal.stdout.strip(), "QDM_BEFORE_REPORT_SIGNAL store-overview")
+        self.assertEqual(signal.stdout.strip(), "QDM_BEFORE_REPORT_SIGNAL member-overview")
 
-        first_signal = run_posttool("python3 .claude/hooks/before-report-signal.py store-overview")
-        self.assertIn("门店管理深度报告模板", first_signal.stdout)
-        self.assertIn("## Template: templates/store-overview-report.md", first_signal.stdout)
-        self.assertNotIn("门店管理指标归属规范", first_signal.stdout)
-        self.assertNotIn("## Spec: spec/store-report.md", first_signal.stdout)
+        first_signal = run_posttool("python3 .claude/hooks/before-report-signal.py member-overview")
+        self.assertIn("用户运营深度报告模板", first_signal.stdout)
+        self.assertIn("## Template: templates/member-overview-report.md", first_signal.stdout)
+        self.assertNotIn("用户运营指标归属规范", first_signal.stdout)
+        self.assertNotIn("## Spec: spec/member-report.md", first_signal.stdout)
 
         state_path = hooks.state_path(ROOT, session_id)
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        report_state = state["reports"]["store-overview"]
+        report_state = state["reports"]["member-overview"]
         self.assertEqual(report_state["recorded_modules"], ["overview"])
         self.assertTrue(report_state["spec_injected"])
         self.assertTrue(report_state["signal_seen"])
         self.assertEqual(report_state["last_signal_missing"], [])
 
-    def test_posttool_reports_missing_store_overview_before_signal(self) -> None:
-        session_id = "sess-store-2"
+    def test_posttool_reports_missing_member_overview_before_signal(self) -> None:
+        session_id = "sess-member-2"
         env = os.environ.copy()
         env["CLAUDE_PROJECT_DIR"] = str(ROOT)
         payload = {
             "session_id": session_id,
             "tool_name": "Bash",
-            "tool_input": {"command": "python3 .claude/hooks/before-report-signal.py store-overview"},
+            "tool_input": {"command": "python3 .claude/hooks/before-report-signal.py member-overview"},
         }
         signal = subprocess.run(
             [sys.executable, str(HOOKS_DIR / "qdm-business-report-posttool.py")],
@@ -112,7 +114,7 @@ class StoreReportHookTests(unittest.TestCase):
 
         state_path = hooks.state_path(ROOT, session_id)
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        report_state = state["reports"]["store-overview"]
+        report_state = state["reports"]["member-overview"]
         self.assertFalse(report_state["spec_injected"])
         self.assertEqual(report_state["last_signal_missing"], ["overview"])
 

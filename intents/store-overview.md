@@ -41,8 +41,10 @@ depth: deep_report
 - 品类固定为全品类，CLI 过滤条件使用 `--category-type 大分类 --category 00`。
 - 必须使用 `qdm-cmr-cli report store overview --ai` 作为主取数入口。
 - 默认全国全品类场景只要求完成 `overview` 必需模块；只有 `overview` 不足以支撑用户指定口径或区域下钻时，才允许补充 `inspect`、`tree --values` 或 `table`。
-- `overview` 成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py store-overview`，收到 spec 注入后再输出最终报告。
-- 必须按模板固定章节输出。
+- spec 已在取数前注入，必须用于取数和业务规则判断；signal 前不读取、不使用 template。
+- `overview` 成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py store-overview`，收到 template 二阶段注入后再输出最终报告。
+- 取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- 最终报告必须等 signal 后收到 template，再按 template 固定章节输出。
 - 诊断可以做有限推断，但必须绑定已返回数据。
 - 不得编造数值、排名、环比、同比、阈值或原因。
 

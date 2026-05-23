@@ -1,6 +1,6 @@
 # QDM 运行约束数据
 
-本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前版本覆盖泛经营概览类问题和门店管理类问题，例如“查看昨天的经营情况”“昨天的门店管理情况”，并将其稳定转换为固定结构的深度分析报告。
+本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前版本覆盖泛经营概览类问题、门店管理类问题和用户运营类问题，例如“查看昨天的经营情况”“昨天的门店管理情况”“查看昨天用户情况”，并将其稳定转换为固定结构的深度分析报告。
 
 运行时行为由 `/Users/pengmd/c/qdm/harness-data/.claude/hooks/qdm-harness-context.py` 实现。
 
@@ -18,12 +18,14 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 
 ## 最小可用版本边界
 
-- 覆盖泛经营概览类问题和门店管理类问题。
+- 覆盖泛经营概览类问题、门店管理类问题和用户运营类问题。
 - 命中该意图后，智能体必须使用 `qdm-cmr-cli`。
 - 报告结构固定，具体数值必须来自 CLI 输出。
-- 模板明确规定的章节、指标归属、指标组和表格结构，优先级高于模型自行组织的结构。
-- 经营分析六个必需模块可并行取数；全部成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，再输出最终报告。
-- 门店管理默认只要求 `report store overview --ai`；成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py store-overview`，再输出最终报告。
+- template 只在 signal 后二阶段注入；signal 前不需要读取或使用 template。
+- 经营分析六个必需模块可并行取数；spec 在取数前注入；全部成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`，收到 template 二阶段注入后再输出最终报告。
+- 门店管理默认只要求 `report store overview --ai`；spec 在取数前注入；成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py store-overview`，收到 template 二阶段注入后再输出最终报告。
+- 用户运营默认只要求 `report user overview --ai`；spec 在取数前注入；成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`，收到 template 二阶段注入后再输出最终报告；用户报表不支持品类过滤。
+- 必需取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
 - 缺失值应直接省略，不要单独列出。
 
 ## 运行约束处理流程示例：“昨天的经营情况”
@@ -66,8 +68,11 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 | 包含:                    |
 | - 时间过滤条件           |
 | - 意图规则               |
-| - CLI 路由规则           |
+| - 命中的单 report 路由   |
+| - 命中的单 report spec   |
 | - 分析 playbook          |
+| 不包含:                  |
+| - 其他 report 路由       |
 | - 报告 template          |
 +------------+-------------+
              |
@@ -77,8 +82,10 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 |                          |
 | 1. 读取 CLI 路径配置     |
 | 2. 调用 qdm-cmr-cli      |
-| 3. 汇总 CLI 返回证据     |
-| 4. 按模板输出 1-9 章     |
+| 3. 立即执行 before-report|
+|    signal                |
+| 4. 收到 template         |
+| 5. 按模板输出 1-9 章     |
 +--------------------------+
 ```
 
@@ -99,7 +106,14 @@ harness-data/
 |   +-- 作用:
 |       当前运行约束的入口脚本。
 |       它负责读取用户提示词、识别经营概览意图、解析时间、
-|       读取四类规格文件，并把完整上下文返回给 Claude Code。
+|       读取 intent、命中的单 report 路由和 playbook，
+|       并把轻量取数上下文返回给 Claude Code。
+|
++-- .claude/hooks/qdm-business-report-posttool.py
+|   |
+|   +-- 作用:
+|       监听 Bash 命令，记录已完成的 CLI 模块。
+|       before-report-signal 满足门禁后，二阶段注入 template。
 |
 +-- config/qdm-cli-paths.env
 |   |
@@ -113,7 +127,7 @@ harness-data/
 |       定义什么样的用户问题算 business_overview。
 |       也定义固定意图字段、时间解析原则和非命中边界。
 |
-+-- routing/qdm-cli-routing.md
++-- routing/business-overview.md
 |   |
 |   +-- 作用:
 |       定义命中 business_overview 后应该走哪个 CLI。
@@ -306,12 +320,16 @@ depth: deep_report
                           |
                           v
 +---------------------------------------------------+
-| append_file(): 追加四类规格文件                   |
+| append_file(): 追加取数阶段必要文件               |
 |                                                   |
 | 1. intents/business-overview.md                   |
-| 2. routing/qdm-cli-routing.md                     |
-| 3. playbooks/business-overview-analysis.md        |
-| 4. templates/business-overview-report.md          |
+| 2. routing/business-overview.md                   |
+| 3. spec/business-report.md                        |
+| 4. playbooks/business-overview-analysis.md        |
+|                                                   |
+| template 不在此阶段注入。                         |
+| 它由 PostToolUse 在 before-report-signal          |
+| 成功后按 report 二阶段注入。                      |
 +-------------------------+-------------------------+
                           |
                           v
@@ -335,7 +353,7 @@ depth: deep_report
 
 ### 7. Claude 收到上下文后的 CLI 路由
 
-Claude 收到 `additionalContext` 后，应按 `routing/qdm-cli-routing.md` 的规则选择 CLI。
+Claude 收到 `additionalContext` 后，应按已命中的单 report 路由文件选择 CLI。以经营分析为例，hook 只注入 `routing/business-overview.md`。
 
 ```text
 +------------------------------+
@@ -345,7 +363,7 @@ Claude 收到 `additionalContext` 后，应按 `routing/qdm-cli-routing.md` 的�
                 |
                 v
 +------------------------------+
-| routing/qdm-cli-routing.md   |
+| routing/business-overview.md |
 |                              |
 | 允许: qdm-cmr-cli            |
 | 禁止: qdm-indicators-cli     |
@@ -419,7 +437,7 @@ source config/qdm-cli-paths.env
 wait
 ```
 
-这六个必要模块没有业务顺序依赖，可以并行执行；只有 `wait` 确认整体成功后，才执行 `python3 .claude/hooks/before-report-signal.py business-overview`。`table` 仍然只是可选补充，不进入六模块门禁。
+这六个必要模块没有业务顺序依赖，可以并行执行；`wait` 确认整体成功后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`。在 signal 前禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。`table` 仍然只是可选补充，不进入六模块门禁。
 
 各模块分工：
 
@@ -460,13 +478,13 @@ CLI 返回证据
 
 - 销售额、客数、客单价固定归入用户渗透维度。
 - 准确率、准点率、合格率固定归入供应链维度。
-- 模板明确规定的指标归属高于模型自由判断。
+- signal 后注入的 template 约束最终报告结构；取数阶段按已注入 spec 判断指标归属。
 - CLI 没有返回的数据直接省略，不列“缺失项”。
 - 数值、同比、环比、排名、阈值、异常点都必须来自 CLI 输出。
 
 ### 10. 最终报告生成流程
 
-最终输出由 `templates/business-overview-report.md` 约束。Claude 不能自由改变章节顺序。
+最终输出由 signal 后二阶段注入的 template 约束。Claude 不能自由改变章节顺序；signal 前不读取、不使用 template。
 
 ```text
 +------------------------------+

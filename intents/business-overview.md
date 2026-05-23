@@ -38,8 +38,10 @@ depth: deep_report
 - 这是深度经营分析报告，不是普通摘要。
 - 不需要向用户追问。
 - 允许且必须使用多次 CMR 查询支撑分析，完成 overview、indicators、tree --values、area、category、trend 六个必要模块；六个模块无业务顺序依赖，可以并行执行。
-- 六个模块全部成功后，必须先执行 `python3 .claude/hooks/before-report-signal.py business-overview`，收到 spec 注入后再输出最终报告。
-- 必须按模板固定章节输出。
+- spec 已在取数前注入，必须用于取数和业务规则判断；signal 前不读取、不使用 template。
+- 六个模块全部成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`，收到 template 二阶段注入后再输出最终报告。
+- 取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- 最终报告必须等 signal 后收到 template，再按 template 固定章节输出。
 - 诊断可以做有限推断，但必须绑定已返回数据。
 - 不得编造数值、排名、环比、同比、阈值或原因。
 

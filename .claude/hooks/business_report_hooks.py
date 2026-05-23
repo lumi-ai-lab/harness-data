@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +16,31 @@ REPORT_CONFIGS: dict[str, dict[str, Any]] = {
         "report": "business",
         "required_modules": REQUIRED_MODULES,
         "spec_path": Path("spec/business-report.md"),
+        "template_path": Path("templates/business-overview-report.md"),
     },
     "store-overview": {
         "report": "store",
         "required_modules": ("overview",),
         "spec_path": Path("spec/store-report.md"),
+        "template_path": Path("templates/store-overview-report.md"),
     },
+    "member-overview": {
+        "report": "user",
+        "required_modules": ("overview",),
+        "spec_path": Path("spec/member-report.md"),
+        "template_path": Path("templates/member-overview-report.md"),
+    },
+}
+REPORT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "business-overview": ("business-overview", "report business", "经营分析", "经营分析指标归属规范"),
+    "store-overview": ("store-overview", "report store", "门店管理", "门店管理指标归属规范"),
+    "member-overview": (
+        "member-overview",
+        "report user",
+        "用户运营",
+        "用户运营指标归属规范",
+        "用户运营深度报告模板",
+    ),
 }
 
 
@@ -47,6 +67,63 @@ def state_dir(project_dir: Path) -> Path:
 def state_path(project_dir: Path, session_id: str) -> Path:
     safe_session = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id) or "unknown"
     return state_dir(project_dir) / f"{safe_session}.json"
+
+
+def safe_session_id(session_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id) or "unknown"
+
+
+def diagnostics_enabled() -> bool:
+    return os.environ.get("QDM_HARNESS_DIAG") == "1"
+
+
+def diagnostics_dir(project_dir: Path) -> Path:
+    return project_dir / ".claude" / "hooks" / "state" / "diagnostics"
+
+
+def diagnostics_path(project_dir: Path, session_id: str) -> Path:
+    return diagnostics_dir(project_dir) / f"{safe_session_id(session_id)}.jsonl"
+
+
+def path_stats(path: Path) -> dict[str, Any]:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return {"path": str(path), "exists": False, "bytes": 0, "lines": 0}
+    return {
+        "path": str(path),
+        "exists": True,
+        "bytes": len(data),
+        "lines": data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0),
+    }
+
+
+def keyword_hits(text: str) -> dict[str, list[str]]:
+    hits: dict[str, list[str]] = {}
+    for report_name, keywords in REPORT_KEYWORDS.items():
+        matched = [keyword for keyword in keywords if keyword in text]
+        if matched:
+            hits[report_name] = matched
+    return hits
+
+
+def cross_report_keyword_hits(report_name: str, text: str) -> dict[str, list[str]]:
+    return {name: hits for name, hits in keyword_hits(text).items() if name != report_name}
+
+
+def write_diagnostic_event(project_dir: Path, session_id: str, event: dict[str, Any]) -> None:
+    if not diagnostics_enabled():
+        return
+    directory = diagnostics_dir(project_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "session_id": session_id,
+        **event,
+    }
+    with diagnostics_path(project_dir, session_id).open("a", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, sort_keys=True)
+        fh.write("\n")
 
 
 def parse_json_payload(raw: str) -> dict[str, Any]:
