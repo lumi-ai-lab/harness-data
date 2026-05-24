@@ -8,7 +8,7 @@
 
 ```text
 用户问题
-  -> data-harness-cli 生成结构化 instructions
+  -> data-harness-cli 生成结构化 context
   -> Agent 按 contextFiles 读取必要 Spec / routing / playbook
   -> Agent 调用 CMR CLI 取数
   -> signal 后读取 template
@@ -45,7 +45,7 @@ spec/<domain>/index.md
 对应到本项目：
 
 ```bash
-data-harness-cli instructions --question "..."
+data-harness-cli context --question "..."
 ```
 
 返回：
@@ -85,46 +85,7 @@ data-harness-cli
 
 ## CLI 指令设计
 
-命令尽量对齐 OpenSpec 的习惯：`status`、`instructions`、`validate` 等。
-
-### init
-
-初始化本项目需要的运行目录。
-
-```bash
-data-harness-cli init
-```
-
-职责：
-
-- 创建 `.harness/index/`。
-- 创建 `.harness/runtime/`。
-- 检查 `spec/`、`routing/`、`playbooks/` 是否存在。
-
-### status
-
-展示当前 Harness 结构和索引状态。
-
-```bash
-data-harness-cli status --json
-```
-
-返回示例：
-
-```json
-{
-  "specIndex": {
-    "exists": true,
-    "path": ".harness/index/spec-index.json"
-  },
-  "counts": {
-    "specs": 28,
-    "routing": 4,
-    "playbooks": 4
-  },
-  "issues": []
-}
-```
+命令尽量对齐 OpenSpec 的习惯，但保留本项目更直观的命名。本期只保留必要命令：`build-index`、`context`、`validate`、`show`。不设计 `init`，也不设计 runtime 目录。
 
 ### build-index
 
@@ -143,14 +104,14 @@ data-harness-cli build-index --json
 .harness/index/playbook-index.json
 ```
 
-本期索引只基于结构化 frontmatter 和明确关键词，不做 BM25/embedding。
+本期索引使用 JSON，不使用 JSONL。索引是结构化对象，需要包含文件列表、按 domain/keyword/id 的反向映射；JSON 更适合一次性加载、校验和调试。本期索引只基于结构化 frontmatter 和明确关键词，不做 BM25/embedding。
 
-### instructions
+### context
 
 核心命令。根据用户问题返回本轮应读取的上下文文件和下一步指令。
 
 ```bash
-data-harness-cli instructions --question "华东区最近会员复购为什么下降？" --json
+data-harness-cli context --question "华东区最近会员复购为什么下降？" --json
 ```
 
 返回示例：
@@ -195,6 +156,7 @@ data-harness-cli instructions --question "华东区最近会员复购为什么�
 - 不返回 `confidence` 字段。
 - 不做概率化置信度。
 - `reason` 必须可解释，来自明确规则：domain、keyword、metric、scenario、default、routing。
+- 如果 `.harness/index/*.json` 不存在或落后于源文件，`context` 可以自动触发 `build-index`，避免 hook 因忘记手动构建索引而失败。
 
 ### validate
 
@@ -236,38 +198,42 @@ data-harness-cli show member-repurchase --json
 
 ```text
 harness-data/
-├── go.mod
-├── go.sum
-│
-├── cmd/
-│   └── data-harness-cli/
-│       └── main.go
-│
-├── internal/
-│   ├── harness/
-│   │   ├── paths.go
-│   │   └── types.go
+├── cli/
+│   ├── go.mod
+│   ├── go.sum
 │   │
-│   ├── frontmatter/
-│   │   ├── parse.go
-│   │   └── validate.go
+│   ├── cmd/
+│   │   └── data-harness-cli/
+│   │       └── main.go
 │   │
-│   ├── index/
-│   │   ├── build.go
-│   │   ├── load.go
-│   │   └── query.go
+│   ├── internal/
+│   │   ├── harness/
+│   │   │   ├── paths.go
+│   │   │   └── types.go
+│   │   │
+│   │   ├── frontmatter/
+│   │   │   ├── parse.go
+│   │   │   └── validate.go
+│   │   │
+│   │   ├── index/
+│   │   │   ├── build.go
+│   │   │   ├── load.go
+│   │   │   └── query.go
+│   │   │
+│   │   └── context/
+│   │       ├── build.go
+│   │       └── match.go
 │   │
-│   └── instructions/
-│       ├── build.go
-│       └── match.go
+│   └── tests/
+│       ├── build_index_test.go
+│       ├── context_test.go
+│       └── validate_test.go
 │
 ├── .harness/
-│   ├── index/
-│   │   ├── spec-index.json
-│   │   ├── routing-index.json
-│   │   └── playbook-index.json
-│   └── runtime/
-│       └── sessions/
+│   └── index/
+│       ├── spec-index.json
+│       ├── routing-index.json
+│       └── playbook-index.json
 │
 ├── spec/
 │   ├── common/
@@ -283,6 +249,13 @@ harness-data/
 ├── scripts/
 └── tests/
 ```
+
+目录边界：
+
+- `cli/`：`data-harness-cli` 的 Go 实现和测试，作为独立 Go module 管理。
+- `spec/`、`routing/`、`playbooks/`：业务知识源，由 CLI 读取。
+- `.harness/index/`：项目级生成索引，放在仓库根目录，不放进 `cli/`。
+- `.claude/hooks/`：Agent 入口，负责调用 `data-harness-cli context`。
 
 ## Frontmatter 设计原则
 
@@ -314,7 +287,7 @@ match:
 原因：
 
 - 这些字段意图是表达规则重要性和适用阶段。
-- 但本项目当前所有被 instructions 召回的 Spec 都默认必须在取数和报告生成时遵守。
+- 但本项目当前所有被 `context` 召回的 Spec 都默认必须在取数和报告生成时遵守。
 - 再增加这些字段会造成维护负担和解释成本。
 - 如果未来确实需要阶段化规则，再单独设计。
 
@@ -492,13 +465,13 @@ children:
 本期范围包括：
 
 1. 新增 `data-harness-cli`。
-2. 完成 `init`、`status`、`build-index`、`instructions`、`validate`、`show`。
+2. 完成 `build-index`、`context`、`validate`、`show`。
 3. 完成所有现有 Spec 文档迁移。
 4. 为所有 Spec 文件添加必要 frontmatter。
 5. 将大 Spec 拆成按业务域组织的 `index.md + topic spec`。
 6. 为所有 routing 文件添加轻量 frontmatter。
 7. 为 playbook 添加必要 frontmatter；必要时拆成 index + topic playbook。
-8. 改造 `.claude/hooks/qdm-harness-context.py`，直接使用 `data-harness-cli instructions`。
+8. 改造 `.claude/hooks/qdm-harness-context.py`，直接使用 `data-harness-cli context`。
 9. 删除旧的“append 完整 Spec / Playbook”注入路径。
 10. 更新测试，验证 contextFiles 选择和 hook 输出。
 
@@ -576,7 +549,7 @@ routing/qdm-cli-routing.md
 - 保留现有正文内容。
 - 给每个 routing 文件增加 routing frontmatter。
 - `data-harness-cli build-index` 生成 `routing-index.json`。
-- `instructions` 必须能返回相关 routing 文件。
+- `context` 必须能返回相关 routing 文件。
 
 ### Playbooks
 
@@ -617,13 +590,25 @@ playbooks/financial/default-overview.md
 ```text
 1. 解析用户 prompt 和时间。
 2. 调用：
-   data-harness-cli instructions --question <prompt> --json
+   data-harness-cli context --question <prompt> --json
 3. 输出 additionalContext：
    - 时间解析 JSON
-   - instructions 返回的 contextFiles
+   - context 返回的 contextFiles
    - 必须读取 contextFiles 的指令
    - constraints
 4. 不再 append 完整 Spec / Playbook 正文。
+```
+
+开发期可以直接从仓库根目录调用：
+
+```bash
+go run ./cli/cmd/data-harness-cli context --question "<prompt>" --json
+```
+
+正式使用时建议编译或安装为：
+
+```bash
+data-harness-cli context --question "<prompt>" --json
 ```
 
 hook 输出示例：
@@ -653,9 +638,9 @@ Constraints:
 新增 Go 测试：
 
 ```text
-tests/data-harness-cli/build_index_test.go
-tests/data-harness-cli/instructions_test.go
-tests/data-harness-cli/validate_test.go
+cli/tests/build_index_test.go
+cli/tests/context_test.go
+cli/tests/validate_test.go
 ```
 
 更新 Python hook 测试：
@@ -683,7 +668,7 @@ tests/test_financial_report_hooks.py
 ```text
 data-harness-cli
   -> build-index
-  -> instructions
+  -> context
   -> validate
 
 frontmatter
@@ -692,7 +677,7 @@ frontmatter
   -> playbook index
 
 hook
-  -> calls data-harness-cli instructions
+  -> calls data-harness-cli context
   -> injects contextFiles list
 
 Agent
@@ -710,7 +695,7 @@ Agent
 变成：
 
 ```text
-用户问题 -> CLI instructions -> contextFiles -> 按需读取
+用户问题 -> CLI context -> contextFiles -> 按需读取
 ```
 
 这样可以减少上下文冗余，提高业务规则选择的可解释性、可测试性和长期扩展能力。
