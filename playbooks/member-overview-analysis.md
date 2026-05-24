@@ -29,7 +29,7 @@
 
 执行查询前先归一化以下口径：
 
-- 时间口径：支持日期、周、月；“昨天”使用 `--date <YYYY-MM-DD>`。
+- 时间口径：支持日期、周、月；“昨天”使用 `<time_filter>`。
 - 区域口径：区域支持下钻。未指定区域时使用 `--area-type 管理区域 --area CN00`，即全国（不含港澳）。
 - 品类口径：用户报表不支持品类过滤，不传 `--category-type` 和 `--category`。用户表达“全品类”时，在报告中表述为用户报表默认全口径，不把品类参数传给 CLI。
 - 报告范围：从 `overview` 或必要时 `inspect` 返回结果中确认 report、时间、区域解析结果。
@@ -54,7 +54,7 @@ error: report 用户报表 does not support category filters
 
 ## 查询原则
 
-默认全国口径下，`qdm-cmr-cli report user overview <cli_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`。其中 `category` 在用户报表下通常为空，不作为品类分析依据。`overview` 成功后，下一步必须立即执行 `before-report-signal.py member-overview`。
+默认全国口径下，`qdm-cmr-cli report user overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`。其中 `category` 在用户报表下通常为空，不作为品类分析依据。`overview` 成功后，下一步必须立即执行 `before-report-signal.py member-overview`。
 
 Agent 不应在默认全国用户报表场景下主动拆开调用 `indicators`、`area`、`category`、`trend` 或 `table`。只有在以下情况才允许补充探索：
 
@@ -66,6 +66,8 @@ Agent 不应在默认全国用户报表场景下主动拆开调用 `indicators`�
 
 ## 推荐查询方式
 
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+
 使用 `qdm-cmr-cli report user overview --ai` 作为用户报表主取数入口。该命令一次返回核心指标、区域分布和近 30 天趋势；对“昨天的用户报表（全国、全品类维度）”这类报告，已经可以覆盖大部分可用指标值、同比、环比、区域和趋势基础证据。
 
 默认推荐命令：
@@ -73,7 +75,7 @@ Agent 不应在默认全国用户报表场景下主动拆开调用 `indicators`�
 ```bash
 source config/qdm-cli-paths.env
 
-"$QDM_CMR_CLI" report user overview <cli_filter> --ai
+"$QDM_CMR_CLI" report user overview <time_filter> --ai
 ```
 
 全国默认示例：
@@ -89,15 +91,15 @@ source config/qdm-cli-paths.env
 只有需要完整 JSON 结构或 `filters` 字段时，才执行 `inspect` 或非 `--ai` 版本：
 
 ```bash
-"$QDM_CMR_CLI" report user inspect <cli_filter>
-"$QDM_CMR_CLI" report user overview <cli_filter>
+"$QDM_CMR_CLI" report user inspect <time_filter>
+"$QDM_CMR_CLI" report user overview <time_filter>
 ```
 
 若需要切换区域和趋势对应的指标，仍优先使用 `overview` 并指定 `--indicator`；`indicators` 仍返回全量核心指标，`area` 和 `trend` 会切换到对应指标：
 
 ```bash
-"$QDM_CMR_CLI" report user overview <cli_filter> --indicator 活跃用户数 --ai
-"$QDM_CMR_CLI" report user overview <cli_filter> --indicator 会员销售占比 --ai
+"$QDM_CMR_CLI" report user overview <time_filter> --indicator 活跃用户数 --ai
+"$QDM_CMR_CLI" report user overview <time_filter> --indicator 会员销售占比 --ai
 ```
 
 ## 可选校验与补充
@@ -109,10 +111,10 @@ source config/qdm-cli-paths.env
 - 需要区域维度子指标明细时，用 `table`。
 
 ```bash
-"$QDM_CMR_CLI" report user inspect <cli_filter>
-"$QDM_CMR_CLI" report user tree --values <cli_filter>
-"$QDM_CMR_CLI" table --report user <cli_filter> --indicator 活跃用户数 --dim-type 管理区域 --ai
-"$QDM_CMR_CLI" table --report user <cli_filter> --indicator 会员销售占比 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" report user inspect <time_filter>
+"$QDM_CMR_CLI" report user tree --values <time_filter>
+"$QDM_CMR_CLI" table --report user <time_filter> --indicator 活跃用户数 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" table --report user <time_filter> --indicator 会员销售占比 --dim-type 管理区域 --ai
 ```
 
 `tree --values` 当前不支持 `--ai`，保持默认 JSON 输出。它用于确认指标树、指标归属和哪些指标有值，不替代 `overview --ai`。
@@ -233,8 +235,8 @@ source config/qdm-cli-paths.env
 需要切换区域和趋势对应的指标时，在 `overview` 上指定 `--indicator`：
 
 ```bash
-"$QDM_CMR_CLI" report user overview <cli_filter> --indicator 活跃用户数 --ai
-"$QDM_CMR_CLI" report user overview <cli_filter> --indicator 会员销售占比 --ai
+"$QDM_CMR_CLI" report user overview <time_filter> --indicator 活跃用户数 --ai
+"$QDM_CMR_CLI" report user overview <time_filter> --indicator 会员销售占比 --ai
 ```
 
 趋势支持近 30 天对比，来自 `overview` 的 `trend` section。趋势只能用于判断该指标的短期波动、持续变化或异常峰谷，不得推断未返回指标的趋势。
@@ -300,7 +302,7 @@ signal 后 template 与证据映射：
 
 输出前逐项检查：
 
-- 已完成 `report user overview <cli_filter> --ai`。
+- 已完成 `report user overview <time_filter> --ai`。
 - 已在 `overview` 成功后的下一步立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`，且 signal 前没有输出总结、素材整理或中间分析。
 - 已收到 template 二阶段注入。
 - 未向用户报表传入 `--category-type` 或 `--category`。

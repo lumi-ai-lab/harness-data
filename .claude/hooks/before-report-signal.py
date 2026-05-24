@@ -5,9 +5,9 @@ import sys
 
 
 def main() -> int:
-    allowed_reports = {"business-overview", "store-overview", "member-overview"}
+    allowed_reports = {"business-overview", "store-overview", "member-overview", "financial-overview"}
     if len(sys.argv) != 2 or sys.argv[1] not in allowed_reports:
-        sys.stderr.write("usage: before-report-signal.py business-overview|store-overview|member-overview\n")
+        sys.stderr.write("usage: before-report-signal.py business-overview|store-overview|member-overview|financial-overview\n")
         return 2
     sys.stdout.write(f"QDM_BEFORE_REPORT_SIGNAL {sys.argv[1]}\n")
     return 0

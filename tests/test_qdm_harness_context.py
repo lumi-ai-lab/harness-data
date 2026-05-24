@@ -43,11 +43,14 @@ class QdmHarnessContextTests(unittest.TestCase):
         context = self.run_hook("查看昨天用户情况，全国，全品类维度")
         self.assertIn("query_type=member_overview", context)
         self.assertIn("report=user", context)
-        self.assertIn("report user overview <cli_filter> --ai", context)
+        self.assertIn("report user overview <time_filter> --area-type 管理区域 --area CN00 --ai", context)
         self.assertIn("before-report-signal.py member-overview", context)
         self.assertIn("用户运营深度报告 Playbook", context)
-        self.assertIn('"cli_filter":"--date 2026-05-21 --area-type 管理区域 --area CN00"', context)
+        self.assertIn('"current_date":"2026-05-22"', context)
+        self.assertIn('"default_area_filter":"--area-type 管理区域 --area CN00"', context)
         self.assertIn('"category_supported":false', context)
+        self.assertIn("# CMR CLI 使用说明", context)
+        self.assertIn("# QDM 时间口径规则", context)
         self.assertIn("# 用户运营深度报告路由", context)
         self.assertIn("用户运营指标归属规范", context)
         self.assertNotIn("## Report Template", context)
@@ -58,6 +61,38 @@ class QdmHarnessContextTests(unittest.TestCase):
         context = self.run_hook("查看昨天会员销售占比情况")
         context_header = context.split("## Intent Spec", 1)[0]
         self.assertIn("query_type=member_overview", context_header)
+        self.assertNotIn("query_type=business_overview", context_header)
+
+    def test_financial_prompt_injects_company_report_context(self) -> None:
+        context = self.run_hook("查看昨天的财务报表，全国，全品类")
+        self.assertIn("query_type=financial_overview", context)
+        self.assertIn("report=company", context)
+        self.assertIn("report company indicators <time_filter> --ai", context)
+        self.assertIn("report company tree --values <time_filter>", context)
+        self.assertIn("table --report company <time_filter> --indicator EBITDA --dim-type 管理区域 --ai", context)
+        self.assertIn("before-report-signal.py financial-overview", context)
+        self.assertIn("财务核心指标深度报告 Playbook", context)
+        self.assertIn('"current_date":"2026-05-22"', context)
+        self.assertIn('"time_requirement":"company reports use --week or --month only; convert date questions to the containing ISO week."', context)
+        self.assertIn('"category_supported":false', context)
+        self.assertNotIn('"cli_filter"', context)
+        self.assertIn("# 财务核心指标深度报告路由", context)
+        self.assertIn("财务核心指标归属规范", context)
+        self.assertNotIn("## Report Template", context)
+        self.assertNotIn("财务核心指标深度报告模板", context)
+        self.assertNotIn("# QDM CLI 路由规则", context)
+
+    def test_financial_explicit_date_converts_to_iso_week(self) -> None:
+        context = self.run_hook("查看2026年5月20日公司报表")
+        self.assertIn("query_type=financial_overview", context)
+        self.assertNotIn('"cli_filter"', context)
+        self.assertIn("company 报表只能使用 `--week` 或 `--month`", context)
+        self.assertIn("公司/财务报表不支持日维度", context)
+
+    def test_financial_prompt_wins_over_business_revenue_keyword(self) -> None:
+        context = self.run_hook("查看昨天公司营业收入和费用率表现")
+        context_header = context.split("## Intent Spec", 1)[0]
+        self.assertIn("query_type=financial_overview", context_header)
         self.assertNotIn("query_type=business_overview", context_header)
 
     def test_default_does_not_write_diagnostics_or_change_stdout_shape(self) -> None:
@@ -73,6 +108,8 @@ class QdmHarnessContextTests(unittest.TestCase):
         self.assertEqual(event["event"], "user_prompt_context")
         self.assertEqual(event["report_name"], "business-overview")
         injected_paths = [item["relative_path"] for item in event["injected_files"]]
+        self.assertIn("spec/cmr-cli-readme.md", injected_paths)
+        self.assertIn("spec/qdm-time-policy.md", injected_paths)
         self.assertIn("routing/business-overview.md", injected_paths)
         self.assertIn("spec/business-report.md", injected_paths)
         self.assertNotIn("routing/qdm-cli-routing.md", injected_paths)

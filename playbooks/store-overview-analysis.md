@@ -27,7 +27,7 @@
 
 执行查询前先归一化以下口径：
 
-- 时间口径：支持日期、周、月；“昨天”使用 `--date <YYYY-MM-DD>`。
+- 时间口径：支持日期、周、月；“昨天”使用 `<time_filter>`。
 - 区域口径：区域支持下钻。未指定区域时使用 `--area-type 管理区域 --area CN00`，即全国（不含港澳）。
 - 品类口径：门店管理报表品类不支持下钻，也不做业务过滤，固定使用 `--category-type 大分类 --category 00`，即全品类。
 - 报告范围：从 `overview.filters` 返回结果中确认 report、时间、区域、品类解析结果。
@@ -40,7 +40,7 @@
 
 ## 查询原则
 
-默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <cli_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑核心报告取数。`overview` 成功后，下一步必须立即执行 `before-report-signal.py store-overview`。
+默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑核心报告取数。`overview` 成功后，下一步必须立即执行 `before-report-signal.py store-overview`。
 
 Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tree --values`、`indicators`、`area`、`trend` 或 `table`。只有在以下情况才允许补充探索：
 
@@ -52,6 +52,8 @@ Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tre
 
 ## 推荐查询方式
 
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+
 使用 `qdm-cmr-cli report store overview --ai` 作为门店管理报表主取数入口。该命令一次返回 compact 的 `indicators`、`area`、`category`、`trend`；对“昨天的门店管理情况（全品类、全国维度）”这类报告，已经可以覆盖核心指标值、同比、环比、区域和趋势基础证据。
 
 默认推荐命令：
@@ -59,20 +61,20 @@ Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tre
 ```bash
 source config/qdm-cli-paths.env
 
-"$QDM_CMR_CLI" report store overview <cli_filter> --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --ai
 ```
 
 只有需要完整 JSON 结构或 `filters` 字段时，才执行非 `--ai` 版本：
 
 ```bash
-"$QDM_CMR_CLI" report store overview <cli_filter>
+"$QDM_CMR_CLI" report store overview <time_filter>
 ```
 
 若非全国区域或区域下钻场景需要同时分析两条主线，仍优先使用 `overview` 并分别指定一级指标；`overview` 会把 `area` 和 `trend` 切换到对应指标，`indicators` 仍返回全量指标：
 
 ```bash
-"$QDM_CMR_CLI" report store overview <cli_filter> --indicator 营业门店数 --ai
-"$QDM_CMR_CLI" report store overview <cli_filter> --indicator 门店净利润 --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --indicator 营业门店数 --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --indicator 门店净利润 --ai
 ```
 
 ## 可选校验与补充
@@ -84,10 +86,10 @@ source config/qdm-cli-paths.env
 - 需要区域维度子指标明细时，用 `table`。
 
 ```bash
-"$QDM_CMR_CLI" report store inspect <cli_filter>
-"$QDM_CMR_CLI" report store tree --values <cli_filter>
-"$QDM_CMR_CLI" table --report store <cli_filter> --indicator 营业门店数 --dim-type 管理区域 --ai
-"$QDM_CMR_CLI" table --report store <cli_filter> --indicator 门店净利润 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" report store inspect <time_filter>
+"$QDM_CMR_CLI" report store tree --values <time_filter>
+"$QDM_CMR_CLI" table --report store <time_filter> --indicator 营业门店数 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" table --report store <time_filter> --indicator 门店净利润 --dim-type 管理区域 --ai
 ```
 
 `table` 用于补充区域明细。营业门店数表会同时返回净增门店数、开店数、待开业门店数、闭店数、停业超30天门店数、存量门店数、停业门店数等子指标；门店净利润表会同时返回盈亏平衡点、坪效、门店面积、人效、门店人数等子指标。
@@ -99,7 +101,7 @@ source config/qdm-cli-paths.env
 门店管理报表不做品类下钻。实测：
 
 ```bash
-"$QDM_CMR_CLI" report store category <cli_filter> --indicator 营业门店数 --ai
+"$QDM_CMR_CLI" report store category <time_filter> --indicator 营业门店数 --ai
 ```
 
 返回空结构：
@@ -190,15 +192,15 @@ source config/qdm-cli-paths.env
 区域支持下钻，优先使用 `overview` 的 `area` section。需要切换区域和趋势对应的指标时，在 `overview` 上指定 `--indicator`：
 
 ```bash
-"$QDM_CMR_CLI" report store overview <cli_filter> --indicator 营业门店数 --ai
-"$QDM_CMR_CLI" report store overview <cli_filter> --indicator 门店净利润 --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --indicator 营业门店数 --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --indicator 门店净利润 --ai
 ```
 
 需要子指标明细时使用：
 
 ```bash
-"$QDM_CMR_CLI" table --report store <cli_filter> --indicator 营业门店数 --dim-type 管理区域 --ai
-"$QDM_CMR_CLI" table --report store <cli_filter> --indicator 门店净利润 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" table --report store <time_filter> --indicator 营业门店数 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" table --report store <time_filter> --indicator 门店净利润 --dim-type 管理区域 --ai
 ```
 
 趋势支持近 30 天对比，来自 `overview` 的 `trend` section。

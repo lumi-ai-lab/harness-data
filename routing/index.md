@@ -7,6 +7,7 @@ Hook 已在 UserPromptSubmit 阶段完成确定性路由。Agent 不需要阅读
 | `business_overview` | `business-overview` | `routing/business-overview.md` |
 | `store_overview` | `store-overview` | `routing/store-overview.md` |
 | `member_overview` | `member-overview` | `routing/member-overview.md` |
+| `financial_overview` | `financial-overview` | `routing/financial-overview.md` |
 
 公共约束：
 

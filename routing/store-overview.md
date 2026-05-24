@@ -2,6 +2,8 @@
 
 命中 `query_type=store_overview` 时，只允许使用 `qdm-cmr-cli`。
 
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+
 默认全国全品类场景下，`overview` 是唯一必需模块。`overview` 成功后，必须先执行：
 
 ```bash
@@ -17,7 +19,7 @@ python3 .claude/hooks/before-report-signal.py store-overview
 ```bash
 source config/qdm-cli-paths.env
 
-"$QDM_CMR_CLI" report store overview --date <YYYY-MM-DD> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00 --ai
+"$QDM_CMR_CLI" report store overview <time_filter> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00 --ai
 
 python3 .claude/hooks/before-report-signal.py store-overview
 ```
@@ -25,9 +27,9 @@ python3 .claude/hooks/before-report-signal.py store-overview
 可选补充命令：
 
 ```bash
-"$QDM_CMR_CLI" report store inspect --date <YYYY-MM-DD> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00
-"$QDM_CMR_CLI" report store tree --values --date <YYYY-MM-DD> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00
-"$QDM_CMR_CLI" table --report store --date <YYYY-MM-DD> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00 --indicator 营业门店数 --dim-type 管理区域 --ai
+"$QDM_CMR_CLI" report store inspect <time_filter> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00
+"$QDM_CMR_CLI" report store tree --values <time_filter> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00
+"$QDM_CMR_CLI" table --report store <time_filter> --area-type 管理区域 --area CN00 --category-type 大分类 --category 00 --indicator 营业门店数 --dim-type 管理区域 --ai
 ```
 
 查询策略：

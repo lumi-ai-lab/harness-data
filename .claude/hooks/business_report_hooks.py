@@ -30,6 +30,12 @@ REPORT_CONFIGS: dict[str, dict[str, Any]] = {
         "spec_path": Path("spec/member-report.md"),
         "template_path": Path("templates/member-overview-report.md"),
     },
+    "financial-overview": {
+        "report": "company",
+        "required_modules": ("indicators", "tree", "table"),
+        "spec_path": Path("spec/financial-report.md"),
+        "template_path": Path("templates/financial-overview-report.md"),
+    },
 }
 REPORT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "business-overview": ("business-overview", "report business", "经营分析", "经营分析指标归属规范"),
@@ -40,6 +46,13 @@ REPORT_KEYWORDS: dict[str, tuple[str, ...]] = {
         "用户运营",
         "用户运营指标归属规范",
         "用户运营深度报告模板",
+    ),
+    "financial-overview": (
+        "financial-overview",
+        "report company",
+        "财务核心指标",
+        "财务核心指标归属规范",
+        "财务核心指标深度报告模板",
     ),
 }
 
@@ -183,6 +196,12 @@ def extract_report_modules(command: str, report_name: str) -> list[str]:
             continue
         if module not in modules:
             modules.append(module)
+    if report_name == "financial-overview" and "table" in required_modules:
+        if re.search(r"\btable\b", lowered) and re.search(r"--report\s+company\b", lowered):
+            has_ebitda = re.search(r"--indicator\s+(ebitda|ebitdacompanyprofit)\b", lowered) is not None
+            has_manage_area = re.search(r"--dim-type\s+(管理区域|manageareaid)\b", normalized, re.IGNORECASE) is not None
+            if has_ebitda and has_manage_area and "table" not in modules:
+                modules.append("table")
     return modules
 
 

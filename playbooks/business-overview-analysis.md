@@ -36,6 +36,8 @@
 
 ## 必要查询模块
 
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+
 使用 `qdm-cmr-cli report business`，按用户时间口径补充日期、周或月过滤。对支持 `--ai` 的模块默认追加 `--ai`，降低上下文 token 消耗；`tree --values` 保持默认 JSON 输出。
 
 六个模块是硬性要求，模块之间没有业务顺序依赖，可以并行查询；必须全部成功后才能进入报告生成阶段。六个模块全部成功后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`。
@@ -53,12 +55,12 @@
 ```bash
 source config/qdm-cli-paths.env
 
-"$QDM_CMR_CLI" report business overview --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business indicators --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business tree --values --date <YYYY-MM-DD> &
-"$QDM_CMR_CLI" report business area --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business category --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business trend --date <YYYY-MM-DD> --ai &
+"$QDM_CMR_CLI" report business overview <time_filter> --ai &
+"$QDM_CMR_CLI" report business indicators <time_filter> --ai &
+"$QDM_CMR_CLI" report business tree --values <time_filter> &
+"$QDM_CMR_CLI" report business area <time_filter> --ai &
+"$QDM_CMR_CLI" report business category <time_filter> --ai &
+"$QDM_CMR_CLI" report business trend <time_filter> --ai &
 wait
 ```
 

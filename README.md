@@ -1,6 +1,6 @@
 # QDM 运行约束数据
 
-本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前版本覆盖泛经营概览类问题、门店管理类问题和用户运营类问题，例如“查看昨天的经营情况”“昨天的门店管理情况”“查看昨天用户情况”，并将其稳定转换为固定结构的深度分析报告。
+本目录存放 QDM 助手在用户提交提示词时使用的运行约束规格说明。当前版本覆盖泛经营概览类问题、门店管理类问题、用户运营类问题和财务核心指标类问题，例如“查看昨天的经营情况”“昨天的门店管理情况”“查看昨天用户情况”“查看昨天的财务报表”，并将其稳定转换为固定结构的深度分析报告。
 
 运行时行为由 `/Users/pengmd/c/qdm/harness-data/.claude/hooks/qdm-harness-context.py` 实现。
 
@@ -18,13 +18,14 @@ CLI 绝对路径集中配置在 `config/qdm-cli-paths.env`。
 
 ## 最小可用版本边界
 
-- 覆盖泛经营概览类问题、门店管理类问题和用户运营类问题。
+- 覆盖泛经营概览类问题、门店管理类问题、用户运营类问题和财务核心指标类问题。
 - 命中该意图后，智能体必须使用 `qdm-cmr-cli`。
 - 报告结构固定，具体数值必须来自 CLI 输出。
 - template 只在 signal 后二阶段注入；signal 前不需要读取或使用 template。
 - 经营分析六个必需模块可并行取数；spec 在取数前注入；全部成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`，收到 template 二阶段注入后再输出最终报告。
 - 门店管理默认只要求 `report store overview --ai`；spec 在取数前注入；成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py store-overview`，收到 template 二阶段注入后再输出最终报告。
 - 用户运营默认只要求 `report user overview --ai`；spec 在取数前注入；成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`，收到 template 二阶段注入后再输出最终报告；用户报表不支持品类过滤。
+- 财务核心指标默认要求 `report company indicators --ai`、`report company tree --values`、`table --report company --indicator EBITDA --dim-type 管理区域 --ai` 三个必需取数动作；company 报表只支持周/月，日维度问题转换为所在周；品类不可选且不传品类过滤；区域可选。spec 在取数前注入；全部成功后的下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py financial-overview`，收到 template 二阶段注入后再输出最终报告。
 - 必需取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
 - 缺失值应直接省略，不要单独列出。
 
@@ -237,9 +238,9 @@ depth: deep_report
 
 如果没有命中，例如用户只是问“查一下品效指标定义”，脚本会直接退出，不会注入经营分析报告上下文。
 
-### 5. 时间解析细节
+### 5. 时间上下文细节
 
-命中意图后，脚本调用 `build_date_info(prompt, current_date)`。当前日期优先来自环境变量 `QDM_HARNESS_CURRENT_DATE`，没有该变量时使用系统日期。
+命中意图后，脚本调用 `build_time_context(prompt, current_date)`。当前日期优先来自环境变量 `QDM_HARNESS_CURRENT_DATE`，没有该变量时使用系统日期。
 
 以当前日期 `2026-05-21` 为例：
 
@@ -252,21 +253,20 @@ depth: deep_report
                 |
                 v
 +-------------------------------+
-| build_date_info()             |
+| build_time_context()          |
 |                               |
-| 识别到: 昨天/昨日             |
-| yesterday = current_date - 1  |
+| 提供 current_date/timezone    |
+| 不预设最终 CLI 时间过滤       |
 +---------------+---------------+
                 |
                 v
 +-------------------------------+
-| 输出 date_info                |
+| 输出 time_context             |
 |                               |
 | current_date: 2026-05-21      |
-| defaulted: false              |
-| cli_filter: --date 2026-05-20 |
-| time_label: 2026-05-20        |
-| time_grain: date              |
+| timezone: Asia/Shanghai       |
+| time_policy: 参考             |
+| spec/qdm-time-policy.md       |
 +-------------------------------+
 ```
 
@@ -275,29 +275,28 @@ depth: deep_report
 ```json
 {
   "current_date": "2026-05-21",
-  "defaulted": false,
-  "cli_filter": "--date 2026-05-20",
-  "time_label": "2026-05-20",
-  "time_grain": "date"
+  "timezone": "Asia/Shanghai",
+  "time_policy": "Use spec/qdm-time-policy.md to infer --date, --week, or --month. Do not use date ranges.",
+  "prompt": "昨天的经营情况"
 }
 ```
 
-时间解析规则由脚本和 `intents/business-overview.md` 共同约束：
+时间口径规则由 `spec/qdm-time-policy.md` 统一约束，hook 只注入当前日期和规则，不直接替模型计算最终 CLI 参数：
 
 ```text
 明确日期  -> --date YYYY-MM-DD
 今天/今日 -> --date 当前日期
 昨天/昨日 -> --date 当前日期前一天
-本周/这周 -> --week ISO_WEEK
-上周      -> --week 上周 ISO_WEEK
+本周/这周/最近一周 -> --week 当前 QDM 业务周 value
+上周      -> --week 上一 QDM 业务周 value
 本月      -> --month YYYY-MM
 上月      -> --month 上月 YYYY-MM
-未给时间  -> 默认昨天，并标记 defaulted=true
+未给时间  -> 默认昨天
 ```
 
 ### 6. 附加上下文组装细节
 
-时间解析完成后，脚本调用 `build_context(prompt, project_dir, harness_dir, date_info)`。这个函数会把“硬编码强制约束”和仓库里的四类规格文件拼成一份完整上下文。
+时间上下文生成后，脚本调用 `build_context(prompt, project_dir, harness_dir, time_context)`。这个函数会把“硬编码强制约束”、统一 CMR CLI 说明和仓库里的规格文件拼成一份完整上下文。
 
 ```text
 +---------------------------------------------------+
@@ -313,7 +312,7 @@ depth: deep_report
 | - needs_clarification=false                       |
 | - 必须走 qdm-cmr-cli                              |
 | - 推荐查询 overview/indicators/tree/area/...      |
-| - 支持 --ai 的 CMR 查询默认使用 AI 压缩输出       |
+| - CMR CLI 参数规则以 spec/cmr-cli-readme.md 为准 |
 | - 章节顺序固定为 1 到 9                           |
 | - 数值必须来自 CLI                                |
 +-------------------------+-------------------------+
@@ -322,10 +321,12 @@ depth: deep_report
 +---------------------------------------------------+
 | append_file(): 追加取数阶段必要文件               |
 |                                                   |
-| 1. intents/business-overview.md                   |
-| 2. routing/business-overview.md                   |
-| 3. spec/business-report.md                        |
-| 4. playbooks/business-overview-analysis.md        |
+| 1. spec/cmr-cli-readme.md                         |
+| 2. spec/qdm-time-policy.md                        |
+| 3. intents/business-overview.md                   |
+| 4. routing/business-overview.md                   |
+| 5. spec/business-report.md                        |
+| 6. playbooks/business-overview-analysis.md        |
 |                                                   |
 | template 不在此阶段注入。                         |
 | 它由 PostToolUse 在 before-report-signal          |
@@ -562,13 +563,13 @@ qdm-harness-context.py:
     |
     v
 qdm-harness-context.py:
-  build_date_info()
-  "昨天" -> "--date 2026-05-20"
+  build_time_context()
+  注入 current_date/timezone/time policy
     |
     v
 qdm-harness-context.py:
   build_context()
-  追加 intents/routing/playbooks/templates 四类文件内容
+  追加 CMR readme/time policy/intents/routing/spec/playbooks
     |
     v
 Claude Code:

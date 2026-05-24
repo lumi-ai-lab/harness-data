@@ -7,5 +7,6 @@
 | `business_overview` | `business-overview` | `routing/business-overview.md` |
 | `store_overview` | `store-overview` | `routing/store-overview.md` |
 | `member_overview` | `member-overview` | `routing/member-overview.md` |
+| `financial_overview` | `financial-overview` | `routing/financial-overview.md` |
 
 公共约束见 `routing/index.md`。具体执行规则以命中的单 report 路由文件为准。

@@ -2,6 +2,8 @@
 
 命中 `query_type=business_overview` 时，只允许使用 `qdm-cmr-cli`。
 
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+
 `overview`、`indicators`、`tree --values`、`area`、`category`、`trend` 六个模块没有业务顺序依赖，允许并行执行。六个模块全部成功后，必须先执行：
 
 ```bash
@@ -17,12 +19,12 @@ python3 .claude/hooks/before-report-signal.py business-overview
 ```bash
 source config/qdm-cli-paths.env
 
-"$QDM_CMR_CLI" report business overview --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business indicators --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business tree --values --date <YYYY-MM-DD> &
-"$QDM_CMR_CLI" report business area --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business category --date <YYYY-MM-DD> --ai &
-"$QDM_CMR_CLI" report business trend --date <YYYY-MM-DD> --ai &
+"$QDM_CMR_CLI" report business overview <time_filter> --ai &
+"$QDM_CMR_CLI" report business indicators <time_filter> --ai &
+"$QDM_CMR_CLI" report business tree --values <time_filter> &
+"$QDM_CMR_CLI" report business area <time_filter> --ai &
+"$QDM_CMR_CLI" report business category <time_filter> --ai &
+"$QDM_CMR_CLI" report business trend <time_filter> --ai &
 wait
 
 python3 .claude/hooks/before-report-signal.py business-overview
@@ -31,7 +33,7 @@ python3 .claude/hooks/before-report-signal.py business-overview
 可选补充命令：
 
 ```bash
-qdm-cmr-cli table --report business --date <YYYY-MM-DD> ... --ai
+qdm-cmr-cli table --report business <time_filter> ... --ai
 ```
 
 查询策略：
@@ -40,7 +42,7 @@ qdm-cmr-cli table --report business --date <YYYY-MM-DD> ... --ai
 - 只有需要更细颗粒度佐证时才调用 `table`。
 - `before-report-signal.py business-overview` 不并行，必须在并行查询整体成功后的下一步立即执行。
 - 并行查询整体成功后、signal 前，不得先整理证据、总结素材、生成中间分析或输出阶段性结论。
-- 对支持 `--ai` 的 CMR 查询，默认使用 AI 压缩输出以节省上下文 token；`tree --values` 当前不在支持清单内，继续使用默认 JSON 输出。
+- 对支持 `--ai` 的 CMR 查询，默认使用 AI 压缩输出以节省上下文 token；`tree --values` 不追加 `--ai`。
 - 对 CLI 未返回的数据，不得自行估算。
 
 禁止路由：
