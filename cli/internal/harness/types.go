@@ -16,6 +16,7 @@ type Document struct {
 	Title    string      `json:"title"`
 	Path     string      `json:"path"`
 	Tags     []string    `json:"tags,omitempty"`
+	Template string      `json:"template,omitempty"`
 	Match    MatchInfo   `json:"match"`
 	Context  ContextInfo `json:"context,omitempty"`
 	Children []Child     `json:"children,omitempty"`

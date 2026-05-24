@@ -22,7 +22,7 @@ REPORT_KEYWORDS = {
         "用户运营深度报告",
     ),
 }
-SIGNAL_RE = re.compile(r"before-report-signal\.py\s+([a-z-]+)")
+TEMPLATE_RE = re.compile(r"data-harness-cli\s+inject-template")
 TOOL_RE = re.compile(r"\breport\s+(business|store|user)\s+([a-z]+)\b")
 
 
@@ -152,9 +152,9 @@ def main() -> int:
         if name:
             kind = f"tool:{name}"
             detail = " ".join(command.split())[:120]
-        elif SIGNAL_RE.search(text):
-            kind = "signal"
-            detail = SIGNAL_RE.search(text).group(0)
+        elif TEMPLATE_RE.search(text):
+            kind = "template"
+            detail = TEMPLATE_RE.search(text).group(0)
         elif "additionalContext" in text or "hookSpecificOutput" in text:
             kind = "hook_context"
             detail = "additionalContext"

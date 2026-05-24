@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"harness-data/cli/internal/sessionstate"
 )
 
 type Output struct {
@@ -34,20 +36,6 @@ type reportConfig struct {
 	Report          string
 	RequiredModules []string
 	SpecPath        string
-	TemplatePath    string
-}
-
-type stateFile struct {
-	SessionID string                  `json:"session_id"`
-	Reports   map[string]*reportState `json:"reports"`
-}
-
-type reportState struct {
-	RecordedModules   []string `json:"recorded_modules"`
-	SignalSeen        bool     `json:"signal_seen"`
-	TemplateInjected  bool     `json:"template_injected"`
-	LastSignalMissing []string `json:"last_signal_missing"`
-	LastSignalCommand string   `json:"last_signal_command"`
 }
 
 var reportConfigs = map[string]reportConfig{
@@ -55,25 +43,21 @@ var reportConfigs = map[string]reportConfig{
 		Report:          "business",
 		RequiredModules: []string{"overview", "indicators", "tree", "area", "category", "trend"},
 		SpecPath:        "spec/business/report-contract.md",
-		TemplatePath:    "templates/business-overview-report.md",
 	},
 	"store-overview": {
 		Report:          "store",
 		RequiredModules: []string{"overview"},
 		SpecPath:        "spec/store/report-contract.md",
-		TemplatePath:    "templates/store-overview-report.md",
 	},
 	"member-overview": {
 		Report:          "user",
 		RequiredModules: []string{"overview"},
 		SpecPath:        "spec/member/report-contract.md",
-		TemplatePath:    "templates/member-overview-report.md",
 	},
 	"financial-overview": {
 		Report:          "company",
 		RequiredModules: []string{"indicators", "tree", "table"},
 		SpecPath:        "spec/financial/report-contract.md",
-		TemplatePath:    "templates/financial-overview-report.md",
 	},
 }
 
@@ -95,67 +79,56 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 		sessionID = "unknown"
 	}
 	command := payload.ToolInput.Command
-	state, err := loadState(root, sessionID)
+	state, err := sessionstate.Load(root, sessionID)
 	if err != nil {
 		return false, Output{}, err
 	}
 
 	if recordCommandModules(state, command) {
-		if err := saveState(root, sessionID, state); err != nil {
+		if err := sessionstate.Save(root, sessionID, state); err != nil {
 			return false, Output{}, err
 		}
 		return false, Output{}, nil
 	}
 
-	signalReport := extractSignalReport(command)
-	if signalReport == "" {
+	if !isTemplateInjectionCommand(command) {
 		return false, Output{}, nil
 	}
-	config := reportConfigs[signalReport]
-	reportState := getReportState(state, signalReport)
-	normalized := normalizeCommand(command)
-	reportState.SignalSeen = true
-	reportState.LastSignalCommand = normalized
-	missing := missingModules(reportState, config.RequiredModules)
-	reportState.LastSignalMissing = missing
+	reportState := getReportState(state, "template")
 
-	if reportState.TemplateInjected {
-		if err := saveState(root, sessionID, state); err != nil {
+	templateRel, validationMessage := selectedTemplatePath(root, state)
+	if validationMessage != "" {
+		if err := sessionstate.Save(root, sessionID, state); err != nil {
 			return false, Output{}, err
 		}
-		recordSignalDiagnostic(root, sessionID, signalReport, reportState, missing, "already_injected")
-		return true, buildOutput(fmt.Sprintf("%s signal already satisfied in this session; do not request template injection again.", signalReport)), nil
+		recordTemplateDiagnostic(root, sessionID, state, reportState, "template_selection_error", templateRel)
+		return true, buildOutput(validationMessage), nil
 	}
 
-	if len(missing) > 0 {
-		if err := saveState(root, sessionID, state); err != nil {
+	if state.TemplateInjected {
+		if err := sessionstate.Save(root, sessionID, state); err != nil {
 			return false, Output{}, err
 		}
-		recordSignalDiagnostic(root, sessionID, signalReport, reportState, missing, "missing_modules")
-		message := fmt.Sprintf(
-			"QDM_BEFORE_REPORT_SIGNAL %s missing modules: %s. Continue querying the missing modules, then rerun python3 .claude/hooks/before-report-signal.py %s.",
-			signalReport,
-			strings.Join(missing, ", "),
-			signalReport,
-		)
-		return true, buildOutput(message), nil
+		recordTemplateDiagnostic(root, sessionID, state, reportState, "already_injected", templateRel)
+		return true, buildOutput("QDM_INJECT_TEMPLATE already injected in this session; do not request template injection again."), nil
 	}
 
-	templatePath := filepath.Join(root, filepath.FromSlash(config.TemplatePath))
+	templatePath := filepath.Join(root, filepath.FromSlash(templateRel))
 	template, err := os.ReadFile(templatePath)
 	if err != nil {
-		if saveErr := saveState(root, sessionID, state); saveErr != nil {
+		if saveErr := sessionstate.Save(root, sessionID, state); saveErr != nil {
 			return false, Output{}, saveErr
 		}
-		recordSignalDiagnostic(root, sessionID, signalReport, reportState, missing, "missing_template")
-		return true, buildOutput(fmt.Sprintf("QDM_BEFORE_REPORT_SIGNAL %s missing %s.", signalReport, config.TemplatePath)), nil
+		recordTemplateDiagnostic(root, sessionID, state, reportState, "missing_template", templateRel)
+		return true, buildOutput(fmt.Sprintf("QDM_INJECT_TEMPLATE missing %s.", templateRel)), nil
 	}
 
+	state.TemplateInjected = true
 	reportState.TemplateInjected = true
-	if err := saveState(root, sessionID, state); err != nil {
+	if err := sessionstate.Save(root, sessionID, state); err != nil {
 		return false, Output{}, err
 	}
-	recordSignalDiagnostic(root, sessionID, signalReport, reportState, missing, "template_injected")
+	recordTemplateDiagnostic(root, sessionID, state, reportState, "template_injected", templateRel)
 	return true, buildOutput(string(template)), nil
 }
 
@@ -168,7 +141,7 @@ func buildOutput(message string) Output {
 	}
 }
 
-func recordCommandModules(state stateFile, command string) bool {
+func recordCommandModules(state sessionstate.File, command string) bool {
 	handled := false
 	for _, reportName := range reportOrder {
 		config := reportConfigs[reportName]
@@ -227,39 +200,63 @@ func financialTableCommand(normalized, lowered string) bool {
 	return hasReport && hasIndicator && hasDim
 }
 
-func extractSignalReport(command string) string {
+func isTemplateInjectionCommand(command string) bool {
 	normalized := normalizeCommand(command)
-	for _, reportName := range reportOrder {
-		if strings.Contains(normalized, "before-report-signal.py "+reportName) {
-			return reportName
-		}
+	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
+		return false
 	}
-	return ""
+	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
+}
+
+func selectedTemplatePath(root string, state sessionstate.File) (string, string) {
+	if state.SelectedPlaybook == "" {
+		if len(state.PlaybookCandidates) > 1 {
+			var items []string
+			for _, candidate := range state.PlaybookCandidates {
+				items = append(items, candidate.Path+" -> "+candidate.Template)
+			}
+			sort.Strings(items)
+			return "", "QDM_INJECT_TEMPLATE ambiguous playbook candidates with templates: " + strings.Join(items, ", ") + ". Read contextFiles and user question, choose exactly one playbook, then rerun bin/data-harness-cli inject-template."
+		}
+		return "", "QDM_INJECT_TEMPLATE no selected playbook. First read contextFiles and determine one playbook, complete data collection, then run bin/data-harness-cli inject-template."
+	}
+	if state.SelectedTemplate == "" {
+		return "", "QDM_INJECT_TEMPLATE selected playbook missing template frontmatter: " + state.SelectedPlaybook + "."
+	}
+	if !strings.HasPrefix(state.SelectedTemplate, "templates/") {
+		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE template must be under templates/: " + state.SelectedTemplate + "."
+	}
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(state.SelectedTemplate)))
+	if err != nil || info.IsDir() {
+		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE missing " + state.SelectedTemplate + "."
+	}
+	return state.SelectedTemplate, ""
 }
 
 func normalizeCommand(command string) string {
 	return strings.Join(strings.Fields(command), " ")
 }
 
-func getReportState(state stateFile, reportName string) *reportState {
+func getReportState(state sessionstate.File, reportName string) *sessionstate.Report {
 	if state.Reports == nil {
-		state.Reports = map[string]*reportState{}
+		state.Reports = map[string]*sessionstate.Report{}
+	}
+	if reportName == "" {
+		reportName = "template"
 	}
 	current := state.Reports[reportName]
 	if current == nil {
-		current = &reportState{}
+		current = &sessionstate.Report{}
 		state.Reports[reportName] = current
 	}
 	if current.RecordedModules == nil {
 		current.RecordedModules = []string{}
 	}
-	if current.LastSignalMissing == nil {
-		current.LastSignalMissing = []string{}
-	}
 	return current
 }
 
-func addModule(state *reportState, module string) bool {
+func addModule(state *sessionstate.Report, module string) bool {
 	if contains(state.RecordedModules, module) {
 		return false
 	}
@@ -267,107 +264,18 @@ func addModule(state *reportState, module string) bool {
 	return true
 }
 
-func missingModules(state *reportState, required []string) []string {
-	recorded := map[string]bool{}
-	for _, module := range state.RecordedModules {
-		recorded[module] = true
-	}
-	var missing []string
-	for _, module := range required {
-		if !recorded[module] {
-			missing = append(missing, module)
-		}
-	}
-	return missing
-}
-
-func loadState(root, sessionID string) (stateFile, error) {
-	path := statePath(root, sessionID)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return stateFile{SessionID: sessionID, Reports: map[string]*reportState{}}, nil
-		}
-		return stateFile{}, err
-	}
-	var state stateFile
-	if err := json.Unmarshal(data, &state); err != nil {
-		return stateFile{SessionID: sessionID, Reports: map[string]*reportState{}}, nil
-	}
-	if state.SessionID == "" {
-		state.SessionID = sessionID
-	}
-	if state.Reports == nil {
-		state.Reports = map[string]*reportState{}
-	}
-	return state, nil
-}
-
-func saveState(root, sessionID string, state stateFile) error {
-	if state.SessionID == "" {
-		state.SessionID = sessionID
-	}
-	dir := stateDir(root)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	temp, err := os.CreateTemp(dir, ".tmp-*.json")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		_ = os.Remove(tempName)
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(tempName)
-		return err
-	}
-	return os.Rename(tempName, statePath(root, sessionID))
-}
-
-func stateDir(root string) string {
-	return filepath.Join(root, ".claude", "hooks", "state", "business-report")
-}
-
-func statePath(root, sessionID string) string {
-	return filepath.Join(stateDir(root), safeSessionID(sessionID)+".json")
-}
-
-func safeSessionID(sessionID string) string {
-	re := regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
-	safe := re.ReplaceAllString(sessionID, "_")
-	if safe == "" {
-		return "unknown"
-	}
-	return safe
-}
-
-func recordSignalDiagnostic(root, sessionID, reportName string, state *reportState, missing []string, outcome string) {
+func recordTemplateDiagnostic(root, sessionID string, session sessionstate.File, state *sessionstate.Report, outcome, templatePath string) {
 	if os.Getenv("QDM_HARNESS_DIAG") != "1" {
 		return
 	}
-	config := reportConfigs[reportName]
 	event := map[string]any{
 		"ts":                        time.Now().UTC().Format(time.RFC3339Nano),
 		"session_id":                sessionID,
-		"event":                     "before_report_signal",
-		"report_name":               reportName,
-		"report":                    config.Report,
-		"spec_path":                 config.SpecPath,
-		"spec_stats":                pathStats(filepath.Join(root, filepath.FromSlash(config.SpecPath))),
-		"template_path":             config.TemplatePath,
-		"template_stats":            pathStats(filepath.Join(root, filepath.FromSlash(config.TemplatePath))),
-		"missing_modules":           missing,
+		"event":                     "inject_template",
+		"selected_playbook":         session.SelectedPlaybook,
+		"template_path":             templatePath,
+		"template_stats":            pathStats(filepath.Join(root, filepath.FromSlash(templatePath))),
 		"template_already_injected": state.TemplateInjected,
-		"signal_seen":               state.SignalSeen,
 		"outcome":                   outcome,
 	}
 	data, err := json.Marshal(event)
@@ -378,7 +286,7 @@ func recordSignalDiagnostic(root, sessionID, reportName string, state *reportSta
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	path := filepath.Join(dir, safeSessionID(sessionID)+".jsonl")
+	path := filepath.Join(dir, sessionstate.SafeSessionID(sessionID)+".jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return

@@ -43,10 +43,10 @@ depth: deep_report
 - 用户表达“全品类”时，按用户报表默认全口径处理，并在报告中说明口径边界。
 - 必须使用 `qdm-cmr-cli report user overview --ai` 作为主取数入口。
 - 默认全国场景只要求完成 `overview` 必需模块；只有 `overview` 不足以支撑用户指定口径、区域下钻或指标树校验时，才允许补充 `inspect`、`tree --values` 或 `table`。
-- spec 已在取数前注入，必须用于取数和业务规则判断；signal 前不读取、不使用 template。
-- `overview` 成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`，收到 template 二阶段注入后再输出最终报告。
-- 取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-- 最终报告必须等 signal 后收到 template，再按 template 固定章节输出。
+- spec 已在取数前注入，必须用于取数和业务规则判断；template 注入前不读取、不使用 template。
+- `overview` 成功取数后，下一步必须立即执行 `bin/data-harness-cli inject-template`，收到 template 二阶段注入后再输出最终报告。
+- 取数完成后、template 注入前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- 最终报告必须等 template 注入后收到 template，再按 template 固定章节输出。
 - 诊断可以做有限推断，但必须绑定已返回数据。
 - 不得编造数值、排名、环比、同比、阈值或原因。
 

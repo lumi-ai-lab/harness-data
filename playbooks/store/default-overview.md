@@ -11,6 +11,7 @@ match:
     - 门店管理
     - 门店运营
     - 门店报告
+template: templates/store-overview-report.md
 ---
 
 # 门店管理深度报告 Playbook
@@ -24,7 +25,7 @@ match:
 1. 门店规模与健康度
 2. 门店盈利与运营效率
 
-最终报告版式、章节顺序和表格结构在 signal 后由二阶段注入的 template 决定。
+最终报告版式、章节顺序和表格结构在 二阶段注入的 template 决定。
 
 ## 适用边界
 
@@ -55,7 +56,7 @@ match:
 
 ## 查询原则
 
-默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑核心报告取数。`overview` 成功后，下一步必须立即执行 `before-report-signal.py store-overview`。
+默认全国维度、全品类口径下，`qdm-cmr-cli report store overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`，足够支撑核心报告取数。完成本 playbook 要求的取数后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 
 Agent 不应在默认全国全品类场景下主动拆开调用 `inspect`、`tree --values`、`indicators`、`area`、`trend` 或 `table`。只有在以下情况才允许补充探索：
 
@@ -230,11 +231,11 @@ source config/qdm-cli-paths.env
 
 ## 报告生成约束
 
-- `overview` 成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py store-overview`。
-- `overview` 成功后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-- signal 前不读取、不打开、不猜测、不使用 template。
-- 最终报告必须使用 signal 后二阶段注入的 template。
-- 章节顺序保持 signal 后 template 的结构。
+- `overview` 成功取数后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
+- `overview` 成功后、template 注入前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- template 注入前不读取、不打开、不猜测、不使用 template。
+- 最终报告必须使用 二阶段注入的 template。
+- 章节顺序保持 注入后的 template 的结构。
 - 第二章只展示营业门店数、门店净利润两项一级核心指标。
 - 第三章只放门店规模与健康度指标。
 - 第四章只放门店盈利与运营效率指标。

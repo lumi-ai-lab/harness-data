@@ -14,7 +14,7 @@ Claude Code 的 `PostToolUse` hook 调用：
 "$CLAUDE_PROJECT_DIR/bin/data-harness-cli" posttool --format claude-hook
 ```
 
-`context` 负责根据用户问题召回相关 `spec`、`routing`、`playbook` 文件清单；Agent 读取这些文件后判断取数路径、调用 `qdm-cmr-cli`、执行 `before-report-signal.py`。`posttool` 负责记录 Bash 取数模块状态，并在 signal 成功后只注入匹配 report 的 template 正文。
+`context` 负责根据用户问题召回相关 `spec`、`routing`、`playbook` 文件清单；Agent 读取这些文件后判断取数路径、调用 `qdm-cmr-cli`、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 selected playbook 绑定的 template 正文。
 
 ## 常用命令
 
@@ -31,7 +31,7 @@ go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
 ./bin/data-harness-cli build-index
 ./bin/data-harness-cli context --question "华东区最近会员复购为什么下降？" --json
 printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format claude-hook
-printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python3 .claude/hooks/before-report-signal.py member-overview"}}' | ./bin/data-harness-cli posttool --format claude-hook
+printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' | ./bin/data-harness-cli posttool --format claude-hook
 ./bin/data-harness-cli show member-repurchase --json
 ```
 
@@ -40,7 +40,6 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python
 ## 目录结构
 
 - `.claude/settings.json`：注册 Claude Code hook，调用 `context --format claude-hook` 和 `posttool --format claude-hook`。
-- `.claude/hooks/`：报告 signal 薄脚本。
 - `.harness/index/`：由 `data-harness-cli build-index` 生成的机器索引。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
 - `cli/`：Data Harness CLI 源码和 Go 测试。
@@ -48,7 +47,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python
 - `routing/`：Agent 读取后的取数路由规则。
 - `playbooks/`：分析流程与必要证据来源。
 - `spec/`：报告指标归属和业务知识权威说明。
-- `templates/`：signal 成功后二阶段注入的报告骨架与输出约束。
+- `templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
 - `tests/`：Python 集成测试。
 
 ## Context 输出
@@ -90,15 +89,15 @@ printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli co
 Claude hook 模式：
 
 ```bash
-printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python3 .claude/hooks/before-report-signal.py financial-overview"}}' \
+printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' \
   | ./bin/data-harness-cli posttool --format claude-hook
 ```
 
 `posttool` 只处理 `Bash` 工具事件：
 
 - 取数命令：记录对应 report 的必需模块，不输出 additionalContext。
-- `before-report-signal.py <report_name>`：若模块缺失，输出缺失模块提醒。
-- signal 满足：只注入该 report 对应的 `templates/*-report.md` 正文，不注入 spec、routing 或 playbook。
+- `bin/data-harness-cli inject-template`：根据当前 session 中的 selected playbook 注入其绑定的 template。
+- template 注入满足：只注入 selected playbook 绑定的 `templates/*-report.md` 正文，不注入 spec、routing 或 playbook。
 
 ## 召回原则
 
@@ -115,10 +114,10 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python
 - 数值、同比、环比、排名、阈值必须来自 CLI 输出。
 - 不得估算、补造或用示例数值替代缺失数据。
 - 除非用户明确要求导出文件，否则不得写入报告文件。
-- 必需取数完成后，下一步必须立即执行对应 `before-report-signal.py <report_name>`。
-- signal 前禁止总结、整理报告素材、生成中间分析、输出阶段性结论。
-- signal 前禁止读取、打开、猜测或使用任何 `templates/` 文件。
-- signal 成功后只由 `posttool` 注入匹配 report 的 template 正文。
+- 必需取数完成后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
+- template 注入前禁止总结、整理报告素材、生成中间分析、输出阶段性结论。
+- template 注入前禁止读取、打开、猜测或使用任何 `templates/` 文件。
+- inject-template 成功后只由 `posttool` 注入 selected playbook 绑定的 template 正文。
 
 ## 诊断
 
@@ -128,8 +127,8 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"python
 - `context_files`
 - `keyword_hits`
 - `context_bytes`
-- `before_report_signal`
+- `inject_template`
 - `template_path`
 - `template_stats`
 
-诊断不再使用 `report_name` / `injected_files` 表达 hook 预先判定的单一报告类型。
+诊断使用上下文发现和 selected playbook 字段表达当前运行状态。

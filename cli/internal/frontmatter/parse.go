@@ -62,6 +62,8 @@ func parseLines(lines []string) harness.Document {
 					doc.Domain = clean(value)
 				case "title":
 					doc.Title = clean(value)
+				case "template":
+					doc.Template = clean(value)
 				case "tags", "match", "context", "children":
 					section = key
 					if key == "tags" && strings.HasPrefix(strings.TrimSpace(value), "[") {

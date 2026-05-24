@@ -22,7 +22,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: data-harness-cli <build-index|context|posttool|validate|show>")
+		return fmt.Errorf("usage: data-harness-cli <build-index|context|inject-template|posttool|validate|show>")
 	}
 	root, err := harness.FindRoot(rootStart())
 	if err != nil {
@@ -100,6 +100,13 @@ func run() error {
 		if ok {
 			return printCompactJSON(output)
 		}
+	case "inject-template":
+		fs := flag.NewFlagSet("inject-template", flag.ExitOnError)
+		_ = fs.Parse(os.Args[2:])
+		if fs.NArg() != 0 {
+			return fmt.Errorf("inject-template does not accept arguments")
+		}
+		fmt.Println("QDM_INJECT_TEMPLATE")
 	case "validate":
 		fs := flag.NewFlagSet("validate", flag.ExitOnError)
 		jsonOut := fs.Bool("json", false, "print json")

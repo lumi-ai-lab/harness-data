@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"harness-data/cli/internal/harness"
+	"harness-data/cli/internal/sessionstate"
 )
 
 type Output struct {
@@ -24,7 +24,8 @@ type HookSpecificOutput struct {
 }
 
 type promptPayload struct {
-	Prompt string `json:"prompt"`
+	SessionID string `json:"session_id"`
+	Prompt    string `json:"prompt"`
 }
 
 type timeContext struct {
@@ -35,10 +36,11 @@ type timeContext struct {
 }
 
 func RunClaudeHook(root string, input []byte) (bool, Output, error) {
-	prompt := parsePrompt(input)
-	if prompt == "" {
+	payload, ok := parsePromptPayload(input)
+	if !ok || payload.Prompt == "" {
 		return false, Output{}, nil
 	}
+	prompt := payload.Prompt
 	tc := buildTimeContext(prompt)
 	response, err := Build(root, prompt)
 	if err != nil {
@@ -48,8 +50,12 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
+	sessionID := hookSessionID(payload)
+	if err := writeSelectedPlaybookState(root, sessionID, prompt, response); err != nil {
+		return false, Output{}, err
+	}
 	if os.Getenv("QDM_HARNESS_DIAG") == "1" {
-		if err := recordDiagnostic(root, prompt, additionalContext, tc, response); err != nil {
+		if err := recordDiagnostic(root, sessionID, prompt, additionalContext, tc, response); err != nil {
 			return false, Output{}, err
 		}
 	}
@@ -61,12 +67,12 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	}, nil
 }
 
-func parsePrompt(input []byte) string {
+func parsePromptPayload(input []byte) (promptPayload, bool) {
 	var payload promptPayload
 	if err := json.Unmarshal(input, &payload); err != nil {
-		return ""
+		return promptPayload{}, false
 	}
-	return payload.Prompt
+	return payload, true
 }
 
 func buildTimeContext(prompt string) timeContext {
@@ -123,15 +129,11 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse) (s
 		b.WriteString(constraint)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n禁止在 before-report-signal 成功前读取 templates/ 下的报告模板。\n")
+	b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
 	return b.String(), nil
 }
 
-func recordDiagnostic(root, prompt, context string, tc timeContext, response harness.ContextResponse) error {
-	sessionID := os.Getenv("CLAUDE_SESSION_ID")
-	if sessionID == "" {
-		sessionID = "unknown"
-	}
+func recordDiagnostic(root, sessionID, prompt, context string, tc timeContext, response harness.ContextResponse) error {
 	event := map[string]any{
 		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
 		"session_id":      sessionID,
@@ -152,7 +154,7 @@ func recordDiagnostic(root, prompt, context string, tc timeContext, response har
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, safeSessionID(sessionID)+".jsonl")
+	path := filepath.Join(dir, sessionstate.SafeSessionID(sessionID)+".jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -206,15 +208,6 @@ func countLinesBytes(data []byte) int {
 	return lines
 }
 
-func safeSessionID(sessionID string) string {
-	re := regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
-	safe := re.ReplaceAllString(sessionID, "_")
-	if safe == "" {
-		return "unknown"
-	}
-	return safe
-}
-
 func diagnosticMatchedDomains(refs []harness.FileRef) []string {
 	seen := map[string]bool{}
 	for _, ref := range refs {
@@ -230,6 +223,40 @@ func diagnosticMatchedDomains(refs []harness.FileRef) []string {
 	}
 	sort.Strings(domains)
 	return domains
+}
+
+func hookSessionID(payload promptPayload) string {
+	if payload.SessionID != "" {
+		return payload.SessionID
+	}
+	sessionID := os.Getenv("CLAUDE_SESSION_ID")
+	if sessionID == "" {
+		return "unknown"
+	}
+	return sessionID
+}
+
+func writeSelectedPlaybookState(root, sessionID, prompt string, response harness.ContextResponse) error {
+	candidates, err := PlaybookCandidates(root, response)
+	if err != nil {
+		return err
+	}
+	state, err := sessionstate.Load(root, sessionID)
+	if err != nil {
+		return err
+	}
+	state.Prompt = prompt
+	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	state.PlaybookCandidates = candidates
+	state.SelectedPlaybook = ""
+	state.SelectedTemplate = ""
+	state.TemplateInjected = false
+	state.Reports = map[string]*sessionstate.Report{}
+	if len(candidates) == 1 {
+		state.SelectedPlaybook = candidates[0].Path
+		state.SelectedTemplate = candidates[0].Template
+	}
+	return sessionstate.Save(root, sessionID, state)
 }
 
 func keywordHits(refs []harness.FileRef) []map[string]string {

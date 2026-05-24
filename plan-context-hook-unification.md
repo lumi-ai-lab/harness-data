@@ -13,7 +13,7 @@
 
 - 先用正则识别固定 report 类型。
 - 输出 `query_type=...`。
-- 诊断字段仍围绕 `report_name`。
+- 诊断字段仍围绕 `selected_playbook`。
 
 这会让链路看起来像“CLI 先决定业务类型”，而不是“CLI 找上下文，Agent 基于上下文判断取数路径”。
 
@@ -98,12 +98,12 @@ data-harness-cli claude-hook
       "reason": "keyword: 复购"
     }
   ],
-  "instruction": "Read all contextFiles before running data CLI. Do not read templates before before-report-signal succeeds.",
+  "instruction": "Read all contextFiles before running data CLI. Do not read templates before inject-template succeeds.",
   "constraints": [
     "values_must_come_from_cli",
     "do_not_estimate_missing_values",
     "do_not_write_report_file_unless_requested",
-    "do_not_read_template_before_signal"
+    "do_not_read_template_before_inject_template"
   ]
 }
 ```
@@ -139,7 +139,7 @@ Constraints:
 - values_must_come_from_cli
 - do_not_estimate_missing_values
 - do_not_write_report_file_unless_requested
-- do_not_read_template_before_signal
+- do_not_read_template_before_inject_template
 ```
 
 不再输出：
@@ -166,16 +166,7 @@ query_type=financial_overview
 
 ## 诊断字段调整
 
-当前诊断字段：
-
-```json
-{
-  "report_name": "member-overview",
-  "injected_files": [...]
-}
-```
-
-建议改为：
+诊断字段使用上下文发现结构：
 
 ```json
 {

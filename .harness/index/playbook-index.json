@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-24T07:37:54Z",
+  "generatedAt": "2026-05-24T13:01:21Z",
   "root": "/Users/pengmd/c/qdm/harness-data",
   "files": [
     {
@@ -12,6 +12,7 @@
         "playbook",
         "business-report"
       ],
+      "template": "templates/business-overview-report.md",
       "match": {
         "keywords": [
           "经营分析",
@@ -59,6 +60,7 @@
         "playbook",
         "financial-report"
       ],
+      "template": "templates/financial-overview-report.md",
       "match": {
         "keywords": [
           "财务报表",
@@ -106,6 +108,7 @@
         "playbook",
         "user-report"
       ],
+      "template": "templates/member-overview-report.md",
       "match": {
         "keywords": [
           "用户报表",
@@ -153,6 +156,7 @@
         "playbook",
         "store-report"
       ],
+      "template": "templates/store-overview-report.md",
       "match": {
         "keywords": [
           "门店管理",

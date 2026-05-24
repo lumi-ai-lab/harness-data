@@ -141,12 +141,12 @@ data-harness-cli context --question "华东区最近会员复购为什么下降�
       "reason": "domain routing: member"
     }
   ],
-  "instruction": "Read all contextFiles before running data CLI. Do not read templates before before-report-signal succeeds.",
+  "instruction": "Read all contextFiles before running data CLI. Do not read templates before inject-template succeeds.",
   "constraints": [
     "values_must_come_from_cli",
     "do_not_estimate_missing_values",
     "do_not_write_report_file_unless_requested",
-    "do_not_read_template_before_signal"
+    "do_not_read_template_before_inject_template"
   ]
 }
 ```
@@ -255,7 +255,6 @@ harness-data/
 - `cli/`：`data-harness-cli` 的 Go 实现和测试，作为独立 Go module 管理。
 - `spec/`、`routing/`、`playbooks/`：业务知识源，由 CLI 读取。
 - `.harness/index/`：项目级生成索引，放在仓库根目录，不放进 `cli/`。
-- `.claude/hooks/`：Agent 入口，负责调用 `data-harness-cli context`。
 
 ## Frontmatter 设计原则
 
@@ -282,7 +281,7 @@ match:
 - `tags`：稳定标签，例如 `report`、`cli`、`time`、`area`、`repurchase`。
 - `match.keywords`：明确关键词，用于本期检索。
 
-不设计 `rules.severity`、`applies_before_cli`、`applies_before_report`。
+不设计 `rules.severity`、`applies_before_cli`、`applies_inject_template`。
 
 原因：
 
@@ -598,7 +597,7 @@ data-harness-cli posttool --format claude-hook
    - constraints
 3. 不再 append 完整 Spec / Playbook 正文。
 4. `posttool --format claude-hook` 记录 Bash 取数模块。
-5. `before-report-signal.py <report_name>` 满足后，`posttool` 只注入匹配 template 正文，不注入 spec、routing 或 playbook。
+5. `bin/data-harness-cli inject-template` 满足后，`posttool` 只注入匹配 template 正文，不注入 spec、routing 或 playbook。
 ```
 
 开发期可以直接从仓库根目录调用：
@@ -632,7 +631,7 @@ Constraints:
 - values_must_come_from_cli
 - do_not_estimate_missing_values
 - do_not_write_report_file_unless_requested
-- do_not_read_template_before_signal
+- do_not_read_template_before_inject_template
 ```
 
 ## 测试要求

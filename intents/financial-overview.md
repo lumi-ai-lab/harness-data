@@ -45,10 +45,10 @@ depth: deep_report
 - 必须完成 `qdm-cmr-cli report company indicators --ai`、`qdm-cmr-cli report company tree --values`、`qdm-cmr-cli table --report company --indicator EBITDA --dim-type 管理区域 --ai` 三个必需取数动作。
 - `indicators --ai`、`table --ai` 优先使用 AI 压缩输出；`tree --values` 当前不支持 `--ai`，保持默认 JSON 输出。
 - `overview --ai`、`area --ai`、`category --ai`、`trend --ai` 已实测无法稳定补齐财务模板指标，不作为默认必需模块。
-- spec 已在取数前注入，必须用于取数和业务规则判断；signal 前不读取、不使用 template。
-- 三个必需取数动作全部成功后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py financial-overview`，收到 template 二阶段注入后再输出最终报告。
-- 取数完成后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-- 最终报告必须等 signal 后收到 template，再按 template 固定章节输出。
+- spec 已在取数前注入，必须用于取数和业务规则判断；template 注入前不读取、不使用 template。
+- 三个必需取数动作全部成功后，下一步必须立即执行 `bin/data-harness-cli inject-template`，收到 template 二阶段注入后再输出最终报告。
+- 取数完成后、template 注入前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- 最终报告必须等 template 注入后收到 template，再按 template 固定章节输出。
 - 诊断可以做有限推断，但必须绑定已返回数据。
 - 不得编造数值、排名、环比、同比、阈值或原因。
 

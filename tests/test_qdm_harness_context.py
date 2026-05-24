@@ -48,7 +48,8 @@ class QdmHarnessContextTests(unittest.TestCase):
         self.assertIn("spec/member/category-unsupported.md", context)
         self.assertIn("routing/member-overview.md", context)
         self.assertIn("playbooks/member/default-overview.md", context)
-        self.assertIn("do_not_read_template_before_signal", context)
+        self.assertIn("do_not_read_template_before_inject_template", context)
+        self.assertIn("data-harness-cli inject-template", context)
         self.assertNotIn("用户运营指标归属规范", context)
         self.assertNotIn("## Report Template", context)
         self.assertNotIn("用户运营深度报告模板", context)
@@ -97,8 +98,6 @@ class QdmHarnessContextTests(unittest.TestCase):
         events = [json.loads(line) for line in diag_path.read_text(encoding="utf-8").splitlines()]
         event = events[-1]
         self.assertEqual(event["event"], "user_prompt_context")
-        self.assertNotIn("report_name", event)
-        self.assertNotIn("injected_files", event)
         self.assertEqual(event["matched_domains"], ["business"])
         context_paths = [item["relative_path"] for item in event["context_files"]]
         self.assertIn("spec/common/cmr-cli-readme.md", context_paths)

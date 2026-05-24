@@ -11,6 +11,7 @@ match:
     - 经营分析
     - 经营报告
     - 业务表现
+template: templates/business-overview-report.md
 ---
 
 # 经营分析深度报告 Playbook
@@ -25,7 +26,7 @@ match:
 2. 品效
 3. 供应链
 
-本 playbook 负责定义取数流程、必要证据和报告生成门禁；最终报告版式、章节顺序和表格结构在 signal 后由二阶段注入的 template 决定。
+本 playbook 负责定义取数流程、必要证据和报告生成门禁；最终报告版式、章节顺序和表格结构在 二阶段注入的 template 决定。
 
 ## 适用边界
 
@@ -55,7 +56,7 @@ CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `
 
 使用 `qdm-cmr-cli report business`，按用户时间口径补充日期、周或月过滤。对支持 `--ai` 的模块默认追加 `--ai`，降低上下文 token 消耗；`tree --values` 保持默认 JSON 输出。
 
-六个模块是硬性要求，模块之间没有业务顺序依赖，可以并行查询；必须全部成功后才能进入报告生成阶段。六个模块全部成功后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`。
+六个模块是硬性要求，模块之间没有业务顺序依赖，可以并行查询；必须全部成功后才能进入报告生成阶段。六个模块全部成功后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 
 - `overview`: 全局概览，确认报告对象、时间口径和整体表现。
 - `indicators`: 核心指标总览，提取主要指标值、同比、环比、阈值或达成情况。
@@ -86,19 +87,19 @@ wait
 - `category --ai`: 获取品类结构差异。
 - `trend --ai`: 获取趋势、峰谷和异常持续性。
 - `table --ai`: 可选，按需在六个必要模块之后补充。
-- `before-report-signal.py business-overview` 不并行，必须在六个必要模块整体成功后的下一步立即执行。
+- `bin/data-harness-cli inject-template` 不并行，必须在六个必要模块整体成功后的下一步立即执行。
 
 ## 分析步骤
 
 1. 明确时间口径和筛选口径。
 2. 并行查询 `overview`、`indicators`、`tree --values`、`area`、`category`、`trend` 六个必要模块。
-3. 若六个模块均成功，立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`。
-4. signal 前禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-5. signal 成功并收到 template 二阶段注入后，再按 template 组织最终报告正文。
+3. 若六个模块均成功，立即执行 `bin/data-harness-cli inject-template`。
+4. template 注入前禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+5. inject-template 成功并收到 template 二阶段注入后，再按 template 组织最终报告正文。
 
 ## 证据使用方法
 
-以下规则只在 signal 成功并收到 template 后用于最终报告；signal 前不得据此先整理素材或生成中间分析：
+以下规则只在 inject-template 成功并收到 template 后用于最终报告；template 注入前不得据此先整理素材或生成中间分析：
 
 - 核心指标：只保留客数渗透率、品效、活跃供应商数，用于第二章核心指标总览。
 - 维度证据：按用户渗透、品效、供应链三条主线分组，避免跨维度混放。
@@ -148,18 +149,18 @@ wait
 
 ## 报告模板
 
-最终报告必须使用 signal 后二阶段注入的 template。signal 前不读取、不打开、不猜测、不使用 template。
+最终报告必须使用 二阶段注入的 template。template 注入前不读取、不打开、不猜测、不使用 template。
 
 模板使用规则：
 
-- 保持 signal 后收到的 template 章节顺序，不自行增删一级章节。
-- signal 后收到的 template 中的指标组和表格结构优先级高于自由组织。
-- signal 后只注入 template 正文；报告生成阶段按 template 内置的指标归属、缺失省略、单位展示和禁放规则执行。
+- 保持 注入后的 template 章节顺序，不自行增删一级章节。
+- 注入后的 template 中的指标组和表格结构优先级高于自由组织。
+- template 注入后只注入 template 正文；报告生成阶段按 template 内置的指标归属、缺失省略、单位展示和禁放规则执行。
 - CLI 未返回的指标行、指标组或段落直接省略，不写“暂无数据”“未返回”等缺失说明。
-- 不把 signal 后 template 中的占位符原样留在最终报告中。
+- 不把 注入后的 template 中的占位符原样留在最终报告中。
 - 最终报告正文只使用已查询到的 CLI 证据，不使用本地示例值或经验估算值。
 
-signal 后 template 与证据映射：
+注入后的 template 与证据映射：
 
 - 第一章：来自 `overview`，补充时间口径、筛选口径、数据来源和总体判断。
 - 第二章：来自 `indicators` 和 `tree --values`，只展示三大一级核心指标。
@@ -181,10 +182,10 @@ signal 后 template 与证据映射：
 ## 异常处理
 
 - 若必要模块查询失败，先重试或调整合法参数；仍失败时不得生成最终报告。
-- 若某个必要模块成功但返回数据为空，保留已返回证据；不得在 signal 前继续分析或补造缺失指标。
+- 若某个必要模块成功但返回数据为空，保留已返回证据；不得在 template 注入前继续分析或补造缺失指标。
 - 若不同模块对同一指标口径冲突，优先以 `indicators` 和 `tree --values` 的指标值为准，并用其他模块只做结构性佐证。
-- 六个必要模块全部成功后，若未立即执行 `before-report-signal.py business-overview`，不得输出任何总结、素材整理或中间分析。
-- 若 `before-report-signal.py business-overview` 未成功，或未收到 template 二阶段注入，不得输出最终报告正文。
+- 六个必要模块全部成功后，若未立即执行 `bin/data-harness-cli inject-template`，不得输出任何总结、素材整理或中间分析。
+- 若 `bin/data-harness-cli inject-template` 未成功，或未收到 template 二阶段注入，不得输出最终报告正文。
 - 若用户中途追加更具体的筛选条件，应按新条件重新确认时间和过滤口径，并重新完成必要模块查询。
 
 ## 最终输出检查
@@ -192,9 +193,9 @@ signal 后 template 与证据映射：
 输出前逐项检查：
 
 - 已完成 `overview`、`indicators`、`tree --values`、`area`、`category`、`trend` 六个必要模块。
-- 已在六个必要模块成功后的下一步立即执行 `python3 .claude/hooks/before-report-signal.py business-overview`，且 signal 前没有输出总结、素材整理或中间分析。
+- 已在六个必要模块成功后的下一步立即执行 `bin/data-harness-cli inject-template`，且 template 注入前没有输出总结、素材整理或中间分析。
 - 已收到 template 二阶段注入。
-- 报告使用 signal 后 template 的章节结构。
+- 报告使用 注入后的 template 的章节结构。
 - 第二章只展示客数渗透率、品效、活跃供应商数。
 - 销售额、客数、客单价、19点前链路没有放入品效或供应链章节。
 - 出库折让率没有放入供应链章节。

@@ -6,13 +6,14 @@ import (
 
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
+	"harness-data/cli/internal/sessionstate"
 )
 
 var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
-	"do_not_read_template_before_signal",
+	"do_not_read_template_before_inject_template",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -80,9 +81,35 @@ func Build(root, question string) (harness.ContextResponse, error) {
 	return harness.ContextResponse{
 		Question:     question,
 		ContextFiles: refs,
-		Instruction:  "Read all contextFiles before running data CLI. Do not read templates before before-report-signal succeeds.",
+		Instruction:  "Read all contextFiles before running data CLI. Do not read templates before inject-template succeeds. After data collection for the selected playbook is complete, run bin/data-harness-cli inject-template.",
 		Constraints:  constraints,
 	}, nil
+}
+
+func PlaybookCandidates(root string, response harness.ContextResponse) ([]sessionstate.PlaybookCandidate, error) {
+	indexes, err := idx.Build(root)
+	if err != nil {
+		return nil, err
+	}
+	playbooks := map[string]harness.Document{}
+	for _, doc := range indexes.Playbook.Files {
+		if doc.Kind == "playbook" && doc.Template != "" {
+			playbooks[doc.Path] = doc
+		}
+	}
+	var candidates []sessionstate.PlaybookCandidate
+	for _, ref := range response.ContextFiles {
+		doc, ok := playbooks[ref.Path]
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, sessionstate.PlaybookCandidate{
+			Path:     doc.Path,
+			Template: doc.Template,
+			Reason:   ref.Reason,
+		})
+	}
+	return candidates, nil
 }
 
 func recallDomains(question string, docs []harness.Document) map[string]bool {

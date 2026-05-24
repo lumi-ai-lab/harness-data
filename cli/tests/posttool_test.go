@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	dhcontext "harness-data/cli/internal/context"
 	"harness-data/cli/internal/posttool"
 )
 
@@ -45,6 +46,7 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 	root := root(t)
 	sessionID := "go-posttool-business-signal"
 	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天经营情况")
 
 	for _, module := range []string{"overview", "indicators", "tree", "area", "category", "trend"} {
 		command := `"$QDM_CMR_CLI" report business ` + module + ` --date 2026-05-20`
@@ -58,7 +60,7 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 		}
 	}
 
-	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "python3 .claude/hooks/before-report-signal.py business-overview"))
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,19 +77,25 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 
 	state := readPosttoolState(t, root, sessionID)
 	report := state["reports"].(map[string]any)["business-overview"].(map[string]any)
-	if report["template_injected"] != true {
-		t.Fatalf("expected template_injected in %#v", report)
+	if state["selected_playbook"] != "playbooks/business/default-overview.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business-overview-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
 	}
 	if _, ok := report["spec_injected"]; ok {
 		t.Fatalf("did not expect legacy spec_injected in %#v", report)
 	}
 
-	ok, output, err = posttool.RunClaudeHook(root, bashPayload(t, sessionID, "python3 .claude/hooks/before-report-signal.py business-overview"))
+	ok, output, err = posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "already satisfied") {
-		t.Fatalf("expected already satisfied output, got ok=%v output=%#v", ok, output)
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "already injected") {
+		t.Fatalf("expected already injected output, got ok=%v output=%#v", ok, output)
 	}
 }
 
@@ -95,6 +103,7 @@ func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
 	root := root(t)
 	sessionID := "go-posttool-financial"
 	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的财务报表")
 
 	for _, command := range []string{
 		`"$QDM_CMR_CLI" report company indicators --week 2026-20 --ai`,
@@ -110,12 +119,12 @@ func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
 		}
 	}
 
-	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "python3 .claude/hooks/before-report-signal.py financial-overview"))
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("expected signal output")
+		t.Fatal("expected template output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
 	for _, want := range []string{"财务核心指标深度报告模板", "## 一、报告概述"} {
@@ -134,8 +143,8 @@ func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
 	if got := stringSlice(report["recorded_modules"]); !sameStrings(got, []string{"indicators", "tree", "table"}) {
 		t.Fatalf("recorded_modules = %#v", got)
 	}
-	if report["template_injected"] != true {
-		t.Fatalf("expected template_injected in %#v", report)
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
 	}
 }
 
@@ -144,96 +153,126 @@ func TestPosttoolReportsMissingModulesBeforeSignal(t *testing.T) {
 	sessionID := "go-posttool-missing"
 	cleanupPosttoolState(t, root, sessionID)
 
-	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "python3 .claude/hooks/before-report-signal.py business-overview"))
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("expected missing module output")
+		t.Fatal("expected missing playbook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"missing modules", "overview", "indicators", "tree", "area", "category", "trend"} {
+	for _, want := range []string{"no selected playbook", "data-harness-cli inject-template"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
 	}
 }
 
-func TestPosttoolSignalDiagnosticsRecordEachReportPath(t *testing.T) {
+func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 	root := root(t)
-	cases := map[string]struct {
-		Commands     []string
-		SpecPath     string
-		TemplatePath string
-	}{
-		"business-overview": {
-			Commands: []string{
-				`"$QDM_CMR_CLI" report business overview --date 2026-05-20`,
-				`"$QDM_CMR_CLI" report business indicators --date 2026-05-20`,
-				`"$QDM_CMR_CLI" report business tree --values --date 2026-05-20`,
-				`"$QDM_CMR_CLI" report business area --date 2026-05-20`,
-				`"$QDM_CMR_CLI" report business category --date 2026-05-20`,
-				`"$QDM_CMR_CLI" report business trend --date 2026-05-20`,
-			},
-			SpecPath:     "spec/business/report-contract.md",
-			TemplatePath: "templates/business-overview-report.md",
-		},
-		"store-overview": {
-			Commands:     []string{`"$QDM_CMR_CLI" report store overview --date 2026-05-20 --category-type 大分类 --category 00`},
-			SpecPath:     "spec/store/report-contract.md",
-			TemplatePath: "templates/store-overview-report.md",
-		},
-		"member-overview": {
-			Commands:     []string{`"$QDM_CMR_CLI" report user overview --date 2026-05-20`},
-			SpecPath:     "spec/member/report-contract.md",
-			TemplatePath: "templates/member-overview-report.md",
-		},
-		"financial-overview": {
-			Commands: []string{
-				`"$QDM_CMR_CLI" report company indicators --week 2026-20 --ai`,
-				`"$QDM_CMR_CLI" report company tree --values --week 2026-20`,
-				`"$QDM_CMR_CLI" table --report company --week 2026-20 --indicator EBITDA --dim-type 管理区域 --ai`,
-			},
-			SpecPath:     "spec/financial/report-contract.md",
-			TemplatePath: "templates/financial-overview-report.md",
-		},
-	}
-
+	sessionID := "go-posttool-diag-member"
+	cleanupPosttoolState(t, root, sessionID)
 	t.Setenv("QDM_HARNESS_DIAG", "1")
-	for reportName, tc := range cases {
-		t.Run(reportName, func(t *testing.T) {
-			sessionID := "go-posttool-diag-" + reportName
-			cleanupPosttoolState(t, root, sessionID)
-			for _, command := range tc.Commands {
-				if _, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, command)); err != nil {
-					t.Fatal(err)
-				}
-			}
-			ok, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "python3 .claude/hooks/before-report-signal.py "+reportName))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !ok {
-				t.Fatal("expected signal output")
-			}
-			events := readDiagnosticEvents(t, root, sessionID)
-			event := events[len(events)-1]
-			if event["event"] != "before_report_signal" {
-				t.Fatalf("event = %#v", event)
-			}
-			if event["report_name"] != reportName {
-				t.Fatalf("report_name = %#v", event["report_name"])
-			}
-			if event["spec_path"] != tc.SpecPath {
-				t.Fatalf("spec_path = %#v", event["spec_path"])
-			}
-			if event["template_path"] != tc.TemplatePath {
-				t.Fatalf("template_path = %#v", event["template_path"])
-			}
-			if event["outcome"] != "template_injected" {
-				t.Fatalf("outcome = %#v", event["outcome"])
-			}
-		})
+	writeContextState(t, root, sessionID, "查看昨天用户报表")
+
+	ok, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	events := readDiagnosticEvents(t, root, sessionID)
+	event := events[len(events)-1]
+	if event["event"] != "inject_template" {
+		t.Fatalf("event = %#v", event)
+	}
+	if event["selected_playbook"] != "playbooks/member/default-overview.md" {
+		t.Fatalf("selected_playbook = %#v", event["selected_playbook"])
+	}
+	if event["template_path"] != "templates/member-overview-report.md" {
+		t.Fatalf("template_path = %#v", event["template_path"])
+	}
+	for _, unexpected := range []string{"template_signal", "template_signal_arg", "spec_path"} {
+		if _, ok := event[unexpected]; ok {
+			t.Fatalf("unexpected %s in %#v", unexpected, event)
+		}
+	}
+	if event["outcome"] != "template_injected" {
+		t.Fatalf("outcome = %#v", event["outcome"])
+	}
+}
+
+func TestPosttoolInjectTemplateReportsAmbiguousPlaybooks(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-ambiguous"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "会员复购和门店净利润最近为什么下降？")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected ambiguous output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, want := range []string{"ambiguous playbook candidates", "playbooks/member/default-overview.md", "playbooks/store/default-overview.md"} {
+		if !stringsContains(context, want) {
+			t.Fatalf("missing %q in %s", want, context)
+		}
+	}
+}
+
+func TestPosttoolInjectTemplateReportsMissingTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-missing-template"
+	cleanupPosttoolState(t, root, sessionID)
+	state := map[string]any{
+		"session_id":        sessionID,
+		"selected_playbook": "playbooks/member/default-overview.md",
+		"selected_template": "templates/missing-report.md",
+	}
+	writePosttoolState(t, root, sessionID, state)
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !stringsContains(output.HookSpecificOutput.AdditionalContext, "missing templates/missing-report.md") {
+		t.Fatalf("expected missing template output, got ok=%v output=%#v", ok, output)
+	}
+}
+
+func writeContextState(t *testing.T, root, sessionID, prompt string) {
+	t.Helper()
+	t.Setenv("CLAUDE_SESSION_ID", sessionID)
+	data, err := json.Marshal(map[string]string{"prompt": prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, _, err := dhcontext.RunClaudeHook(root, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected context hook output")
+	}
+}
+
+func writePosttoolState(t *testing.T, root, sessionID string, state map[string]any) {
+	t.Helper()
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

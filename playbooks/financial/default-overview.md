@@ -11,6 +11,7 @@ match:
     - 财务报表
     - 财务核心指标
     - 公司报表
+template: templates/financial-overview-report.md
 ---
 
 # 财务核心指标深度报告 Playbook
@@ -25,7 +26,7 @@ match:
 2. 收入结构与毛利贡献
 3. 费用管控与成本效率
 
-最终报告版式、章节顺序和表格结构在 signal 后由二阶段注入的 template 决定。
+最终报告版式、章节顺序和表格结构在 二阶段注入的 template 决定。
 
 ## 适用边界
 
@@ -65,7 +66,7 @@ match:
 - `qdm-cmr-cli report company tree --values <time_filter>`
 - `qdm-cmr-cli table --report company <time_filter> --indicator EBITDA --dim-type 管理区域 --ai`
 
-三个动作都成功后，下一步必须立即执行 `before-report-signal.py financial-overview`。
+三个动作都成功后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 
 实测结论：
 
@@ -206,11 +207,11 @@ EBITDA -> 公司营业收入、公司毛利额、费率/额
 
 ## 报告生成约束
 
-- `indicators --ai`、`tree --values`、`table EBITDA 管理区域 --ai` 三个必需取数动作全部成功后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py financial-overview`。
-- 三个必需取数动作成功后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-- signal 前不读取、不打开、不猜测、不使用 template。
-- 最终报告必须使用 signal 后二阶段注入的 template。
-- 章节顺序保持 signal 后 template 的结构。
+- `indicators --ai`、`tree --values`、`table EBITDA 管理区域 --ai` 三个必需取数动作全部成功后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
+- 三个必需取数动作成功后、template 注入前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- template 注入前不读取、不打开、不猜测、不使用 template。
+- 最终报告必须使用 二阶段注入的 template。
+- 章节顺序保持 注入后的 template 的结构。
 - 报告中的所有数值、同比、环比、排名、阈值和诊断事实必须来自 CLI 输出。
 
 ## 当前 Harness 支持评估
@@ -218,7 +219,7 @@ EBITDA -> 公司营业收入、公司毛利额、费率/额
 现有 Harness 已具备财务报告接入所需的基础能力：
 
 - UserPromptSubmit 阶段可按意图注入单 report 的 intent、routing、spec、playbook。
-- PostToolUse 由 `data-harness-cli posttool --format claude-hook` 处理：记录指定 report 的必需取数模块，并在 signal 后只注入匹配 template。
+- PostToolUse 由 `data-harness-cli posttool --format claude-hook` 处理：记录指定 report 的必需取数模块，并在 template 注入后只注入 selected playbook 绑定的 template。
 - `qdm-cmr-cli report company` 已暴露公司报表入口，支持 `overview`、`inspect`、`tree`、`indicators`、`area`、`category`、`trend` 等模块。
 - `qdm-cmr-cli table --report company` 已暴露公司报表表格入口，`--indicator EBITDA --dim-type 管理区域 --ai` 可返回 EBITDA 树下结构当前值。
 
@@ -227,5 +228,5 @@ EBITDA -> 公司营业收入、公司毛利额、费率/额
 - 已新增 `financial_overview` 意图识别，并确保优先级高于泛经营分析。
 - 已在 report 配置中新增 `financial-overview -> company`，必需动作为 `indicators`、`tree`、`table`，template 为 `templates/financial-overview-report.md`。
 - 已新增 `spec/financial/report-contract.md`，明确 EBITDA、收入、毛利、费用指标的章节归属和禁放规则。
-- 已新增 Go 测试覆盖：用户 prompt 注入、company indicators/tree/table 模块记录、signal 后财务模板注入、未取数 signal 的缺失模块提示。
+- 已新增 Go 测试覆盖：用户 prompt 注入、company indicators/tree/table 模块记录、template 注入后财务模板注入、未取数 template 注入 的缺失模块提示。
 - 数据侧仍需确认部分指标真实值口径：当前实测 EBITDA、公司毛利额、供应链收入/毛利额等在部分接口中返回 0 或缺失；报告生成时必须按 CLI 返回展示或省略，不得倒算。

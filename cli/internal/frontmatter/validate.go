@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"harness-data/cli/internal/harness"
 )
@@ -43,6 +44,20 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 				errs = append(errs, fmt.Sprintf("%s: missing children.path reference %s", doc.Path, child.Path))
 			}
 		}
+		if doc.Kind == "playbook" && !hasTag(doc.Tags, "supplemental") && doc.Template == "" {
+			errs = append(errs, fmt.Sprintf("%s: playbook missing template", doc.Path))
+		}
+		if doc.Kind == "playbook_index" && doc.Template != "" {
+			errs = append(errs, fmt.Sprintf("%s: playbook_index must not declare template", doc.Path))
+		}
+		if doc.Template != "" {
+			if !strings.HasPrefix(doc.Template, "templates/") {
+				errs = append(errs, fmt.Sprintf("%s: template must be under templates/: %s", doc.Path, doc.Template))
+			}
+			if !exists(root, doc.Template) {
+				errs = append(errs, fmt.Sprintf("%s: missing template reference %s", doc.Path, doc.Template))
+			}
+		}
 	}
 	return errs
 }
@@ -50,4 +65,13 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 func exists(root, rel string) bool {
 	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
 	return err == nil && !info.IsDir()
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
 }

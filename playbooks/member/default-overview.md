@@ -11,6 +11,7 @@ match:
     - 用户报表
     - 用户运营
     - 会员分析
+template: templates/member-overview-report.md
 ---
 
 # 用户运营深度报告 Playbook
@@ -25,7 +26,7 @@ match:
 2. 会员价值与复购转化
 3. 用户触达与渠道效率
 
-本 playbook 负责定义取数流程、必要证据和报告生成约束；最终报告版式、章节顺序和表格结构在 signal 后由二阶段注入的 template 决定。
+本 playbook 负责定义取数流程、必要证据和报告生成约束；最终报告版式、章节顺序和表格结构在 二阶段注入的 template 决定。
 
 ## 适用边界
 
@@ -69,7 +70,7 @@ error: report 用户报表 does not support category filters
 
 ## 查询原则
 
-默认全国口径下，`qdm-cmr-cli report user overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`。其中 `category` 在用户报表下通常为空，不作为品类分析依据。`overview` 成功后，下一步必须立即执行 `before-report-signal.py member-overview`。
+默认全国口径下，`qdm-cmr-cli report user overview <time_filter> --ai` 是唯一必需查询。源头支持 `--ai`，会返回 compact 的 `#section/#cols/#data` 结构，包含 `indicators`、`area`、`category`、`trend`。其中 `category` 在用户报表下通常为空，不作为品类分析依据。完成本 playbook 要求的取数后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 
 Agent 不应在默认全国用户报表场景下主动拆开调用 `indicators`、`area`、`category`、`trend` 或 `table`。只有在以下情况才允许补充探索：
 
@@ -268,22 +269,22 @@ source config/qdm-cli-paths.env
 
 ## 报告模板
 
-最终报告必须使用 signal 后二阶段注入的 template。signal 前不读取、不打开、不猜测、不使用 template。
+最终报告必须使用 二阶段注入的 template。template 注入前不读取、不打开、不猜测、不使用 template。
 
 模板使用规则：
 
-- `overview` 成功取数后，下一步必须立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`。
-- `overview` 成功后、signal 前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
-- 保持 signal 后 template 章节顺序，不自行增删一级章节。
-- signal 后 template 中的指标组和表格结构优先级高于自由组织。
+- `overview` 成功取数后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
+- `overview` 成功后、template 注入前，禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
+- 保持 注入后的 template 章节顺序，不自行增删一级章节。
+- 注入后的 template 中的指标组和表格结构优先级高于自由组织。
 - 第一章数据来源写为 `qdm-cmr-cli report user <modules>`；不要写成 `report member`。
 - 区域口径未指定时填全国（不含港澳）。
 - 品类口径写为用户报表默认全口径；不要声称 CLI 已传入全品类过滤。
 - CLI 未返回的指标行、指标组或段落直接省略；不写“暂无数据”“未返回”等缺失说明，除非用户明确要求解释数据缺失。
-- 不把 signal 后 template 中的占位符原样留在最终报告中。
+- 不把 注入后的 template 中的占位符原样留在最终报告中。
 - 最终报告正文只使用已查询到的 CLI 证据，不使用 `templates/member-demo.md` 示例值或经验估算值。
 
-signal 后 template 与证据映射：
+注入后的 template 与证据映射：
 
 - 第一章：来自 `overview` 或 `inspect`，补充时间口径、区域口径、品类口径、数据来源和总体判断。
 - 第二章：来自 `overview.indicators` 和必要时 `tree --values`，只展示有值的一级核心指标。若会员复购率没有值，则从核心总览表中省略。
@@ -309,8 +310,8 @@ signal 后 template 与证据映射：
 - 若 `overview --ai` 查询失败，先检查是否误传了品类参数；用户报表必须移除 `--category-type` 和 `--category` 后重试。
 - 若区域参数解析失败，先用 `search stores --type 管理区域 --keyword <keyword> --ai` 找到区域编码，再重试。
 - 若 `overview --ai` 成功但 `category` 为空，视为正常，不补查品类。
-- 若 `overview --ai` 成功但部分指标没有值，按 signal 后 template 规则省略，不补造缺失指标。
-- 若 `overview --ai` 成功，不得在 signal 前总结、整理报告素材、生成中间分析或输出阶段性结论。
+- 若 `overview --ai` 成功但部分指标没有值，按 注入后的 template 规则省略，不补造缺失指标。
+- 若 `overview --ai` 成功，不得在 template 注入前总结、整理报告素材、生成中间分析或输出阶段性结论。
 - 若用户中途追加更具体的筛选条件，应按新条件重新确认时间和过滤口径，并重新完成必要查询。
 
 ## 最终输出检查
@@ -318,10 +319,10 @@ signal 后 template 与证据映射：
 输出前逐项检查：
 
 - 已完成 `report user overview <time_filter> --ai`。
-- 已在 `overview` 成功后的下一步立即执行 `python3 .claude/hooks/before-report-signal.py member-overview`，且 signal 前没有输出总结、素材整理或中间分析。
+- 已在 `overview` 成功后的下一步立即执行 `bin/data-harness-cli inject-template`，且 template 注入前没有输出总结、素材整理或中间分析。
 - 已收到 template 二阶段注入。
 - 未向用户报表传入 `--category-type` 或 `--category`。
-- 报告使用 signal 后 template 的章节结构。
+- 报告使用 注入后的 template 的章节结构。
 - 数据来源写的是 `qdm-cmr-cli report user <modules>`。
 - 第二章只展示 CLI 返回有值的一级核心指标。
 - 第三章只放用户规模与分层结构指标。

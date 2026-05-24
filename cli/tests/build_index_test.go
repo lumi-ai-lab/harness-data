@@ -34,4 +34,13 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	if result.Playbook.ByID["playbook-member-default-overview"] != "playbooks/member/default-overview.md" {
 		t.Fatalf("member playbook not indexed")
 	}
+	var memberTemplate string
+	for _, doc := range result.Playbook.Files {
+		if doc.ID == "playbook-member-default-overview" {
+			memberTemplate = doc.Template
+		}
+	}
+	if memberTemplate != "templates/member-overview-report.md" {
+		t.Fatalf("member playbook template = %#v", memberTemplate)
+	}
 }
