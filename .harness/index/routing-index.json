@@ -1,0 +1,222 @@
+{
+  "generatedAt": "2026-05-24T07:37:54Z",
+  "root": "/Users/pengmd/c/qdm/harness-data",
+  "files": [
+    {
+      "id": "routing-business-overview",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析路由规则",
+      "path": "routing/business-overview.md",
+      "tags": [
+        "routing",
+        "business-report"
+      ],
+      "match": {
+        "keywords": [
+          "经营",
+          "经营分析",
+          "业务表现",
+          "销售"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-financial-overview",
+      "kind": "routing",
+      "domain": "financial",
+      "title": "财务核心指标路由规则",
+      "path": "routing/financial-overview.md",
+      "tags": [
+        "routing",
+        "financial-report"
+      ],
+      "match": {
+        "keywords": [
+          "财务",
+          "财务报表",
+          "公司报表",
+          "EBITDA",
+          "营业收入"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-index",
+      "kind": "routing",
+      "domain": "common",
+      "title": "路由导航",
+      "path": "routing/index.md",
+      "tags": [
+        "routing",
+        "index"
+      ],
+      "match": {
+        "keywords": [
+          "路由",
+          "report"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-member-overview",
+      "kind": "routing",
+      "domain": "member",
+      "title": "用户运营路由规则",
+      "path": "routing/member-overview.md",
+      "tags": [
+        "routing",
+        "user-report"
+      ],
+      "match": {
+        "keywords": [
+          "用户",
+          "会员",
+          "活跃用户",
+          "会员复购",
+          "用户报表"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-qdm-cli",
+      "kind": "routing",
+      "domain": "common",
+      "title": "QDM CLI 路由规则",
+      "path": "routing/qdm-cli-routing.md",
+      "tags": [
+        "routing",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "qdm",
+          "cli",
+          "indicators"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-store-overview",
+      "kind": "routing",
+      "domain": "store",
+      "title": "门店管理路由规则",
+      "path": "routing/store-overview.md",
+      "tags": [
+        "routing",
+        "store-report"
+      ],
+      "match": {
+        "keywords": [
+          "门店",
+          "门店管理",
+          "门店运营",
+          "门店净利润"
+        ]
+      },
+      "context": {}
+    }
+  ],
+  "byDomain": {
+    "business": [
+      "routing/business-overview.md"
+    ],
+    "common": [
+      "routing/index.md",
+      "routing/qdm-cli-routing.md"
+    ],
+    "financial": [
+      "routing/financial-overview.md"
+    ],
+    "member": [
+      "routing/member-overview.md"
+    ],
+    "store": [
+      "routing/store-overview.md"
+    ]
+  },
+  "byKeyword": {
+    "EBITDA": [
+      "routing/financial-overview.md"
+    ],
+    "cli": [
+      "routing/qdm-cli-routing.md"
+    ],
+    "indicators": [
+      "routing/qdm-cli-routing.md"
+    ],
+    "qdm": [
+      "routing/qdm-cli-routing.md"
+    ],
+    "report": [
+      "routing/index.md"
+    ],
+    "业务表现": [
+      "routing/business-overview.md"
+    ],
+    "会员": [
+      "routing/member-overview.md"
+    ],
+    "会员复购": [
+      "routing/member-overview.md"
+    ],
+    "公司报表": [
+      "routing/financial-overview.md"
+    ],
+    "活跃用户": [
+      "routing/member-overview.md"
+    ],
+    "用户": [
+      "routing/member-overview.md"
+    ],
+    "用户报表": [
+      "routing/member-overview.md"
+    ],
+    "经营": [
+      "routing/business-overview.md"
+    ],
+    "经营分析": [
+      "routing/business-overview.md"
+    ],
+    "营业收入": [
+      "routing/financial-overview.md"
+    ],
+    "财务": [
+      "routing/financial-overview.md"
+    ],
+    "财务报表": [
+      "routing/financial-overview.md"
+    ],
+    "路由": [
+      "routing/index.md"
+    ],
+    "销售": [
+      "routing/business-overview.md"
+    ],
+    "门店": [
+      "routing/store-overview.md"
+    ],
+    "门店净利润": [
+      "routing/store-overview.md"
+    ],
+    "门店管理": [
+      "routing/store-overview.md"
+    ],
+    "门店运营": [
+      "routing/store-overview.md"
+    ]
+  },
+  "byId": {
+    "routing-business-overview": "routing/business-overview.md",
+    "routing-financial-overview": "routing/financial-overview.md",
+    "routing-index": "routing/index.md",
+    "routing-member-overview": "routing/member-overview.md",
+    "routing-qdm-cli": "routing/qdm-cli-routing.md",
+    "routing-store-overview": "routing/store-overview.md"
+  }
+}

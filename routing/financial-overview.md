@@ -1,8 +1,25 @@
+---
+id: routing-financial-overview
+kind: routing
+domain: financial
+title: 财务核心指标路由规则
+tags:
+  - routing
+  - financial-report
+match:
+  keywords:
+    - 财务
+    - 财务报表
+    - 公司报表
+    - EBITDA
+    - 营业收入
+---
+
 # 财务核心指标深度报告路由
 
-命中 `query_type=financial_overview` 时，只允许使用 `qdm-cmr-cli`。
+判断为财务核心指标取数路径时，只允许使用 `qdm-cmr-cli`。
 
-CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/common/cmr-cli-readme.md` 与 `spec/common/time-policy.md` 为准。
 
 默认全品类场景下，必须完成 `indicators`、`tree --values`、`table(EBITDA, 管理区域)` 三个必需取数动作。三个动作全部成功后，必须先执行：
 
@@ -12,7 +29,7 @@ python3 .claude/hooks/before-report-signal.py financial-overview
 
 三个必需取数动作成功后，下一步必须立即执行该 signal；signal 前禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
 
-只有在该 signal 成功且后续收到 template 二阶段注入后，才允许生成最终报告正文；取数前已注入的 `spec/financial-report.md` 在报告生成阶段继续遵守。signal 前不读取、不使用 template。
+只有在该 signal 成功且后续收到 template 二阶段注入后，才允许生成最终报告正文；signal 后只注入匹配的 template 正文，不再注入 spec、routing 或 playbook。signal 前不读取、不使用 template。
 
 推荐命令族：
 

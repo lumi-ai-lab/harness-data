@@ -1,0 +1,290 @@
+{
+  "generatedAt": "2026-05-24T07:37:54Z",
+  "root": "/Users/pengmd/c/qdm/harness-data",
+  "files": [
+    {
+      "id": "playbook-business-default-overview",
+      "kind": "playbook",
+      "domain": "business",
+      "title": "经营分析默认取数 Playbook",
+      "path": "playbooks/business/default-overview.md",
+      "tags": [
+        "playbook",
+        "business-report"
+      ],
+      "match": {
+        "keywords": [
+          "经营分析",
+          "经营报告",
+          "业务表现"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "playbook-business-index",
+      "kind": "playbook_index",
+      "domain": "business",
+      "title": "经营分析 Playbook Index",
+      "path": "playbooks/business/index.md",
+      "tags": [
+        "index",
+        "playbook"
+      ],
+      "match": {
+        "keywords": [
+          "经营",
+          "经营分析"
+        ]
+      },
+      "context": {},
+      "children": [
+        {
+          "path": "playbooks/business/default-overview.md",
+          "keywords": [
+            "经营分析",
+            "经营报告",
+            "业务表现"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "playbook-financial-default-overview",
+      "kind": "playbook",
+      "domain": "financial",
+      "title": "财务核心指标默认取数 Playbook",
+      "path": "playbooks/financial/default-overview.md",
+      "tags": [
+        "playbook",
+        "financial-report"
+      ],
+      "match": {
+        "keywords": [
+          "财务报表",
+          "财务核心指标",
+          "公司报表"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "playbook-financial-index",
+      "kind": "playbook_index",
+      "domain": "financial",
+      "title": "财务核心指标 Playbook Index",
+      "path": "playbooks/financial/index.md",
+      "tags": [
+        "index",
+        "playbook"
+      ],
+      "match": {
+        "keywords": [
+          "财务",
+          "公司报表"
+        ]
+      },
+      "context": {},
+      "children": [
+        {
+          "path": "playbooks/financial/default-overview.md",
+          "keywords": [
+            "财务报表",
+            "财务核心指标",
+            "公司报表"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "playbook-member-default-overview",
+      "kind": "playbook",
+      "domain": "member",
+      "title": "用户运营默认取数 Playbook",
+      "path": "playbooks/member/default-overview.md",
+      "tags": [
+        "playbook",
+        "user-report"
+      ],
+      "match": {
+        "keywords": [
+          "用户报表",
+          "用户运营",
+          "会员分析"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "playbook-member-index",
+      "kind": "playbook_index",
+      "domain": "member",
+      "title": "用户运营 Playbook Index",
+      "path": "playbooks/member/index.md",
+      "tags": [
+        "index",
+        "playbook"
+      ],
+      "match": {
+        "keywords": [
+          "用户",
+          "会员"
+        ]
+      },
+      "context": {},
+      "children": [
+        {
+          "path": "playbooks/member/default-overview.md",
+          "keywords": [
+            "用户报表",
+            "用户运营",
+            "会员分析"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "playbook-store-default-overview",
+      "kind": "playbook",
+      "domain": "store",
+      "title": "门店管理默认取数 Playbook",
+      "path": "playbooks/store/default-overview.md",
+      "tags": [
+        "playbook",
+        "store-report"
+      ],
+      "match": {
+        "keywords": [
+          "门店管理",
+          "门店运营",
+          "门店报告"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "playbook-store-index",
+      "kind": "playbook_index",
+      "domain": "store",
+      "title": "门店管理 Playbook Index",
+      "path": "playbooks/store/index.md",
+      "tags": [
+        "index",
+        "playbook"
+      ],
+      "match": {
+        "keywords": [
+          "门店",
+          "门店管理"
+        ]
+      },
+      "context": {},
+      "children": [
+        {
+          "path": "playbooks/store/default-overview.md",
+          "keywords": [
+            "门店管理",
+            "门店运营",
+            "门店报告"
+          ]
+        }
+      ]
+    }
+  ],
+  "byDomain": {
+    "business": [
+      "playbooks/business/default-overview.md",
+      "playbooks/business/index.md"
+    ],
+    "financial": [
+      "playbooks/financial/default-overview.md",
+      "playbooks/financial/index.md"
+    ],
+    "member": [
+      "playbooks/member/default-overview.md",
+      "playbooks/member/index.md"
+    ],
+    "store": [
+      "playbooks/store/default-overview.md",
+      "playbooks/store/index.md"
+    ]
+  },
+  "byKeyword": {
+    "业务表现": [
+      "playbooks/business/default-overview.md",
+      "playbooks/business/default-overview.md"
+    ],
+    "会员": [
+      "playbooks/member/index.md"
+    ],
+    "会员分析": [
+      "playbooks/member/default-overview.md",
+      "playbooks/member/default-overview.md"
+    ],
+    "公司报表": [
+      "playbooks/financial/default-overview.md",
+      "playbooks/financial/index.md",
+      "playbooks/financial/default-overview.md"
+    ],
+    "用户": [
+      "playbooks/member/index.md"
+    ],
+    "用户报表": [
+      "playbooks/member/default-overview.md",
+      "playbooks/member/default-overview.md"
+    ],
+    "用户运营": [
+      "playbooks/member/default-overview.md",
+      "playbooks/member/default-overview.md"
+    ],
+    "经营": [
+      "playbooks/business/index.md"
+    ],
+    "经营分析": [
+      "playbooks/business/default-overview.md",
+      "playbooks/business/index.md",
+      "playbooks/business/default-overview.md"
+    ],
+    "经营报告": [
+      "playbooks/business/default-overview.md",
+      "playbooks/business/default-overview.md"
+    ],
+    "财务": [
+      "playbooks/financial/index.md"
+    ],
+    "财务报表": [
+      "playbooks/financial/default-overview.md",
+      "playbooks/financial/default-overview.md"
+    ],
+    "财务核心指标": [
+      "playbooks/financial/default-overview.md",
+      "playbooks/financial/default-overview.md"
+    ],
+    "门店": [
+      "playbooks/store/index.md"
+    ],
+    "门店报告": [
+      "playbooks/store/default-overview.md",
+      "playbooks/store/default-overview.md"
+    ],
+    "门店管理": [
+      "playbooks/store/default-overview.md",
+      "playbooks/store/index.md",
+      "playbooks/store/default-overview.md"
+    ],
+    "门店运营": [
+      "playbooks/store/default-overview.md",
+      "playbooks/store/default-overview.md"
+    ]
+  },
+  "byId": {
+    "playbook-business-default-overview": "playbooks/business/default-overview.md",
+    "playbook-business-index": "playbooks/business/index.md",
+    "playbook-financial-default-overview": "playbooks/financial/default-overview.md",
+    "playbook-financial-index": "playbooks/financial/index.md",
+    "playbook-member-default-overview": "playbooks/member/default-overview.md",
+    "playbook-member-index": "playbooks/member/index.md",
+    "playbook-store-default-overview": "playbooks/store/default-overview.md",
+    "playbook-store-index": "playbooks/store/index.md"
+  }
+}

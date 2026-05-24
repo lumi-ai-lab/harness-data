@@ -1,8 +1,25 @@
+---
+id: routing-member-overview
+kind: routing
+domain: member
+title: 用户运营路由规则
+tags:
+  - routing
+  - user-report
+match:
+  keywords:
+    - 用户
+    - 会员
+    - 活跃用户
+    - 会员复购
+    - 用户报表
+---
+
 # 用户运营深度报告路由
 
-命中 `query_type=member_overview` 时，只允许使用 `qdm-cmr-cli`。
+判断为用户运营取数路径时，只允许使用 `qdm-cmr-cli`。
 
-CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/cmr-cli-readme.md` 与 `spec/qdm-time-policy.md` 为准。
+CMR CLI 参数格式、时间过滤、`--ai` 白名单和失败重试规则以 `spec/common/cmr-cli-readme.md` 与 `spec/common/time-policy.md` 为准。
 
 默认全国场景下，`overview` 是唯一必需模块。`overview` 成功后，必须先执行：
 
@@ -12,7 +29,7 @@ python3 .claude/hooks/before-report-signal.py member-overview
 
 `overview` 成功取数后，下一步必须立即执行该 signal；signal 前禁止总结、禁止整理报告素材、禁止生成中间分析、禁止输出阶段性结论。
 
-只有在该 signal 成功且后续收到 template 二阶段注入后，才允许生成最终报告正文；取数前已注入的 `spec/member-report.md` 在报告生成阶段继续遵守。signal 前不读取、不使用 template。
+只有在该 signal 成功且后续收到 template 二阶段注入后，才允许生成最终报告正文；signal 后只注入匹配的 template 正文，不再注入 spec、routing 或 playbook。signal 前不读取、不使用 template。
 
 推荐命令族：
 

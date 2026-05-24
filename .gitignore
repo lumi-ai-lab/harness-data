@@ -19,3 +19,7 @@ __pycache__/
 *.tmp
 *.swp
 *~
+
+# Compiled official harness CLI entrypoint is intentionally tracked.
+!bin/
+!bin/data-harness-cli

@@ -1,0 +1,936 @@
+{
+  "generatedAt": "2026-05-24T07:37:54Z",
+  "root": "/Users/pengmd/c/qdm/harness-data",
+  "files": [
+    {
+      "id": "business-area-category-trend",
+      "kind": "spec",
+      "domain": "business",
+      "title": "经营分析区域品类趋势规则",
+      "path": "spec/business/area-category-trend.md",
+      "tags": [
+        "report",
+        "area",
+        "category",
+        "trend"
+      ],
+      "match": {
+        "keywords": [
+          "区域",
+          "品类",
+          "趋势",
+          "华东"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-core-indicators",
+      "kind": "spec",
+      "domain": "business",
+      "title": "经营分析核心指标规则",
+      "path": "spec/business/core-indicators.md",
+      "tags": [
+        "report",
+        "metric",
+        "core"
+      ],
+      "match": {
+        "keywords": [
+          "核心指标",
+          "客数渗透率",
+          "品效",
+          "活跃供应商数"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-index",
+      "kind": "spec_index",
+      "domain": "business",
+      "title": "经营分析 Spec Index",
+      "path": "spec/business/index.md",
+      "tags": [
+        "index",
+        "business-report"
+      ],
+      "match": {
+        "keywords": [
+          "经营",
+          "经营分析",
+          "业务表现",
+          "销售"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/business/report-contract.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/business/core-indicators.md",
+          "keywords": [
+            "核心指标",
+            "客数渗透率",
+            "品效",
+            "活跃供应商数"
+          ]
+        },
+        {
+          "path": "spec/business/area-category-trend.md",
+          "keywords": [
+            "区域",
+            "品类",
+            "趋势"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "business-report-contract",
+      "kind": "spec",
+      "domain": "business",
+      "title": "经营分析报告合同",
+      "path": "spec/business/report-contract.md",
+      "tags": [
+        "report",
+        "contract",
+        "business"
+      ],
+      "match": {
+        "keywords": [
+          "经营",
+          "经营分析",
+          "业务表现",
+          "销售"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "common-area",
+      "kind": "spec",
+      "domain": "common",
+      "title": "QDM 区域口径规则",
+      "path": "spec/common/area.md",
+      "tags": [
+        "area",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "全国",
+          "区域",
+          "华东",
+          "华南",
+          "华北",
+          "管理区域"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "common-cli-safety",
+      "kind": "spec",
+      "domain": "common",
+      "title": "取数安全规则",
+      "path": "spec/common/cli-safety.md",
+      "tags": [
+        "safety",
+        "cli",
+        "report"
+      ],
+      "match": {
+        "keywords": [
+          "禁止估算",
+          "缺失值",
+          "报告文件",
+          "template"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "common-cmr-cli-readme",
+      "kind": "spec",
+      "domain": "common",
+      "title": "CMR CLI 使用说明",
+      "path": "spec/common/cmr-cli-readme.md",
+      "tags": [
+        "cli",
+        "cmr",
+        "safety"
+      ],
+      "match": {
+        "keywords": [
+          "CMR CLI",
+          "qdm-cmr-cli",
+          "取数"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "common-index",
+      "kind": "spec_index",
+      "domain": "common",
+      "title": "通用 Spec Index",
+      "path": "spec/common/index.md",
+      "tags": [
+        "index",
+        "common"
+      ],
+      "match": {
+        "keywords": [
+          "取数",
+          "时间",
+          "区域"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/common/cmr-cli-readme.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/common/time-policy.md",
+          "keywords": [
+            "今天",
+            "昨天",
+            "最近",
+            "本周",
+            "上周",
+            "本月",
+            "上月"
+          ]
+        },
+        {
+          "path": "spec/common/area.md",
+          "keywords": [
+            "全国",
+            "区域",
+            "华东",
+            "华南",
+            "华北",
+            "管理区域"
+          ]
+        },
+        {
+          "path": "spec/common/cli-safety.md",
+          "keywords": [
+            "禁止估算",
+            "报告文件",
+            "template"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "common-time-policy",
+      "kind": "spec",
+      "domain": "common",
+      "title": "QDM 时间口径规则",
+      "path": "spec/common/time-policy.md",
+      "tags": [
+        "time",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "今天",
+          "昨天",
+          "最近",
+          "本周",
+          "上周",
+          "本月",
+          "上月"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "financial-income-cost-profit",
+      "kind": "spec",
+      "domain": "financial",
+      "title": "财务收入毛利费用规则",
+      "path": "spec/financial/income-cost-profit.md",
+      "tags": [
+        "report",
+        "metric",
+        "profit"
+      ],
+      "match": {
+        "keywords": [
+          "营业收入",
+          "毛利",
+          "费用",
+          "EBITDA",
+          "利润"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "financial-index",
+      "kind": "spec_index",
+      "domain": "financial",
+      "title": "财务核心指标 Spec Index",
+      "path": "spec/financial/index.md",
+      "tags": [
+        "index",
+        "financial-report"
+      ],
+      "match": {
+        "keywords": [
+          "财务",
+          "财务报表",
+          "公司报表",
+          "EBITDA"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/financial/report-contract.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/financial/income-cost-profit.md",
+          "keywords": [
+            "营业收入",
+            "毛利",
+            "费用",
+            "EBITDA"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "financial-report-contract",
+      "kind": "spec",
+      "domain": "financial",
+      "title": "财务核心指标报告合同",
+      "path": "spec/financial/report-contract.md",
+      "tags": [
+        "report",
+        "contract",
+        "financial"
+      ],
+      "match": {
+        "keywords": [
+          "财务",
+          "财务报表",
+          "公司报表",
+          "EBITDA"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "member-category-unsupported",
+      "kind": "spec",
+      "domain": "member",
+      "title": "用户报表品类不支持规则",
+      "path": "spec/member/category-unsupported.md",
+      "tags": [
+        "report",
+        "category",
+        "unsupported"
+      ],
+      "match": {
+        "keywords": [
+          "品类",
+          "全品类",
+          "分类",
+          "类目"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "member-channel-touch",
+      "kind": "spec",
+      "domain": "member",
+      "title": "用户触达与渠道效率规则",
+      "path": "spec/member/channel-touch.md",
+      "tags": [
+        "report",
+        "metric",
+        "channel"
+      ],
+      "match": {
+        "keywords": [
+          "触达",
+          "社群",
+          "官媒",
+          "抖音"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "member-index",
+      "kind": "spec_index",
+      "domain": "member",
+      "title": "用户运营 Spec Index",
+      "path": "spec/member/index.md",
+      "tags": [
+        "index",
+        "user-report"
+      ],
+      "match": {
+        "keywords": [
+          "用户",
+          "会员",
+          "用户运营",
+          "用户报表"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/member/report-contract.md",
+          "spec/member/category-unsupported.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/member/repurchase.md",
+          "keywords": [
+            "复购",
+            "会员复购率",
+            "复购会员数",
+            "会员销售占比"
+          ]
+        },
+        {
+          "path": "spec/member/retention.md",
+          "keywords": [
+            "留存",
+            "流失",
+            "休眠",
+            "挽回"
+          ]
+        },
+        {
+          "path": "spec/member/channel-touch.md",
+          "keywords": [
+            "触达",
+            "社群",
+            "官媒",
+            "抖音"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "member-report-contract",
+      "kind": "spec",
+      "domain": "member",
+      "title": "用户运营报告合同",
+      "path": "spec/member/report-contract.md",
+      "tags": [
+        "report",
+        "contract",
+        "member"
+      ],
+      "match": {
+        "keywords": [
+          "用户",
+          "用户运营",
+          "会员",
+          "用户报表"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "member-repurchase",
+      "kind": "spec",
+      "domain": "member",
+      "title": "会员复购规则",
+      "path": "spec/member/repurchase.md",
+      "tags": [
+        "report",
+        "metric",
+        "repurchase"
+      ],
+      "match": {
+        "keywords": [
+          "复购",
+          "会员复购率",
+          "复购会员数",
+          "会员销售占比",
+          "老客"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "member-retention",
+      "kind": "spec",
+      "domain": "member",
+      "title": "用户留存与流失规则",
+      "path": "spec/member/retention.md",
+      "tags": [
+        "report",
+        "metric",
+        "retention"
+      ],
+      "match": {
+        "keywords": [
+          "留存",
+          "流失",
+          "休眠",
+          "挽回"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "store-index",
+      "kind": "spec_index",
+      "domain": "store",
+      "title": "门店管理 Spec Index",
+      "path": "spec/store/index.md",
+      "tags": [
+        "index",
+        "store-report"
+      ],
+      "match": {
+        "keywords": [
+          "门店",
+          "门店管理",
+          "门店运营"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/store/report-contract.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/store/scale-health.md",
+          "keywords": [
+            "营业门店数",
+            "开店",
+            "闭店",
+            "停业"
+          ]
+        },
+        {
+          "path": "spec/store/profit-efficiency.md",
+          "keywords": [
+            "门店净利润",
+            "坪效",
+            "人效",
+            "盈亏平衡点"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "store-profit-efficiency",
+      "kind": "spec",
+      "domain": "store",
+      "title": "门店盈利与效率规则",
+      "path": "spec/store/profit-efficiency.md",
+      "tags": [
+        "report",
+        "metric",
+        "profit"
+      ],
+      "match": {
+        "keywords": [
+          "门店净利润",
+          "坪效",
+          "人效",
+          "盈亏平衡点"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "store-report-contract",
+      "kind": "spec",
+      "domain": "store",
+      "title": "门店管理报告合同",
+      "path": "spec/store/report-contract.md",
+      "tags": [
+        "report",
+        "contract",
+        "store"
+      ],
+      "match": {
+        "keywords": [
+          "门店",
+          "门店管理",
+          "门店运营"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "store-scale-health",
+      "kind": "spec",
+      "domain": "store",
+      "title": "门店规模与健康度规则",
+      "path": "spec/store/scale-health.md",
+      "tags": [
+        "report",
+        "metric",
+        "scale"
+      ],
+      "match": {
+        "keywords": [
+          "营业门店数",
+          "开店",
+          "闭店",
+          "停业"
+        ]
+      },
+      "context": {}
+    }
+  ],
+  "byDomain": {
+    "business": [
+      "spec/business/area-category-trend.md",
+      "spec/business/core-indicators.md",
+      "spec/business/index.md",
+      "spec/business/report-contract.md"
+    ],
+    "common": [
+      "spec/common/area.md",
+      "spec/common/cli-safety.md",
+      "spec/common/cmr-cli-readme.md",
+      "spec/common/index.md",
+      "spec/common/time-policy.md"
+    ],
+    "financial": [
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/index.md",
+      "spec/financial/report-contract.md"
+    ],
+    "member": [
+      "spec/member/category-unsupported.md",
+      "spec/member/channel-touch.md",
+      "spec/member/index.md",
+      "spec/member/report-contract.md",
+      "spec/member/repurchase.md",
+      "spec/member/retention.md"
+    ],
+    "store": [
+      "spec/store/index.md",
+      "spec/store/profit-efficiency.md",
+      "spec/store/report-contract.md",
+      "spec/store/scale-health.md"
+    ]
+  },
+  "byKeyword": {
+    "CMR CLI": [
+      "spec/common/cmr-cli-readme.md"
+    ],
+    "EBITDA": [
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/index.md",
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/report-contract.md"
+    ],
+    "qdm-cmr-cli": [
+      "spec/common/cmr-cli-readme.md"
+    ],
+    "template": [
+      "spec/common/cli-safety.md",
+      "spec/common/cli-safety.md"
+    ],
+    "上周": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "上月": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "业务表现": [
+      "spec/business/index.md",
+      "spec/business/report-contract.md"
+    ],
+    "人效": [
+      "spec/store/profit-efficiency.md",
+      "spec/store/profit-efficiency.md"
+    ],
+    "今天": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "休眠": [
+      "spec/member/retention.md",
+      "spec/member/retention.md"
+    ],
+    "会员": [
+      "spec/member/index.md",
+      "spec/member/report-contract.md"
+    ],
+    "会员复购率": [
+      "spec/member/repurchase.md",
+      "spec/member/repurchase.md"
+    ],
+    "会员销售占比": [
+      "spec/member/repurchase.md",
+      "spec/member/repurchase.md"
+    ],
+    "停业": [
+      "spec/store/scale-health.md",
+      "spec/store/scale-health.md"
+    ],
+    "全品类": [
+      "spec/member/category-unsupported.md"
+    ],
+    "全国": [
+      "spec/common/area.md",
+      "spec/common/area.md"
+    ],
+    "公司报表": [
+      "spec/financial/index.md",
+      "spec/financial/report-contract.md"
+    ],
+    "分类": [
+      "spec/member/category-unsupported.md"
+    ],
+    "利润": [
+      "spec/financial/income-cost-profit.md"
+    ],
+    "区域": [
+      "spec/business/area-category-trend.md",
+      "spec/business/area-category-trend.md",
+      "spec/common/area.md",
+      "spec/common/index.md",
+      "spec/common/area.md"
+    ],
+    "华东": [
+      "spec/business/area-category-trend.md",
+      "spec/common/area.md",
+      "spec/common/area.md"
+    ],
+    "华北": [
+      "spec/common/area.md",
+      "spec/common/area.md"
+    ],
+    "华南": [
+      "spec/common/area.md",
+      "spec/common/area.md"
+    ],
+    "取数": [
+      "spec/common/cmr-cli-readme.md",
+      "spec/common/index.md"
+    ],
+    "品效": [
+      "spec/business/core-indicators.md",
+      "spec/business/core-indicators.md"
+    ],
+    "品类": [
+      "spec/business/area-category-trend.md",
+      "spec/business/area-category-trend.md",
+      "spec/member/category-unsupported.md"
+    ],
+    "坪效": [
+      "spec/store/profit-efficiency.md",
+      "spec/store/profit-efficiency.md"
+    ],
+    "复购": [
+      "spec/member/repurchase.md",
+      "spec/member/repurchase.md"
+    ],
+    "复购会员数": [
+      "spec/member/repurchase.md",
+      "spec/member/repurchase.md"
+    ],
+    "官媒": [
+      "spec/member/channel-touch.md",
+      "spec/member/channel-touch.md"
+    ],
+    "客数渗透率": [
+      "spec/business/core-indicators.md",
+      "spec/business/core-indicators.md"
+    ],
+    "开店": [
+      "spec/store/scale-health.md",
+      "spec/store/scale-health.md"
+    ],
+    "抖音": [
+      "spec/member/channel-touch.md",
+      "spec/member/channel-touch.md"
+    ],
+    "报告文件": [
+      "spec/common/cli-safety.md",
+      "spec/common/cli-safety.md"
+    ],
+    "挽回": [
+      "spec/member/retention.md",
+      "spec/member/retention.md"
+    ],
+    "时间": [
+      "spec/common/index.md"
+    ],
+    "昨天": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "最近": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "本周": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "本月": [
+      "spec/common/time-policy.md",
+      "spec/common/time-policy.md"
+    ],
+    "核心指标": [
+      "spec/business/core-indicators.md",
+      "spec/business/core-indicators.md"
+    ],
+    "毛利": [
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/income-cost-profit.md"
+    ],
+    "活跃供应商数": [
+      "spec/business/core-indicators.md",
+      "spec/business/core-indicators.md"
+    ],
+    "流失": [
+      "spec/member/retention.md",
+      "spec/member/retention.md"
+    ],
+    "用户": [
+      "spec/member/index.md",
+      "spec/member/report-contract.md"
+    ],
+    "用户报表": [
+      "spec/member/index.md",
+      "spec/member/report-contract.md"
+    ],
+    "用户运营": [
+      "spec/member/index.md",
+      "spec/member/report-contract.md"
+    ],
+    "留存": [
+      "spec/member/retention.md",
+      "spec/member/retention.md"
+    ],
+    "盈亏平衡点": [
+      "spec/store/profit-efficiency.md",
+      "spec/store/profit-efficiency.md"
+    ],
+    "社群": [
+      "spec/member/channel-touch.md",
+      "spec/member/channel-touch.md"
+    ],
+    "禁止估算": [
+      "spec/common/cli-safety.md",
+      "spec/common/cli-safety.md"
+    ],
+    "管理区域": [
+      "spec/common/area.md",
+      "spec/common/area.md"
+    ],
+    "类目": [
+      "spec/member/category-unsupported.md"
+    ],
+    "经营": [
+      "spec/business/index.md",
+      "spec/business/report-contract.md"
+    ],
+    "经营分析": [
+      "spec/business/index.md",
+      "spec/business/report-contract.md"
+    ],
+    "缺失值": [
+      "spec/common/cli-safety.md"
+    ],
+    "老客": [
+      "spec/member/repurchase.md"
+    ],
+    "营业收入": [
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/income-cost-profit.md"
+    ],
+    "营业门店数": [
+      "spec/store/scale-health.md",
+      "spec/store/scale-health.md"
+    ],
+    "触达": [
+      "spec/member/channel-touch.md",
+      "spec/member/channel-touch.md"
+    ],
+    "财务": [
+      "spec/financial/index.md",
+      "spec/financial/report-contract.md"
+    ],
+    "财务报表": [
+      "spec/financial/index.md",
+      "spec/financial/report-contract.md"
+    ],
+    "费用": [
+      "spec/financial/income-cost-profit.md",
+      "spec/financial/income-cost-profit.md"
+    ],
+    "趋势": [
+      "spec/business/area-category-trend.md",
+      "spec/business/area-category-trend.md"
+    ],
+    "销售": [
+      "spec/business/index.md",
+      "spec/business/report-contract.md"
+    ],
+    "门店": [
+      "spec/store/index.md",
+      "spec/store/report-contract.md"
+    ],
+    "门店净利润": [
+      "spec/store/profit-efficiency.md",
+      "spec/store/profit-efficiency.md"
+    ],
+    "门店管理": [
+      "spec/store/index.md",
+      "spec/store/report-contract.md"
+    ],
+    "门店运营": [
+      "spec/store/index.md",
+      "spec/store/report-contract.md"
+    ],
+    "闭店": [
+      "spec/store/scale-health.md",
+      "spec/store/scale-health.md"
+    ]
+  },
+  "byId": {
+    "business-area-category-trend": "spec/business/area-category-trend.md",
+    "business-core-indicators": "spec/business/core-indicators.md",
+    "business-index": "spec/business/index.md",
+    "business-report-contract": "spec/business/report-contract.md",
+    "common-area": "spec/common/area.md",
+    "common-cli-safety": "spec/common/cli-safety.md",
+    "common-cmr-cli-readme": "spec/common/cmr-cli-readme.md",
+    "common-index": "spec/common/index.md",
+    "common-time-policy": "spec/common/time-policy.md",
+    "financial-income-cost-profit": "spec/financial/income-cost-profit.md",
+    "financial-index": "spec/financial/index.md",
+    "financial-report-contract": "spec/financial/report-contract.md",
+    "member-category-unsupported": "spec/member/category-unsupported.md",
+    "member-channel-touch": "spec/member/channel-touch.md",
+    "member-index": "spec/member/index.md",
+    "member-report-contract": "spec/member/report-contract.md",
+    "member-repurchase": "spec/member/repurchase.md",
+    "member-retention": "spec/member/retention.md",
+    "store-index": "spec/store/index.md",
+    "store-profit-efficiency": "spec/store/profit-efficiency.md",
+    "store-report-contract": "spec/store/report-contract.md",
+    "store-scale-health": "spec/store/scale-health.md"
+  }
+}

@@ -471,9 +471,10 @@ children:
 5. 将大 Spec 拆成按业务域组织的 `index.md + topic spec`。
 6. 为所有 routing 文件添加轻量 frontmatter。
 7. 为 playbook 添加必要 frontmatter；必要时拆成 index + topic playbook。
-8. 改造 `.claude/hooks/qdm-harness-context.py`，直接使用 `data-harness-cli context`。
-9. 删除旧的“append 完整 Spec / Playbook”注入路径。
-10. 更新测试，验证 contextFiles 选择和 hook 输出。
+8. 使用 `data-harness-cli context --format claude-hook` 承接 `UserPromptSubmit`。
+9. 使用 `data-harness-cli posttool --format claude-hook` 承接 `PostToolUse`，signal 后只注入匹配 template。
+10. 删除旧的 Python hook 和“append 完整 Spec / Playbook”注入路径。
+11. 更新测试，验证 contextFiles 选择、PostToolUse 模块记录和 template 注入。
 
 ## 现有文件迁移
 
@@ -579,24 +580,25 @@ playbooks/financial/default-overview.md
 
 ## Hook 改造
 
-当前 hook：
+当前 hook 入口：
 
 ```text
-.claude/hooks/qdm-harness-context.py
+data-harness-cli context --format claude-hook
+data-harness-cli posttool --format claude-hook
 ```
 
 目标行为：
 
 ```text
-1. 解析用户 prompt 和时间。
-2. 调用：
-   data-harness-cli context --question <prompt> --json
-3. 输出 additionalContext：
+1. `context --format claude-hook` 解析用户 prompt 和时间。
+2. 输出 additionalContext：
    - 时间解析 JSON
    - context 返回的 contextFiles
    - 必须读取 contextFiles 的指令
    - constraints
-4. 不再 append 完整 Spec / Playbook 正文。
+3. 不再 append 完整 Spec / Playbook 正文。
+4. `posttool --format claude-hook` 记录 Bash 取数模块。
+5. `before-report-signal.py <report_name>` 满足后，`posttool` 只注入匹配 template 正文，不注入 spec、routing 或 playbook。
 ```
 
 开发期可以直接从仓库根目录调用：
@@ -643,14 +645,11 @@ cli/tests/context_test.go
 cli/tests/validate_test.go
 ```
 
-更新 Python hook 测试：
+更新 Hook 测试：
 
 ```text
 tests/test_qdm_harness_context.py
-tests/test_business_report_hooks.py
-tests/test_store_report_hooks.py
-tests/test_member_report_hooks.py
-tests/test_financial_report_hooks.py
+cli/tests/posttool_test.go
 ```
 
 必须覆盖：
