@@ -134,6 +134,9 @@ func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 			t.Fatalf("missing %s in %s", want, string(data))
 		}
 	}
+	if !bytes.Contains(data, []byte(`"mode": "template_report"`)) {
+		t.Fatalf("missing template_report mode in %s", string(data))
+	}
 }
 
 func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
@@ -185,6 +188,9 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	if state["prompt"] != prompt {
 		t.Fatalf("prompt = %#v", state["prompt"])
 	}
+	if state["mode"] != "template_report" {
+		t.Fatalf("mode = %#v", state["mode"])
+	}
 	if state["started_at"] == "" {
 		t.Fatalf("missing started_at in %s", string(data))
 	}
@@ -200,6 +206,57 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	reports, ok := state["reports"].(map[string]any)
 	if !ok || len(reports) != 0 {
 		t.Fatalf("reports not reset: %#v", state["reports"])
+	}
+}
+
+func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
+	sessionID := "go-context-free-analysis"
+	root := root(t)
+	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	})
+
+	payload := bytes.NewBufferString(`{"session_id":"` + sessionID + `","prompt":"2026年第10周粤西1区会员经营情况如何 @dm"}`)
+	ok, output, err := dhcontext.RunClaudeHook(root, payload.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected hook output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, want := range []string{"Harness mode: free_analysis", "不要执行 `bin/data-harness-cli inject-template`", "playbooks/business/default-overview.md", "playbooks/member/default-overview.md"} {
+		if !bytes.Contains([]byte(context), []byte(want)) {
+			t.Fatalf("missing %s in %s", want, context)
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state["mode"] != "free_analysis" {
+		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
+	}
+	if state["selected_playbook"] != nil {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != nil {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	candidates, ok := state["playbook_candidates"].([]any)
+	if !ok || len(candidates) != 2 {
+		t.Fatalf("playbook_candidates = %#v", state["playbook_candidates"])
 	}
 }
 

@@ -1559,7 +1559,7 @@ func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 	}
 }
 
-func TestPosttoolInjectTemplateReportsAmbiguousPlaybooks(t *testing.T) {
+func TestPosttoolInjectTemplateUsesFreeAnalysisForAmbiguousPlaybooks(t *testing.T) {
 	root := root(t)
 	sessionID := "go-posttool-ambiguous"
 	cleanupPosttoolState(t, root, sessionID)
@@ -1570,13 +1570,17 @@ func TestPosttoolInjectTemplateReportsAmbiguousPlaybooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("expected ambiguous output")
+		t.Fatal("expected free analysis output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"ambiguous playbook candidates", "playbooks/member/default-overview.md", "playbooks/store/default-overview.md"} {
+	for _, want := range []string{"QDM_FREE_ANALYSIS", "no unique playbook/template", "Do not run bin/data-harness-cli inject-template"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
+	}
+	state := readPosttoolState(t, root, sessionID)
+	if state["mode"] != "free_analysis" {
+		t.Fatalf("mode = %#v", state["mode"])
 	}
 }
 

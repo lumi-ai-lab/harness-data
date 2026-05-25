@@ -96,6 +96,14 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	}
 	reportState := getReportState(state, "template")
 
+	if state.Mode == sessionstate.ModeFreeAnalysis {
+		if err := sessionstate.Save(root, sessionID, state); err != nil {
+			return false, Output{}, err
+		}
+		recordTemplateDiagnostic(root, sessionID, state, reportState, "free_analysis_no_template", "")
+		return true, buildOutput("QDM_FREE_ANALYSIS current session has no unique playbook/template. Do not run bin/data-harness-cli inject-template. Continue with CLI evidence and write a free analysis report without reading templates/."), nil
+	}
+
 	templateRel, validationMessage := selectedTemplatePath(root, state)
 	if validationMessage != "" {
 		if err := sessionstate.Save(root, sessionID, state); err != nil {

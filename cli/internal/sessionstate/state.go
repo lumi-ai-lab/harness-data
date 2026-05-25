@@ -7,6 +7,11 @@ import (
 	"regexp"
 )
 
+const (
+	ModeTemplateReport = "template_report"
+	ModeFreeAnalysis   = "free_analysis"
+)
+
 type PlaybookCandidate struct {
 	Path     string `json:"path"`
 	Template string `json:"template"`
@@ -15,6 +20,7 @@ type PlaybookCandidate struct {
 
 type File struct {
 	SessionID          string              `json:"session_id"`
+	Mode               string              `json:"mode,omitempty"`
 	Prompt             string              `json:"prompt,omitempty"`
 	StartedAt          string              `json:"started_at,omitempty"`
 	SelectedPlaybook   string              `json:"selected_playbook,omitempty"`

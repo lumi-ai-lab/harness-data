@@ -46,12 +46,17 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	additionalContext, err := buildAdditionalContext(tc, response)
+	candidates, err := PlaybookCandidates(root, response)
+	if err != nil {
+		return false, Output{}, err
+	}
+	mode := reportMode(candidates)
+	additionalContext, err := buildAdditionalContext(tc, response, mode, candidates)
 	if err != nil {
 		return false, Output{}, err
 	}
 	sessionID := hookSessionID(payload)
-	if err := writeSelectedPlaybookState(root, sessionID, prompt, response); err != nil {
+	if err := writeSelectedPlaybookState(root, sessionID, prompt, candidates, mode); err != nil {
 		return false, Output{}, err
 	}
 	if os.Getenv("QDM_HARNESS_DIAG") == "1" {
@@ -96,7 +101,7 @@ func buildTimeContext(prompt string) timeContext {
 	}
 }
 
-func buildAdditionalContext(tc timeContext, response harness.ContextResponse) (string, error) {
+func buildAdditionalContext(tc timeContext, response harness.ContextResponse, mode string, candidates []sessionstate.PlaybookCandidate) (string, error) {
 	timeJSON, err := json.Marshal(tc)
 	if err != nil {
 		return "", err
@@ -118,10 +123,34 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse) (s
 		b.WriteString("\n")
 	}
 	b.WriteString("\n读取完 contextFiles 后，再判断取数路径并执行数据 CLI。\n")
-	if response.Instruction != "" {
-		b.WriteString("\nInstruction: ")
-		b.WriteString(response.Instruction)
-		b.WriteString("\n")
+	b.WriteString("\nHarness mode: ")
+	b.WriteString(mode)
+	b.WriteString("\n")
+	if mode == sessionstate.ModeTemplateReport {
+		if response.Instruction != "" {
+			b.WriteString("\nInstruction: ")
+			b.WriteString(response.Instruction)
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("\nInstruction: 当前没有唯一可用的 playbook/template，进入自由分析模式。不要执行 `bin/data-harness-cli inject-template`，不要读取 templates/ 下的报告模板。读取 contextFiles 后，基于 CLI 证据自由组织分析报告；候选 playbook 只能作为取数参考，不能作为模板门禁。\n")
+		if len(candidates) > 0 {
+			b.WriteString("\nPlaybook candidates for reference only:\n")
+			for _, candidate := range candidates {
+				b.WriteString("- ")
+				b.WriteString(candidate.Path)
+				if candidate.Template != "" {
+					b.WriteString(" -> ")
+					b.WriteString(candidate.Template)
+				}
+				if candidate.Reason != "" {
+					b.WriteString(" (")
+					b.WriteString(candidate.Reason)
+					b.WriteString(")")
+				}
+				b.WriteString("\n")
+			}
+		}
 	}
 	b.WriteString("\nConstraints:\n")
 	for _, constraint := range response.Constraints {
@@ -129,7 +158,11 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse) (s
 		b.WriteString(constraint)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
+	if mode == sessionstate.ModeTemplateReport {
+		b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
+	} else {
+		b.WriteString("\n自由分析模式下禁止读取 templates/ 下的报告模板，禁止等待 template 注入。\n")
+	}
 	return b.String(), nil
 }
 
@@ -236,15 +269,12 @@ func hookSessionID(payload promptPayload) string {
 	return sessionID
 }
 
-func writeSelectedPlaybookState(root, sessionID, prompt string, response harness.ContextResponse) error {
-	candidates, err := PlaybookCandidates(root, response)
-	if err != nil {
-		return err
-	}
+func writeSelectedPlaybookState(root, sessionID, prompt string, candidates []sessionstate.PlaybookCandidate, mode string) error {
 	state, err := sessionstate.Load(root, sessionID)
 	if err != nil {
 		return err
 	}
+	state.Mode = mode
 	state.Prompt = prompt
 	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	state.PlaybookCandidates = candidates
@@ -252,11 +282,18 @@ func writeSelectedPlaybookState(root, sessionID, prompt string, response harness
 	state.SelectedTemplate = ""
 	state.TemplateInjected = false
 	state.Reports = map[string]*sessionstate.Report{}
-	if len(candidates) == 1 {
+	if mode == sessionstate.ModeTemplateReport && len(candidates) == 1 {
 		state.SelectedPlaybook = candidates[0].Path
 		state.SelectedTemplate = candidates[0].Template
 	}
 	return sessionstate.Save(root, sessionID, state)
+}
+
+func reportMode(candidates []sessionstate.PlaybookCandidate) string {
+	if len(candidates) == 1 {
+		return sessionstate.ModeTemplateReport
+	}
+	return sessionstate.ModeFreeAnalysis
 }
 
 func keywordHits(refs []harness.FileRef) []map[string]string {
