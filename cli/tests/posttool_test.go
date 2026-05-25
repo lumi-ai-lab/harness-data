@@ -99,6 +99,1362 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 	}
 }
 
+func TestPosttoolBrandProductEffectivenessInjectsDrillTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-brand-product-effectiveness"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的品效情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "品效下钻分析报告模板") {
+		t.Fatalf("missing brand product effectiveness template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolCustPenetrationRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-cust-penetration-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的客数渗透率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "客数渗透率指标分析报告模板") {
+		t.Fatalf("missing cust penetration rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/cust-penetration-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/cust-penetration-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolSaleAmtInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-sale-amt"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的销售额情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "销售额指标分析报告模板") {
+		t.Fatalf("missing sale amt template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/sale-amt.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/sale-amt-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19SaleRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-sale-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前销售占比情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前销售占比指标分析报告模板") {
+		t.Fatalf("missing bf19 sale rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "销售额指标分析报告模板") {
+		t.Fatalf("unexpected sale amt template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-sale-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-sale-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19SaleWeightInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-sale-weight"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前销售重量情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前销售重量指标分析报告模板") {
+		t.Fatalf("missing bf19 sale weight template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "销售额指标分析报告模板") {
+		t.Fatalf("unexpected sale amt template in %s", context)
+	}
+	if strings.Contains(context, "19点前销售占比指标分析报告模板") {
+		t.Fatalf("unexpected bf19 sale rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-sale-weight.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-sale-weight-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolSatisfiedRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-satisfied-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的订单满足率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "订单满足率指标分析报告模板") {
+		t.Fatalf("missing satisfied rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "销售额指标分析报告模板") {
+		t.Fatalf("unexpected sale amt template in %s", context)
+	}
+	if strings.Contains(context, "19点前销售占比指标分析报告模板") {
+		t.Fatalf("unexpected bf19 sale rate template in %s", context)
+	}
+	if strings.Contains(context, "19点前销售重量指标分析报告模板") {
+		t.Fatalf("unexpected bf19 sale weight template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/satisfied-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/satisfied-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolCustNumInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-cust-num"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的客数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "客数指标分析报告模板") {
+		t.Fatalf("missing cust num template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/cust-num.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/cust-num-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19CustNumInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-cust-num"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前客数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前客数指标分析报告模板") {
+		t.Fatalf("missing bf19 cust num template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 客数指标分析报告模板") {
+		t.Fatalf("unexpected cust num template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-cust-num.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-cust-num-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19CategoryStoreCustRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-category-store-cust-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前PI值情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前PI值指标分析报告模板") {
+		t.Fatalf("missing bf19 category store cust rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前客数指标分析报告模板") {
+		t.Fatalf("unexpected bf19 cust num template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-category-store-cust-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-category-store-cust-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19MemberRepurchaseRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-member-repurchase-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前复购率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前复购率指标分析报告模板") {
+		t.Fatalf("missing bf19 member repurchase rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前客数指标分析报告模板") {
+		t.Fatalf("unexpected bf19 cust num template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前PI值指标分析报告模板") {
+		t.Fatalf("unexpected bf19 category store cust rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-member-repurchase-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-member-repurchase-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPerCustAmtInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-per-cust-amt"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的客单价情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "客单价指标分析报告模板") {
+		t.Fatalf("missing per cust amt template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/per-cust-amt.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/per-cust-amt-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19PerCustAmtInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-per-cust-amt"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前客单价情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前客单价指标分析报告模板") {
+		t.Fatalf("missing bf19 per cust amt template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 客单价指标分析报告模板") {
+		t.Fatalf("unexpected per cust amt template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-per-cust-amt.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-per-cust-amt-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19AvgPieceNumInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-avg-piece-num"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前单均件数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前单均件数指标分析报告模板") {
+		t.Fatalf("missing bf19 avg piece num template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前客单价指标分析报告模板") {
+		t.Fatalf("unexpected bf19 per cust amt template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-avg-piece-num.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-avg-piece-num-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolBf19PerPieceAmtInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-bf19-per-piece-amt"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的19点前件单价情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "19点前件单价指标分析报告模板") {
+		t.Fatalf("missing bf19 per piece amt template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前客单价指标分析报告模板") {
+		t.Fatalf("unexpected bf19 per cust amt template in %s", context)
+	}
+	if strings.Contains(context, "# 19点前单均件数指标分析报告模板") {
+		t.Fatalf("unexpected bf19 avg piece num template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/bf19-per-piece-amt.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/bf19-per-piece-amt-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolFullLinkStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-full-link-store-profit-notax-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的全链路毛利率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "全链路毛利率指标分析报告模板") {
+		t.Fatalf("missing full link profit rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/full-link-store-profit-notax-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/full-link-store-profit-notax-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolProfitRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-profit-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的门店毛利率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "门店毛利率指标分析报告模板") {
+		t.Fatalf("missing profit rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 全链路毛利率指标分析报告模板") {
+		t.Fatalf("unexpected full link profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/profit-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/profit-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolScmStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-scm-store-profit-notax-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的供应链毛利率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "供应链毛利率指标分析报告模板") {
+		t.Fatalf("missing scm store profit notax rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "# 全链路毛利率指标分析报告模板") {
+		t.Fatalf("unexpected full link profit rate template in %s", context)
+	}
+	if strings.Contains(context, "# 门店毛利率指标分析报告模板") {
+		t.Fatalf("unexpected profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/scm-store-profit-notax-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/scm-store-profit-notax-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolFullLinkStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-full-link-store-profit-amt-notax"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的全链路毛利额情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "全链路毛利额指标分析报告模板") {
+		t.Fatalf("missing full link profit amount template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "全链路毛利率指标分析报告模板") {
+		t.Fatalf("unexpected full link profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/full-link-store-profit-amt-notax.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/full-link-store-profit-amt-notax-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolProfitAmtInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-profit-amt"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的门店毛利额情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "门店毛利额指标分析报告模板") {
+		t.Fatalf("missing profit amount template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "全链路毛利额指标分析报告模板") {
+		t.Fatalf("unexpected full link profit amount template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/profit-amt.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/profit-amt-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolScmStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-scm-store-profit-amt-notax"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的供应链毛利额情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "供应链毛利额指标分析报告模板") {
+		t.Fatalf("missing scm profit amount template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "全链路毛利额指标分析报告模板") {
+		t.Fatalf("unexpected full link profit amount template in %s", context)
+	}
+	if strings.Contains(context, "门店毛利额指标分析报告模板") {
+		t.Fatalf("unexpected profit amount template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/cust-penetration-rate/scm-store-profit-amt-notax.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/cust-penetration-rate/scm-store-profit-amt-notax-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPrePriceProfitRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-pre-price-profit-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的定价毛利率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("missing pre price profit rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "品效分析报告模板") {
+		t.Fatalf("unexpected brand product effectiveness template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/pre-price-profit-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/pre-price-profit-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPreProfitRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-pre-profit-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的预期毛利率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "预期毛利率指标分析报告模板") {
+		t.Fatalf("missing pre profit rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre price profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/pre-profit-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/pre-profit-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolScmPromotionTotalRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-scm-promotion-total-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的出库折让率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "出库折让率指标分析报告模板") {
+		t.Fatalf("missing scm promotion total rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "预期毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre profit rate template in %s", context)
+	}
+	if strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre price profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/scm-promotion-total-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/scm-promotion-total-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolHourDiscountRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-hour-discount-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的时段折扣率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "时段折扣率指标分析报告模板") {
+		t.Fatalf("missing hour discount rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre price profit rate template in %s", context)
+	}
+	if strings.Contains(context, "促销折扣率指标分析报告模板") {
+		t.Fatalf("unexpected promotion discount rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/hour-discount-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/hour-discount-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPromotionDiscountRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-promotion-discount-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的促销折扣率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "促销折扣率指标分析报告模板") {
+		t.Fatalf("missing promotion discount rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre price profit rate template in %s", context)
+	}
+	if strings.Contains(context, "时段折扣率指标分析报告模板") {
+		t.Fatalf("unexpected hour discount rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/promotion-discount-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/promotion-discount-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolOrderArticleRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-order-article-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的商品订购渗透率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "商品订购渗透率指标分析报告模板") {
+		t.Fatalf("missing order article rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "品效分析报告模板") {
+		t.Fatalf("unexpected brand product effectiveness template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/order-article-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/order-article-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolOrderStoresInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-order-stores"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的订购门店数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "订购门店数指标分析报告模板") {
+		t.Fatalf("missing order stores template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "商品订购渗透率指标分析报告模板") {
+		t.Fatalf("unexpected order article rate template in %s", context)
+	}
+	if strings.Contains(context, "品效分析报告模板") {
+		t.Fatalf("unexpected brand product effectiveness template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/order-stores.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/order-stores-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolStoreCanOrdersInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-store-can-orders"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的可订门店数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "可订门店数指标分析报告模板") {
+		t.Fatalf("missing store can orders template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "商品订购渗透率指标分析报告模板") {
+		t.Fatalf("unexpected order article rate template in %s", context)
+	}
+	if strings.Contains(context, "订购门店数指标分析报告模板") {
+		t.Fatalf("unexpected order stores template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/store-can-orders.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/store-can-orders-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPriceIndexInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-price-index"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的售价价格指数(线上)情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "售价价格指数指标分析报告模板") {
+		t.Fatalf("missing price index template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "品效分析报告模板") {
+		t.Fatalf("unexpected brand product effectiveness template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/price-index.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/price-index-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolPurchasePriceIndexInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-purchase-price-index"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的采购价格指数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "采购价格指数指标分析报告模板") {
+		t.Fatalf("missing purchase price index template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "售价价格指数指标分析报告模板") {
+		t.Fatalf("unexpected price index template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/purchase-price-index.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/purchase-price-index-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolLostRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-lost-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的损耗率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "损耗率指标分析报告模板") {
+		t.Fatalf("missing lost rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "定价毛利率指标分析报告模板") {
+		t.Fatalf("unexpected pre price profit rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/brand-product-effectiveness/lost-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/brand-product-effectiveness/lost-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolActiveVenderNumInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-active-vender-num"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的活跃供应商数情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "活跃供应商数指标分析报告模板") {
+		t.Fatalf("missing active vender num template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/active-vender-num.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/active-vender-num-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolCentralInstockRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-central-instock-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的集采入库占比情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "集采入库占比指标分析报告模板") {
+		t.Fatalf("missing central instock rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "活跃供应商数指标分析报告模板") {
+		t.Fatalf("unexpected active vender num template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/central-instock-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/central-instock-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolThreeRateScoreInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-three-rate-score"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的三率综合得分情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "三率综合得分指标分析报告模板") {
+		t.Fatalf("missing three rate score template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "活跃供应商数指标分析报告模板") {
+		t.Fatalf("unexpected active vender num template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/three-rate-score.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/three-rate-score-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolVendorAccuracyRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-vendor-accuracy-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的准确率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "准确率指标分析报告模板") {
+		t.Fatalf("missing vendor accuracy rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "三率综合得分指标分析报告模板") {
+		t.Fatalf("unexpected three rate score template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/vendor-accuracy-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/vendor-accuracy-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolVendorIntimeRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-vendor-intime-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的准点率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "准点率指标分析报告模板") {
+		t.Fatalf("missing vendor intime rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "三率综合得分指标分析报告模板") {
+		t.Fatalf("unexpected three rate score template in %s", context)
+	}
+	if strings.Contains(context, "准确率指标分析报告模板") {
+		t.Fatalf("unexpected vendor accuracy rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/vendor-intime-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/vendor-intime-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
+func TestPosttoolVendorQualificationRateInjectsMetricTemplate(t *testing.T) {
+	root := root(t)
+	sessionID := "go-posttool-vendor-qualification-rate"
+	cleanupPosttoolState(t, root, sessionID)
+	writeContextState(t, root, sessionID, "查看昨天的合格率情况")
+
+	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected template output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	if !strings.Contains(context, "合格率指标分析报告模板") {
+		t.Fatalf("missing vendor qualification rate template in %s", context)
+	}
+	if strings.Contains(context, "经营分析深度报告模板") {
+		t.Fatalf("unexpected business overview template in %s", context)
+	}
+	if strings.Contains(context, "三率综合得分指标分析报告模板") {
+		t.Fatalf("unexpected three rate score template in %s", context)
+	}
+	if strings.Contains(context, "准确率指标分析报告模板") {
+		t.Fatalf("unexpected vendor accuracy rate template in %s", context)
+	}
+	if strings.Contains(context, "准点率指标分析报告模板") {
+		t.Fatalf("unexpected vendor intime rate template in %s", context)
+	}
+
+	state := readPosttoolState(t, root, sessionID)
+	if state["selected_playbook"] != "playbooks/business/active-vender-num/vendor-qualification-rate.md" {
+		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
+	}
+	if state["selected_template"] != "templates/business/active-vender-num/vendor-qualification-rate-report.md" {
+		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["template_injected"] != true {
+		t.Fatalf("expected root template_injected in %#v", state)
+	}
+}
+
 func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
 	root := root(t)
 	sessionID := "go-posttool-financial"

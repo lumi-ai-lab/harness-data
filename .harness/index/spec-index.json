@@ -1,7 +1,145 @@
 {
-  "generatedAt": "2026-05-24T13:01:21Z",
+  "generatedAt": "2026-05-25T05:24:07Z",
   "root": "/Users/pengmd/c/qdm/harness-data",
   "files": [
+    {
+      "id": "business-active-vender-num-active-vender-num",
+      "kind": "spec",
+      "domain": "business",
+      "title": "活跃供应商数指标报告规则",
+      "path": "spec/business/active-vender-num/active-vender-num.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "active-vender-num",
+        "activeVenderNum"
+      ],
+      "match": {
+        "keywords": [
+          "活跃供应商数",
+          "activeVenderNum",
+          "活跃供应商数情况",
+          "活跃供应商数为什么下降",
+          "活跃供应商数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-active-vender-num-central-instock-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "集采入库占比指标报告规则",
+      "path": "spec/business/active-vender-num/central-instock-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "active-vender-num",
+        "centralInstockRate"
+      ],
+      "match": {
+        "keywords": [
+          "集采入库占比",
+          "centralInstockRate",
+          "集采入库占比情况",
+          "集采入库占比为什么下降",
+          "集采入库占比为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-active-vender-num-three-rate-score",
+      "kind": "spec",
+      "domain": "business",
+      "title": "三率综合得分指标报告规则",
+      "path": "spec/business/active-vender-num/three-rate-score.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "active-vender-num",
+        "threeRateScore"
+      ],
+      "match": {
+        "keywords": [
+          "三率综合得分",
+          "threeRateScore",
+          "三率综合得分情况",
+          "三率综合得分为什么下降",
+          "三率综合得分为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-active-vender-num-vendor-accuracy-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "准确率指标报告规则",
+      "path": "spec/business/active-vender-num/vendor-accuracy-rate.md",
+      "tags": [
+        "metric",
+        "active-vender-num",
+        "vendorAccuracyRate"
+      ],
+      "match": {
+        "keywords": [
+          "准确率",
+          "vendorAccuracyRate",
+          "准确率情况",
+          "准确率为什么下降",
+          "准确率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-active-vender-num-vendor-intime-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "准点率指标报告规则",
+      "path": "spec/business/active-vender-num/vendor-intime-rate.md",
+      "tags": [
+        "metric",
+        "active-vender-num",
+        "vendorIntimeRate"
+      ],
+      "match": {
+        "keywords": [
+          "准点率",
+          "vendorIntimeRate",
+          "准点率情况",
+          "准点率为什么下降",
+          "准点率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-active-vender-num-vendor-qualification-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "合格率指标报告规则",
+      "path": "spec/business/active-vender-num/vendor-qualification-rate.md",
+      "tags": [
+        "metric",
+        "active-vender-num",
+        "vendorQualificationRate"
+      ],
+      "match": {
+        "keywords": [
+          "合格率",
+          "vendorQualificationRate",
+          "合格率情况",
+          "合格率为什么下降",
+          "合格率为什么提升"
+        ]
+      },
+      "context": {}
+    },
     {
       "id": "business-area-category-trend",
       "kind": "spec",
@@ -20,6 +158,292 @@
           "品类",
           "趋势",
           "华东"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness",
+      "kind": "spec",
+      "domain": "business",
+      "title": "品效下钻指标归属规则",
+      "path": "spec/business/brand-product-effectiveness.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness"
+      ],
+      "match": {
+        "keywords": [
+          "品效",
+          "品效情况",
+          "品效下钻",
+          "brandProductEffectiveness",
+          "商品经营效率"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-hour-discount-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "时段折扣率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "hourDiscountRate"
+      ],
+      "match": {
+        "keywords": [
+          "时段折扣率",
+          "hourDiscountRate",
+          "时段折扣率情况",
+          "时段折扣率为什么下降",
+          "时段折扣率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-lost-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "损耗率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/lost-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "lostRate"
+      ],
+      "match": {
+        "keywords": [
+          "损耗率",
+          "lostRate",
+          "损耗率情况",
+          "损耗率为什么下降",
+          "损耗率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-order-article-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "商品订购渗透率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/order-article-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "orderArticleRate"
+      ],
+      "match": {
+        "keywords": [
+          "商品订购渗透率",
+          "orderArticleRate",
+          "商品订购渗透率情况",
+          "商品订购渗透率为什么下降",
+          "商品订购渗透率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-order-stores",
+      "kind": "spec",
+      "domain": "business",
+      "title": "订购门店数指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/order-stores.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "orderStores"
+      ],
+      "match": {
+        "keywords": [
+          "订购门店数",
+          "orderStores",
+          "订购门店数情况",
+          "订购门店数为什么下降",
+          "订购门店数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-pre-price-profit-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "定价毛利率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "prePriceProfitRate"
+      ],
+      "match": {
+        "keywords": [
+          "定价毛利率",
+          "prePriceProfitRate",
+          "定价毛利率情况",
+          "定价毛利率为什么下降",
+          "定价毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-pre-profit-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "预期毛利率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "preProfitRate"
+      ],
+      "match": {
+        "keywords": [
+          "预期毛利率",
+          "preProfitRate",
+          "预期毛利率情况",
+          "预期毛利率为什么下降",
+          "预期毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-price-index",
+      "kind": "spec",
+      "domain": "business",
+      "title": "售价价格指数指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/price-index.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "priceIndex"
+      ],
+      "match": {
+        "keywords": [
+          "售价价格指数",
+          "售价价格指数(线上)",
+          "priceIndex",
+          "售价价格指数情况",
+          "售价价格指数为什么下降",
+          "售价价格指数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-promotion-discount-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "促销折扣率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "promotionDiscountRate"
+      ],
+      "match": {
+        "keywords": [
+          "促销折扣率",
+          "promotionDiscountRate",
+          "促销折扣率情况",
+          "促销折扣率为什么下降",
+          "促销折扣率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-purchase-price-index",
+      "kind": "spec",
+      "domain": "business",
+      "title": "采购价格指数指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/purchase-price-index.md",
+      "tags": [
+        "metric",
+        "brand-product-effectiveness",
+        "purchasePriceIndex"
+      ],
+      "match": {
+        "keywords": [
+          "采购价格指数",
+          "purchasePriceIndex",
+          "采购价格指数情况",
+          "采购价格指数为什么下降",
+          "采购价格指数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-scm-promotion-total-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "出库折让率指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "scmPromotionTotalRate"
+      ],
+      "match": {
+        "keywords": [
+          "出库折让率",
+          "scmPromotionTotalRate",
+          "出库折让率情况",
+          "出库折让率为什么下降",
+          "出库折让率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-brand-product-effectiveness-store-can-orders",
+      "kind": "spec",
+      "domain": "business",
+      "title": "可订门店数指标报告规则",
+      "path": "spec/business/brand-product-effectiveness/store-can-orders.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "brand-product-effectiveness",
+        "storeCanOrders"
+      ],
+      "match": {
+        "keywords": [
+          "可订门店数",
+          "storeCanOrders",
+          "可订门店数情况",
+          "可订门店数为什么下降",
+          "可订门店数为什么提升"
         ]
       },
       "context": {}
@@ -46,6 +470,456 @@
       "context": {}
     },
     {
+      "id": "business-cust-penetration-rate-bf19-avg-piece-num",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前单均件数指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19AvgPieceNum"
+      ],
+      "match": {
+        "keywords": [
+          "19点前单均件数",
+          "bf19AvgPieceNum",
+          "19点前单均件数情况",
+          "19点前单均件数为什么下降",
+          "19点前单均件数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-category-store-cust-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前PI值指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19CategoryStoreCustRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前PI值",
+          "bf19CategoryStoreCustRate",
+          "19点前PI值情况",
+          "19点前PI值为什么下降",
+          "19点前PI值为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-cust-num",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前客数指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-cust-num.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19CustNum"
+      ],
+      "match": {
+        "keywords": [
+          "19点前客数",
+          "bf19CustNum",
+          "19点前客数情况",
+          "19点前客数为什么下降",
+          "19点前客数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-member-repurchase-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前复购率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19MemberRepurchaseRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前复购率",
+          "bf19MemberRepurchaseRate",
+          "19点前复购率情况",
+          "19点前复购率为什么下降",
+          "19点前复购率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-per-cust-amt",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前客单价指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19PerCustAmt"
+      ],
+      "match": {
+        "keywords": [
+          "19点前客单价",
+          "bf19PerCustAmt",
+          "19点前客单价情况",
+          "19点前客单价为什么下降",
+          "19点前客单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-per-piece-amt",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前件单价指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19PerPieceAmt"
+      ],
+      "match": {
+        "keywords": [
+          "19点前件单价",
+          "bf19PerPieceAmt",
+          "19点前件单价情况",
+          "19点前件单价为什么下降",
+          "19点前件单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-sale-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前销售占比指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+      "tags": [
+        "metric",
+        "cust-penetration-rate",
+        "bf19SaleRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前销售占比",
+          "bf19SaleRate",
+          "19点前销售占比情况",
+          "19点前销售占比为什么下降",
+          "19点前销售占比为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-bf19-sale-weight",
+      "kind": "spec",
+      "domain": "business",
+      "title": "19点前销售重量指标报告规则",
+      "path": "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+      "tags": [
+        "metric",
+        "cust-penetration-rate",
+        "bf19SaleWeight"
+      ],
+      "match": {
+        "keywords": [
+          "19点前销售重量",
+          "bf19SaleWeight",
+          "19点前销售重量情况",
+          "19点前销售重量为什么下降",
+          "19点前销售重量为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-cust-num",
+      "kind": "spec",
+      "domain": "business",
+      "title": "客数指标报告规则",
+      "path": "spec/business/cust-penetration-rate/cust-num.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "custNum"
+      ],
+      "match": {
+        "keywords": [
+          "客数",
+          "custNum",
+          "客数情况",
+          "客数为什么下降",
+          "客数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-cust-penetration-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "客数渗透率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "custPenetrationRate"
+      ],
+      "match": {
+        "keywords": [
+          "客数渗透率",
+          "custPenetrationRate",
+          "客数渗透率情况",
+          "客数渗透率为什么下降",
+          "客数渗透率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-full-link-store-profit-amt-notax",
+      "kind": "spec",
+      "domain": "business",
+      "title": "全链路毛利额指标报告规则",
+      "path": "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "fullLinkStoreProfitAmtNotax"
+      ],
+      "match": {
+        "keywords": [
+          "全链路毛利额",
+          "fullLinkStoreProfitAmtNotax",
+          "全链路毛利额情况",
+          "全链路毛利额为什么下降",
+          "全链路毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-full-link-store-profit-notax-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "全链路毛利率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "fullLinkStoreProfitNotaxRate"
+      ],
+      "match": {
+        "keywords": [
+          "全链路毛利率",
+          "fullLinkStoreProfitNotaxRate",
+          "全链路毛利率情况",
+          "全链路毛利率为什么下降",
+          "全链路毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-per-cust-amt",
+      "kind": "spec",
+      "domain": "business",
+      "title": "客单价指标报告规则",
+      "path": "spec/business/cust-penetration-rate/per-cust-amt.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "perCustAmt"
+      ],
+      "match": {
+        "keywords": [
+          "客单价",
+          "perCustAmt",
+          "客单价情况",
+          "客单价为什么下降",
+          "客单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-profit-amt",
+      "kind": "spec",
+      "domain": "business",
+      "title": "门店毛利额指标报告规则",
+      "path": "spec/business/cust-penetration-rate/profit-amt.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "profitAmt"
+      ],
+      "match": {
+        "keywords": [
+          "门店毛利额",
+          "profitAmt",
+          "门店毛利额情况",
+          "门店毛利额为什么下降",
+          "门店毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-profit-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "门店毛利率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/profit-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "profitRate"
+      ],
+      "match": {
+        "keywords": [
+          "门店毛利率",
+          "profitRate",
+          "门店毛利率情况",
+          "门店毛利率为什么下降",
+          "门店毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-sale-amt",
+      "kind": "spec",
+      "domain": "business",
+      "title": "销售额指标报告规则",
+      "path": "spec/business/cust-penetration-rate/sale-amt.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "saleAmt"
+      ],
+      "match": {
+        "keywords": [
+          "销售额",
+          "saleAmt",
+          "销售额情况",
+          "销售额为什么下降",
+          "销售额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-satisfied-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "订单满足率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/satisfied-rate.md",
+      "tags": [
+        "metric",
+        "cust-penetration-rate",
+        "satisfiedRate"
+      ],
+      "match": {
+        "keywords": [
+          "订单满足率",
+          "satisfiedRate",
+          "订单满足率情况",
+          "订单满足率为什么下降",
+          "订单满足率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-scm-store-profit-amt-notax",
+      "kind": "spec",
+      "domain": "business",
+      "title": "供应链毛利额指标报告规则",
+      "path": "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "scmStoreProfitAmtNotax"
+      ],
+      "match": {
+        "keywords": [
+          "供应链毛利额",
+          "scmStoreProfitAmtNotax",
+          "供应链毛利额情况",
+          "供应链毛利额为什么下降",
+          "供应链毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "business-cust-penetration-rate-scm-store-profit-notax-rate",
+      "kind": "spec",
+      "domain": "business",
+      "title": "供应链毛利率指标报告规则",
+      "path": "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
+      "tags": [
+        "report",
+        "metric",
+        "business-report",
+        "cust-penetration-rate",
+        "scmStoreProfitNotaxRate"
+      ],
+      "match": {
+        "keywords": [
+          "供应链毛利率",
+          "scmStoreProfitNotaxRate",
+          "供应链毛利率情况",
+          "供应链毛利率为什么下降",
+          "供应链毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
       "id": "business-index",
       "kind": "spec_index",
       "domain": "business",
@@ -60,7 +934,12 @@
           "经营",
           "经营分析",
           "业务表现",
-          "销售"
+          "销售",
+          "品效",
+          "品效情况",
+          "品效下钻",
+          "brandProductEffectiveness",
+          "商品经营效率"
         ]
       },
       "context": {
@@ -69,6 +948,305 @@
         ]
       },
       "children": [
+        {
+          "path": "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+          "keywords": [
+            "客数渗透率",
+            "custPenetrationRate",
+            "客数渗透率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/sale-amt.md",
+          "keywords": [
+            "销售额",
+            "saleAmt",
+            "销售额情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+          "keywords": [
+            "19点前销售占比",
+            "bf19SaleRate",
+            "19点前销售占比情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+          "keywords": [
+            "19点前销售重量",
+            "bf19SaleWeight",
+            "19点前销售重量情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/satisfied-rate.md",
+          "keywords": [
+            "订单满足率",
+            "satisfiedRate",
+            "订单满足率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/cust-num.md",
+          "keywords": [
+            "客数",
+            "custNum",
+            "客数情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-cust-num.md",
+          "keywords": [
+            "19点前客数",
+            "bf19CustNum",
+            "19点前客数情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+          "keywords": [
+            "19点前PI值",
+            "bf19CategoryStoreCustRate",
+            "19点前PI值情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+          "keywords": [
+            "19点前复购率",
+            "bf19MemberRepurchaseRate",
+            "19点前复购率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/per-cust-amt.md",
+          "keywords": [
+            "客单价",
+            "perCustAmt",
+            "客单价情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+          "keywords": [
+            "19点前客单价",
+            "bf19PerCustAmt",
+            "19点前客单价情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+          "keywords": [
+            "19点前单均件数",
+            "bf19AvgPieceNum",
+            "19点前单均件数情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+          "keywords": [
+            "19点前件单价",
+            "bf19PerPieceAmt",
+            "19点前件单价情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+          "keywords": [
+            "全链路毛利率",
+            "fullLinkStoreProfitNotaxRate",
+            "全链路毛利率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/profit-rate.md",
+          "keywords": [
+            "门店毛利率",
+            "profitRate",
+            "门店毛利率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
+          "keywords": [
+            "供应链毛利率",
+            "scmStoreProfitNotaxRate",
+            "供应链毛利率情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+          "keywords": [
+            "全链路毛利额",
+            "fullLinkStoreProfitAmtNotax",
+            "全链路毛利额情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/profit-amt.md",
+          "keywords": [
+            "门店毛利额",
+            "profitAmt",
+            "门店毛利额情况"
+          ]
+        },
+        {
+          "path": "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+          "keywords": [
+            "供应链毛利额",
+            "scmStoreProfitAmtNotax",
+            "供应链毛利额情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness.md",
+          "keywords": [
+            "品效",
+            "品效情况",
+            "品效下钻",
+            "brandProductEffectiveness",
+            "商品经营效率"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/order-article-rate.md",
+          "keywords": [
+            "商品订购渗透率",
+            "orderArticleRate",
+            "商品订购渗透率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/order-stores.md",
+          "keywords": [
+            "订购门店数",
+            "orderStores",
+            "订购门店数情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/store-can-orders.md",
+          "keywords": [
+            "可订门店数",
+            "storeCanOrders",
+            "可订门店数情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+          "keywords": [
+            "定价毛利率",
+            "prePriceProfitRate",
+            "定价毛利率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+          "keywords": [
+            "预期毛利率",
+            "preProfitRate",
+            "预期毛利率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+          "keywords": [
+            "出库折让率",
+            "scmPromotionTotalRate",
+            "出库折让率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+          "keywords": [
+            "时段折扣率",
+            "hourDiscountRate",
+            "时段折扣率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+          "keywords": [
+            "促销折扣率",
+            "promotionDiscountRate",
+            "促销折扣率情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/price-index.md",
+          "keywords": [
+            "售价价格指数",
+            "售价价格指数(线上)",
+            "priceIndex",
+            "售价价格指数情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/purchase-price-index.md",
+          "keywords": [
+            "采购价格指数",
+            "purchasePriceIndex",
+            "采购价格指数情况"
+          ]
+        },
+        {
+          "path": "spec/business/brand-product-effectiveness/lost-rate.md",
+          "keywords": [
+            "损耗率",
+            "lostRate",
+            "损耗率情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/active-vender-num.md",
+          "keywords": [
+            "活跃供应商数",
+            "activeVenderNum",
+            "活跃供应商数情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/central-instock-rate.md",
+          "keywords": [
+            "集采入库占比",
+            "centralInstockRate",
+            "集采入库占比情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/three-rate-score.md",
+          "keywords": [
+            "三率综合得分",
+            "threeRateScore",
+            "三率综合得分情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/vendor-accuracy-rate.md",
+          "keywords": [
+            "准确率",
+            "vendorAccuracyRate",
+            "准确率情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/vendor-intime-rate.md",
+          "keywords": [
+            "准点率",
+            "vendorIntimeRate",
+            "准点率情况"
+          ]
+        },
+        {
+          "path": "spec/business/active-vender-num/vendor-qualification-rate.md",
+          "keywords": [
+            "合格率",
+            "vendorQualificationRate",
+            "合格率情况"
+          ]
+        },
         {
           "path": "spec/business/core-indicators.md",
           "keywords": [
@@ -597,8 +1775,45 @@
   ],
   "byDomain": {
     "business": [
+      "spec/business/active-vender-num/active-vender-num.md",
+      "spec/business/active-vender-num/central-instock-rate.md",
+      "spec/business/active-vender-num/three-rate-score.md",
+      "spec/business/active-vender-num/vendor-accuracy-rate.md",
+      "spec/business/active-vender-num/vendor-intime-rate.md",
+      "spec/business/active-vender-num/vendor-qualification-rate.md",
       "spec/business/area-category-trend.md",
+      "spec/business/brand-product-effectiveness.md",
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+      "spec/business/brand-product-effectiveness/lost-rate.md",
+      "spec/business/brand-product-effectiveness/order-article-rate.md",
+      "spec/business/brand-product-effectiveness/order-stores.md",
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+      "spec/business/brand-product-effectiveness/price-index.md",
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+      "spec/business/brand-product-effectiveness/purchase-price-index.md",
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "spec/business/brand-product-effectiveness/store-can-orders.md",
       "spec/business/core-indicators.md",
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "spec/business/cust-penetration-rate/bf19-cust-num.md",
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+      "spec/business/cust-penetration-rate/cust-num.md",
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/per-cust-amt.md",
+      "spec/business/cust-penetration-rate/profit-amt.md",
+      "spec/business/cust-penetration-rate/profit-rate.md",
+      "spec/business/cust-penetration-rate/sale-amt.md",
+      "spec/business/cust-penetration-rate/satisfied-rate.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
       "spec/business/index.md",
       "spec/business/report-contract.md"
     ],
@@ -630,6 +1845,118 @@
     ]
   },
   "byKeyword": {
+    "19点前PI值": [
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值情况": [
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md"
+    ],
+    "19点前件单价": [
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md"
+    ],
+    "19点前件单价为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md"
+    ],
+    "19点前件单价为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md"
+    ],
+    "19点前件单价情况": [
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md"
+    ],
+    "19点前单均件数": [
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数情况": [
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md"
+    ],
+    "19点前复购率": [
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率情况": [
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md"
+    ],
+    "19点前客单价": [
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md"
+    ],
+    "19点前客单价为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md"
+    ],
+    "19点前客单价为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md"
+    ],
+    "19点前客单价情况": [
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md"
+    ],
+    "19点前客数": [
+      "spec/business/cust-penetration-rate/bf19-cust-num.md",
+      "spec/business/cust-penetration-rate/bf19-cust-num.md"
+    ],
+    "19点前客数为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-cust-num.md"
+    ],
+    "19点前客数为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-cust-num.md"
+    ],
+    "19点前客数情况": [
+      "spec/business/cust-penetration-rate/bf19-cust-num.md",
+      "spec/business/cust-penetration-rate/bf19-cust-num.md"
+    ],
+    "19点前销售占比": [
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md"
+    ],
+    "19点前销售占比为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md"
+    ],
+    "19点前销售占比为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md"
+    ],
+    "19点前销售占比情况": [
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md"
+    ],
+    "19点前销售重量": [
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md"
+    ],
+    "19点前销售重量为什么下降": [
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md"
+    ],
+    "19点前销售重量为什么提升": [
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md"
+    ],
+    "19点前销售重量情况": [
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md"
+    ],
     "CMR CLI": [
       "spec/common/cmr-cli-readme.md"
     ],
@@ -639,12 +1966,175 @@
       "spec/financial/income-cost-profit.md",
       "spec/financial/report-contract.md"
     ],
+    "activeVenderNum": [
+      "spec/business/active-vender-num/active-vender-num.md",
+      "spec/business/active-vender-num/active-vender-num.md"
+    ],
+    "bf19AvgPieceNum": [
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "spec/business/cust-penetration-rate/bf19-avg-piece-num.md"
+    ],
+    "bf19CategoryStoreCustRate": [
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md"
+    ],
+    "bf19CustNum": [
+      "spec/business/cust-penetration-rate/bf19-cust-num.md",
+      "spec/business/cust-penetration-rate/bf19-cust-num.md"
+    ],
+    "bf19MemberRepurchaseRate": [
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md"
+    ],
+    "bf19PerCustAmt": [
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-cust-amt.md"
+    ],
+    "bf19PerPieceAmt": [
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+      "spec/business/cust-penetration-rate/bf19-per-piece-amt.md"
+    ],
+    "bf19SaleRate": [
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+      "spec/business/cust-penetration-rate/bf19-sale-rate.md"
+    ],
+    "bf19SaleWeight": [
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+      "spec/business/cust-penetration-rate/bf19-sale-weight.md"
+    ],
+    "brandProductEffectiveness": [
+      "spec/business/brand-product-effectiveness.md",
+      "spec/business/index.md",
+      "spec/business/brand-product-effectiveness.md"
+    ],
+    "centralInstockRate": [
+      "spec/business/active-vender-num/central-instock-rate.md",
+      "spec/business/active-vender-num/central-instock-rate.md"
+    ],
+    "custNum": [
+      "spec/business/cust-penetration-rate/cust-num.md",
+      "spec/business/cust-penetration-rate/cust-num.md"
+    ],
+    "custPenetrationRate": [
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md"
+    ],
+    "fullLinkStoreProfitAmtNotax": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md"
+    ],
+    "fullLinkStoreProfitNotaxRate": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md"
+    ],
+    "hourDiscountRate": [
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md"
+    ],
+    "lostRate": [
+      "spec/business/brand-product-effectiveness/lost-rate.md",
+      "spec/business/brand-product-effectiveness/lost-rate.md"
+    ],
+    "orderArticleRate": [
+      "spec/business/brand-product-effectiveness/order-article-rate.md",
+      "spec/business/brand-product-effectiveness/order-article-rate.md"
+    ],
+    "orderStores": [
+      "spec/business/brand-product-effectiveness/order-stores.md",
+      "spec/business/brand-product-effectiveness/order-stores.md"
+    ],
+    "perCustAmt": [
+      "spec/business/cust-penetration-rate/per-cust-amt.md",
+      "spec/business/cust-penetration-rate/per-cust-amt.md"
+    ],
+    "prePriceProfitRate": [
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md"
+    ],
+    "preProfitRate": [
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md"
+    ],
+    "priceIndex": [
+      "spec/business/brand-product-effectiveness/price-index.md",
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "profitAmt": [
+      "spec/business/cust-penetration-rate/profit-amt.md",
+      "spec/business/cust-penetration-rate/profit-amt.md"
+    ],
+    "profitRate": [
+      "spec/business/cust-penetration-rate/profit-rate.md",
+      "spec/business/cust-penetration-rate/profit-rate.md"
+    ],
+    "promotionDiscountRate": [
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md"
+    ],
+    "purchasePriceIndex": [
+      "spec/business/brand-product-effectiveness/purchase-price-index.md",
+      "spec/business/brand-product-effectiveness/purchase-price-index.md"
+    ],
     "qdm-cmr-cli": [
       "spec/common/cmr-cli-readme.md"
+    ],
+    "saleAmt": [
+      "spec/business/cust-penetration-rate/sale-amt.md",
+      "spec/business/cust-penetration-rate/sale-amt.md"
+    ],
+    "satisfiedRate": [
+      "spec/business/cust-penetration-rate/satisfied-rate.md",
+      "spec/business/cust-penetration-rate/satisfied-rate.md"
+    ],
+    "scmPromotionTotalRate": [
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md"
+    ],
+    "scmStoreProfitAmtNotax": [
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md"
+    ],
+    "scmStoreProfitNotaxRate": [
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md"
+    ],
+    "storeCanOrders": [
+      "spec/business/brand-product-effectiveness/store-can-orders.md",
+      "spec/business/brand-product-effectiveness/store-can-orders.md"
     ],
     "template": [
       "spec/common/cli-safety.md",
       "spec/common/cli-safety.md"
+    ],
+    "threeRateScore": [
+      "spec/business/active-vender-num/three-rate-score.md",
+      "spec/business/active-vender-num/three-rate-score.md"
+    ],
+    "vendorAccuracyRate": [
+      "spec/business/active-vender-num/vendor-accuracy-rate.md",
+      "spec/business/active-vender-num/vendor-accuracy-rate.md"
+    ],
+    "vendorIntimeRate": [
+      "spec/business/active-vender-num/vendor-intime-rate.md",
+      "spec/business/active-vender-num/vendor-intime-rate.md"
+    ],
+    "vendorQualificationRate": [
+      "spec/business/active-vender-num/vendor-qualification-rate.md",
+      "spec/business/active-vender-num/vendor-qualification-rate.md"
+    ],
+    "三率综合得分": [
+      "spec/business/active-vender-num/three-rate-score.md",
+      "spec/business/active-vender-num/three-rate-score.md"
+    ],
+    "三率综合得分为什么下降": [
+      "spec/business/active-vender-num/three-rate-score.md"
+    ],
+    "三率综合得分为什么提升": [
+      "spec/business/active-vender-num/three-rate-score.md"
+    ],
+    "三率综合得分情况": [
+      "spec/business/active-vender-num/three-rate-score.md",
+      "spec/business/active-vender-num/three-rate-score.md"
     ],
     "上周": [
       "spec/common/time-policy.md",
@@ -682,6 +2172,48 @@
       "spec/member/repurchase.md",
       "spec/member/repurchase.md"
     ],
+    "供应链毛利率": [
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率为什么下降": [
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率为什么提升": [
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率情况": [
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利额": [
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额为什么下降": [
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额为什么提升": [
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额情况": [
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md"
+    ],
+    "促销折扣率": [
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md"
+    ],
+    "促销折扣率为什么下降": [
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md"
+    ],
+    "促销折扣率为什么提升": [
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md"
+    ],
+    "促销折扣率情况": [
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+      "spec/business/brand-product-effectiveness/promotion-discount-rate.md"
+    ],
     "停业": [
       "spec/store/scale-health.md",
       "spec/store/scale-health.md"
@@ -693,9 +2225,79 @@
       "spec/common/area.md",
       "spec/common/area.md"
     ],
+    "全链路毛利率": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率为什么下降": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率为什么提升": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率情况": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利额": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额为什么下降": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额为什么提升": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额情况": [
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md"
+    ],
     "公司报表": [
       "spec/financial/index.md",
       "spec/financial/report-contract.md"
+    ],
+    "准点率": [
+      "spec/business/active-vender-num/vendor-intime-rate.md",
+      "spec/business/active-vender-num/vendor-intime-rate.md"
+    ],
+    "准点率为什么下降": [
+      "spec/business/active-vender-num/vendor-intime-rate.md"
+    ],
+    "准点率为什么提升": [
+      "spec/business/active-vender-num/vendor-intime-rate.md"
+    ],
+    "准点率情况": [
+      "spec/business/active-vender-num/vendor-intime-rate.md",
+      "spec/business/active-vender-num/vendor-intime-rate.md"
+    ],
+    "准确率": [
+      "spec/business/active-vender-num/vendor-accuracy-rate.md",
+      "spec/business/active-vender-num/vendor-accuracy-rate.md"
+    ],
+    "准确率为什么下降": [
+      "spec/business/active-vender-num/vendor-accuracy-rate.md"
+    ],
+    "准确率为什么提升": [
+      "spec/business/active-vender-num/vendor-accuracy-rate.md"
+    ],
+    "准确率情况": [
+      "spec/business/active-vender-num/vendor-accuracy-rate.md",
+      "spec/business/active-vender-num/vendor-accuracy-rate.md"
+    ],
+    "出库折让率": [
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md"
+    ],
+    "出库折让率为什么下降": [
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md"
+    ],
+    "出库折让率为什么提升": [
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md"
+    ],
+    "出库折让率情况": [
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md"
     ],
     "分类": [
       "spec/member/category-unsupported.md"
@@ -727,14 +2329,92 @@
       "spec/common/cmr-cli-readme.md",
       "spec/common/index.md"
     ],
+    "可订门店数": [
+      "spec/business/brand-product-effectiveness/store-can-orders.md",
+      "spec/business/brand-product-effectiveness/store-can-orders.md"
+    ],
+    "可订门店数为什么下降": [
+      "spec/business/brand-product-effectiveness/store-can-orders.md"
+    ],
+    "可订门店数为什么提升": [
+      "spec/business/brand-product-effectiveness/store-can-orders.md"
+    ],
+    "可订门店数情况": [
+      "spec/business/brand-product-effectiveness/store-can-orders.md",
+      "spec/business/brand-product-effectiveness/store-can-orders.md"
+    ],
+    "合格率": [
+      "spec/business/active-vender-num/vendor-qualification-rate.md",
+      "spec/business/active-vender-num/vendor-qualification-rate.md"
+    ],
+    "合格率为什么下降": [
+      "spec/business/active-vender-num/vendor-qualification-rate.md"
+    ],
+    "合格率为什么提升": [
+      "spec/business/active-vender-num/vendor-qualification-rate.md"
+    ],
+    "合格率情况": [
+      "spec/business/active-vender-num/vendor-qualification-rate.md",
+      "spec/business/active-vender-num/vendor-qualification-rate.md"
+    ],
     "品效": [
+      "spec/business/brand-product-effectiveness.md",
       "spec/business/core-indicators.md",
+      "spec/business/index.md",
+      "spec/business/brand-product-effectiveness.md",
       "spec/business/core-indicators.md"
+    ],
+    "品效下钻": [
+      "spec/business/brand-product-effectiveness.md",
+      "spec/business/index.md",
+      "spec/business/brand-product-effectiveness.md"
+    ],
+    "品效情况": [
+      "spec/business/brand-product-effectiveness.md",
+      "spec/business/index.md",
+      "spec/business/brand-product-effectiveness.md"
     ],
     "品类": [
       "spec/business/area-category-trend.md",
       "spec/business/area-category-trend.md",
       "spec/member/category-unsupported.md"
+    ],
+    "售价价格指数": [
+      "spec/business/brand-product-effectiveness/price-index.md",
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "售价价格指数(线上)": [
+      "spec/business/brand-product-effectiveness/price-index.md",
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "售价价格指数为什么下降": [
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "售价价格指数为什么提升": [
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "售价价格指数情况": [
+      "spec/business/brand-product-effectiveness/price-index.md",
+      "spec/business/brand-product-effectiveness/price-index.md"
+    ],
+    "商品经营效率": [
+      "spec/business/brand-product-effectiveness.md",
+      "spec/business/index.md",
+      "spec/business/brand-product-effectiveness.md"
+    ],
+    "商品订购渗透率": [
+      "spec/business/brand-product-effectiveness/order-article-rate.md",
+      "spec/business/brand-product-effectiveness/order-article-rate.md"
+    ],
+    "商品订购渗透率为什么下降": [
+      "spec/business/brand-product-effectiveness/order-article-rate.md"
+    ],
+    "商品订购渗透率为什么提升": [
+      "spec/business/brand-product-effectiveness/order-article-rate.md"
+    ],
+    "商品订购渗透率情况": [
+      "spec/business/brand-product-effectiveness/order-article-rate.md",
+      "spec/business/brand-product-effectiveness/order-article-rate.md"
     ],
     "坪效": [
       "spec/store/profit-efficiency.md",
@@ -752,9 +2432,63 @@
       "spec/member/channel-touch.md",
       "spec/member/channel-touch.md"
     ],
+    "定价毛利率": [
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md"
+    ],
+    "定价毛利率为什么下降": [
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md"
+    ],
+    "定价毛利率为什么提升": [
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md"
+    ],
+    "定价毛利率情况": [
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-price-profit-rate.md"
+    ],
+    "客单价": [
+      "spec/business/cust-penetration-rate/per-cust-amt.md",
+      "spec/business/cust-penetration-rate/per-cust-amt.md"
+    ],
+    "客单价为什么下降": [
+      "spec/business/cust-penetration-rate/per-cust-amt.md"
+    ],
+    "客单价为什么提升": [
+      "spec/business/cust-penetration-rate/per-cust-amt.md"
+    ],
+    "客单价情况": [
+      "spec/business/cust-penetration-rate/per-cust-amt.md",
+      "spec/business/cust-penetration-rate/per-cust-amt.md"
+    ],
+    "客数": [
+      "spec/business/cust-penetration-rate/cust-num.md",
+      "spec/business/cust-penetration-rate/cust-num.md"
+    ],
+    "客数为什么下降": [
+      "spec/business/cust-penetration-rate/cust-num.md"
+    ],
+    "客数为什么提升": [
+      "spec/business/cust-penetration-rate/cust-num.md"
+    ],
+    "客数情况": [
+      "spec/business/cust-penetration-rate/cust-num.md",
+      "spec/business/cust-penetration-rate/cust-num.md"
+    ],
     "客数渗透率": [
       "spec/business/core-indicators.md",
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md",
       "spec/business/core-indicators.md"
+    ],
+    "客数渗透率为什么下降": [
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md"
+    ],
+    "客数渗透率为什么提升": [
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md"
+    ],
+    "客数渗透率情况": [
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+      "spec/business/cust-penetration-rate/cust-penetration-rate.md"
     ],
     "开店": [
       "spec/store/scale-health.md",
@@ -771,6 +2505,34 @@
     "挽回": [
       "spec/member/retention.md",
       "spec/member/retention.md"
+    ],
+    "损耗率": [
+      "spec/business/brand-product-effectiveness/lost-rate.md",
+      "spec/business/brand-product-effectiveness/lost-rate.md"
+    ],
+    "损耗率为什么下降": [
+      "spec/business/brand-product-effectiveness/lost-rate.md"
+    ],
+    "损耗率为什么提升": [
+      "spec/business/brand-product-effectiveness/lost-rate.md"
+    ],
+    "损耗率情况": [
+      "spec/business/brand-product-effectiveness/lost-rate.md",
+      "spec/business/brand-product-effectiveness/lost-rate.md"
+    ],
+    "时段折扣率": [
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md"
+    ],
+    "时段折扣率为什么下降": [
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md"
+    ],
+    "时段折扣率为什么提升": [
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md"
+    ],
+    "时段折扣率情况": [
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+      "spec/business/brand-product-effectiveness/hour-discount-rate.md"
     ],
     "时间": [
       "spec/common/index.md"
@@ -800,8 +2562,20 @@
       "spec/financial/income-cost-profit.md"
     ],
     "活跃供应商数": [
+      "spec/business/active-vender-num/active-vender-num.md",
       "spec/business/core-indicators.md",
+      "spec/business/active-vender-num/active-vender-num.md",
       "spec/business/core-indicators.md"
+    ],
+    "活跃供应商数为什么下降": [
+      "spec/business/active-vender-num/active-vender-num.md"
+    ],
+    "活跃供应商数为什么提升": [
+      "spec/business/active-vender-num/active-vender-num.md"
+    ],
+    "活跃供应商数情况": [
+      "spec/business/active-vender-num/active-vender-num.md",
+      "spec/business/active-vender-num/active-vender-num.md"
     ],
     "流失": [
       "spec/member/retention.md",
@@ -868,6 +2642,34 @@
       "spec/member/channel-touch.md",
       "spec/member/channel-touch.md"
     ],
+    "订单满足率": [
+      "spec/business/cust-penetration-rate/satisfied-rate.md",
+      "spec/business/cust-penetration-rate/satisfied-rate.md"
+    ],
+    "订单满足率为什么下降": [
+      "spec/business/cust-penetration-rate/satisfied-rate.md"
+    ],
+    "订单满足率为什么提升": [
+      "spec/business/cust-penetration-rate/satisfied-rate.md"
+    ],
+    "订单满足率情况": [
+      "spec/business/cust-penetration-rate/satisfied-rate.md",
+      "spec/business/cust-penetration-rate/satisfied-rate.md"
+    ],
+    "订购门店数": [
+      "spec/business/brand-product-effectiveness/order-stores.md",
+      "spec/business/brand-product-effectiveness/order-stores.md"
+    ],
+    "订购门店数为什么下降": [
+      "spec/business/brand-product-effectiveness/order-stores.md"
+    ],
+    "订购门店数为什么提升": [
+      "spec/business/brand-product-effectiveness/order-stores.md"
+    ],
+    "订购门店数情况": [
+      "spec/business/brand-product-effectiveness/order-stores.md",
+      "spec/business/brand-product-effectiveness/order-stores.md"
+    ],
     "财务": [
       "spec/financial/index.md",
       "spec/financial/report-contract.md"
@@ -884,9 +2686,37 @@
       "spec/business/area-category-trend.md",
       "spec/business/area-category-trend.md"
     ],
+    "采购价格指数": [
+      "spec/business/brand-product-effectiveness/purchase-price-index.md",
+      "spec/business/brand-product-effectiveness/purchase-price-index.md"
+    ],
+    "采购价格指数为什么下降": [
+      "spec/business/brand-product-effectiveness/purchase-price-index.md"
+    ],
+    "采购价格指数为什么提升": [
+      "spec/business/brand-product-effectiveness/purchase-price-index.md"
+    ],
+    "采购价格指数情况": [
+      "spec/business/brand-product-effectiveness/purchase-price-index.md",
+      "spec/business/brand-product-effectiveness/purchase-price-index.md"
+    ],
     "销售": [
       "spec/business/index.md",
       "spec/business/report-contract.md"
+    ],
+    "销售额": [
+      "spec/business/cust-penetration-rate/sale-amt.md",
+      "spec/business/cust-penetration-rate/sale-amt.md"
+    ],
+    "销售额为什么下降": [
+      "spec/business/cust-penetration-rate/sale-amt.md"
+    ],
+    "销售额为什么提升": [
+      "spec/business/cust-penetration-rate/sale-amt.md"
+    ],
+    "销售额情况": [
+      "spec/business/cust-penetration-rate/sale-amt.md",
+      "spec/business/cust-penetration-rate/sale-amt.md"
     ],
     "门店": [
       "spec/store/index.md",
@@ -895,6 +2725,34 @@
     "门店净利润": [
       "spec/store/profit-efficiency.md",
       "spec/store/profit-efficiency.md"
+    ],
+    "门店毛利率": [
+      "spec/business/cust-penetration-rate/profit-rate.md",
+      "spec/business/cust-penetration-rate/profit-rate.md"
+    ],
+    "门店毛利率为什么下降": [
+      "spec/business/cust-penetration-rate/profit-rate.md"
+    ],
+    "门店毛利率为什么提升": [
+      "spec/business/cust-penetration-rate/profit-rate.md"
+    ],
+    "门店毛利率情况": [
+      "spec/business/cust-penetration-rate/profit-rate.md",
+      "spec/business/cust-penetration-rate/profit-rate.md"
+    ],
+    "门店毛利额": [
+      "spec/business/cust-penetration-rate/profit-amt.md",
+      "spec/business/cust-penetration-rate/profit-amt.md"
+    ],
+    "门店毛利额为什么下降": [
+      "spec/business/cust-penetration-rate/profit-amt.md"
+    ],
+    "门店毛利额为什么提升": [
+      "spec/business/cust-penetration-rate/profit-amt.md"
+    ],
+    "门店毛利额情况": [
+      "spec/business/cust-penetration-rate/profit-amt.md",
+      "spec/business/cust-penetration-rate/profit-amt.md"
     ],
     "门店管理": [
       "spec/store/index.md",
@@ -907,11 +2765,76 @@
     "闭店": [
       "spec/store/scale-health.md",
       "spec/store/scale-health.md"
+    ],
+    "集采入库占比": [
+      "spec/business/active-vender-num/central-instock-rate.md",
+      "spec/business/active-vender-num/central-instock-rate.md"
+    ],
+    "集采入库占比为什么下降": [
+      "spec/business/active-vender-num/central-instock-rate.md"
+    ],
+    "集采入库占比为什么提升": [
+      "spec/business/active-vender-num/central-instock-rate.md"
+    ],
+    "集采入库占比情况": [
+      "spec/business/active-vender-num/central-instock-rate.md",
+      "spec/business/active-vender-num/central-instock-rate.md"
+    ],
+    "预期毛利率": [
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md"
+    ],
+    "预期毛利率为什么下降": [
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md"
+    ],
+    "预期毛利率为什么提升": [
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md"
+    ],
+    "预期毛利率情况": [
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+      "spec/business/brand-product-effectiveness/pre-profit-rate.md"
     ]
   },
   "byId": {
+    "business-active-vender-num-active-vender-num": "spec/business/active-vender-num/active-vender-num.md",
+    "business-active-vender-num-central-instock-rate": "spec/business/active-vender-num/central-instock-rate.md",
+    "business-active-vender-num-three-rate-score": "spec/business/active-vender-num/three-rate-score.md",
+    "business-active-vender-num-vendor-accuracy-rate": "spec/business/active-vender-num/vendor-accuracy-rate.md",
+    "business-active-vender-num-vendor-intime-rate": "spec/business/active-vender-num/vendor-intime-rate.md",
+    "business-active-vender-num-vendor-qualification-rate": "spec/business/active-vender-num/vendor-qualification-rate.md",
     "business-area-category-trend": "spec/business/area-category-trend.md",
+    "business-brand-product-effectiveness": "spec/business/brand-product-effectiveness.md",
+    "business-brand-product-effectiveness-hour-discount-rate": "spec/business/brand-product-effectiveness/hour-discount-rate.md",
+    "business-brand-product-effectiveness-lost-rate": "spec/business/brand-product-effectiveness/lost-rate.md",
+    "business-brand-product-effectiveness-order-article-rate": "spec/business/brand-product-effectiveness/order-article-rate.md",
+    "business-brand-product-effectiveness-order-stores": "spec/business/brand-product-effectiveness/order-stores.md",
+    "business-brand-product-effectiveness-pre-price-profit-rate": "spec/business/brand-product-effectiveness/pre-price-profit-rate.md",
+    "business-brand-product-effectiveness-pre-profit-rate": "spec/business/brand-product-effectiveness/pre-profit-rate.md",
+    "business-brand-product-effectiveness-price-index": "spec/business/brand-product-effectiveness/price-index.md",
+    "business-brand-product-effectiveness-promotion-discount-rate": "spec/business/brand-product-effectiveness/promotion-discount-rate.md",
+    "business-brand-product-effectiveness-purchase-price-index": "spec/business/brand-product-effectiveness/purchase-price-index.md",
+    "business-brand-product-effectiveness-scm-promotion-total-rate": "spec/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+    "business-brand-product-effectiveness-store-can-orders": "spec/business/brand-product-effectiveness/store-can-orders.md",
     "business-core-indicators": "spec/business/core-indicators.md",
+    "business-cust-penetration-rate-bf19-avg-piece-num": "spec/business/cust-penetration-rate/bf19-avg-piece-num.md",
+    "business-cust-penetration-rate-bf19-category-store-cust-rate": "spec/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+    "business-cust-penetration-rate-bf19-cust-num": "spec/business/cust-penetration-rate/bf19-cust-num.md",
+    "business-cust-penetration-rate-bf19-member-repurchase-rate": "spec/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+    "business-cust-penetration-rate-bf19-per-cust-amt": "spec/business/cust-penetration-rate/bf19-per-cust-amt.md",
+    "business-cust-penetration-rate-bf19-per-piece-amt": "spec/business/cust-penetration-rate/bf19-per-piece-amt.md",
+    "business-cust-penetration-rate-bf19-sale-rate": "spec/business/cust-penetration-rate/bf19-sale-rate.md",
+    "business-cust-penetration-rate-bf19-sale-weight": "spec/business/cust-penetration-rate/bf19-sale-weight.md",
+    "business-cust-penetration-rate-cust-num": "spec/business/cust-penetration-rate/cust-num.md",
+    "business-cust-penetration-rate-cust-penetration-rate": "spec/business/cust-penetration-rate/cust-penetration-rate.md",
+    "business-cust-penetration-rate-full-link-store-profit-amt-notax": "spec/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+    "business-cust-penetration-rate-full-link-store-profit-notax-rate": "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+    "business-cust-penetration-rate-per-cust-amt": "spec/business/cust-penetration-rate/per-cust-amt.md",
+    "business-cust-penetration-rate-profit-amt": "spec/business/cust-penetration-rate/profit-amt.md",
+    "business-cust-penetration-rate-profit-rate": "spec/business/cust-penetration-rate/profit-rate.md",
+    "business-cust-penetration-rate-sale-amt": "spec/business/cust-penetration-rate/sale-amt.md",
+    "business-cust-penetration-rate-satisfied-rate": "spec/business/cust-penetration-rate/satisfied-rate.md",
+    "business-cust-penetration-rate-scm-store-profit-amt-notax": "spec/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+    "business-cust-penetration-rate-scm-store-profit-notax-rate": "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
     "business-index": "spec/business/index.md",
     "business-report-contract": "spec/business/report-contract.md",
     "common-area": "spec/common/area.md",

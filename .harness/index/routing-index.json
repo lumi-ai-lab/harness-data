@@ -1,7 +1,851 @@
 {
-  "generatedAt": "2026-05-24T13:01:21Z",
+  "generatedAt": "2026-05-25T05:24:07Z",
   "root": "/Users/pengmd/c/qdm/harness-data",
   "files": [
+    {
+      "id": "routing-business-active-vender-num-active-vender-num",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-活跃供应商数指标路由规则",
+      "path": "routing/business-active-vender-num-active-vender-num.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "active-vender-num",
+        "activeVenderNum"
+      ],
+      "match": {
+        "keywords": [
+          "活跃供应商数",
+          "activeVenderNum",
+          "活跃供应商数情况",
+          "活跃供应商数为什么下降",
+          "活跃供应商数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-active-vender-num-central-instock-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-集采入库占比指标路由规则",
+      "path": "routing/business-active-vender-num-central-instock-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "active-vender-num",
+        "centralInstockRate"
+      ],
+      "match": {
+        "keywords": [
+          "集采入库占比",
+          "centralInstockRate",
+          "集采入库占比情况",
+          "集采入库占比为什么下降",
+          "集采入库占比为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-active-vender-num-three-rate-score",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-三率综合得分指标路由规则",
+      "path": "routing/business-active-vender-num-three-rate-score.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "active-vender-num",
+        "threeRateScore"
+      ],
+      "match": {
+        "keywords": [
+          "三率综合得分",
+          "threeRateScore",
+          "三率综合得分情况",
+          "三率综合得分为什么下降",
+          "三率综合得分为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-active-vender-num-vendor-accuracy-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-准确率指标路由规则",
+      "path": "routing/business-active-vender-num-vendor-accuracy-rate.md",
+      "tags": [
+        "routing",
+        "active-vender-num",
+        "vendorAccuracyRate"
+      ],
+      "match": {
+        "keywords": [
+          "准确率",
+          "vendorAccuracyRate",
+          "准确率情况",
+          "准确率为什么下降",
+          "准确率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-active-vender-num-vendor-intime-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-准点率指标路由规则",
+      "path": "routing/business-active-vender-num-vendor-intime-rate.md",
+      "tags": [
+        "routing",
+        "active-vender-num",
+        "vendorIntimeRate"
+      ],
+      "match": {
+        "keywords": [
+          "准点率",
+          "vendorIntimeRate",
+          "准点率情况",
+          "准点率为什么下降",
+          "准点率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-active-vender-num-vendor-qualification-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-合格率指标路由规则",
+      "path": "routing/business-active-vender-num-vendor-qualification-rate.md",
+      "tags": [
+        "routing",
+        "active-vender-num",
+        "vendorQualificationRate"
+      ],
+      "match": {
+        "keywords": [
+          "合格率",
+          "vendorQualificationRate",
+          "合格率情况",
+          "合格率为什么下降",
+          "合格率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-hour-discount-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-时段折扣率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-hour-discount-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "hourDiscountRate"
+      ],
+      "match": {
+        "keywords": [
+          "时段折扣率",
+          "hourDiscountRate",
+          "时段折扣率情况",
+          "时段折扣率为什么下降",
+          "时段折扣率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-lost-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-损耗率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-lost-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "lostRate"
+      ],
+      "match": {
+        "keywords": [
+          "损耗率",
+          "lostRate",
+          "损耗率情况",
+          "损耗率为什么下降",
+          "损耗率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-order-article-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-商品订购渗透率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-order-article-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "orderArticleRate"
+      ],
+      "match": {
+        "keywords": [
+          "商品订购渗透率",
+          "orderArticleRate",
+          "商品订购渗透率情况",
+          "商品订购渗透率为什么下降",
+          "商品订购渗透率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-order-stores",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-订购门店数指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-order-stores.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "orderStores"
+      ],
+      "match": {
+        "keywords": [
+          "订购门店数",
+          "orderStores",
+          "订购门店数情况",
+          "订购门店数为什么下降",
+          "订购门店数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-pre-price-profit-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-定价毛利率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-pre-price-profit-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "prePriceProfitRate"
+      ],
+      "match": {
+        "keywords": [
+          "定价毛利率",
+          "prePriceProfitRate",
+          "定价毛利率情况",
+          "定价毛利率为什么下降",
+          "定价毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-pre-profit-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-预期毛利率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-pre-profit-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "preProfitRate"
+      ],
+      "match": {
+        "keywords": [
+          "预期毛利率",
+          "preProfitRate",
+          "预期毛利率情况",
+          "预期毛利率为什么下降",
+          "预期毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-price-index",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-售价价格指数指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-price-index.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "priceIndex"
+      ],
+      "match": {
+        "keywords": [
+          "售价价格指数",
+          "售价价格指数(线上)",
+          "priceIndex",
+          "售价价格指数情况",
+          "售价价格指数为什么下降",
+          "售价价格指数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-promotion-discount-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-促销折扣率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-promotion-discount-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "promotionDiscountRate"
+      ],
+      "match": {
+        "keywords": [
+          "促销折扣率",
+          "promotionDiscountRate",
+          "促销折扣率情况",
+          "促销折扣率为什么下降",
+          "促销折扣率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-purchase-price-index",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-采购价格指数指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-purchase-price-index.md",
+      "tags": [
+        "routing",
+        "brand-product-effectiveness",
+        "purchasePriceIndex"
+      ],
+      "match": {
+        "keywords": [
+          "采购价格指数",
+          "purchasePriceIndex",
+          "采购价格指数情况",
+          "采购价格指数为什么下降",
+          "采购价格指数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-scm-promotion-total-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-出库折让率指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "scmPromotionTotalRate"
+      ],
+      "match": {
+        "keywords": [
+          "出库折让率",
+          "scmPromotionTotalRate",
+          "出库折让率情况",
+          "出库折让率为什么下降",
+          "出库折让率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness-store-can-orders",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-可订门店数指标路由规则",
+      "path": "routing/business-brand-product-effectiveness-store-can-orders.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness",
+        "storeCanOrders"
+      ],
+      "match": {
+        "keywords": [
+          "可订门店数",
+          "storeCanOrders",
+          "可订门店数情况",
+          "可订门店数为什么下降",
+          "可订门店数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-brand-product-effectiveness",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-品效下钻路由规则",
+      "path": "routing/business-brand-product-effectiveness.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "brand-product-effectiveness"
+      ],
+      "match": {
+        "keywords": [
+          "品效",
+          "品效情况",
+          "品效下钻",
+          "brandProductEffectiveness",
+          "商品经营效率"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-avg-piece-num",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前单均件数指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-avg-piece-num.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19AvgPieceNum"
+      ],
+      "match": {
+        "keywords": [
+          "19点前单均件数",
+          "bf19AvgPieceNum",
+          "19点前单均件数情况",
+          "19点前单均件数为什么下降",
+          "19点前单均件数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-category-store-cust-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前PI值指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19CategoryStoreCustRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前PI值",
+          "bf19CategoryStoreCustRate",
+          "19点前PI值情况",
+          "19点前PI值为什么下降",
+          "19点前PI值为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-cust-num",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前客数指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-cust-num.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19CustNum"
+      ],
+      "match": {
+        "keywords": [
+          "19点前客数",
+          "bf19CustNum",
+          "19点前客数情况",
+          "19点前客数为什么下降",
+          "19点前客数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-member-repurchase-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前复购率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19MemberRepurchaseRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前复购率",
+          "bf19MemberRepurchaseRate",
+          "19点前复购率情况",
+          "19点前复购率为什么下降",
+          "19点前复购率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-per-cust-amt",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前客单价指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-per-cust-amt.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19PerCustAmt"
+      ],
+      "match": {
+        "keywords": [
+          "19点前客单价",
+          "bf19PerCustAmt",
+          "19点前客单价情况",
+          "19点前客单价为什么下降",
+          "19点前客单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-per-piece-amt",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前件单价指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-per-piece-amt.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "bf19PerPieceAmt"
+      ],
+      "match": {
+        "keywords": [
+          "19点前件单价",
+          "bf19PerPieceAmt",
+          "19点前件单价情况",
+          "19点前件单价为什么下降",
+          "19点前件单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-sale-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前销售占比指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-sale-rate.md",
+      "tags": [
+        "routing",
+        "cust-penetration-rate",
+        "bf19SaleRate"
+      ],
+      "match": {
+        "keywords": [
+          "19点前销售占比",
+          "bf19SaleRate",
+          "19点前销售占比情况",
+          "19点前销售占比为什么下降",
+          "19点前销售占比为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-bf19-sale-weight",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-19点前销售重量指标路由规则",
+      "path": "routing/business-cust-penetration-rate-bf19-sale-weight.md",
+      "tags": [
+        "routing",
+        "cust-penetration-rate",
+        "bf19SaleWeight"
+      ],
+      "match": {
+        "keywords": [
+          "19点前销售重量",
+          "bf19SaleWeight",
+          "19点前销售重量情况",
+          "19点前销售重量为什么下降",
+          "19点前销售重量为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-cust-num",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-客数指标路由规则",
+      "path": "routing/business-cust-penetration-rate-cust-num.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "custNum"
+      ],
+      "match": {
+        "keywords": [
+          "客数",
+          "custNum",
+          "客数情况",
+          "客数为什么下降",
+          "客数为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-cust-penetration-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-客数渗透率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-cust-penetration-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "custPenetrationRate"
+      ],
+      "match": {
+        "keywords": [
+          "客数渗透率",
+          "custPenetrationRate",
+          "客数渗透率情况",
+          "客数渗透率为什么下降",
+          "客数渗透率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-full-link-store-profit-amt-notax",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-全链路毛利额指标路由规则",
+      "path": "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "fullLinkStoreProfitAmtNotax"
+      ],
+      "match": {
+        "keywords": [
+          "全链路毛利额",
+          "fullLinkStoreProfitAmtNotax",
+          "全链路毛利额情况",
+          "全链路毛利额为什么下降",
+          "全链路毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-full-link-store-profit-notax-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-全链路毛利率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "fullLinkStoreProfitNotaxRate"
+      ],
+      "match": {
+        "keywords": [
+          "全链路毛利率",
+          "fullLinkStoreProfitNotaxRate",
+          "全链路毛利率情况",
+          "全链路毛利率为什么下降",
+          "全链路毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-per-cust-amt",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-客单价指标路由规则",
+      "path": "routing/business-cust-penetration-rate-per-cust-amt.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "perCustAmt"
+      ],
+      "match": {
+        "keywords": [
+          "客单价",
+          "perCustAmt",
+          "客单价情况",
+          "客单价为什么下降",
+          "客单价为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-profit-amt",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-门店毛利额指标路由规则",
+      "path": "routing/business-cust-penetration-rate-profit-amt.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "profitAmt"
+      ],
+      "match": {
+        "keywords": [
+          "门店毛利额",
+          "profitAmt",
+          "门店毛利额情况",
+          "门店毛利额为什么下降",
+          "门店毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-profit-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-门店毛利率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-profit-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "profitRate"
+      ],
+      "match": {
+        "keywords": [
+          "门店毛利率",
+          "profitRate",
+          "门店毛利率情况",
+          "门店毛利率为什么下降",
+          "门店毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-sale-amt",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-销售额指标路由规则",
+      "path": "routing/business-cust-penetration-rate-sale-amt.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "saleAmt"
+      ],
+      "match": {
+        "keywords": [
+          "销售额",
+          "saleAmt",
+          "销售额情况",
+          "销售额为什么下降",
+          "销售额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-satisfied-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-订单满足率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-satisfied-rate.md",
+      "tags": [
+        "routing",
+        "cust-penetration-rate",
+        "satisfiedRate"
+      ],
+      "match": {
+        "keywords": [
+          "订单满足率",
+          "satisfiedRate",
+          "订单满足率情况",
+          "订单满足率为什么下降",
+          "订单满足率为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-scm-store-profit-amt-notax",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-供应链毛利额指标路由规则",
+      "path": "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "scmStoreProfitAmtNotax"
+      ],
+      "match": {
+        "keywords": [
+          "供应链毛利额",
+          "scmStoreProfitAmtNotax",
+          "供应链毛利额情况",
+          "供应链毛利额为什么下降",
+          "供应链毛利额为什么提升"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "routing-business-cust-penetration-rate-scm-store-profit-notax-rate",
+      "kind": "routing",
+      "domain": "business",
+      "title": "经营分析-供应链毛利率指标路由规则",
+      "path": "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md",
+      "tags": [
+        "routing",
+        "business-report",
+        "cust-penetration-rate",
+        "scmStoreProfitNotaxRate"
+      ],
+      "match": {
+        "keywords": [
+          "供应链毛利率",
+          "scmStoreProfitNotaxRate",
+          "供应链毛利率情况",
+          "供应链毛利率为什么下降",
+          "供应链毛利率为什么提升"
+        ]
+      },
+      "context": {}
+    },
     {
       "id": "routing-business-overview",
       "kind": "routing",
@@ -124,6 +968,43 @@
   ],
   "byDomain": {
     "business": [
+      "routing/business-active-vender-num-active-vender-num.md",
+      "routing/business-active-vender-num-central-instock-rate.md",
+      "routing/business-active-vender-num-three-rate-score.md",
+      "routing/business-active-vender-num-vendor-accuracy-rate.md",
+      "routing/business-active-vender-num-vendor-intime-rate.md",
+      "routing/business-active-vender-num-vendor-qualification-rate.md",
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md",
+      "routing/business-brand-product-effectiveness-lost-rate.md",
+      "routing/business-brand-product-effectiveness-order-article-rate.md",
+      "routing/business-brand-product-effectiveness-order-stores.md",
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md",
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md",
+      "routing/business-brand-product-effectiveness-price-index.md",
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md",
+      "routing/business-brand-product-effectiveness-purchase-price-index.md",
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md",
+      "routing/business-brand-product-effectiveness-store-can-orders.md",
+      "routing/business-brand-product-effectiveness.md",
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md",
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md",
+      "routing/business-cust-penetration-rate-bf19-cust-num.md",
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md",
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md",
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md",
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md",
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md",
+      "routing/business-cust-penetration-rate-cust-num.md",
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md",
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md",
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md",
+      "routing/business-cust-penetration-rate-per-cust-amt.md",
+      "routing/business-cust-penetration-rate-profit-amt.md",
+      "routing/business-cust-penetration-rate-profit-rate.md",
+      "routing/business-cust-penetration-rate-sale-amt.md",
+      "routing/business-cust-penetration-rate-satisfied-rate.md",
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md",
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md",
       "routing/business-overview.md"
     ],
     "common": [
@@ -141,20 +1022,239 @@
     ]
   },
   "byKeyword": {
+    "19点前PI值": [
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md"
+    ],
+    "19点前PI值情况": [
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md"
+    ],
+    "19点前件单价": [
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md"
+    ],
+    "19点前件单价为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md"
+    ],
+    "19点前件单价为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md"
+    ],
+    "19点前件单价情况": [
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md"
+    ],
+    "19点前单均件数": [
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md"
+    ],
+    "19点前单均件数情况": [
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md"
+    ],
+    "19点前复购率": [
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md"
+    ],
+    "19点前复购率情况": [
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md"
+    ],
+    "19点前客单价": [
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md"
+    ],
+    "19点前客单价为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md"
+    ],
+    "19点前客单价为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md"
+    ],
+    "19点前客单价情况": [
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md"
+    ],
+    "19点前客数": [
+      "routing/business-cust-penetration-rate-bf19-cust-num.md"
+    ],
+    "19点前客数为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-cust-num.md"
+    ],
+    "19点前客数为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-cust-num.md"
+    ],
+    "19点前客数情况": [
+      "routing/business-cust-penetration-rate-bf19-cust-num.md"
+    ],
+    "19点前销售占比": [
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md"
+    ],
+    "19点前销售占比为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md"
+    ],
+    "19点前销售占比为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md"
+    ],
+    "19点前销售占比情况": [
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md"
+    ],
+    "19点前销售重量": [
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md"
+    ],
+    "19点前销售重量为什么下降": [
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md"
+    ],
+    "19点前销售重量为什么提升": [
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md"
+    ],
+    "19点前销售重量情况": [
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md"
+    ],
     "EBITDA": [
       "routing/financial-overview.md"
+    ],
+    "activeVenderNum": [
+      "routing/business-active-vender-num-active-vender-num.md"
+    ],
+    "bf19AvgPieceNum": [
+      "routing/business-cust-penetration-rate-bf19-avg-piece-num.md"
+    ],
+    "bf19CategoryStoreCustRate": [
+      "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md"
+    ],
+    "bf19CustNum": [
+      "routing/business-cust-penetration-rate-bf19-cust-num.md"
+    ],
+    "bf19MemberRepurchaseRate": [
+      "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md"
+    ],
+    "bf19PerCustAmt": [
+      "routing/business-cust-penetration-rate-bf19-per-cust-amt.md"
+    ],
+    "bf19PerPieceAmt": [
+      "routing/business-cust-penetration-rate-bf19-per-piece-amt.md"
+    ],
+    "bf19SaleRate": [
+      "routing/business-cust-penetration-rate-bf19-sale-rate.md"
+    ],
+    "bf19SaleWeight": [
+      "routing/business-cust-penetration-rate-bf19-sale-weight.md"
+    ],
+    "brandProductEffectiveness": [
+      "routing/business-brand-product-effectiveness.md"
+    ],
+    "centralInstockRate": [
+      "routing/business-active-vender-num-central-instock-rate.md"
     ],
     "cli": [
       "routing/qdm-cli-routing.md"
     ],
+    "custNum": [
+      "routing/business-cust-penetration-rate-cust-num.md"
+    ],
+    "custPenetrationRate": [
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md"
+    ],
+    "fullLinkStoreProfitAmtNotax": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md"
+    ],
+    "fullLinkStoreProfitNotaxRate": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md"
+    ],
+    "hourDiscountRate": [
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md"
+    ],
     "indicators": [
       "routing/qdm-cli-routing.md"
+    ],
+    "lostRate": [
+      "routing/business-brand-product-effectiveness-lost-rate.md"
+    ],
+    "orderArticleRate": [
+      "routing/business-brand-product-effectiveness-order-article-rate.md"
+    ],
+    "orderStores": [
+      "routing/business-brand-product-effectiveness-order-stores.md"
+    ],
+    "perCustAmt": [
+      "routing/business-cust-penetration-rate-per-cust-amt.md"
+    ],
+    "prePriceProfitRate": [
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md"
+    ],
+    "preProfitRate": [
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md"
+    ],
+    "priceIndex": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "profitAmt": [
+      "routing/business-cust-penetration-rate-profit-amt.md"
+    ],
+    "profitRate": [
+      "routing/business-cust-penetration-rate-profit-rate.md"
+    ],
+    "promotionDiscountRate": [
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md"
+    ],
+    "purchasePriceIndex": [
+      "routing/business-brand-product-effectiveness-purchase-price-index.md"
     ],
     "qdm": [
       "routing/qdm-cli-routing.md"
     ],
     "report": [
       "routing/index.md"
+    ],
+    "saleAmt": [
+      "routing/business-cust-penetration-rate-sale-amt.md"
+    ],
+    "satisfiedRate": [
+      "routing/business-cust-penetration-rate-satisfied-rate.md"
+    ],
+    "scmPromotionTotalRate": [
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md"
+    ],
+    "scmStoreProfitAmtNotax": [
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md"
+    ],
+    "scmStoreProfitNotaxRate": [
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md"
+    ],
+    "storeCanOrders": [
+      "routing/business-brand-product-effectiveness-store-can-orders.md"
+    ],
+    "threeRateScore": [
+      "routing/business-active-vender-num-three-rate-score.md"
+    ],
+    "vendorAccuracyRate": [
+      "routing/business-active-vender-num-vendor-accuracy-rate.md"
+    ],
+    "vendorIntimeRate": [
+      "routing/business-active-vender-num-vendor-intime-rate.md"
+    ],
+    "vendorQualificationRate": [
+      "routing/business-active-vender-num-vendor-qualification-rate.md"
+    ],
+    "三率综合得分": [
+      "routing/business-active-vender-num-three-rate-score.md"
+    ],
+    "三率综合得分为什么下降": [
+      "routing/business-active-vender-num-three-rate-score.md"
+    ],
+    "三率综合得分为什么提升": [
+      "routing/business-active-vender-num-three-rate-score.md"
+    ],
+    "三率综合得分情况": [
+      "routing/business-active-vender-num-three-rate-score.md"
     ],
     "业务表现": [
       "routing/business-overview.md"
@@ -165,8 +1265,251 @@
     "会员复购": [
       "routing/member-overview.md"
     ],
+    "供应链毛利率": [
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率为什么下降": [
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率为什么提升": [
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利率情况": [
+      "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md"
+    ],
+    "供应链毛利额": [
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额为什么下降": [
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额为什么提升": [
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md"
+    ],
+    "供应链毛利额情况": [
+      "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md"
+    ],
+    "促销折扣率": [
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md"
+    ],
+    "促销折扣率为什么下降": [
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md"
+    ],
+    "促销折扣率为什么提升": [
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md"
+    ],
+    "促销折扣率情况": [
+      "routing/business-brand-product-effectiveness-promotion-discount-rate.md"
+    ],
+    "全链路毛利率": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率为什么下降": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率为什么提升": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利率情况": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md"
+    ],
+    "全链路毛利额": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额为什么下降": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额为什么提升": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md"
+    ],
+    "全链路毛利额情况": [
+      "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md"
+    ],
     "公司报表": [
       "routing/financial-overview.md"
+    ],
+    "准点率": [
+      "routing/business-active-vender-num-vendor-intime-rate.md"
+    ],
+    "准点率为什么下降": [
+      "routing/business-active-vender-num-vendor-intime-rate.md"
+    ],
+    "准点率为什么提升": [
+      "routing/business-active-vender-num-vendor-intime-rate.md"
+    ],
+    "准点率情况": [
+      "routing/business-active-vender-num-vendor-intime-rate.md"
+    ],
+    "准确率": [
+      "routing/business-active-vender-num-vendor-accuracy-rate.md"
+    ],
+    "准确率为什么下降": [
+      "routing/business-active-vender-num-vendor-accuracy-rate.md"
+    ],
+    "准确率为什么提升": [
+      "routing/business-active-vender-num-vendor-accuracy-rate.md"
+    ],
+    "准确率情况": [
+      "routing/business-active-vender-num-vendor-accuracy-rate.md"
+    ],
+    "出库折让率": [
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md"
+    ],
+    "出库折让率为什么下降": [
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md"
+    ],
+    "出库折让率为什么提升": [
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md"
+    ],
+    "出库折让率情况": [
+      "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md"
+    ],
+    "可订门店数": [
+      "routing/business-brand-product-effectiveness-store-can-orders.md"
+    ],
+    "可订门店数为什么下降": [
+      "routing/business-brand-product-effectiveness-store-can-orders.md"
+    ],
+    "可订门店数为什么提升": [
+      "routing/business-brand-product-effectiveness-store-can-orders.md"
+    ],
+    "可订门店数情况": [
+      "routing/business-brand-product-effectiveness-store-can-orders.md"
+    ],
+    "合格率": [
+      "routing/business-active-vender-num-vendor-qualification-rate.md"
+    ],
+    "合格率为什么下降": [
+      "routing/business-active-vender-num-vendor-qualification-rate.md"
+    ],
+    "合格率为什么提升": [
+      "routing/business-active-vender-num-vendor-qualification-rate.md"
+    ],
+    "合格率情况": [
+      "routing/business-active-vender-num-vendor-qualification-rate.md"
+    ],
+    "品效": [
+      "routing/business-brand-product-effectiveness.md"
+    ],
+    "品效下钻": [
+      "routing/business-brand-product-effectiveness.md"
+    ],
+    "品效情况": [
+      "routing/business-brand-product-effectiveness.md"
+    ],
+    "售价价格指数": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "售价价格指数(线上)": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "售价价格指数为什么下降": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "售价价格指数为什么提升": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "售价价格指数情况": [
+      "routing/business-brand-product-effectiveness-price-index.md"
+    ],
+    "商品经营效率": [
+      "routing/business-brand-product-effectiveness.md"
+    ],
+    "商品订购渗透率": [
+      "routing/business-brand-product-effectiveness-order-article-rate.md"
+    ],
+    "商品订购渗透率为什么下降": [
+      "routing/business-brand-product-effectiveness-order-article-rate.md"
+    ],
+    "商品订购渗透率为什么提升": [
+      "routing/business-brand-product-effectiveness-order-article-rate.md"
+    ],
+    "商品订购渗透率情况": [
+      "routing/business-brand-product-effectiveness-order-article-rate.md"
+    ],
+    "定价毛利率": [
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md"
+    ],
+    "定价毛利率为什么下降": [
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md"
+    ],
+    "定价毛利率为什么提升": [
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md"
+    ],
+    "定价毛利率情况": [
+      "routing/business-brand-product-effectiveness-pre-price-profit-rate.md"
+    ],
+    "客单价": [
+      "routing/business-cust-penetration-rate-per-cust-amt.md"
+    ],
+    "客单价为什么下降": [
+      "routing/business-cust-penetration-rate-per-cust-amt.md"
+    ],
+    "客单价为什么提升": [
+      "routing/business-cust-penetration-rate-per-cust-amt.md"
+    ],
+    "客单价情况": [
+      "routing/business-cust-penetration-rate-per-cust-amt.md"
+    ],
+    "客数": [
+      "routing/business-cust-penetration-rate-cust-num.md"
+    ],
+    "客数为什么下降": [
+      "routing/business-cust-penetration-rate-cust-num.md"
+    ],
+    "客数为什么提升": [
+      "routing/business-cust-penetration-rate-cust-num.md"
+    ],
+    "客数情况": [
+      "routing/business-cust-penetration-rate-cust-num.md"
+    ],
+    "客数渗透率": [
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md"
+    ],
+    "客数渗透率为什么下降": [
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md"
+    ],
+    "客数渗透率为什么提升": [
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md"
+    ],
+    "客数渗透率情况": [
+      "routing/business-cust-penetration-rate-cust-penetration-rate.md"
+    ],
+    "损耗率": [
+      "routing/business-brand-product-effectiveness-lost-rate.md"
+    ],
+    "损耗率为什么下降": [
+      "routing/business-brand-product-effectiveness-lost-rate.md"
+    ],
+    "损耗率为什么提升": [
+      "routing/business-brand-product-effectiveness-lost-rate.md"
+    ],
+    "损耗率情况": [
+      "routing/business-brand-product-effectiveness-lost-rate.md"
+    ],
+    "时段折扣率": [
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md"
+    ],
+    "时段折扣率为什么下降": [
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md"
+    ],
+    "时段折扣率为什么提升": [
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md"
+    ],
+    "时段折扣率情况": [
+      "routing/business-brand-product-effectiveness-hour-discount-rate.md"
+    ],
+    "活跃供应商数": [
+      "routing/business-active-vender-num-active-vender-num.md"
+    ],
+    "活跃供应商数为什么下降": [
+      "routing/business-active-vender-num-active-vender-num.md"
+    ],
+    "活跃供应商数为什么提升": [
+      "routing/business-active-vender-num-active-vender-num.md"
+    ],
+    "活跃供应商数情况": [
+      "routing/business-active-vender-num-active-vender-num.md"
     ],
     "活跃用户": [
       "routing/member-overview.md"
@@ -186,6 +1529,30 @@
     "营业收入": [
       "routing/financial-overview.md"
     ],
+    "订单满足率": [
+      "routing/business-cust-penetration-rate-satisfied-rate.md"
+    ],
+    "订单满足率为什么下降": [
+      "routing/business-cust-penetration-rate-satisfied-rate.md"
+    ],
+    "订单满足率为什么提升": [
+      "routing/business-cust-penetration-rate-satisfied-rate.md"
+    ],
+    "订单满足率情况": [
+      "routing/business-cust-penetration-rate-satisfied-rate.md"
+    ],
+    "订购门店数": [
+      "routing/business-brand-product-effectiveness-order-stores.md"
+    ],
+    "订购门店数为什么下降": [
+      "routing/business-brand-product-effectiveness-order-stores.md"
+    ],
+    "订购门店数为什么提升": [
+      "routing/business-brand-product-effectiveness-order-stores.md"
+    ],
+    "订购门店数情况": [
+      "routing/business-brand-product-effectiveness-order-stores.md"
+    ],
     "财务": [
       "routing/financial-overview.md"
     ],
@@ -195,8 +1562,32 @@
     "路由": [
       "routing/index.md"
     ],
+    "采购价格指数": [
+      "routing/business-brand-product-effectiveness-purchase-price-index.md"
+    ],
+    "采购价格指数为什么下降": [
+      "routing/business-brand-product-effectiveness-purchase-price-index.md"
+    ],
+    "采购价格指数为什么提升": [
+      "routing/business-brand-product-effectiveness-purchase-price-index.md"
+    ],
+    "采购价格指数情况": [
+      "routing/business-brand-product-effectiveness-purchase-price-index.md"
+    ],
     "销售": [
       "routing/business-overview.md"
+    ],
+    "销售额": [
+      "routing/business-cust-penetration-rate-sale-amt.md"
+    ],
+    "销售额为什么下降": [
+      "routing/business-cust-penetration-rate-sale-amt.md"
+    ],
+    "销售额为什么提升": [
+      "routing/business-cust-penetration-rate-sale-amt.md"
+    ],
+    "销售额情况": [
+      "routing/business-cust-penetration-rate-sale-amt.md"
     ],
     "门店": [
       "routing/store-overview.md"
@@ -204,14 +1595,99 @@
     "门店净利润": [
       "routing/store-overview.md"
     ],
+    "门店毛利率": [
+      "routing/business-cust-penetration-rate-profit-rate.md"
+    ],
+    "门店毛利率为什么下降": [
+      "routing/business-cust-penetration-rate-profit-rate.md"
+    ],
+    "门店毛利率为什么提升": [
+      "routing/business-cust-penetration-rate-profit-rate.md"
+    ],
+    "门店毛利率情况": [
+      "routing/business-cust-penetration-rate-profit-rate.md"
+    ],
+    "门店毛利额": [
+      "routing/business-cust-penetration-rate-profit-amt.md"
+    ],
+    "门店毛利额为什么下降": [
+      "routing/business-cust-penetration-rate-profit-amt.md"
+    ],
+    "门店毛利额为什么提升": [
+      "routing/business-cust-penetration-rate-profit-amt.md"
+    ],
+    "门店毛利额情况": [
+      "routing/business-cust-penetration-rate-profit-amt.md"
+    ],
     "门店管理": [
       "routing/store-overview.md"
     ],
     "门店运营": [
       "routing/store-overview.md"
+    ],
+    "集采入库占比": [
+      "routing/business-active-vender-num-central-instock-rate.md"
+    ],
+    "集采入库占比为什么下降": [
+      "routing/business-active-vender-num-central-instock-rate.md"
+    ],
+    "集采入库占比为什么提升": [
+      "routing/business-active-vender-num-central-instock-rate.md"
+    ],
+    "集采入库占比情况": [
+      "routing/business-active-vender-num-central-instock-rate.md"
+    ],
+    "预期毛利率": [
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md"
+    ],
+    "预期毛利率为什么下降": [
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md"
+    ],
+    "预期毛利率为什么提升": [
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md"
+    ],
+    "预期毛利率情况": [
+      "routing/business-brand-product-effectiveness-pre-profit-rate.md"
     ]
   },
   "byId": {
+    "routing-business-active-vender-num-active-vender-num": "routing/business-active-vender-num-active-vender-num.md",
+    "routing-business-active-vender-num-central-instock-rate": "routing/business-active-vender-num-central-instock-rate.md",
+    "routing-business-active-vender-num-three-rate-score": "routing/business-active-vender-num-three-rate-score.md",
+    "routing-business-active-vender-num-vendor-accuracy-rate": "routing/business-active-vender-num-vendor-accuracy-rate.md",
+    "routing-business-active-vender-num-vendor-intime-rate": "routing/business-active-vender-num-vendor-intime-rate.md",
+    "routing-business-active-vender-num-vendor-qualification-rate": "routing/business-active-vender-num-vendor-qualification-rate.md",
+    "routing-business-brand-product-effectiveness": "routing/business-brand-product-effectiveness.md",
+    "routing-business-brand-product-effectiveness-hour-discount-rate": "routing/business-brand-product-effectiveness-hour-discount-rate.md",
+    "routing-business-brand-product-effectiveness-lost-rate": "routing/business-brand-product-effectiveness-lost-rate.md",
+    "routing-business-brand-product-effectiveness-order-article-rate": "routing/business-brand-product-effectiveness-order-article-rate.md",
+    "routing-business-brand-product-effectiveness-order-stores": "routing/business-brand-product-effectiveness-order-stores.md",
+    "routing-business-brand-product-effectiveness-pre-price-profit-rate": "routing/business-brand-product-effectiveness-pre-price-profit-rate.md",
+    "routing-business-brand-product-effectiveness-pre-profit-rate": "routing/business-brand-product-effectiveness-pre-profit-rate.md",
+    "routing-business-brand-product-effectiveness-price-index": "routing/business-brand-product-effectiveness-price-index.md",
+    "routing-business-brand-product-effectiveness-promotion-discount-rate": "routing/business-brand-product-effectiveness-promotion-discount-rate.md",
+    "routing-business-brand-product-effectiveness-purchase-price-index": "routing/business-brand-product-effectiveness-purchase-price-index.md",
+    "routing-business-brand-product-effectiveness-scm-promotion-total-rate": "routing/business-brand-product-effectiveness-scm-promotion-total-rate.md",
+    "routing-business-brand-product-effectiveness-store-can-orders": "routing/business-brand-product-effectiveness-store-can-orders.md",
+    "routing-business-cust-penetration-rate-bf19-avg-piece-num": "routing/business-cust-penetration-rate-bf19-avg-piece-num.md",
+    "routing-business-cust-penetration-rate-bf19-category-store-cust-rate": "routing/business-cust-penetration-rate-bf19-category-store-cust-rate.md",
+    "routing-business-cust-penetration-rate-bf19-cust-num": "routing/business-cust-penetration-rate-bf19-cust-num.md",
+    "routing-business-cust-penetration-rate-bf19-member-repurchase-rate": "routing/business-cust-penetration-rate-bf19-member-repurchase-rate.md",
+    "routing-business-cust-penetration-rate-bf19-per-cust-amt": "routing/business-cust-penetration-rate-bf19-per-cust-amt.md",
+    "routing-business-cust-penetration-rate-bf19-per-piece-amt": "routing/business-cust-penetration-rate-bf19-per-piece-amt.md",
+    "routing-business-cust-penetration-rate-bf19-sale-rate": "routing/business-cust-penetration-rate-bf19-sale-rate.md",
+    "routing-business-cust-penetration-rate-bf19-sale-weight": "routing/business-cust-penetration-rate-bf19-sale-weight.md",
+    "routing-business-cust-penetration-rate-cust-num": "routing/business-cust-penetration-rate-cust-num.md",
+    "routing-business-cust-penetration-rate-cust-penetration-rate": "routing/business-cust-penetration-rate-cust-penetration-rate.md",
+    "routing-business-cust-penetration-rate-full-link-store-profit-amt-notax": "routing/business-cust-penetration-rate-full-link-store-profit-amt-notax.md",
+    "routing-business-cust-penetration-rate-full-link-store-profit-notax-rate": "routing/business-cust-penetration-rate-full-link-store-profit-notax-rate.md",
+    "routing-business-cust-penetration-rate-per-cust-amt": "routing/business-cust-penetration-rate-per-cust-amt.md",
+    "routing-business-cust-penetration-rate-profit-amt": "routing/business-cust-penetration-rate-profit-amt.md",
+    "routing-business-cust-penetration-rate-profit-rate": "routing/business-cust-penetration-rate-profit-rate.md",
+    "routing-business-cust-penetration-rate-sale-amt": "routing/business-cust-penetration-rate-sale-amt.md",
+    "routing-business-cust-penetration-rate-satisfied-rate": "routing/business-cust-penetration-rate-satisfied-rate.md",
+    "routing-business-cust-penetration-rate-scm-store-profit-amt-notax": "routing/business-cust-penetration-rate-scm-store-profit-amt-notax.md",
+    "routing-business-cust-penetration-rate-scm-store-profit-notax-rate": "routing/business-cust-penetration-rate-scm-store-profit-notax-rate.md",
     "routing-business-overview": "routing/business-overview.md",
     "routing-financial-overview": "routing/financial-overview.md",
     "routing-index": "routing/index.md",

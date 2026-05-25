@@ -70,9 +70,11 @@ func Build(root, question string) (harness.ContextResponse, error) {
 	}
 
 	for _, domain := range sortedDomains(domains) {
-		addDomainRouting(indexes.Routing.Files, domain, add)
+		addDomainRouting(indexes.Routing.Files, domain, question, add)
 		addDomainPlaybooks(indexes.Playbook.Files, domain, question, add)
 	}
+
+	refs = filterLessSpecificKeywordRefs(refs, indexes)
 
 	sort.SliceStable(refs, func(i, j int) bool {
 		return fileRank(refs[i].Path) < fileRank(refs[j].Path)
@@ -86,6 +88,112 @@ func Build(root, question string) (harness.ContextResponse, error) {
 	}, nil
 }
 
+func filterLessSpecificKeywordRefs(refs []harness.FileRef, indexes idx.BuildResult) []harness.FileRef {
+	docsByPath := map[string]harness.Document{}
+	for _, doc := range indexes.Spec.Files {
+		docsByPath[doc.Path] = doc
+	}
+	for _, doc := range indexes.Routing.Files {
+		docsByPath[doc.Path] = doc
+	}
+	for _, doc := range indexes.Playbook.Files {
+		docsByPath[doc.Path] = doc
+	}
+
+	type groupKey struct {
+		domain string
+		kind   string
+	}
+	maxByGroup := map[groupKey]int{}
+	var keywords []string
+	for _, ref := range refs {
+		doc, ok := docsByPath[ref.Path]
+		if !ok || isIndexKind(doc.Kind) {
+			continue
+		}
+		score := keywordReasonScore(ref.Reason)
+		if score == 0 {
+			continue
+		}
+		if kw := keywordFromReason(ref.Reason); kw != "" {
+			keywords = append(keywords, kw)
+		}
+		key := groupKey{domain: doc.Domain, kind: doc.Kind}
+		if score > maxByGroup[key] {
+			maxByGroup[key] = score
+		}
+	}
+
+	var out []harness.FileRef
+	for _, ref := range refs {
+		doc, ok := docsByPath[ref.Path]
+		if !ok || isIndexKind(doc.Kind) {
+			out = append(out, ref)
+			continue
+		}
+		if isDomainOverview(doc.Path) {
+			out = append(out, ref)
+			continue
+		}
+		score := keywordReasonScore(ref.Reason)
+		if score == 0 {
+			out = append(out, ref)
+			continue
+		}
+		if isCoveredKeyword(keywordFromReason(ref.Reason), keywords) {
+			continue
+		}
+		key := groupKey{domain: doc.Domain, kind: doc.Kind}
+		if maxByGroup[key] > score {
+			continue
+		}
+		out = append(out, ref)
+	}
+
+	activeDomains := map[string]bool{}
+	for _, ref := range out {
+		doc, ok := docsByPath[ref.Path]
+		if !ok || doc.Domain == "" || doc.Domain == "common" {
+			continue
+		}
+		if keywordReasonScore(ref.Reason) > 0 {
+			activeDomains[doc.Domain] = true
+		}
+	}
+	if activeDomains["business"] && activeDomains["store"] && storeOnlyHasGenericDoorKeyword(out, docsByPath) {
+		delete(activeDomains, "store")
+	}
+
+	var final []harness.FileRef
+	for _, ref := range out {
+		doc, ok := docsByPath[ref.Path]
+		if !ok || doc.Domain == "" || doc.Domain == "common" || activeDomains[doc.Domain] {
+			final = append(final, ref)
+		}
+	}
+	return final
+}
+
+func storeOnlyHasGenericDoorKeyword(refs []harness.FileRef, docsByPath map[string]harness.Document) bool {
+	hasStore := false
+	for _, ref := range refs {
+		doc, ok := docsByPath[ref.Path]
+		if !ok || doc.Domain != "store" {
+			continue
+		}
+		score := keywordReasonScore(ref.Reason)
+		if score == 0 {
+			continue
+		}
+		hasStore = true
+		kw := keywordFromReason(ref.Reason)
+		if kw != "门店" && kw != "门店管理" {
+			return false
+		}
+	}
+	return hasStore
+}
+
 func PlaybookCandidates(root string, response harness.ContextResponse) ([]sessionstate.PlaybookCandidate, error) {
 	indexes, err := idx.Build(root)
 	if err != nil {
@@ -97,17 +205,40 @@ func PlaybookCandidates(root string, response harness.ContextResponse) ([]sessio
 			playbooks[doc.Path] = doc
 		}
 	}
-	var candidates []sessionstate.PlaybookCandidate
+	type candidateWithDomain struct {
+		candidate sessionstate.PlaybookCandidate
+		domain    string
+		score     int
+	}
+	var scoped []candidateWithDomain
 	for _, ref := range response.ContextFiles {
 		doc, ok := playbooks[ref.Path]
 		if !ok {
 			continue
 		}
-		candidates = append(candidates, sessionstate.PlaybookCandidate{
-			Path:     doc.Path,
-			Template: doc.Template,
-			Reason:   ref.Reason,
+		scoped = append(scoped, candidateWithDomain{
+			candidate: sessionstate.PlaybookCandidate{
+				Path:     doc.Path,
+				Template: doc.Template,
+				Reason:   ref.Reason,
+			},
+			domain: doc.Domain,
+			score:  keywordReasonScore(ref.Reason),
 		})
+	}
+	maxByDomain := map[string]int{}
+	for _, item := range scoped {
+		if item.score > maxByDomain[item.domain] {
+			maxByDomain[item.domain] = item.score
+		}
+	}
+	var candidates []sessionstate.PlaybookCandidate
+	for _, item := range scoped {
+		maxScore := maxByDomain[item.domain]
+		if maxScore > 0 && item.score > 0 && item.score < maxScore {
+			continue
+		}
+		candidates = append(candidates, item.candidate)
 	}
 	return candidates, nil
 }
@@ -158,15 +289,22 @@ func addDefaultFiles(doc harness.Document, reason string, add func(string, strin
 	}
 }
 
-func addDomainRouting(docs []harness.Document, domain string, add func(string, string)) {
+func addDomainRouting(docs []harness.Document, domain, question string, add func(string, string)) {
 	for _, doc := range docs {
 		if doc.Domain == domain && doc.Kind == "routing" {
-			add(doc.Path, "domain routing: "+domain)
+			if matchedKeyword(question, doc.Match.Keywords) != "" || isOverviewRouting(doc.Path, domain) {
+				add(doc.Path, "domain routing: "+domain)
+			}
 		}
 	}
 }
 
+func isOverviewRouting(path, domain string) bool {
+	return path == "routing/"+domain+"-overview.md"
+}
+
 func addDomainPlaybooks(docs []harness.Document, domain, question string, add func(string, string)) {
+	matchedChild := map[string]bool{}
 	for _, doc := range docs {
 		if doc.Domain != domain {
 			continue
@@ -176,10 +314,26 @@ func addDomainPlaybooks(docs []harness.Document, domain, question string, add fu
 			for _, child := range doc.Children {
 				if kw := matchedKeyword(question, child.Keywords); kw != "" {
 					add(child.Path, "playbook keyword: "+kw)
+					matchedChild[child.Path] = true
 				}
 			}
 		}
+	}
+	hasSpecificChild := false
+	for path := range matchedChild {
+		if !strings.HasSuffix(path, "/default-overview.md") {
+			hasSpecificChild = true
+			break
+		}
+	}
+	for _, doc := range docs {
+		if doc.Domain != domain {
+			continue
+		}
 		if doc.Kind == "playbook" && (matchedKeyword(question, doc.Match.Keywords) != "" || strings.HasSuffix(doc.Path, "/default-overview.md")) {
+			if hasSpecificChild && strings.HasSuffix(doc.Path, "/default-overview.md") && !matchedChild[doc.Path] {
+				continue
+			}
 			add(doc.Path, "default playbook: "+domain)
 		}
 	}
@@ -256,9 +410,55 @@ func hasAny(s string, keywords []string) bool {
 
 func matchedKeyword(s string, keywords []string) string {
 	for _, kw := range keywords {
+		if isShadowedByTimeSegmentMetric(s, kw) {
+			continue
+		}
 		if kw != "" && strings.Contains(s, kw) {
 			return kw
 		}
 	}
 	return ""
+}
+
+func isShadowedByTimeSegmentMetric(s, keyword string) bool {
+	if keyword == "" || strings.HasPrefix(keyword, "19点前") {
+		return false
+	}
+	return strings.Contains(s, "19点前"+keyword)
+}
+
+func isDomainOverview(path string) bool {
+	return strings.HasSuffix(path, "-overview.md") || strings.HasSuffix(path, "/default-overview.md")
+}
+
+func keywordReasonScore(reason string) int {
+	keyword := keywordFromReason(reason)
+	if keyword == "" {
+		return 0
+	}
+	return len([]rune(keyword))
+}
+
+func keywordFromReason(reason string) string {
+	for _, marker := range []string{"playbook keyword: ", "keyword: "} {
+		if strings.Contains(reason, marker) {
+			parts := strings.SplitN(reason, marker, 2)
+			if len(parts) == 2 {
+				return parts[1]
+			}
+		}
+	}
+	return ""
+}
+
+func isCoveredKeyword(keyword string, keywords []string) bool {
+	if keyword == "" {
+		return false
+	}
+	for _, other := range keywords {
+		if other != keyword && strings.Contains(other, keyword) {
+			return true
+		}
+	}
+	return false
 }
