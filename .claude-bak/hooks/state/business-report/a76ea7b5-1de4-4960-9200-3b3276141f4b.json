@@ -1,0 +1,8 @@
+{
+  "session_id": "a76ea7b5-1de4-4960-9200-3b3276141f4b",
+  "mode": "free_analysis",
+  "prompt": "在我们的sap-area.md还有store.md, 都加上说明, 如果阿拉伯数字和中文的数字都应该被同样命中, 例如: sap-area.md中粤西1区等于粤西一区这样",
+  "started_at": "2026-05-25T12:49:40.860369Z",
+  "template_injected": false,
+  "reports": {}
+}

@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-bpe-04",
+  "prompt": "查看昨天的定价毛利率情况",
+  "started_at": "2026-05-24T15:31:00.363331Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/pre-price-profit-rate.md",
+  "selected_template": "templates/business/brand-product-effectiveness/pre-price-profit-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/pre-price-profit-rate.md",
+      "template": "templates/business/brand-product-effectiveness/pre-price-profit-rate-report.md",
+      "reason": "keyword: 定价毛利率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

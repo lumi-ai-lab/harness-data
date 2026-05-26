@@ -1,0 +1,17 @@
+{
+  "session_id": "unknown",
+  "mode": "template_report",
+  "prompt": "会员复购为什么下降？",
+  "started_at": "2026-05-25T09:44:47.158512Z",
+  "selected_playbook": "playbooks/member/default-overview.md",
+  "selected_template": "templates/member-overview-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/member/default-overview.md",
+      "template": "templates/member-overview-report.md",
+      "reason": "default playbook: member"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

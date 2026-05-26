@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-bpe-10",
+  "prompt": "查看昨天的售价价格指数(线上)情况",
+  "started_at": "2026-05-24T15:37:51.087511Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/price-index.md",
+  "selected_template": "templates/business/brand-product-effectiveness/price-index-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/price-index.md",
+      "template": "templates/business/brand-product-effectiveness/price-index-report.md",
+      "reason": "keyword: 售价价格指数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

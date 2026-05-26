@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-10",
+  "prompt": "查看昨天的客单价情况",
+  "started_at": "2026-05-24T15:13:26.449198Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/per-cust-amt.md",
+  "selected_template": "templates/business/cust-penetration-rate/per-cust-amt-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/per-cust-amt.md",
+      "template": "templates/business/cust-penetration-rate/per-cust-amt-report.md",
+      "reason": "keyword: 客单价"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

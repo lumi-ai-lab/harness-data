@@ -1,0 +1,17 @@
+{
+  "session_id": "purchase-price-index",
+  "mode": "template_report",
+  "prompt": "查看昨天的采购价格指数情况",
+  "started_at": "2026-05-25T09:45:30.717694Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/purchase-price-index.md",
+  "selected_template": "templates/business/brand-product-effectiveness/purchase-price-index-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/purchase-price-index.md",
+      "template": "templates/business/brand-product-effectiveness/purchase-price-index-report.md",
+      "reason": "keyword: 采购价格指数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

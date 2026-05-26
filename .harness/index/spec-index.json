@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-25T09:47:31Z",
+  "generatedAt": "2026-05-25T13:14:30Z",
   "root": "/Users/pengmd/c/qdm/harness-data",
   "files": [
     {
@@ -1288,28 +1288,6 @@
       "context": {}
     },
     {
-      "id": "common-area",
-      "kind": "spec",
-      "domain": "common",
-      "title": "QDM 区域口径规则",
-      "path": "spec/common/area.md",
-      "tags": [
-        "area",
-        "cli"
-      ],
-      "match": {
-        "keywords": [
-          "全国",
-          "区域",
-          "华东",
-          "华南",
-          "华北",
-          "管理区域"
-        ]
-      },
-      "context": {}
-    },
-    {
       "id": "common-cli-safety",
       "kind": "spec",
       "domain": "common",
@@ -1386,14 +1364,24 @@
           ]
         },
         {
-          "path": "spec/common/area.md",
+          "path": "spec/dim-area/index.md",
           "keywords": [
             "全国",
             "区域",
             "华东",
             "华南",
             "华北",
-            "管理区域"
+            "管理区域",
+            "大区",
+            "区域编码"
+          ]
+        },
+        {
+          "path": "spec/dim-store/index.md",
+          "keywords": [
+            "门店编码",
+            "门店列表",
+            "storeId"
           ]
         },
         {
@@ -1425,6 +1413,150 @@
           "上周",
           "本月",
           "上月"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "dim-area-index",
+      "kind": "spec_index",
+      "domain": "common",
+      "title": "维度区域 Spec Index",
+      "path": "spec/dim-area/index.md",
+      "tags": [
+        "index",
+        "dim-area",
+        "area"
+      ],
+      "match": {
+        "keywords": [
+          "全国",
+          "区域",
+          "华东",
+          "华南",
+          "华北",
+          "管理区域",
+          "大区",
+          "区域维度",
+          "区域编码"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/dim-area/manage-area.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/dim-area/manage-area.md",
+          "keywords": [
+            "管理区域",
+            "manageAreaId",
+            "CN00"
+          ]
+        },
+        {
+          "path": "spec/dim-area/sap-area.md",
+          "keywords": [
+            "大区",
+            "sapAreaId",
+            "区域"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dim-area-manage-area",
+      "kind": "spec",
+      "domain": "common",
+      "title": "管理区域编码映射",
+      "path": "spec/dim-area/manage-area.md",
+      "tags": [
+        "area",
+        "manage-area",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "管理区域",
+          "manageAreaId",
+          "全国",
+          "CN00"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "dim-area-sap-area",
+      "kind": "spec",
+      "domain": "common",
+      "title": "大区编码映射",
+      "path": "spec/dim-area/sap-area.md",
+      "tags": [
+        "area",
+        "sap-area",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "大区",
+          "sapAreaId",
+          "区域"
+        ]
+      },
+      "context": {}
+    },
+    {
+      "id": "dim-store-index",
+      "kind": "spec_index",
+      "domain": "store",
+      "title": "维度门店 Spec Index",
+      "path": "spec/dim-store/index.md",
+      "tags": [
+        "index",
+        "dim-store",
+        "store"
+      ],
+      "match": {
+        "keywords": [
+          "门店编码",
+          "门店列表",
+          "storeId"
+        ]
+      },
+      "context": {
+        "default_files": [
+          "spec/dim-store/store.md"
+        ]
+      },
+      "children": [
+        {
+          "path": "spec/dim-store/store.md",
+          "keywords": [
+            "门店编码",
+            "门店列表",
+            "storeId",
+            "门店"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "store-store-dim",
+      "kind": "spec",
+      "domain": "store",
+      "title": "门店编码映射",
+      "path": "spec/dim-store/store.md",
+      "tags": [
+        "store",
+        "dim",
+        "cli"
+      ],
+      "match": {
+        "keywords": [
+          "门店",
+          "门店编码",
+          "storeId"
         ]
       },
       "context": {}
@@ -1707,6 +1839,14 @@
             "人效",
             "盈亏平衡点"
           ]
+        },
+        {
+          "path": "spec/dim-store/index.md",
+          "keywords": [
+            "门店编码",
+            "门店列表",
+            "storeId"
+          ]
         }
       ]
     },
@@ -1818,11 +1958,13 @@
       "spec/business/report-contract.md"
     ],
     "common": [
-      "spec/common/area.md",
       "spec/common/cli-safety.md",
       "spec/common/cmr-cli-readme.md",
       "spec/common/index.md",
-      "spec/common/time-policy.md"
+      "spec/common/time-policy.md",
+      "spec/dim-area/index.md",
+      "spec/dim-area/manage-area.md",
+      "spec/dim-area/sap-area.md"
     ],
     "financial": [
       "spec/financial/income-cost-profit.md",
@@ -1838,6 +1980,8 @@
       "spec/member/retention.md"
     ],
     "store": [
+      "spec/dim-store/index.md",
+      "spec/dim-store/store.md",
       "spec/store/index.md",
       "spec/store/profit-efficiency.md",
       "spec/store/report-contract.md",
@@ -1960,6 +2104,10 @@
     "CMR CLI": [
       "spec/common/cmr-cli-readme.md"
     ],
+    "CN00": [
+      "spec/dim-area/manage-area.md",
+      "spec/dim-area/manage-area.md"
+    ],
     "EBITDA": [
       "spec/financial/income-cost-profit.md",
       "spec/financial/index.md",
@@ -2035,6 +2183,10 @@
       "spec/business/brand-product-effectiveness/lost-rate.md",
       "spec/business/brand-product-effectiveness/lost-rate.md"
     ],
+    "manageAreaId": [
+      "spec/dim-area/manage-area.md",
+      "spec/dim-area/manage-area.md"
+    ],
     "orderArticleRate": [
       "spec/business/brand-product-effectiveness/order-article-rate.md",
       "spec/business/brand-product-effectiveness/order-article-rate.md"
@@ -2082,6 +2234,10 @@
       "spec/business/cust-penetration-rate/sale-amt.md",
       "spec/business/cust-penetration-rate/sale-amt.md"
     ],
+    "sapAreaId": [
+      "spec/dim-area/sap-area.md",
+      "spec/dim-area/sap-area.md"
+    ],
     "satisfiedRate": [
       "spec/business/cust-penetration-rate/satisfied-rate.md",
       "spec/business/cust-penetration-rate/satisfied-rate.md"
@@ -2101,6 +2257,13 @@
     "storeCanOrders": [
       "spec/business/brand-product-effectiveness/store-can-orders.md",
       "spec/business/brand-product-effectiveness/store-can-orders.md"
+    ],
+    "storeId": [
+      "spec/dim-store/index.md",
+      "spec/dim-store/index.md",
+      "spec/dim-store/store.md",
+      "spec/dim-store/store.md",
+      "spec/dim-store/index.md"
     ],
     "template": [
       "spec/common/cli-safety.md",
@@ -2222,8 +2385,9 @@
       "spec/member/category-unsupported.md"
     ],
     "全国": [
-      "spec/common/area.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md",
+      "spec/dim-area/manage-area.md"
     ],
     "全链路毛利率": [
       "spec/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
@@ -2308,22 +2472,31 @@
     "区域": [
       "spec/business/area-category-trend.md",
       "spec/business/area-category-trend.md",
-      "spec/common/area.md",
       "spec/common/index.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md",
+      "spec/dim-area/sap-area.md",
+      "spec/dim-area/sap-area.md"
+    ],
+    "区域维度": [
+      "spec/dim-area/index.md"
+    ],
+    "区域编码": [
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md"
     ],
     "华东": [
       "spec/business/area-category-trend.md",
-      "spec/common/area.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md"
     ],
     "华北": [
-      "spec/common/area.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md"
     ],
     "华南": [
-      "spec/common/area.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md"
     ],
     "取数": [
       "spec/common/cmr-cli-readme.md",
@@ -2427,6 +2600,12 @@
     "复购会员数": [
       "spec/member/repurchase.md",
       "spec/member/repurchase.md"
+    ],
+    "大区": [
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md",
+      "spec/dim-area/sap-area.md",
+      "spec/dim-area/sap-area.md"
     ],
     "官媒": [
       "spec/member/channel-touch.md",
@@ -2610,8 +2789,10 @@
       "spec/common/cli-safety.md"
     ],
     "管理区域": [
-      "spec/common/area.md",
-      "spec/common/area.md"
+      "spec/dim-area/index.md",
+      "spec/dim-area/index.md",
+      "spec/dim-area/manage-area.md",
+      "spec/dim-area/manage-area.md"
     ],
     "类目": [
       "spec/member/category-unsupported.md"
@@ -2719,12 +2900,20 @@
       "spec/business/cust-penetration-rate/sale-amt.md"
     ],
     "门店": [
+      "spec/dim-store/store.md",
+      "spec/dim-store/store.md",
       "spec/store/index.md",
       "spec/store/report-contract.md"
     ],
     "门店净利润": [
       "spec/store/profit-efficiency.md",
       "spec/store/profit-efficiency.md"
+    ],
+    "门店列表": [
+      "spec/dim-store/index.md",
+      "spec/dim-store/index.md",
+      "spec/dim-store/store.md",
+      "spec/dim-store/index.md"
     ],
     "门店毛利率": [
       "spec/business/cust-penetration-rate/profit-rate.md",
@@ -2757,6 +2946,13 @@
     "门店管理": [
       "spec/store/index.md",
       "spec/store/report-contract.md"
+    ],
+    "门店编码": [
+      "spec/dim-store/index.md",
+      "spec/dim-store/index.md",
+      "spec/dim-store/store.md",
+      "spec/dim-store/store.md",
+      "spec/dim-store/index.md"
     ],
     "门店运营": [
       "spec/store/index.md",
@@ -2837,11 +3033,14 @@
     "business-cust-penetration-rate-scm-store-profit-notax-rate": "spec/business/cust-penetration-rate/scm-store-profit-notax-rate.md",
     "business-index": "spec/business/index.md",
     "business-report-contract": "spec/business/report-contract.md",
-    "common-area": "spec/common/area.md",
     "common-cli-safety": "spec/common/cli-safety.md",
     "common-cmr-cli-readme": "spec/common/cmr-cli-readme.md",
     "common-index": "spec/common/index.md",
     "common-time-policy": "spec/common/time-policy.md",
+    "dim-area-index": "spec/dim-area/index.md",
+    "dim-area-manage-area": "spec/dim-area/manage-area.md",
+    "dim-area-sap-area": "spec/dim-area/sap-area.md",
+    "dim-store-index": "spec/dim-store/index.md",
     "financial-income-cost-profit": "spec/financial/income-cost-profit.md",
     "financial-index": "spec/financial/index.md",
     "financial-report-contract": "spec/financial/report-contract.md",
@@ -2854,6 +3053,7 @@
     "store-index": "spec/store/index.md",
     "store-profit-efficiency": "spec/store/profit-efficiency.md",
     "store-report-contract": "spec/store/report-contract.md",
-    "store-scale-health": "spec/store/scale-health.md"
+    "store-scale-health": "spec/store/scale-health.md",
+    "store-store-dim": "spec/dim-store/store.md"
   }
 }

@@ -1,0 +1,25 @@
+{
+  "session_id": "manual-free-analysis",
+  "mode": "free_analysis",
+  "prompt": "2026年第10周粤西1区会员经营情况如何 @dm",
+  "started_at": "2026-05-25T09:45:16.460915Z",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/default-overview.md",
+      "template": "templates/business-overview-report.md",
+      "reason": "default playbook: business"
+    },
+    {
+      "path": "playbooks/member/default-overview.md",
+      "template": "templates/member-overview-report.md",
+      "reason": "default playbook: member"
+    }
+  ],
+  "template_injected": false,
+  "reports": {
+    "template": {
+      "recorded_modules": [],
+      "template_injected": false
+    }
+  }
+}

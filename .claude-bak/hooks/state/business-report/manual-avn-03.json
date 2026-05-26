@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-avn-03",
+  "prompt": "查看昨天的三率综合得分情况",
+  "started_at": "2026-05-24T15:48:05.429445Z",
+  "selected_playbook": "playbooks/business/active-vender-num/three-rate-score.md",
+  "selected_template": "templates/business/active-vender-num/three-rate-score-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/active-vender-num/three-rate-score.md",
+      "template": "templates/business/active-vender-num/three-rate-score-report.md",
+      "reason": "keyword: 三率综合得分"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

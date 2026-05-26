@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-08",
+  "prompt": "查看昨天的19点前PI值情况",
+  "started_at": "2026-05-24T16:33:23.823438Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+  "selected_template": "templates/business/cust-penetration-rate/bf19-category-store-cust-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/bf19-category-store-cust-rate.md",
+      "template": "templates/business/cust-penetration-rate/bf19-category-store-cust-rate-report.md",
+      "reason": "keyword: 19点前PI值"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

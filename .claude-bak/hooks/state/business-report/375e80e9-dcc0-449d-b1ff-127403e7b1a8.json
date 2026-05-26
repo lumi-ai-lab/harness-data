@@ -1,0 +1,31 @@
+{
+  "session_id": "375e80e9-dcc0-449d-b1ff-127403e7b1a8",
+  "prompt": "  查看昨天的客数渗透率情况",
+  "started_at": "2026-05-24T22:44:04.245091Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/cust-penetration-rate.md",
+  "selected_template": "templates/business/cust-penetration-rate/cust-penetration-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/cust-penetration-rate.md",
+      "template": "templates/business/cust-penetration-rate/cust-penetration-rate-report.md",
+      "reason": "keyword: 客数渗透率"
+    }
+  ],
+  "template_injected": true,
+  "reports": {
+    "business-overview": {
+      "recorded_modules": [
+        "indicators",
+        "tree",
+        "area",
+        "category",
+        "trend"
+      ],
+      "template_injected": false
+    },
+    "template": {
+      "recorded_modules": [],
+      "template_injected": true
+    }
+  }
+}

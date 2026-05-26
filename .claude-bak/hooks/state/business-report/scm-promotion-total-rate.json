@@ -1,0 +1,17 @@
+{
+  "session_id": "scm-promotion-total-rate",
+  "mode": "template_report",
+  "prompt": "查看昨天的出库折让率情况",
+  "started_at": "2026-05-25T09:45:30.759016Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+  "selected_template": "templates/business/brand-product-effectiveness/scm-promotion-total-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/scm-promotion-total-rate.md",
+      "template": "templates/business/brand-product-effectiveness/scm-promotion-total-rate-report.md",
+      "reason": "keyword: 出库折让率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

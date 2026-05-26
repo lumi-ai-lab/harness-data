@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-bpe-03",
+  "prompt": "查看昨天的可订门店数情况",
+  "started_at": "2026-05-24T21:58:07.853919Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/store-can-orders.md",
+  "selected_template": "templates/business/brand-product-effectiveness/store-can-orders-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/store-can-orders.md",
+      "template": "templates/business/brand-product-effectiveness/store-can-orders-report.md",
+      "reason": "keyword: 可订门店数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

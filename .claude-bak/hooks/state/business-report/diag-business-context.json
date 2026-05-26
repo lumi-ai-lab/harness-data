@@ -1,0 +1,17 @@
+{
+  "session_id": "diag-business-context",
+  "mode": "template_report",
+  "prompt": "查看昨天经营情况",
+  "started_at": "2026-05-25T09:45:30.344075Z",
+  "selected_playbook": "playbooks/business/default-overview.md",
+  "selected_template": "templates/business-overview-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/default-overview.md",
+      "template": "templates/business-overview-report.md",
+      "reason": "default playbook: business"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

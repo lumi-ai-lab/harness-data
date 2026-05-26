@@ -1,0 +1,17 @@
+{
+  "session_id": "order-stores",
+  "mode": "template_report",
+  "prompt": "查看昨天的订购门店数情况",
+  "started_at": "2026-05-25T09:45:30.591564Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/order-stores.md",
+  "selected_template": "templates/business/brand-product-effectiveness/order-stores-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/order-stores.md",
+      "template": "templates/business/brand-product-effectiveness/order-stores-report.md",
+      "reason": "keyword: 订购门店数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

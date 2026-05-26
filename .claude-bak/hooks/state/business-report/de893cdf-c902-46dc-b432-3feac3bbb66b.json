@@ -1,0 +1,31 @@
+{
+  "session_id": "de893cdf-c902-46dc-b432-3feac3bbb66b",
+  "prompt": "你能具体帮我分析一下粤东一区的品效情况吗?",
+  "started_at": "2026-05-25T05:24:07.532196Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness.md",
+  "selected_template": "templates/business/brand-product-effectiveness-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness.md",
+      "template": "templates/business/brand-product-effectiveness-report.md",
+      "reason": "keyword: 品效"
+    }
+  ],
+  "template_injected": true,
+  "reports": {
+    "business-overview": {
+      "recorded_modules": [
+        "indicators",
+        "tree",
+        "area",
+        "category",
+        "trend"
+      ],
+      "template_injected": false
+    },
+    "template": {
+      "recorded_modules": [],
+      "template_injected": true
+    }
+  }
+}

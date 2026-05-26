@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-12",
+  "prompt": "查看昨天的19点前单均件数情况",
+  "started_at": "2026-05-24T16:43:39.626897Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/bf19-avg-piece-num.md",
+  "selected_template": "templates/business/cust-penetration-rate/bf19-avg-piece-num-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/bf19-avg-piece-num.md",
+      "template": "templates/business/cust-penetration-rate/bf19-avg-piece-num-report.md",
+      "reason": "keyword: 19点前单均件数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

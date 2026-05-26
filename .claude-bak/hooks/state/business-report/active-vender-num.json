@@ -1,0 +1,17 @@
+{
+  "session_id": "active-vender-num",
+  "mode": "template_report",
+  "prompt": "查看昨天的活跃供应商数情况",
+  "started_at": "2026-05-25T09:45:30.195098Z",
+  "selected_playbook": "playbooks/business/active-vender-num/active-vender-num.md",
+  "selected_template": "templates/business/active-vender-num/active-vender-num-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/active-vender-num/active-vender-num.md",
+      "template": "templates/business/active-vender-num/active-vender-num-report.md",
+      "reason": "keyword: 活跃供应商数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

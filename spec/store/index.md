@@ -27,6 +27,11 @@ children:
       - 坪效
       - 人效
       - 盈亏平衡点
+  - path: spec/dim-store/index.md
+    keywords:
+      - 门店编码
+      - 门店列表
+      - storeId
 ---
 
 # 门店管理 Spec Index

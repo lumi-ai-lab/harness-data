@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-06b",
+  "prompt": "查看昨天的客数情况",
+  "started_at": "2026-05-24T15:08:23.928761Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/cust-num.md",
+  "selected_template": "templates/business/cust-penetration-rate/cust-num-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/cust-num.md",
+      "template": "templates/business/cust-penetration-rate/cust-num-report.md",
+      "reason": "keyword: 客数"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

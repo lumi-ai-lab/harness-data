@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-04",
+  "prompt": "查看昨天的19点前销售重量情况",
+  "started_at": "2026-05-24T16:19:44.300567Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/bf19-sale-weight.md",
+  "selected_template": "templates/business/cust-penetration-rate/bf19-sale-weight-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/bf19-sale-weight.md",
+      "template": "templates/business/cust-penetration-rate/bf19-sale-weight-report.md",
+      "reason": "keyword: 19点前销售重量"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

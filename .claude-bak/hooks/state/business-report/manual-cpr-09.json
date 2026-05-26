@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-09",
+  "prompt": "查看昨天的19点前复购率情况",
+  "started_at": "2026-05-24T16:36:27.004132Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+  "selected_template": "templates/business/cust-penetration-rate/bf19-member-repurchase-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/bf19-member-repurchase-rate.md",
+      "template": "templates/business/cust-penetration-rate/bf19-member-repurchase-rate-report.md",
+      "reason": "keyword: 19点前复购率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

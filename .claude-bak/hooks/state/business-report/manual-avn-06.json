@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-avn-06",
+  "prompt": "查看昨天的合格率情况",
+  "started_at": "2026-05-24T16:10:47.497044Z",
+  "selected_playbook": "playbooks/business/active-vender-num/vendor-qualification-rate.md",
+  "selected_template": "templates/business/active-vender-num/vendor-qualification-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/active-vender-num/vendor-qualification-rate.md",
+      "template": "templates/business/active-vender-num/vendor-qualification-rate-report.md",
+      "reason": "keyword: 合格率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

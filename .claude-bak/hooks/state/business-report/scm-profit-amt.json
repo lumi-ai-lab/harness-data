@@ -1,0 +1,17 @@
+{
+  "session_id": "scm-profit-amt",
+  "mode": "template_report",
+  "prompt": "查看昨天的供应链毛利额情况",
+  "started_at": "2026-05-25T09:45:30.774076Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+  "selected_template": "templates/business/cust-penetration-rate/scm-store-profit-amt-notax-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/scm-store-profit-amt-notax.md",
+      "template": "templates/business/cust-penetration-rate/scm-store-profit-amt-notax-report.md",
+      "reason": "keyword: 供应链毛利额"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

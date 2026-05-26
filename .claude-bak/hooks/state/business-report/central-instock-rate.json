@@ -1,0 +1,17 @@
+{
+  "session_id": "central-instock-rate",
+  "mode": "template_report",
+  "prompt": "查看昨天的集采入库占比情况",
+  "started_at": "2026-05-25T09:45:30.375665Z",
+  "selected_playbook": "playbooks/business/active-vender-num/central-instock-rate.md",
+  "selected_template": "templates/business/active-vender-num/central-instock-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/active-vender-num/central-instock-rate.md",
+      "template": "templates/business/active-vender-num/central-instock-rate-report.md",
+      "reason": "keyword: 集采入库占比"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

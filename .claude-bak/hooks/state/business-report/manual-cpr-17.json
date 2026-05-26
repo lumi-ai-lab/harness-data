@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-17",
+  "prompt": "查看昨天的全链路毛利额情况",
+  "started_at": "2026-05-24T15:27:09.185167Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+  "selected_template": "templates/business/cust-penetration-rate/full-link-store-profit-amt-notax-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/full-link-store-profit-amt-notax.md",
+      "template": "templates/business/cust-penetration-rate/full-link-store-profit-amt-notax-report.md",
+      "reason": "keyword: 全链路毛利额"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

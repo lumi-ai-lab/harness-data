@@ -24,7 +24,7 @@ children:
       - 上周
       - 本月
       - 上月
-  - path: spec/common/area.md
+  - path: spec/dim-area/index.md
     keywords:
       - 全国
       - 区域
@@ -32,6 +32,13 @@ children:
       - 华南
       - 华北
       - 管理区域
+      - 大区
+      - 区域编码
+  - path: spec/dim-store/index.md
+    keywords:
+      - 门店编码
+      - 门店列表
+      - storeId
   - path: spec/common/cli-safety.md
     keywords:
       - 禁止估算

@@ -1,0 +1,17 @@
+{
+  "session_id": "pre-profit-rate",
+  "mode": "template_report",
+  "prompt": "查看昨天的预期毛利率情况",
+  "started_at": "2026-05-25T09:45:30.634355Z",
+  "selected_playbook": "playbooks/business/brand-product-effectiveness/pre-profit-rate.md",
+  "selected_template": "templates/business/brand-product-effectiveness/pre-profit-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/brand-product-effectiveness/pre-profit-rate.md",
+      "template": "templates/business/brand-product-effectiveness/pre-profit-rate-report.md",
+      "reason": "keyword: 预期毛利率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

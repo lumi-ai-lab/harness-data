@@ -1,0 +1,16 @@
+{
+  "session_id": "manual-cpr-14b",
+  "prompt": "查看昨天的全链路毛利率情况",
+  "started_at": "2026-05-24T15:21:32.086742Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+  "selected_template": "templates/business/cust-penetration-rate/full-link-store-profit-notax-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/full-link-store-profit-notax-rate.md",
+      "template": "templates/business/cust-penetration-rate/full-link-store-profit-notax-rate-report.md",
+      "reason": "keyword: 全链路毛利率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}

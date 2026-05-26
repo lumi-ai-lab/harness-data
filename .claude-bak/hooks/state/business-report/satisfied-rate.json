@@ -1,0 +1,17 @@
+{
+  "session_id": "satisfied-rate",
+  "mode": "template_report",
+  "prompt": "查看昨天的订单满足率情况",
+  "started_at": "2026-05-25T09:45:30.745221Z",
+  "selected_playbook": "playbooks/business/cust-penetration-rate/satisfied-rate.md",
+  "selected_template": "templates/business/cust-penetration-rate/satisfied-rate-report.md",
+  "playbook_candidates": [
+    {
+      "path": "playbooks/business/cust-penetration-rate/satisfied-rate.md",
+      "template": "templates/business/cust-penetration-rate/satisfied-rate-report.md",
+      "reason": "keyword: 订单满足率"
+    }
+  ],
+  "template_injected": false,
+  "reports": {}
+}
