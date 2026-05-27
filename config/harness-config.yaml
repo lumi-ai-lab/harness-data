@@ -1,0 +1,12 @@
+# Harness repository configuration.
+
+paths:
+  spec: wikis/spec
+  routing: wikis/routing
+  playbooks: wikis/playbooks
+  templates: wikis/templates
+
+cli:
+  qdm_cmr_cli: /Users/pengmd/c/qdm/cmr-cli/dist/qdm-cmr-cli
+  qdm_indicators_cli: /Users/pengmd/c/qdm/indicators-cli/dist/qdm-indicators-cli
+  qdm_cas_cli: /Users/pengmd/c/qdm/cas-cli/dist/cas-cli

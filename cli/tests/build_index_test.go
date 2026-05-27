@@ -25,13 +25,13 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	if len(result.Spec.Files) == 0 || len(result.Routing.Files) == 0 || len(result.Playbook.Files) == 0 {
 		t.Fatalf("expected spec/routing/playbook files, got spec=%d routing=%d playbook=%d", len(result.Spec.Files), len(result.Routing.Files), len(result.Playbook.Files))
 	}
-	if result.Spec.ByID["member-repurchase"] != "spec/member/repurchase.md" {
+	if result.Spec.ByID["member-repurchase"] != "wikis/spec/cmr/member/repurchase.md" {
 		t.Fatalf("member-repurchase not indexed: %#v", result.Spec.ByID["member-repurchase"])
 	}
-	if result.Routing.ByID["routing-member-overview"] != "routing/member-overview.md" {
+	if result.Routing.ByID["routing-member-overview"] != "wikis/routing/member-overview.md" {
 		t.Fatalf("member routing not indexed")
 	}
-	if result.Playbook.ByID["playbook-member-default-overview"] != "playbooks/member/default-overview.md" {
+	if result.Playbook.ByID["playbook-member-default-overview"] != "wikis/playbooks/cmr/member/default-overview.md" {
 		t.Fatalf("member playbook not indexed")
 	}
 	var memberTemplate string
@@ -40,7 +40,7 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 			memberTemplate = doc.Template
 		}
 	}
-	if memberTemplate != "templates/member-overview-report.md" {
+	if memberTemplate != "templates/cmr/member/member-overview-report.md" {
 		t.Fatalf("member playbook template = %#v", memberTemplate)
 	}
 }

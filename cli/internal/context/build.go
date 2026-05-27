@@ -17,6 +17,10 @@ var constraints = []string{
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return harness.ContextResponse{}, err
+	}
 	indexes, err := idx.Build(root)
 	if err != nil {
 		return harness.ContextResponse{}, err
@@ -27,15 +31,16 @@ func Build(root, question string) (harness.ContextResponse, error) {
 		if path == "" {
 			return
 		}
-		if seen[path] {
+		physical := resolver.ResolveRel(path)
+		if seen[physical] {
 			return
 		}
-		seen[path] = true
-		refs = append(refs, harness.FileRef{Path: path, Reason: reason})
+		seen[physical] = true
+		refs = append(refs, harness.FileRef{Path: physical, Reason: reason})
 	}
 
 	add("spec/common/index.md", "default: common spec index")
-	addIndexDefaults(indexes.Spec.Files, "spec/common/index.md", "default: common", add)
+	addIndexDefaults(indexes.Spec.Files, resolver.ResolveRel("spec/common/index.md"), "default: common", add)
 
 	allDocs := append(append([]harness.Document{}, indexes.Spec.Files...), indexes.Routing.Files...)
 	allDocs = append(allDocs, indexes.Playbook.Files...)
@@ -70,14 +75,14 @@ func Build(root, question string) (harness.ContextResponse, error) {
 	}
 
 	for _, domain := range sortedDomains(domains) {
-		addDomainRouting(indexes.Routing.Files, domain, question, add)
+		addDomainRouting(resolver, indexes.Routing.Files, domain, question, add)
 		addDomainPlaybooks(indexes.Playbook.Files, domain, question, add)
 	}
 
 	refs = filterLessSpecificKeywordRefs(refs, indexes)
 
 	sort.SliceStable(refs, func(i, j int) bool {
-		return fileRank(refs[i].Path) < fileRank(refs[j].Path)
+		return fileRank(resolver, refs[i].Path) < fileRank(resolver, refs[j].Path)
 	})
 
 	return harness.ContextResponse{
@@ -220,6 +225,7 @@ func PlaybookCandidates(root string, response harness.ContextResponse) ([]sessio
 			candidate: sessionstate.PlaybookCandidate{
 				Path:     doc.Path,
 				Template: doc.Template,
+				Domain:   doc.Domain,
 				Reason:   ref.Reason,
 			},
 			domain: doc.Domain,
@@ -289,18 +295,18 @@ func addDefaultFiles(doc harness.Document, reason string, add func(string, strin
 	}
 }
 
-func addDomainRouting(docs []harness.Document, domain, question string, add func(string, string)) {
+func addDomainRouting(resolver harness.PathResolver, docs []harness.Document, domain, question string, add func(string, string)) {
 	for _, doc := range docs {
 		if doc.Domain == domain && doc.Kind == "routing" {
-			if matchedKeyword(question, doc.Match.Keywords) != "" || isOverviewRouting(doc.Path, domain) {
+			if matchedKeyword(question, doc.Match.Keywords) != "" || isOverviewRouting(resolver, doc.Path, domain) {
 				add(doc.Path, "domain routing: "+domain)
 			}
 		}
 	}
 }
 
-func isOverviewRouting(path, domain string) bool {
-	return path == "routing/"+domain+"-overview.md"
+func isOverviewRouting(resolver harness.PathResolver, path, domain string) bool {
+	return resolver.LogicalRel(path) == "routing/"+domain+"-overview.md"
 }
 
 func addDomainPlaybooks(docs []harness.Document, domain, question string, add func(string, string)) {
@@ -350,11 +356,11 @@ func domainOrKind(doc harness.Document) string {
 	return doc.Kind
 }
 
-func matchedDomains(refs []harness.FileRef) []string {
+func matchedDomains(resolver harness.PathResolver, refs []harness.FileRef) []string {
 	seen := map[string]bool{}
 	var domains []string
 	for _, ref := range refs {
-		parts := strings.Split(ref.Path, "/")
+		parts := strings.Split(resolver.LogicalRel(ref.Path), "/")
 		if len(parts) < 3 {
 			continue
 		}
@@ -378,7 +384,8 @@ func sortedDomains(domains map[string]bool) []string {
 	return out
 }
 
-func fileRank(path string) int {
+func fileRank(resolver harness.PathResolver, path string) int {
+	path = resolver.LogicalRel(path)
 	switch {
 	case path == "spec/common/index.md":
 		return 0

@@ -19,15 +19,19 @@ type BuildResult struct {
 }
 
 func Build(root string) (BuildResult, error) {
-	specDocs, err := scan(root, "spec")
+	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		return BuildResult{}, err
 	}
-	routingDocs, err := scan(root, "routing")
+	specDocs, err := scan(resolver, "spec")
 	if err != nil {
 		return BuildResult{}, err
 	}
-	playbookDocs, err := scan(root, "playbooks")
+	routingDocs, err := scan(resolver, "routing")
+	if err != nil {
+		return BuildResult{}, err
+	}
+	playbookDocs, err := scan(resolver, "playbooks")
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -50,9 +54,13 @@ func Build(root string) (BuildResult, error) {
 }
 
 func AllDocuments(root string) ([]harness.Document, error) {
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return nil, err
+	}
 	var all []harness.Document
 	for _, dir := range []string{"spec", "routing", "playbooks"} {
-		docs, err := scan(root, dir)
+		docs, err := scan(resolver, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -61,9 +69,9 @@ func AllDocuments(root string) ([]harness.Document, error) {
 	return all, nil
 }
 
-func scan(root, dir string) ([]harness.Document, error) {
+func scan(resolver harness.PathResolver, dir string) ([]harness.Document, error) {
 	var docs []harness.Document
-	base := filepath.Join(root, dir)
+	base := resolver.KnowledgePath(dir)
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -71,11 +79,11 @@ func scan(root, dir string) ([]harness.Document, error) {
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(resolver.Root, path)
 		if err != nil {
 			return err
 		}
-		doc, err := frontmatter.ParseFile(root, filepath.ToSlash(rel))
+		doc, err := frontmatter.ParseFile(resolver.Root, filepath.ToSlash(rel))
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,7 +42,11 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 		return false, Output{}, nil
 	}
 	prompt := payload.Prompt
-	tc := buildTimeContext(prompt)
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return false, Output{}, err
+	}
+	tc := buildTimeContext(prompt, resolver)
 	response, err := Build(root, prompt)
 	if err != nil {
 		return false, Output{}, err
@@ -50,13 +55,13 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	mode := reportMode(candidates)
-	additionalContext, err := buildAdditionalContext(tc, response, mode, candidates)
+	selection := selectReportMode(prompt, candidates)
+	additionalContext, err := buildAdditionalContext(tc, response, selection, candidates)
 	if err != nil {
 		return false, Output{}, err
 	}
 	sessionID := hookSessionID(payload)
-	if err := writeSelectedPlaybookState(root, sessionID, prompt, candidates, mode); err != nil {
+	if err := writeSelectedPlaybookState(root, sessionID, prompt, candidates, selection); err != nil {
 		return false, Output{}, err
 	}
 	if os.Getenv("QDM_HARNESS_DIAG") == "1" {
@@ -80,7 +85,7 @@ func parsePromptPayload(input []byte) (promptPayload, bool) {
 	return payload, true
 }
 
-func buildTimeContext(prompt string) timeContext {
+func buildTimeContext(prompt string, resolver harness.PathResolver) timeContext {
 	currentDate := os.Getenv("QDM_HARNESS_CURRENT_DATE")
 	current, err := time.Parse("2006-01-02", currentDate)
 	if err != nil {
@@ -96,16 +101,24 @@ func buildTimeContext(prompt string) timeContext {
 	return timeContext{
 		CurrentDate: current.Format("2006-01-02"),
 		Timezone:    timezone,
-		TimePolicy:  "Use spec/common/time-policy.md to infer --date, --week, or --month. Do not use date ranges.",
+		TimePolicy:  fmt.Sprintf("Use %s to infer --date, --week, or --month. Do not use date ranges.", resolver.ResolveRel("spec/common/time-policy.md")),
 		Prompt:      prompt,
 	}
 }
 
-func buildAdditionalContext(tc timeContext, response harness.ContextResponse, mode string, candidates []sessionstate.PlaybookCandidate) (string, error) {
+type reportSelection struct {
+	Mode              string
+	SelectedPlaybooks []sessionstate.PlaybookCandidate
+	SelectedTemplate  string
+	Composite         *sessionstate.CompositeSelection
+}
+
+func buildAdditionalContext(tc timeContext, response harness.ContextResponse, selection reportSelection, candidates []sessionstate.PlaybookCandidate) (string, error) {
 	timeJSON, err := json.Marshal(tc)
 	if err != nil {
 		return "", err
 	}
+	mode := selection.Mode
 	var b strings.Builder
 	b.WriteString("# Data Harness Context\n\n")
 	b.WriteString("时间解析 JSON：`")
@@ -126,13 +139,36 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse, mo
 	b.WriteString("\nHarness mode: ")
 	b.WriteString(mode)
 	b.WriteString("\n")
-	if mode == sessionstate.ModeTemplateReport {
+	switch mode {
+	case sessionstate.ModeTemplateReport:
 		if response.Instruction != "" {
 			b.WriteString("\nInstruction: ")
 			b.WriteString(response.Instruction)
 			b.WriteString("\n")
 		}
-	} else {
+	case sessionstate.ModeCompositeReport:
+		b.WriteString("\nInstruction: 当前问题命中多个同域指标，进入多指标组合报告模式。读取全部 contextFiles 后，按 selected playbooks 完成取数；取数完成后执行 `bin/data-harness-cli inject-template`，最终必须使用组合 template 输出一份综合报告，不得分别套用多个单指标 template。\n")
+		b.WriteString("\nSelected playbooks:\n")
+		for _, candidate := range selection.SelectedPlaybooks {
+			b.WriteString("- ")
+			b.WriteString(candidate.Path)
+			if candidate.Template != "" {
+				b.WriteString(" -> ")
+				b.WriteString(candidate.Template)
+			}
+			if candidate.Reason != "" {
+				b.WriteString(" (")
+				b.WriteString(candidate.Reason)
+				b.WriteString(")")
+			}
+			b.WriteString("\n")
+		}
+		if selection.SelectedTemplate != "" {
+			b.WriteString("\nComposite template: ")
+			b.WriteString(selection.SelectedTemplate)
+			b.WriteString("\n")
+		}
+	default:
 		b.WriteString("\nInstruction: 当前没有唯一可用的 playbook/template，进入自由分析模式。不要执行 `bin/data-harness-cli inject-template`，不要读取 templates/ 下的报告模板。读取 contextFiles 后，基于 CLI 证据自由组织分析报告；候选 playbook 只能作为取数参考，不能作为模板门禁。\n")
 		if len(candidates) > 0 {
 			b.WriteString("\nPlaybook candidates for reference only:\n")
@@ -158,7 +194,7 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse, mo
 		b.WriteString(constraint)
 		b.WriteString("\n")
 	}
-	if mode == sessionstate.ModeTemplateReport {
+	if mode == sessionstate.ModeTemplateReport || mode == sessionstate.ModeCompositeReport {
 		b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
 	} else {
 		b.WriteString("\n自由分析模式下禁止读取 templates/ 下的报告模板，禁止等待 template 注入。\n")
@@ -198,10 +234,14 @@ func recordDiagnostic(root, sessionID, prompt, context string, tc timeContext, r
 }
 
 func contextFileDiagnostics(root string, refs []harness.FileRef) []map[string]any {
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		resolver = harness.PathResolver{Root: root, Paths: harness.PathsConfig{Spec: "spec", Routing: "routing", Playbooks: "playbooks", Templates: "templates"}}
+	}
 	var out []map[string]any
 	for _, ref := range refs {
 		rel := ref.Path
-		path := filepath.Join(root, filepath.FromSlash(rel))
+		path := resolver.Resolve(rel)
 		stats := pathStats(path)
 		stats["relative_path"] = rel
 		stats["reason"] = ref.Reason
@@ -269,31 +309,164 @@ func hookSessionID(payload promptPayload) string {
 	return sessionID
 }
 
-func writeSelectedPlaybookState(root, sessionID, prompt string, candidates []sessionstate.PlaybookCandidate, mode string) error {
+func writeSelectedPlaybookState(root, sessionID, prompt string, candidates []sessionstate.PlaybookCandidate, selection reportSelection) error {
 	state, err := sessionstate.Load(root, sessionID)
 	if err != nil {
 		return err
 	}
-	state.Mode = mode
+	state.Mode = selection.Mode
 	state.Prompt = prompt
 	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	state.PlaybookCandidates = candidates
 	state.SelectedPlaybook = ""
 	state.SelectedTemplate = ""
+	state.SelectedPlaybooks = nil
+	state.Composite = nil
 	state.TemplateInjected = false
 	state.Reports = map[string]*sessionstate.Report{}
-	if mode == sessionstate.ModeTemplateReport && len(candidates) == 1 {
+	if selection.Mode == sessionstate.ModeTemplateReport && len(candidates) == 1 {
 		state.SelectedPlaybook = candidates[0].Path
 		state.SelectedTemplate = candidates[0].Template
+	}
+	if selection.Mode == sessionstate.ModeCompositeReport {
+		state.SelectedPlaybooks = selection.SelectedPlaybooks
+		state.SelectedTemplate = selection.SelectedTemplate
+		state.Composite = selection.Composite
 	}
 	return sessionstate.Save(root, sessionID, state)
 }
 
-func reportMode(candidates []sessionstate.PlaybookCandidate) string {
+func selectReportMode(prompt string, candidates []sessionstate.PlaybookCandidate) reportSelection {
 	if len(candidates) == 1 {
-		return sessionstate.ModeTemplateReport
+		return reportSelection{Mode: sessionstate.ModeTemplateReport}
 	}
-	return sessionstate.ModeFreeAnalysis
+	if selected, composite := compositePlaybooks(prompt, candidates); len(selected) >= 2 {
+		return reportSelection{
+			Mode:              sessionstate.ModeCompositeReport,
+			SelectedPlaybooks: selected,
+			SelectedTemplate:  compositeTemplateForDomain(composite.Domain),
+			Composite:         composite,
+		}
+	}
+	return reportSelection{Mode: sessionstate.ModeFreeAnalysis}
+}
+
+func compositePlaybooks(prompt string, candidates []sessionstate.PlaybookCandidate) ([]sessionstate.PlaybookCandidate, *sessionstate.CompositeSelection) {
+	if len(candidates) < 2 || !hasCompositeSignal(prompt) {
+		return nil, nil
+	}
+	byFamily := map[string][]sessionstate.PlaybookCandidate{}
+	domainByFamily := map[string]string{}
+	for _, candidate := range candidates {
+		if candidate.Domain == "" || candidate.Template == "" {
+			continue
+		}
+		if strings.Contains(candidate.Path, "/default-overview.md") {
+			continue
+		}
+		family := playbookFamily(candidate.Path)
+		if family == "" {
+			continue
+		}
+		key := candidate.Domain + "\x00" + family
+		byFamily[key] = append(byFamily[key], candidate)
+		domainByFamily[key] = candidate.Domain
+	}
+	var best []sessionstate.PlaybookCandidate
+	bestKey := ""
+	for key, items := range byFamily {
+		items = uniqueCandidates(items)
+		if len(items) > len(best) || (len(items) == len(best) && preferCompositeFamily(key, bestKey)) {
+			best = items
+			bestKey = key
+		}
+	}
+	if len(best) < 2 {
+		return nil, nil
+	}
+	sort.Slice(best, func(i, j int) bool { return best[i].Path < best[j].Path })
+	composite := &sessionstate.CompositeSelection{
+		Type:    compositeType(prompt),
+		Domain:  domainByFamily[bestKey],
+		Metrics: metricNames(best),
+	}
+	return best, composite
+}
+
+func playbookFamily(path string) string {
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if part != "playbooks" || i+2 >= len(parts) {
+			continue
+		}
+		return parts[i+1] + "/" + parts[i+2]
+	}
+	return ""
+}
+
+func preferCompositeFamily(candidate, current string) bool {
+	if current == "" {
+		return true
+	}
+	candidateFamily := strings.SplitN(candidate, "\x00", 2)
+	currentFamily := strings.SplitN(current, "\x00", 2)
+	if len(candidateFamily) == 2 && len(currentFamily) == 2 {
+		if candidateFamily[1] == "cmr/business" && currentFamily[1] != "cmr/business" {
+			return true
+		}
+		if candidateFamily[1] != currentFamily[1] {
+			return candidateFamily[1] < currentFamily[1]
+		}
+	}
+	return candidate < current
+}
+
+func hasCompositeSignal(prompt string) bool {
+	return hasAny(prompt, []string{"和", "与", "及", "以及", "还有", "同时", "一起", "都", "共同", "关系", "是否因为", "是不是因为", "影响", "带动", "拖累", "为什么", "原因", "归因"})
+}
+
+func compositeType(prompt string) string {
+	switch {
+	case hasAny(prompt, []string{"关系", "是否因为", "是不是因为", "影响", "带动", "拖累"}):
+		return "relation"
+	case hasAny(prompt, []string{"为什么", "原因", "归因", "哪些区域", "哪些品类"}):
+		return "attribution"
+	default:
+		return "overview"
+	}
+}
+
+func compositeTemplateForDomain(domain string) string {
+	switch domain {
+	case "business":
+		return "templates/cmr/business/multi-metric-report.md"
+	default:
+		return "templates/common/multi-metric-report.md"
+	}
+}
+
+func uniqueCandidates(candidates []sessionstate.PlaybookCandidate) []sessionstate.PlaybookCandidate {
+	seen := map[string]bool{}
+	var out []sessionstate.PlaybookCandidate
+	for _, candidate := range candidates {
+		if seen[candidate.Path] {
+			continue
+		}
+		seen[candidate.Path] = true
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func metricNames(candidates []sessionstate.PlaybookCandidate) []string {
+	var metrics []string
+	for _, candidate := range candidates {
+		name := strings.TrimSuffix(filepath.Base(candidate.Path), ".md")
+		if name != "" {
+			metrics = append(metrics, name)
+		}
+	}
+	return metrics
 }
 
 func keywordHits(refs []harness.FileRef) []map[string]string {

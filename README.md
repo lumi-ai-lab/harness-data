@@ -14,7 +14,7 @@ Claude Code 的 `PostToolUse` hook 调用：
 "$CLAUDE_PROJECT_DIR/bin/data-harness-cli" posttool --format claude-hook
 ```
 
-`context` 负责根据用户问题召回相关 `spec`、`routing`、`playbook` 文件清单；Agent 读取这些文件后判断取数路径、调用 `qdm-cmr-cli`、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 selected playbook 绑定的 template 正文。
+`context` 负责根据用户问题召回相关 `wikis/spec`、`wikis/routing`、`wikis/playbooks` 文件清单；Agent 读取这些文件后判断取数路径、调用 `qdm-cmr-cli`、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 selected playbook 绑定的 template 正文。
 
 ## 常用命令
 
@@ -43,12 +43,25 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - `.harness/index/`：由 `data-harness-cli build-index` 生成的机器索引。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
 - `cli/`：Data Harness CLI 源码和 Go 测试。
-- `config/qdm-cli-paths.env`：集中维护 QDM CLI 绝对路径。
-- `routing/`：Agent 读取后的取数路由规则。
-- `playbooks/`：分析流程与必要证据来源。
-- `spec/`：报告指标归属和业务知识权威说明。
-- `templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
+- `config/harness-config.yaml`：Harness 统一配置，集中维护知识库路径和 QDM CLI 绝对路径。
+- `wikis/`：业务知识库根目录，可作为 git submodule 管理。
+- `wikis/routing/`：Agent 读取后的取数路由规则。
+- `wikis/playbooks/`：分析流程与必要证据来源。
+- `wikis/spec/`：报告指标归属和业务知识权威说明。
+- `wikis/templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
 - `tests/`：Python 集成测试。
+
+`config/harness-config.yaml` 是受限 YAML，目前支持 `paths` 和 `cli` 两个 section。当前已预配置：
+
+```yaml
+paths:
+  spec: wikis/spec
+  routing: wikis/routing
+  playbooks: wikis/playbooks
+  templates: wikis/templates
+```
+
+未配置时默认兼容旧的根目录 `spec/`、`routing/`、`playbooks/`、`templates/` 结构。frontmatter 中的 `children.path`、`context.default_files`、`template` 可以继续写逻辑路径，例如 `spec/...`、`playbooks/...`、`templates/...`；CLI 会解析到 `wikis/...` 物理路径读取，并在 context/index 输出中使用可直接读取的 `wikis/...` 路径。
 
 ## Context 输出
 
@@ -104,8 +117,8 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - 根据 frontmatter `match.keywords` 召回相关文件。
 - 命中某个 domain 的 index 时，加入该 index 的 `context.default_files`。
 - 命中 index 的 `children.keywords` 时，加入 child path。
-- 时间表达加入 `spec/common/time-policy.md`。
-- 区域表达加入 `spec/common/area.md`。
+- 时间表达加入 `wikis/spec/common/time-policy.md`。
+- 区域表达加入 `wikis/spec/common/area.md`。
 - routing 和 playbook 按关键词及已召回 domain 加入，不由 hook 正则硬编码决定。
 - 结果可以包含多个 domain；Agent 负责读取上下文后判断本轮实际取数路径。
 
@@ -116,7 +129,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - 除非用户明确要求导出文件，否则不得写入报告文件。
 - 必需取数完成后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 - template 注入前禁止总结、整理报告素材、生成中间分析、输出阶段性结论。
-- template 注入前禁止读取、打开、猜测或使用任何 `templates/` 文件。
+- template 注入前禁止读取、打开、猜测或使用任何 `wikis/templates/` 文件。
 - inject-template 成功后只由 `posttool` 注入 selected playbook 绑定的 template 正文。
 
 ## 诊断

@@ -3,7 +3,6 @@ package frontmatter
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"harness-data/cli/internal/harness"
@@ -14,19 +13,24 @@ var validKinds = map[string]bool{
 }
 
 var validDomains = map[string]bool{
-	"common": true, "business": true, "store": true, "member": true, "financial": true,
+	"common": true, "business": true, "store": true, "store-manager": true, "member": true, "financial": true,
+	"purchase": true, "store-area": true, "warehouse": true,
 }
 
 func ValidateDocuments(root string, docs []harness.Document) []string {
 	var errs []string
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return []string{err.Error()}
+	}
 	ids := map[string]string{}
 	for _, doc := range docs {
 		if doc.ID == "" {
 			errs = append(errs, fmt.Sprintf("%s: missing id", doc.Path))
-		} else if existing, ok := ids[doc.ID]; ok {
+		} else if existing, ok := ids[doc.Kind+"\x00"+doc.ID]; ok {
 			errs = append(errs, fmt.Sprintf("%s: duplicate id %q also used by %s", doc.Path, doc.ID, existing))
 		} else {
-			ids[doc.ID] = doc.Path
+			ids[doc.Kind+"\x00"+doc.ID] = doc.Path
 		}
 		if !validKinds[doc.Kind] {
 			errs = append(errs, fmt.Sprintf("%s: invalid kind %q", doc.Path, doc.Kind))
@@ -35,16 +39,16 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 			errs = append(errs, fmt.Sprintf("%s: invalid domain %q", doc.Path, doc.Domain))
 		}
 		for _, ref := range doc.Context.DefaultFiles {
-			if !exists(root, ref) {
+			if !exists(resolver, ref) {
 				errs = append(errs, fmt.Sprintf("%s: missing context.default_files reference %s", doc.Path, ref))
 			}
 		}
 		for _, child := range doc.Children {
-			if !exists(root, child.Path) {
+			if !exists(resolver, child.Path) {
 				errs = append(errs, fmt.Sprintf("%s: missing children.path reference %s", doc.Path, child.Path))
 			}
 		}
-		if doc.Kind == "playbook" && !hasTag(doc.Tags, "supplemental") && doc.Template == "" {
+		if doc.Kind == "playbook" && !hasTag(doc.Tags, "supplemental") && hasTag(doc.Tags, "template-report") && doc.Template == "" {
 			errs = append(errs, fmt.Sprintf("%s: playbook missing template", doc.Path))
 		}
 		if doc.Kind == "playbook_index" && doc.Template != "" {
@@ -52,9 +56,9 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 		}
 		if doc.Template != "" {
 			if !strings.HasPrefix(doc.Template, "templates/") {
-				errs = append(errs, fmt.Sprintf("%s: template must be under templates/: %s", doc.Path, doc.Template))
+				errs = append(errs, fmt.Sprintf("%s: template must use logical path under templates/: %s", doc.Path, doc.Template))
 			}
-			if !exists(root, doc.Template) {
+			if !exists(resolver, doc.Template) {
 				errs = append(errs, fmt.Sprintf("%s: missing template reference %s", doc.Path, doc.Template))
 			}
 		}
@@ -62,8 +66,8 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 	return errs
 }
 
-func exists(root, rel string) bool {
-	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+func exists(resolver harness.PathResolver, rel string) bool {
+	info, err := os.Stat(resolver.Resolve(rel))
 	return err == nil && !info.IsDir()
 }
 

@@ -8,13 +8,15 @@ import (
 )
 
 const (
-	ModeTemplateReport = "template_report"
-	ModeFreeAnalysis   = "free_analysis"
+	ModeTemplateReport  = "template_report"
+	ModeFreeAnalysis    = "free_analysis"
+	ModeCompositeReport = "composite_report"
 )
 
 type PlaybookCandidate struct {
 	Path     string `json:"path"`
 	Template string `json:"template"`
+	Domain   string `json:"domain,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 }
 
@@ -25,9 +27,17 @@ type File struct {
 	StartedAt          string              `json:"started_at,omitempty"`
 	SelectedPlaybook   string              `json:"selected_playbook,omitempty"`
 	SelectedTemplate   string              `json:"selected_template,omitempty"`
+	SelectedPlaybooks  []PlaybookCandidate `json:"selected_playbooks,omitempty"`
 	PlaybookCandidates []PlaybookCandidate `json:"playbook_candidates,omitempty"`
+	Composite          *CompositeSelection `json:"composite,omitempty"`
 	TemplateInjected   bool                `json:"template_injected"`
 	Reports            map[string]*Report  `json:"reports"`
+}
+
+type CompositeSelection struct {
+	Type    string   `json:"type"`
+	Metrics []string `json:"metrics,omitempty"`
+	Domain  string   `json:"domain,omitempty"`
 }
 
 type Report struct {
