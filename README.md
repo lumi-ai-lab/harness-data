@@ -14,7 +14,7 @@ Claude Code 的 `PostToolUse` hook 调用：
 "$CLAUDE_PROJECT_DIR/bin/data-harness-cli" posttool --format claude-hook
 ```
 
-`context` 负责根据用户问题召回相关 `wikis/spec`、`wikis/routing`、`wikis/playbooks` 文件清单；Agent 读取这些文件后判断取数路径、调用 `qdm-cmr-cli`、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 selected playbook 绑定的 template 正文。
+`context` 负责根据 `.harness/index/wikis-index.json` 召回相关 `wikis/spec`、`wikis/playbooks` 文件清单；Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
 ## 常用命令
 
@@ -27,8 +27,8 @@ go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
 验证与调试：
 
 ```bash
-./bin/data-harness-cli validate
-./bin/data-harness-cli build-index
+./bin/data-harness-cli wikis check-all
+./bin/data-harness-cli wikis build-index
 ./bin/data-harness-cli context --question "华东区最近会员复购为什么下降？" --json
 printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format claude-hook
 printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' | ./bin/data-harness-cli posttool --format claude-hook
@@ -40,7 +40,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 ## 目录结构
 
 - `.claude/settings.json`：注册 Claude Code hook，调用 `context --format claude-hook` 和 `posttool --format claude-hook`。
-- `.harness/index/`：由 `data-harness-cli build-index` 生成的机器索引。
+- `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
 - `cli/`：Data Harness CLI 源码和 Go 测试。
 - `config/harness-config.yaml`：Harness 统一配置，集中维护知识库路径和 QDM CLI 绝对路径。
@@ -61,7 +61,7 @@ paths:
   templates: wikis/templates
 ```
 
-未配置时默认兼容旧的根目录 `spec/`、`routing/`、`playbooks/`、`templates/` 结构。frontmatter 中的 `children.path`、`context.default_files`、`template` 可以继续写逻辑路径，例如 `spec/...`、`playbooks/...`、`templates/...`；CLI 会解析到 `wikis/...` 物理路径读取，并在 context/index 输出中使用可直接读取的 `wikis/...` 路径。
+未配置时默认兼容根目录 `spec/`、`routing/`、`playbooks/`、`templates/` 结构。Wiki 检查和索引内部统一使用 `spec/...`、`playbooks/...`、`templates/...` 逻辑路径；context 输出使用可直接读取的物理相对路径。
 
 ## Context 输出
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	idx "harness-data/cli/internal/index"
+	"harness-data/cli/internal/wikis"
 )
 
 func root(t *testing.T) string {
@@ -18,29 +18,29 @@ func root(t *testing.T) string {
 }
 
 func TestBuildIndexScansFrontmatter(t *testing.T) {
-	result, err := idx.Build(root(t))
+	result, err := wikis.BuildIndex(root(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Spec.Files) == 0 || len(result.Routing.Files) == 0 || len(result.Playbook.Files) == 0 {
-		t.Fatalf("expected spec/routing/playbook files, got spec=%d routing=%d playbook=%d", len(result.Spec.Files), len(result.Routing.Files), len(result.Playbook.Files))
+	if result.DocCount == 0 || result.RecallCount == 0 || result.ChecksSkipped {
+		t.Fatalf("unexpected build result: %+v", result)
 	}
-	if result.Spec.ByID["member-repurchase"] != "wikis/spec/cmr/member/repurchase.md" {
-		t.Fatalf("member-repurchase not indexed: %#v", result.Spec.ByID["member-repurchase"])
+	index, err := wikis.LoadIndex(root(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result.Routing.ByID["routing-member-overview"] != "wikis/routing/member-overview.md" {
-		t.Fatalf("member routing not indexed")
+	docs := map[string]wikis.Document{}
+	for _, doc := range index.Docs {
+		docs[doc.Path] = doc
 	}
-	if result.Playbook.ByID["playbook-member-default-overview"] != "wikis/playbooks/cmr/member/default-overview.md" {
-		t.Fatalf("member playbook not indexed")
+	if docs["spec/cmr/member/repurchase.md"].ID != "spec/cmr/member/repurchase" {
+		t.Fatalf("member repurchase not indexed: %+v", docs["spec/cmr/member/repurchase.md"])
 	}
-	var memberTemplate string
-	for _, doc := range result.Playbook.Files {
-		if doc.ID == "playbook-member-default-overview" {
-			memberTemplate = doc.Template
-		}
+	memberPlaybook := docs["playbooks/cmr/member/default-overview.md"]
+	if !memberPlaybook.Playbook.IsCombo || memberPlaybook.Playbook.TemplatePath != "templates/cmr/member/default-overview.md" {
+		t.Fatalf("member playbook = %+v", memberPlaybook)
 	}
-	if memberTemplate != "templates/cmr/member/member-overview-report.md" {
-		t.Fatalf("member playbook template = %#v", memberTemplate)
+	if index.Meta.Version != 1 || index.Meta.ChecksSkipped {
+		t.Fatalf("bad index meta: %+v", index.Meta)
 	}
 }

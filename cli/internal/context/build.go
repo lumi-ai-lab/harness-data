@@ -1,12 +1,14 @@
 package context
 
 import (
+	"path"
 	"sort"
 	"strings"
 
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
 	"harness-data/cli/internal/sessionstate"
+	"harness-data/cli/internal/wikis"
 )
 
 var constraints = []string{
@@ -17,6 +19,310 @@ var constraints = []string{
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
+	response, _, err := BuildWithPlan(root, question)
+	return response, err
+}
+
+type WikiPlan struct {
+	Mode             string
+	SelectedPlaybook string
+	SelectedTemplate string
+	CoveredSpecs     []string
+	Reason           string
+	Candidates       []sessionstate.PlaybookCandidate
+}
+
+func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, error) {
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return harness.ContextResponse{}, WikiPlan{}, err
+	}
+	index, err := wikis.LoadIndex(root)
+	if err != nil {
+		return harness.ContextResponse{}, WikiPlan{}, err
+	}
+	response, plan := buildFromWikisIndex(resolver, index, question)
+	return response, plan, nil
+}
+
+func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, question string) (harness.ContextResponse, WikiPlan) {
+	byPath := map[string]wikis.Document{}
+	for _, doc := range index.Docs {
+		byPath[doc.Path] = doc
+	}
+	var refs []harness.FileRef
+	seen := map[string]bool{}
+	add := func(logical, reason string) {
+		if logical == "" {
+			return
+		}
+		if _, ok := byPath[logical]; !ok {
+			return
+		}
+		physical := resolver.ResolveRel(logical)
+		if seen[physical] {
+			return
+		}
+		seen[physical] = true
+		refs = append(refs, harness.FileRef{Path: physical, Reason: reason})
+	}
+
+	hits := recallHits(index, question)
+	ordinarySpecs, conceptSpecs, directCombos := classifyHits(hits)
+	sortDocsByPath(ordinarySpecs)
+	sortDocsByPath(conceptSpecs)
+	sortDocsByPath(directCombos)
+
+	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
+	switch {
+	case len(directCombos) == 1:
+		combo := directCombos[0]
+		plan = WikiPlan{
+			Mode:             sessionstate.ModeCombo,
+			SelectedPlaybook: combo.Path,
+			SelectedTemplate: combo.Playbook.TemplatePath,
+			CoveredSpecs:     append([]string{}, combo.Covers...),
+		}
+		addComboFiles(add, byPath, combo)
+	case len(directCombos) > 1:
+		plan.Reason = "multiple_combo_alias_hits"
+		for _, combo := range directCombos {
+			addComboFiles(add, byPath, combo)
+		}
+	case len(ordinarySpecs) == 1:
+		spec := ordinarySpecs[0]
+		playbookPath := wikis.SamePath(spec.Path, "playbooks")
+		templatePath := wikis.SamePath(spec.Path, "templates")
+		if _, ok := byPath[playbookPath]; ok {
+			if _, ok := byPath[templatePath]; ok {
+				plan = WikiPlan{Mode: sessionstate.ModeSingle, SelectedPlaybook: playbookPath, SelectedTemplate: templatePath}
+				addIndexChain(add, byPath, spec.Path, "spec index")
+				add(spec.Path, "matched spec")
+				addIndexChain(add, byPath, playbookPath, "playbook index")
+				add(playbookPath, "selected playbook")
+				break
+			}
+		}
+		plan.Reason = "single_spec_missing_playbook_or_template"
+		addFreeSpecFiles(add, byPath, []wikis.Document{spec})
+	case len(ordinarySpecs) > 1:
+		candidates := coveringCombos(index.Docs, ordinarySpecs)
+		if len(candidates) == 1 {
+			combo := candidates[0]
+			plan = WikiPlan{
+				Mode:             sessionstate.ModeCombo,
+				SelectedPlaybook: combo.Path,
+				SelectedTemplate: combo.Playbook.TemplatePath,
+				CoveredSpecs:     append([]string{}, combo.Covers...),
+			}
+			addComboFiles(add, byPath, combo)
+		} else if len(candidates) > 1 {
+			plan.Reason = "multiple_combo_candidates_tied"
+			for _, combo := range candidates {
+				addComboFiles(add, byPath, combo)
+				plan.Candidates = append(plan.Candidates, candidateFromDoc(combo, "combo candidate"))
+			}
+		} else {
+			plan.Reason = "no_combo_covers_all_specs"
+			addFreeSpecFiles(add, byPath, ordinarySpecs)
+		}
+	case len(conceptSpecs) > 0:
+		plan.Reason = "concept_only"
+		for _, spec := range conceptSpecs {
+			addIndexChain(add, byPath, spec.Path, "spec index")
+			add(spec.Path, "matched concept spec")
+		}
+	default:
+		add("spec/index.md", "default free spec index")
+		add("playbooks/index.md", "default free playbook index")
+	}
+	plan.Candidates = append(plan.Candidates, candidatesFromPlan(plan, byPath)...)
+	response := harness.ContextResponse{
+		Question:     question,
+		ContextFiles: refs,
+		Instruction:  instructionForPlan(plan),
+		Constraints:  constraints,
+	}
+	return response, plan
+}
+
+func recallHits(index wikis.Index, question string) []wikis.Document {
+	byPath := map[string]wikis.Document{}
+	for _, doc := range index.Docs {
+		byPath[doc.Path] = doc
+	}
+	seen := map[string]bool{}
+	var docs []wikis.Document
+	for _, item := range index.Recall {
+		if item.Term == "" || !strings.Contains(question, item.Term) || seen[item.TargetPath] {
+			continue
+		}
+		doc, ok := byPath[item.TargetPath]
+		if !ok {
+			continue
+		}
+		seen[item.TargetPath] = true
+		docs = append(docs, doc)
+	}
+	return docs
+}
+
+func classifyHits(hits []wikis.Document) ([]wikis.Document, []wikis.Document, []wikis.Document) {
+	var ordinarySpecs, conceptSpecs, directCombos []wikis.Document
+	for _, doc := range hits {
+		switch {
+		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeMetric:
+			ordinarySpecs = append(ordinarySpecs, doc)
+		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeConcept:
+			conceptSpecs = append(conceptSpecs, doc)
+		case doc.Kind == wikis.KindPlaybook && doc.Playbook.IsCombo:
+			directCombos = append(directCombos, doc)
+		}
+	}
+	return ordinarySpecs, conceptSpecs, directCombos
+}
+
+func sortDocsByPath(docs []wikis.Document) {
+	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
+}
+
+func addIndexChain(add func(string, string), byPath map[string]wikis.Document, docPath, reason string) {
+	parts := strings.Split(docPath, "/")
+	if len(parts) < 2 {
+		return
+	}
+	root := parts[0]
+	if _, ok := byPath[root+"/index.md"]; ok {
+		add(root+"/index.md", reason)
+	}
+	var current []string
+	for _, part := range parts[1 : len(parts)-1] {
+		current = append(current, part)
+		indexPath := root + "/" + path.Join(append(current, "index.md")...)
+		if _, ok := byPath[indexPath]; ok {
+			add(indexPath, reason)
+		}
+	}
+}
+
+func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.Document, specs []wikis.Document) {
+	for _, spec := range specs {
+		addIndexChain(add, byPath, spec.Path, "spec index")
+		add(spec.Path, "matched spec")
+		playbookPath := wikis.SamePath(spec.Path, "playbooks")
+		if _, ok := byPath[playbookPath]; ok {
+			addIndexChain(add, byPath, playbookPath, "playbook index")
+			add(playbookPath, "matched playbook")
+		}
+	}
+}
+
+func addComboFiles(add func(string, string), byPath map[string]wikis.Document, combo wikis.Document) {
+	addIndexChain(add, byPath, combo.Path, "combo playbook index")
+	add(combo.Path, "selected combo playbook")
+	covers := append([]string{}, combo.Covers...)
+	sort.Strings(covers)
+	for _, cover := range covers {
+		addIndexChain(add, byPath, cover, "covered spec index")
+		add(cover, "covered spec")
+	}
+}
+
+func coveringCombos(docs []wikis.Document, specs []wikis.Document) []wikis.Document {
+	required := map[string]bool{}
+	commonDomain := ""
+	for i, spec := range specs {
+		required[spec.Path] = true
+		if i == 0 {
+			commonDomain = spec.Domain
+		} else if commonDomain != spec.Domain {
+			commonDomain = ""
+		}
+	}
+	var candidates []wikis.Document
+	for _, doc := range docs {
+		if doc.Kind != wikis.KindPlaybook || !doc.Playbook.IsCombo || doc.Playbook.TemplatePath == "" {
+			continue
+		}
+		covered := map[string]bool{}
+		for _, cover := range doc.Covers {
+			covered[cover] = true
+		}
+		ok := true
+		for specPath := range required {
+			if !covered[specPath] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			candidates = append(candidates, doc)
+		}
+	}
+	if len(candidates) <= 1 {
+		return candidates
+	}
+	minCovers := len(candidates[0].Covers)
+	for _, candidate := range candidates[1:] {
+		if len(candidate.Covers) < minCovers {
+			minCovers = len(candidate.Covers)
+		}
+	}
+	candidates = filterCombos(candidates, func(doc wikis.Document) bool { return len(doc.Covers) == minCovers })
+	if len(candidates) <= 1 || commonDomain == "" {
+		return candidates
+	}
+	domainMatches := filterCombos(candidates, func(doc wikis.Document) bool { return doc.Domain == commonDomain })
+	if len(domainMatches) > 0 {
+		candidates = domainMatches
+	}
+	sortDocsByPath(candidates)
+	return candidates
+}
+
+func filterCombos(docs []wikis.Document, keep func(wikis.Document) bool) []wikis.Document {
+	var out []wikis.Document
+	for _, doc := range docs {
+		if keep(doc) {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
+func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.Document) []sessionstate.PlaybookCandidate {
+	if plan.SelectedPlaybook == "" {
+		return nil
+	}
+	doc, ok := byPath[plan.SelectedPlaybook]
+	if !ok {
+		return nil
+	}
+	return []sessionstate.PlaybookCandidate{candidateFromDoc(doc, "selected")}
+}
+
+func candidateFromDoc(doc wikis.Document, reason string) sessionstate.PlaybookCandidate {
+	return sessionstate.PlaybookCandidate{
+		Path:     doc.Path,
+		Template: doc.Playbook.TemplatePath,
+		Domain:   doc.Domain,
+		Reason:   reason,
+	}
+}
+
+func instructionForPlan(plan WikiPlan) string {
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate, invent, or write report files unless the user asks."
+	switch plan.Mode {
+	case sessionstate.ModeSingle:
+		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". After selected playbook data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+	case sessionstate.ModeCombo:
+		return common + " Harness mode: combo. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + " coveredSpecs=" + strings.Join(plan.CoveredSpecs, ",") + ". Use the combo playbook for multi-metric data collection and analysis; do not separately apply multiple single-metric playbooks/templates. After data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+	default:
+		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/. You may reference specs/playbooks, but must not apply any template."
+	}
+}
+
+func legacyBuild(root, question string) (harness.ContextResponse, error) {
 	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		return harness.ContextResponse{}, err

@@ -5,16 +5,18 @@ import (
 
 	"harness-data/cli/internal/frontmatter"
 	"harness-data/cli/internal/harness"
-	idx "harness-data/cli/internal/index"
+	"harness-data/cli/internal/wikis"
 )
 
 func TestValidateCurrentDocuments(t *testing.T) {
-	docs, err := idx.AllDocuments(root(t))
+	results, err := wikis.RunAllChecks(root(t), wikis.CheckOptions{MaxErrors: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if errs := frontmatter.ValidateDocuments(root(t), docs); len(errs) != 0 {
-		t.Fatalf("expected valid documents, got %v", errs)
+	for _, result := range results {
+		if result.TotalErrors != 0 {
+			t.Fatalf("expected valid wikis, got %+v", result)
+		}
 	}
 }
 

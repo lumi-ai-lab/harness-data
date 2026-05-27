@@ -3,7 +3,6 @@ package posttool
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,54 +89,51 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if !isTemplateInjectionCommand(command) {
 		return false, Output{}, nil
 	}
-	reportState := getReportState(state, "template")
-
-	if state.Mode == sessionstate.ModeFreeAnalysis {
-		if err := sessionstate.Save(root, sessionID, state); err != nil {
-			return false, Output{}, err
-		}
-		recordTemplateDiagnostic(root, sessionID, state, reportState, "free_analysis_no_template", "")
-		return true, buildOutput("QDM_FREE_ANALYSIS current session has no unique playbook/template. Do not run bin/data-harness-cli inject-template. Continue with CLI evidence and write a free analysis report without reading templates/."), nil
-	}
-
-	templateRel, validationMessage := selectedTemplatePath(root, state)
-	if validationMessage != "" {
-		if err := sessionstate.Save(root, sessionID, state); err != nil {
-			return false, Output{}, err
-		}
-		recordTemplateDiagnostic(root, sessionID, state, reportState, "template_selection_error", templateRel)
-		return true, buildOutput(validationMessage), nil
-	}
-
-	if state.TemplateInjected {
-		if err := sessionstate.Save(root, sessionID, state); err != nil {
-			return false, Output{}, err
-		}
-		recordTemplateDiagnostic(root, sessionID, state, reportState, "already_injected", templateRel)
-		return true, buildOutput("QDM_INJECT_TEMPLATE already injected in this session; do not request template injection again."), nil
-	}
-
-	resolver, err := harness.NewPathResolver(root)
+	message, outcome, templateRel, err := InjectTemplate(root, sessionID)
 	if err != nil {
 		return false, Output{}, err
 	}
-	templatePath := resolver.Resolve(templateRel)
-	template, err := os.ReadFile(templatePath)
-	if err != nil {
-		if saveErr := sessionstate.Save(root, sessionID, state); saveErr != nil {
-			return false, Output{}, saveErr
-		}
-		recordTemplateDiagnostic(root, sessionID, state, reportState, "missing_template", templateRel)
-		return true, buildOutput(fmt.Sprintf("QDM_INJECT_TEMPLATE missing %s.", templateRel)), nil
-	}
+	updated, _ := sessionstate.Load(root, sessionID)
+	recordTemplateDiagnostic(root, sessionID, updated, getReportState(updated, "template"), outcome, templateRel)
+	return true, buildOutput(message), nil
+}
 
+func InjectTemplate(root, sessionID string) (message, outcome, templateRel string, err error) {
+	state, err := sessionstate.Load(root, sessionID)
+	if err != nil {
+		return "", "", "", err
+	}
+	reportState := getReportState(state, "template")
+	if state.Mode == "" {
+		return "QDM_INJECT_TEMPLATE session state missing. Do not guess a template; run context first.", "missing_session_state", "", sessionstate.Save(root, sessionID, state)
+	}
+	if state.Mode == sessionstate.ModeFree {
+		state.SelectedPlaybook = ""
+		state.SelectedTemplate = ""
+		state.SelectedPlaybooks = nil
+		if err := sessionstate.Save(root, sessionID, state); err != nil {
+			return "", "", "", err
+		}
+		return "QDM_FREE_ANALYSIS current session is free mode. Do not run inject-template; continue free analysis and do not read templates/.", "free_mode_no_template", "", nil
+	}
+	templateRel, validationMessage := selectedTemplatePath(root, state)
+	if validationMessage != "" {
+		return validationMessage, "template_selection_error", templateRel, sessionstate.Save(root, sessionID, state)
+	}
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		return "", "", templateRel, err
+	}
+	template, err := os.ReadFile(resolver.Resolve(templateRel))
+	if err != nil {
+		return "QDM_INJECT_TEMPLATE missing " + templateRel + ". Wiki integrity error; do not read any other template.", "missing_template", templateRel, sessionstate.Save(root, sessionID, state)
+	}
 	state.TemplateInjected = true
 	reportState.TemplateInjected = true
 	if err := sessionstate.Save(root, sessionID, state); err != nil {
-		return false, Output{}, err
+		return "", "", templateRel, err
 	}
-	recordTemplateDiagnostic(root, sessionID, state, reportState, "template_injected", templateRel)
-	return true, buildOutput(string(template)), nil
+	return string(stripMarkdownFrontmatter(template)), "template_injected", templateRel, nil
 }
 
 func buildOutput(message string) Output {
@@ -218,22 +214,11 @@ func isTemplateInjectionCommand(command string) bool {
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {
-	if state.Mode == sessionstate.ModeCompositeReport {
-		return compositeTemplatePath(root, state)
-	}
 	if state.SelectedPlaybook == "" {
-		if len(state.PlaybookCandidates) > 1 {
-			var items []string
-			for _, candidate := range state.PlaybookCandidates {
-				items = append(items, candidate.Path+" -> "+candidate.Template)
-			}
-			sort.Strings(items)
-			return "", "QDM_INJECT_TEMPLATE ambiguous playbook candidates with templates: " + strings.Join(items, ", ") + ". Read contextFiles and user question, choose exactly one playbook, then rerun bin/data-harness-cli inject-template."
-		}
-		return "", "QDM_INJECT_TEMPLATE no selected playbook. First read contextFiles and determine one playbook, complete data collection, then run bin/data-harness-cli inject-template."
+		return "", "QDM_INJECT_TEMPLATE no selectedPlaybook in session state. Do not guess a template; continue without template injection."
 	}
 	if state.SelectedTemplate == "" {
-		return "", "QDM_INJECT_TEMPLATE selected playbook missing template frontmatter: " + state.SelectedPlaybook + "."
+		return "", "QDM_INJECT_TEMPLATE no selectedTemplate in session state. Do not guess a template; continue without template injection."
 	}
 	if !strings.HasPrefix(state.SelectedTemplate, "templates/") {
 		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE template must use logical path under templates/: " + state.SelectedTemplate + "."
@@ -249,30 +234,17 @@ func selectedTemplatePath(root string, state sessionstate.File) (string, string)
 	return state.SelectedTemplate, ""
 }
 
-func compositeTemplatePath(root string, state sessionstate.File) (string, string) {
-	if len(state.SelectedPlaybooks) < 2 {
-		return "", "QDM_INJECT_TEMPLATE composite_report requires at least two selected playbooks."
+func stripMarkdownFrontmatter(data []byte) []byte {
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) == 0 || strings.TrimSpace(string(lines[0])) != "---" {
+		return data
 	}
-	if state.SelectedTemplate == "" {
-		return "", "QDM_INJECT_TEMPLATE composite_report missing selected composite template."
-	}
-	if !strings.HasPrefix(state.SelectedTemplate, "templates/") {
-		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE composite template must use logical path under templates/: " + state.SelectedTemplate + "."
-	}
-	for _, playbook := range state.SelectedPlaybooks {
-		if playbook.Path == "" {
-			return state.SelectedTemplate, "QDM_INJECT_TEMPLATE composite_report contains an empty selected playbook path."
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(string(lines[i])) == "---" {
+			return bytes.Join(lines[i+1:], []byte("\n"))
 		}
 	}
-	resolver, err := harness.NewPathResolver(root)
-	if err != nil {
-		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE path config error: " + err.Error() + "."
-	}
-	info, err := os.Stat(resolver.Resolve(state.SelectedTemplate))
-	if err != nil || info.IsDir() {
-		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE missing " + state.SelectedTemplate + "."
-	}
-	return state.SelectedTemplate, ""
+	return data
 }
 
 func normalizeCommand(command string) string {

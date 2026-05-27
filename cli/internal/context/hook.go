@@ -47,21 +47,16 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 		return false, Output{}, err
 	}
 	tc := buildTimeContext(prompt, resolver)
-	response, err := Build(root, prompt)
+	response, plan, err := BuildWithPlan(root, prompt)
 	if err != nil {
 		return false, Output{}, err
 	}
-	candidates, err := PlaybookCandidates(root, response)
-	if err != nil {
-		return false, Output{}, err
-	}
-	selection := selectReportMode(prompt, candidates)
-	additionalContext, err := buildAdditionalContext(tc, response, selection, candidates)
+	additionalContext, err := buildWikiAdditionalContext(tc, response, plan)
 	if err != nil {
 		return false, Output{}, err
 	}
 	sessionID := hookSessionID(payload)
-	if err := writeSelectedPlaybookState(root, sessionID, prompt, candidates, selection); err != nil {
+	if err := writeWikiPlanState(root, sessionID, prompt, plan); err != nil {
 		return false, Output{}, err
 	}
 	if os.Getenv("QDM_HARNESS_DIAG") == "1" {
@@ -75,6 +70,64 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 			AdditionalContext: additionalContext,
 		},
 	}, nil
+}
+
+func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan) (string, error) {
+	timeJSON, err := json.Marshal(tc)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# Data Harness Context\n\n")
+	b.WriteString("时间解析 JSON：`")
+	b.Write(timeJSON)
+	b.WriteString("`\n\n")
+	b.WriteString("Harness mode: ")
+	b.WriteString(plan.Mode)
+	b.WriteString("\n")
+	if plan.SelectedPlaybook != "" {
+		b.WriteString("selectedPlaybook: ")
+		b.WriteString(plan.SelectedPlaybook)
+		b.WriteString("\n")
+	}
+	if plan.SelectedTemplate != "" {
+		b.WriteString("selectedTemplate: ")
+		b.WriteString(plan.SelectedTemplate)
+		b.WriteString("\n")
+	}
+	if len(plan.CoveredSpecs) > 0 {
+		b.WriteString("coveredSpecs:\n")
+		for _, spec := range plan.CoveredSpecs {
+			b.WriteString("- ")
+			b.WriteString(spec)
+			b.WriteString("\n")
+		}
+	}
+	if plan.Mode == sessionstate.ModeFree {
+		b.WriteString("reason: ")
+		b.WriteString(plan.Reason)
+		b.WriteString("\n")
+	}
+	b.WriteString("\n必须先读取以下 contextFiles：\n")
+	for _, ref := range response.ContextFiles {
+		b.WriteString("- ")
+		b.WriteString(ref.Path)
+		if ref.Reason != "" {
+			b.WriteString(" (")
+			b.WriteString(ref.Reason)
+			b.WriteString(")")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nInstruction: ")
+	b.WriteString(response.Instruction)
+	b.WriteString("\n\nConstraints:\n")
+	for _, constraint := range response.Constraints {
+		b.WriteString("- ")
+		b.WriteString(constraint)
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }
 
 func parsePromptPayload(input []byte) (promptPayload, bool) {
@@ -332,6 +385,37 @@ func writeSelectedPlaybookState(root, sessionID, prompt string, candidates []ses
 		state.SelectedPlaybooks = selection.SelectedPlaybooks
 		state.SelectedTemplate = selection.SelectedTemplate
 		state.Composite = selection.Composite
+	}
+	return sessionstate.Save(root, sessionID, state)
+}
+
+func writeWikiPlanState(root, sessionID, prompt string, plan WikiPlan) error {
+	state, err := sessionstate.Load(root, sessionID)
+	if err != nil {
+		return err
+	}
+	state.Mode = plan.Mode
+	state.Prompt = prompt
+	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	state.PlaybookCandidates = plan.Candidates
+	state.SelectedPlaybook = ""
+	state.SelectedTemplate = ""
+	state.SelectedPlaybooks = nil
+	state.Composite = nil
+	state.CoveredSpecs = nil
+	state.Reason = ""
+	state.TemplateInjected = false
+	state.Reports = map[string]*sessionstate.Report{}
+	switch plan.Mode {
+	case sessionstate.ModeSingle:
+		state.SelectedPlaybook = plan.SelectedPlaybook
+		state.SelectedTemplate = plan.SelectedTemplate
+	case sessionstate.ModeCombo:
+		state.SelectedPlaybook = plan.SelectedPlaybook
+		state.SelectedTemplate = plan.SelectedTemplate
+		state.CoveredSpecs = append([]string{}, plan.CoveredSpecs...)
+	case sessionstate.ModeFree:
+		state.Reason = plan.Reason
 	}
 	return sessionstate.Save(root, sessionID, state)
 }

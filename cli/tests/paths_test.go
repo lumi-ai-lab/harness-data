@@ -8,6 +8,7 @@ import (
 
 	dhcontext "harness-data/cli/internal/context"
 	"harness-data/cli/internal/harness"
+	"harness-data/cli/internal/wikis"
 )
 
 func TestFindRootUsesHarnessConfigWithoutLegacyKnowledgeDirs(t *testing.T) {
@@ -54,61 +55,23 @@ func TestPathResolverMapsLogicalKnowledgePaths(t *testing.T) {
 func TestContextUsesConfiguredKnowledgeDirectoryName(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "config/harness-config.yaml", "paths:\n  spec: knowledge/spec\n  routing: knowledge/routing\n  playbooks: knowledge/playbooks\n  templates: knowledge/templates\n")
-	writeFile(t, root, "knowledge/spec/common/index.md", `---
-id: common-index
-kind: spec_index
-domain: common
-title: Common
-match:
-  - 通用
-context:
-  - spec/common/time-policy.md
----
-`)
+	writeFile(t, root, "knowledge/spec/index.md", "# Specs\n")
+	writeFile(t, root, "knowledge/spec/common/index.md", "# Common\n")
 	writeFile(t, root, "knowledge/spec/common/time-policy.md", `---
-id: time-policy
-kind: spec
-domain: common
-title: Time
-match:
-  - 最近
+name: "member_metric"
+label: "会员"
 ---
+# Time
 `)
-	writeFile(t, root, "knowledge/routing/member-overview.md", `---
-id: routing-member-overview
-kind: routing
-domain: member
-title: Member Routing
-match:
-  - 会员
----
-`)
-	writeFile(t, root, "knowledge/playbooks/cmr/member/index.md", `---
-id: playbook-member-index
-kind: playbook_index
-domain: member
-title: Member Playbooks
-match:
-  - 会员
-children:
-  - path: playbooks/cmr/member/default-overview.md
-    keywords:
-      - 会员
----
-`)
-	writeFile(t, root, "knowledge/playbooks/cmr/member/default-overview.md", `---
-id: playbook-member-default-overview
-kind: playbook
-domain: member
-title: Member Overview
-tags:
-  - template-report
-match:
-  - 会员
-template: templates/cmr/member/member-overview-report.md
----
-`)
-	writeFile(t, root, "knowledge/templates/cmr/member/member-overview-report.md", "template\n")
+	writeFile(t, root, "knowledge/playbooks/index.md", "# Playbooks\n")
+	writeFile(t, root, "knowledge/playbooks/common/index.md", "# Common Playbooks\n")
+	writeFile(t, root, "knowledge/playbooks/common/time-policy.md", "# Member Playbook\n")
+	writeFile(t, root, "knowledge/templates/index.md", "# Templates\n")
+	writeFile(t, root, "knowledge/templates/common/index.md", "# Common Templates\n")
+	writeFile(t, root, "knowledge/templates/common/time-policy.md", "# Template\n")
+	if _, err := wikis.BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
 
 	response, err := dhcontext.Build(root, "最近会员表现")
 	if err != nil {
@@ -118,9 +81,8 @@ template: templates/cmr/member/member-overview-report.md
 	for _, want := range []string{
 		"knowledge/spec/common/index.md",
 		"knowledge/spec/common/time-policy.md",
-		"knowledge/routing/member-overview.md",
-		"knowledge/playbooks/cmr/member/index.md",
-		"knowledge/playbooks/cmr/member/default-overview.md",
+		"knowledge/playbooks/common/index.md",
+		"knowledge/playbooks/common/time-policy.md",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %s in %s", want, joined)

@@ -20,13 +20,13 @@ func TestMemberRepurchaseContext(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
-	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/repurchase.md", "wikis/spec/cmr/member/report-contract.md", "wikis/routing/member-overview.md"} {
+	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/repurchase.md", "wikis/playbooks/cmr/member/repurchase.md"} {
 		if !got[want] {
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
 		}
 	}
 	for _, ref := range response.ContextFiles {
-		if !strings.HasPrefix(ref.Path, "wikis/spec/") && !strings.HasPrefix(ref.Path, "wikis/routing/") && !strings.HasPrefix(ref.Path, "wikis/playbooks/") {
+		if !strings.HasPrefix(ref.Path, "wikis/spec/") && !strings.HasPrefix(ref.Path, "wikis/playbooks/") {
 			t.Fatalf("unexpected context path %s", ref.Path)
 		}
 	}
@@ -69,10 +69,8 @@ func TestMultiDomainContextRecall(t *testing.T) {
 	for _, want := range []string{
 		"wikis/spec/cmr/member/repurchase.md",
 		"wikis/spec/cmr/store-manager/s-net-profit.md",
-		"wikis/routing/member-overview.md",
-		"wikis/routing/store-overview.md",
-		"wikis/playbooks/cmr/member/default-overview.md",
-		"wikis/playbooks/cmr/store-manager/default-overview.md",
+		"wikis/playbooks/cmr/member/repurchase.md",
+		"wikis/playbooks/cmr/store-manager/s-net-profit.md",
 	} {
 		if !got[want] {
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
@@ -135,13 +133,13 @@ func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"session_id": "` + sessionID + `"`, `"selected_template": "templates/cmr/member/member-overview-report.md"`} {
+	for _, want := range []string{`"session_id": "` + sessionID + `"`, `"selected_template": "templates/cmr/member/default-overview.md"`} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, string(data))
 		}
 	}
-	if !bytes.Contains(data, []byte(`"mode": "template_report"`)) {
-		t.Fatalf("missing template_report mode in %s", string(data))
+	if !bytes.Contains(data, []byte(`"mode": "combo"`)) {
+		t.Fatalf("missing combo mode in %s", string(data))
 	}
 }
 
@@ -194,16 +192,16 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	if state["prompt"] != prompt {
 		t.Fatalf("prompt = %#v", state["prompt"])
 	}
-	if state["mode"] != "template_report" {
+	if state["mode"] != "combo" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
 	if state["started_at"] == "" {
 		t.Fatalf("missing started_at in %s", string(data))
 	}
-	if state["selected_playbook"] != "wikis/playbooks/cmr/business/default-overview.md" {
+	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/business-overview-report.md" {
+	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != false {
@@ -237,7 +235,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: free_analysis", "不要执行 `bin/data-harness-cli inject-template`", "wikis/playbooks/cmr/business/default-overview.md", "wikis/playbooks/cmr/member/default-overview.md"} {
+	for _, want := range []string{"Harness mode: free", "Do not run bin/data-harness-cli inject-template", "wikis/playbooks/cmr/business/default-overview.md", "wikis/playbooks/cmr/member/default-overview.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
@@ -251,7 +249,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state["mode"] != "free_analysis" {
+	if state["mode"] != "free" {
 		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
 	}
 	if state["selected_playbook"] != nil {
@@ -260,9 +258,8 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	candidates, ok := state["playbook_candidates"].([]any)
-	if !ok || len(candidates) != 2 {
-		t.Fatalf("playbook_candidates = %#v", state["playbook_candidates"])
+	if state["reason"] != "multiple_combo_alias_hits" {
+		t.Fatalf("reason = %#v", state["reason"])
 	}
 }
 
@@ -288,7 +285,7 @@ func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: composite_report", "Selected playbooks:", "templates/cmr/business/multi-metric-report.md", "wikis/playbooks/cmr/business/s-sale-amt.md", "wikis/playbooks/cmr/business/s-per-cust-amt.md"} {
+	for _, want := range []string{"Harness mode: combo", "selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "wikis/spec/cmr/business/s-sale-amt.md", "wikis/spec/cmr/business/s-per-cust-amt.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
@@ -302,22 +299,18 @@ func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state["mode"] != "composite_report" {
+	if state["mode"] != "combo" {
 		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
 	}
-	if state["selected_playbook"] != nil {
+	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/multi-metric-report.md" {
+	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	selected, ok := state["selected_playbooks"].([]any)
-	if !ok || len(selected) != 2 {
-		t.Fatalf("selected_playbooks = %#v", state["selected_playbooks"])
-	}
-	composite, ok := state["composite"].(map[string]any)
-	if !ok || composite["type"] != "overview" || composite["domain"] != "business" {
-		t.Fatalf("composite = %#v", state["composite"])
+	covered, ok := state["covered_specs"].([]any)
+	if !ok || len(covered) == 0 {
+		t.Fatalf("covered_specs = %#v", state["covered_specs"])
 	}
 }
 

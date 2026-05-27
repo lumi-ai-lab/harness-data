@@ -76,10 +76,10 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 
 	state := readPosttoolState(t, root, sessionID)
 	report := state["reports"].(map[string]any)["business-overview"].(map[string]any)
-	if state["selected_playbook"] != "wikis/playbooks/cmr/business/default-overview.md" {
+	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/business-overview-report.md" {
+	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != true {
@@ -93,8 +93,8 @@ func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "already injected") {
-		t.Fatalf("expected already injected output, got ok=%v output=%#v", ok, output)
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "经营分析深度报告模板") {
+		t.Fatalf("expected repeat injection of same template body, got ok=%v output=%#v", ok, output)
 	}
 }
 
@@ -1553,7 +1553,7 @@ func TestPosttoolReportsMissingModulesBeforeSignal(t *testing.T) {
 		t.Fatal("expected missing playbook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"no selected playbook", "data-harness-cli inject-template"} {
+	for _, want := range []string{"session state missing", "Do not guess a template"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
@@ -1579,10 +1579,10 @@ func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 	if event["event"] != "inject_template" {
 		t.Fatalf("event = %#v", event)
 	}
-	if event["selected_playbook"] != "wikis/playbooks/cmr/member/default-overview.md" {
+	if event["selected_playbook"] != "playbooks/cmr/member/default-overview.md" {
 		t.Fatalf("selected_playbook = %#v", event["selected_playbook"])
 	}
-	if event["template_path"] != "templates/cmr/member/member-overview-report.md" {
+	if event["template_path"] != "templates/cmr/member/default-overview.md" {
 		t.Fatalf("template_path = %#v", event["template_path"])
 	}
 	for _, unexpected := range []string{"template_signal", "template_signal_arg", "spec_path"} {
@@ -1609,13 +1609,13 @@ func TestPosttoolInjectTemplateUsesFreeAnalysisForAmbiguousPlaybooks(t *testing.
 		t.Fatal("expected free analysis output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"QDM_FREE_ANALYSIS", "no unique playbook/template", "Do not run bin/data-harness-cli inject-template"} {
+	for _, want := range []string{"QDM_FREE_ANALYSIS", "free mode", "Do not run inject-template"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
 	}
 	state := readPosttoolState(t, root, sessionID)
-	if state["mode"] != "free_analysis" {
+	if state["mode"] != "free" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
 }
@@ -1634,17 +1634,17 @@ func TestPosttoolInjectTemplateUsesCompositeTemplate(t *testing.T) {
 		t.Fatal("expected composite template output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"多指标组合分析报告模板", "不得拼接多个单指标模板"} {
+	for _, want := range []string{"经营分析深度报告模板", "核心指标总览"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
 	}
 
 	state := readPosttoolState(t, root, sessionID)
-	if state["mode"] != "composite_report" {
+	if state["mode"] != "combo" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
-	if state["selected_template"] != "templates/cmr/business/multi-metric-report.md" {
+	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != true {
@@ -1662,7 +1662,8 @@ func TestPosttoolInjectTemplateReportsMissingTemplate(t *testing.T) {
 	cleanupPosttoolState(t, root, sessionID)
 	state := map[string]any{
 		"session_id":        sessionID,
-		"selected_playbook": "wikis/playbooks/cmr/member/default-overview.md",
+		"mode":              "single",
+		"selected_playbook": "playbooks/cmr/member/default-overview.md",
 		"selected_template": "templates/missing-report.md",
 	}
 	writePosttoolState(t, root, sessionID, state)

@@ -8,9 +8,13 @@ import (
 )
 
 const (
-	ModeTemplateReport  = "template_report"
-	ModeFreeAnalysis    = "free_analysis"
-	ModeCompositeReport = "composite_report"
+	ModeSingle = "single"
+	ModeCombo  = "combo"
+	ModeFree   = "free"
+
+	ModeTemplateReport  = ModeSingle
+	ModeFreeAnalysis    = ModeFree
+	ModeCompositeReport = ModeCombo
 )
 
 type PlaybookCandidate struct {
@@ -27,6 +31,8 @@ type File struct {
 	StartedAt          string              `json:"started_at,omitempty"`
 	SelectedPlaybook   string              `json:"selected_playbook,omitempty"`
 	SelectedTemplate   string              `json:"selected_template,omitempty"`
+	CoveredSpecs       []string            `json:"covered_specs,omitempty"`
+	Reason             string              `json:"reason,omitempty"`
 	SelectedPlaybooks  []PlaybookCandidate `json:"selected_playbooks,omitempty"`
 	PlaybookCandidates []PlaybookCandidate `json:"playbook_candidates,omitempty"`
 	Composite          *CompositeSelection `json:"composite,omitempty"`
