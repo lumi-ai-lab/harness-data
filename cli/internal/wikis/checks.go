@@ -218,6 +218,9 @@ func checkAliases(c Corpus) []CheckError {
 				if value == "" {
 					continue
 				}
+				if field == "name" || field == "label" {
+					continue
+				}
 				if other, ok := global[value]; ok {
 					errs = append(errs, CheckError{Path: doc.Path, Code: "duplicate_recall_value", Message: "duplicate recall value", Target: field, Value: value, Other: other.Path})
 				} else {

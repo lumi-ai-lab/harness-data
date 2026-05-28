@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	dhcontext "harness-data/cli/internal/context"
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
 	"harness-data/cli/internal/posttool"
+	"harness-data/cli/internal/retrieval"
 	"harness-data/cli/internal/wikis"
 )
 
@@ -159,7 +161,7 @@ func run() error {
 
 func runWikis(root string, args []string) error {
 	if len(args) < 1 {
-		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-all|build-index>")}
+		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|check-all|build-index|sync-index-md>")}
 	}
 	switch args[0] {
 	case "check-index-md", "check-titles", "check-frontmatter", "check-aliases", "check-covers", "check-links":
@@ -169,6 +171,22 @@ func runWikis(root string, args []string) error {
 		}
 		if result.TotalErrors > 0 {
 			return exitCodeError{Code: 1, Err: fmt.Errorf("%s failed with %d error(s)", result.Check, result.TotalErrors), Silent: true}
+		}
+	case "check-context":
+		result, err := runWikiCheckContext(root, args[1:])
+		if err != nil {
+			return exitCodeError{Code: 2, Err: err}
+		}
+		if result.TotalErrors > 0 {
+			return exitCodeError{Code: 1, Err: fmt.Errorf("%s failed with %d error(s)", result.Check, result.TotalErrors), Silent: true}
+		}
+	case "context-stats":
+		if err := runWikiContextStats(root, args[1:]); err != nil {
+			return exitCodeError{Code: 2, Err: err}
+		}
+	case "recall-debug":
+		if err := runWikiRecallDebug(root, args[1:]); err != nil {
+			return exitCodeError{Code: 2, Err: err}
 		}
 	case "check-all":
 		results, err := runWikiCheckAll(root, args[1:])
@@ -192,6 +210,14 @@ func runWikis(root string, args []string) error {
 			return exitCodeError{Code: 2, Err: err}
 		}
 		_ = result
+	case "sync-index-md":
+		result, err := runWikiSyncIndexMD(root, args[1:])
+		if err != nil {
+			return exitCodeError{Code: 2, Err: err}
+		}
+		if result.CheckOnly && len(result.Outdated) > 0 {
+			return exitCodeError{Code: 1, Err: fmt.Errorf("sync-index-md check failed with %d outdated file(s)", len(result.Outdated)), Silent: true}
+		}
 	default:
 		return exitCodeError{Code: 2, Err: fmt.Errorf("unknown wikis command: %s", args[0])}
 	}
@@ -221,6 +247,375 @@ func runWikiBuildIndex(root string, args []string) (wikis.BuildIndexResult, erro
 	}
 	fmt.Printf("built %s docs=%d recall=%d runtime=%s runtimeDocs=%d checksSkipped=%v\n", result.Path, result.DocCount, result.RecallCount, result.RuntimePath, result.RuntimeDocCount, result.ChecksSkipped)
 	return result, nil
+}
+
+func runWikiSyncIndexMD(root string, args []string) (wikis.SyncIndexMDResult, error) {
+	fs := flag.NewFlagSet("wikis sync-index-md", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	jsonOut := fs.Bool("json", false, "print json")
+	checkOnly := fs.Bool("check", false, "check whether generated index.md blocks are up to date without writing")
+	if err := fs.Parse(args); err != nil {
+		return wikis.SyncIndexMDResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.SyncIndexMDResult{}, fmt.Errorf("sync-index-md does not accept positional arguments")
+	}
+	result, err := wikis.SyncIndexMD(root, *checkOnly)
+	if err != nil {
+		return wikis.SyncIndexMDResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	if *checkOnly {
+		if len(result.Outdated) == 0 {
+			fmt.Printf("sync-index-md ok scanned=%d\n", result.Scanned)
+			return result, nil
+		}
+		fmt.Printf("sync-index-md outdated: total=%d scanned=%d\n", len(result.Outdated), result.Scanned)
+		for _, file := range result.Outdated {
+			fmt.Printf("%s\toutdated\n", file)
+		}
+		fmt.Println("run: bin/data-harness-cli wikis sync-index-md")
+		return result, nil
+	}
+	fmt.Printf("sync-index-md updated scanned=%d changed=%d created=%d\n", result.Scanned, len(result.Changed), len(result.Created))
+	for _, file := range result.Changed {
+		fmt.Printf("%s\tchanged\n", file)
+	}
+	for _, file := range result.Created {
+		fmt.Printf("%s\tcreated\n", file)
+	}
+	return result, nil
+}
+
+func runWikiCheckContext(root string, args []string) (wikis.CheckResult, error) {
+	const checkName = "check-context"
+	fs := flag.NewFlagSet("wikis "+checkName, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	jsonOut := fs.Bool("json", false, "print json")
+	maxErrors := fs.Int("max-errors", 100, "maximum errors to print")
+	failFast := fs.Bool("fail-fast", false, "stop after first oversized context")
+	maxFiles := fs.Int("max-files", 10, "maximum allowed contextFiles per recall term")
+	if err := fs.Parse(args); err != nil {
+		return wikis.CheckResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.CheckResult{}, fmt.Errorf("%s does not accept positional arguments", checkName)
+	}
+	if *maxFiles < 0 {
+		return wikis.CheckResult{}, fmt.Errorf("--max-files must be >= 0")
+	}
+	index, err := wikis.LoadRuntimeIndex(root)
+	if err != nil {
+		return wikis.CheckResult{}, err
+	}
+	seen := map[string]bool{}
+	var errs []wikis.CheckError
+	for _, item := range index.Recall {
+		if item.Term == "" || item.TargetPath == "" {
+			continue
+		}
+		key := item.Term + "\x00" + item.TargetPath
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		response, plan, err := dhcontext.BuildWithRuntimeIndex(root, item.Term, index)
+		if err != nil {
+			return wikis.CheckResult{}, err
+		}
+		count := len(response.ContextFiles)
+		if count <= *maxFiles {
+			continue
+		}
+		errs = append(errs, wikis.CheckError{
+			Check:   checkName,
+			Path:    item.TargetPath,
+			Code:    "context_files_exceeded",
+			Message: fmt.Sprintf("contextFiles exceeds max-files: got %d > %d", count, *maxFiles),
+			Target:  "term",
+			Value:   item.Term,
+			Other:   fmt.Sprintf("mode=%s", plan.Mode),
+		})
+		if *failFast {
+			break
+		}
+	}
+	result := makeCLICheckResult(checkName, errs, wikis.CheckOptions{MaxErrors: *maxErrors})
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printCheckResult(result)
+	return result, nil
+}
+
+type contextStatsResult struct {
+	Total        int                  `json:"total"`
+	Min          int                  `json:"min"`
+	P50          int                  `json:"p50"`
+	P90          int                  `json:"p90"`
+	P95          int                  `json:"p95"`
+	P99          int                  `json:"p99"`
+	Max          int                  `json:"max"`
+	Distribution []contextStatsBucket `json:"distribution"`
+	Top          []contextStatsEntry  `json:"top"`
+}
+
+type contextStatsBucket struct {
+	ContextFiles int `json:"contextFiles"`
+	Count        int `json:"count"`
+}
+
+type contextStatsEntry struct {
+	Term         string `json:"term"`
+	TargetPath   string `json:"targetPath"`
+	Mode         string `json:"mode"`
+	ContextFiles int    `json:"contextFiles"`
+}
+
+func runWikiContextStats(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis context-stats", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	jsonOut := fs.Bool("json", false, "print json")
+	topN := fs.Int("top", 20, "number of largest context entries to print")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("context-stats does not accept positional arguments")
+	}
+	if *topN < 0 {
+		return fmt.Errorf("--top must be >= 0")
+	}
+	index, err := wikis.LoadRuntimeIndex(root)
+	if err != nil {
+		return err
+	}
+	stats, err := buildContextStats(root, index, *topN)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stats)
+	}
+	printContextStats(stats)
+	return nil
+}
+
+func buildContextStats(root string, index wikis.RuntimeIndex, topN int) (contextStatsResult, error) {
+	seen := map[string]bool{}
+	var entries []contextStatsEntry
+	distribution := map[int]int{}
+	for _, item := range index.Recall {
+		if item.Term == "" || item.TargetPath == "" {
+			continue
+		}
+		key := item.Term + "\x00" + item.TargetPath
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		response, plan, err := dhcontext.BuildWithRuntimeIndex(root, item.Term, index)
+		if err != nil {
+			return contextStatsResult{}, err
+		}
+		count := len(response.ContextFiles)
+		distribution[count]++
+		entries = append(entries, contextStatsEntry{
+			Term:         item.Term,
+			TargetPath:   item.TargetPath,
+			Mode:         plan.Mode,
+			ContextFiles: count,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ContextFiles != entries[j].ContextFiles {
+			return entries[i].ContextFiles > entries[j].ContextFiles
+		}
+		if entries[i].TargetPath != entries[j].TargetPath {
+			return entries[i].TargetPath < entries[j].TargetPath
+		}
+		return entries[i].Term < entries[j].Term
+	})
+	counts := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		counts = append(counts, entry.ContextFiles)
+	}
+	sort.Ints(counts)
+	var buckets []contextStatsBucket
+	for _, count := range sortedIntKeys(distribution) {
+		buckets = append(buckets, contextStatsBucket{ContextFiles: count, Count: distribution[count]})
+	}
+	top := entries
+	if len(top) > topN {
+		top = top[:topN]
+	}
+	result := contextStatsResult{Distribution: buckets, Top: top}
+	if len(counts) == 0 {
+		return result, nil
+	}
+	result.Total = len(counts)
+	result.Min = counts[0]
+	result.P50 = percentileNearestRank(counts, 50)
+	result.P90 = percentileNearestRank(counts, 90)
+	result.P95 = percentileNearestRank(counts, 95)
+	result.P99 = percentileNearestRank(counts, 99)
+	result.Max = counts[len(counts)-1]
+	return result, nil
+}
+
+func sortedIntKeys(values map[int]int) []int {
+	keys := make([]int, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+func percentileNearestRank(sorted []int, percentile int) int {
+	if len(sorted) == 0 {
+		return 0
+	}
+	rank := (percentile*len(sorted) + 99) / 100
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > len(sorted) {
+		rank = len(sorted)
+	}
+	return sorted[rank-1]
+}
+
+func printContextStats(stats contextStatsResult) {
+	fmt.Printf("context-stats total=%d min=%d p50=%d p90=%d p95=%d p99=%d max=%d\n", stats.Total, stats.Min, stats.P50, stats.P90, stats.P95, stats.P99, stats.Max)
+	fmt.Println()
+	fmt.Println("contextFiles\tcount")
+	for _, bucket := range stats.Distribution {
+		fmt.Printf("%d\t%d\n", bucket.ContextFiles, bucket.Count)
+	}
+	if len(stats.Top) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("top contextFiles:")
+	for _, entry := range stats.Top {
+		fmt.Printf("%d\t%s\t%s\tmode=%s\n", entry.ContextFiles, entry.Term, entry.TargetPath, entry.Mode)
+	}
+}
+
+type recallDebugResult struct {
+	Question           string            `json:"question"`
+	NormalizedQuestion string            `json:"normalizedQuestion"`
+	QueryBigrams       []string          `json:"queryBigrams"`
+	QueryTrigrams      []string          `json:"queryTrigrams"`
+	Matches            []retrieval.Match `json:"matches"`
+	Plan               recallDebugPlan   `json:"plan"`
+	ContextFiles       []harness.FileRef `json:"contextFiles"`
+}
+
+type recallDebugPlan struct {
+	Mode             string   `json:"mode"`
+	SelectedPlaybook string   `json:"selectedPlaybook,omitempty"`
+	SelectedTemplate string   `json:"selectedTemplate,omitempty"`
+	CoveredSpecs     []string `json:"coveredSpecs,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+	Candidates       any      `json:"candidates,omitempty"`
+}
+
+func runWikiRecallDebug(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis recall-debug", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	question := fs.String("question", "", "question")
+	topN := fs.Int("top", 20, "number of matches to print; 0 means all")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("recall-debug does not accept positional arguments")
+	}
+	if *question == "" {
+		return fmt.Errorf("recall-debug requires --question")
+	}
+	if *topN < 0 {
+		return fmt.Errorf("--top must be >= 0")
+	}
+	index, err := wikis.LoadRuntimeIndex(root)
+	if err != nil {
+		return err
+	}
+	response, plan, err := dhcontext.BuildWithRuntimeIndex(root, *question, index)
+	if err != nil {
+		return err
+	}
+	normalizedQuestion := retrieval.NormalizeChinese(*question)
+	result := recallDebugResult{
+		Question:           *question,
+		NormalizedQuestion: normalizedQuestion,
+		QueryBigrams:       retrieval.Ngrams(normalizedQuestion, 2),
+		QueryTrigrams:      retrieval.Ngrams(normalizedQuestion, 3),
+		Matches:            dhcontext.RecallMatches(index, *question, *topN),
+		Plan:               recallDebugPlanFromWikiPlan(plan),
+		ContextFiles:       response.ContextFiles,
+	}
+	if *jsonOut {
+		return printJSON(result)
+	}
+	printRecallDebug(result)
+	return nil
+}
+
+func recallDebugPlanFromWikiPlan(plan dhcontext.WikiPlan) recallDebugPlan {
+	var candidates any
+	if len(plan.Candidates) > 0 {
+		candidates = plan.Candidates
+	}
+	return recallDebugPlan{
+		Mode:             plan.Mode,
+		SelectedPlaybook: plan.SelectedPlaybook,
+		SelectedTemplate: plan.SelectedTemplate,
+		CoveredSpecs:     plan.CoveredSpecs,
+		Reason:           plan.Reason,
+		Candidates:       candidates,
+	}
+}
+
+func printRecallDebug(result recallDebugResult) {
+	fmt.Printf("question: %s\n", result.Question)
+	fmt.Printf("normalizedQuestion: %s\n", result.NormalizedQuestion)
+	fmt.Printf("queryBigrams: %s\n", strings.Join(result.QueryBigrams, ", "))
+	fmt.Printf("queryTrigrams: %s\n", strings.Join(result.QueryTrigrams, ", "))
+	fmt.Println()
+	if len(result.Matches) == 0 {
+		fmt.Println("top matches: none")
+	} else {
+		fmt.Println("top matches:")
+		for i, match := range result.Matches {
+			fmt.Printf("%d.\t%.2f\t%s\t%s\t%s\n", i+1, match.Score, match.MatchType, match.Term, match.TargetPath)
+			fmt.Printf("\tbigrams=%s trigrams=%s\n", strings.Join(match.MatchedBigrams, ", "), strings.Join(match.MatchedTrigrams, ", "))
+		}
+	}
+	fmt.Println()
+	fmt.Println("final plan:")
+	fmt.Printf("mode=%s\n", result.Plan.Mode)
+	if result.Plan.SelectedPlaybook != "" {
+		fmt.Printf("selectedPlaybook=%s\n", result.Plan.SelectedPlaybook)
+	}
+	if result.Plan.SelectedTemplate != "" {
+		fmt.Printf("selectedTemplate=%s\n", result.Plan.SelectedTemplate)
+	}
+	if result.Plan.Reason != "" {
+		fmt.Printf("reason=%s\n", result.Plan.Reason)
+	}
+	if len(result.Plan.CoveredSpecs) > 0 {
+		fmt.Printf("coveredSpecs=%s\n", strings.Join(result.Plan.CoveredSpecs, ", "))
+	}
+	fmt.Println("contextFiles:")
+	for _, ref := range result.ContextFiles {
+		fmt.Printf("%s\t%s\n", ref.Path, ref.Reason)
+	}
 }
 
 func runSingleWikiCheck(root, name string, args []string) (wikis.CheckResult, error) {
@@ -281,6 +676,29 @@ func totalCheckErrors(results []wikis.CheckResult) int {
 		total += result.TotalErrors
 	}
 	return total
+}
+
+func makeCLICheckResult(name string, errs []wikis.CheckError, opts wikis.CheckOptions) wikis.CheckResult {
+	limit := opts.MaxErrors
+	if limit <= 0 {
+		limit = 100
+	}
+	shown := errs
+	if len(shown) > limit {
+		shown = shown[:limit]
+	}
+	if shown == nil {
+		shown = []wikis.CheckError{}
+	}
+	return wikis.CheckResult{
+		Check:        name,
+		OK:           len(errs) == 0,
+		TotalErrors:  len(errs),
+		ShownErrors:  len(shown),
+		HiddenErrors: len(errs) - len(shown),
+		Truncated:    len(errs) > len(shown),
+		Errors:       shown,
+	}
 }
 
 func printCheckResult(result wikis.CheckResult) {

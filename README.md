@@ -30,6 +30,7 @@ go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
 ./bin/data-harness-cli wikis check-all
 ./bin/data-harness-cli wikis build-index
 ./bin/data-harness-cli context --question "华东区最近会员复购为什么下降？" --json
+./bin/data-harness-cli wikis recall-debug --question "会员复购为什么下降？"
 printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format claude-hook
 printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' | ./bin/data-harness-cli posttool --format claude-hook
 ./bin/data-harness-cli show member-repurchase --json
@@ -114,13 +115,12 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 召回原则
 
-- 根据 frontmatter `match.keywords` 召回相关文件。
-- 命中某个 domain 的 index 时，加入该 index 的 `context.default_files`。
-- 命中 index 的 `children.keywords` 时，加入 child path。
-- 时间表达加入 `wikis/spec/common/time-policy.md`。
-- 区域表达加入 `wikis/spec/common/area.md`。
-- routing 和 playbook 按关键词及已召回 domain 加入，不由 hook 正则硬编码决定。
-- 结果可以包含多个 domain；Agent 负责读取上下文后判断本轮实际取数路径。
+- 运行时从 `.harness/index/wikis-runtime-index.json` 的 recall term 召回 `spec` 和 combo `playbook`。
+- 召回先做中文轻量 normalize：去空白、去常见标点、全角 ASCII 转半角，仅保留中文、数字、字母。
+- 精确包含命中最高优先级；非精确命中使用中文 bigram/trigram 覆盖率打分。
+- 1 字、2 字 term 只允许精确包含；3 字 term 需要完整 bigram 覆盖；4 字及以上 term 需要至少 2 个 bigram 且覆盖率不低于 0.5。
+- 同一 `targetPath` 只保留最高分 term，并继续抑制已命中长 term 内包含的短 term。
+- 最终 plan 只选择 `spec`、`playbook`、`templates` 逻辑路径；template 正文仍只在 `inject-template` 阶段注入。
 
 ## 运行约束
 
@@ -145,3 +145,10 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - `template_stats`
 
 诊断使用上下文发现和 selected playbook 字段表达当前运行状态。
+
+召回调试可直接查看 normalized question、query bigrams/trigrams、top matches、score、exact/fuzzy、matched ngrams、targetPath 和最终 plan：
+
+```bash
+./bin/data-harness-cli wikis recall-debug --question "会员复购为什么下降？" --top 20
+./bin/data-harness-cli wikis recall-debug --question "会员复购为什么下降？" --json
+```

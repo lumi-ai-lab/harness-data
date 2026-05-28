@@ -121,7 +121,7 @@ func TestPosttoolBrandProductEffectivenessInjectsDrillTemplate(t *testing.T) {
 	}
 
 	state := readPosttoolState(t, root, sessionID)
-	if state["selected_playbook"] != "wikis/playbooks/cmr/business/brand-product-effectiveness.md" {
+	if state["selected_playbook"] != "wikis/playbooks/cmr/business/s-brand-product-effectiveness.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
 	if state["selected_template"] != "templates/business/brand-product-effectiveness-report.md" {

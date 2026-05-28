@@ -23,17 +23,23 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 	}
 	got := contextPaths(response)
 	want := []string{
-		"wikis/spec/index.md",
-		"wikis/spec/idx/index.md",
 		"wikis/spec/idx/business/index.md",
 		"wikis/spec/idx/business/s-sale-amt.md",
-		"wikis/playbooks/index.md",
-		"wikis/playbooks/idx/index.md",
 		"wikis/playbooks/idx/business/index.md",
 		"wikis/playbooks/idx/business/s-sale-amt.md",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+	for _, unwanted := range []string{
+		"wikis/spec/index.md",
+		"wikis/spec/idx/index.md",
+		"wikis/playbooks/index.md",
+		"wikis/playbooks/idx/index.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("unexpected ancestor index %s in %#v", unwanted, got)
+		}
 	}
 	if !strings.Contains(response.Instruction, "Harness mode: single") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md\n") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
@@ -49,21 +55,89 @@ func TestBuildWithWikisIndexComboMode(t *testing.T) {
 	if plan.Mode != sessionstate.ModeCombo || plan.SelectedPlaybook != "playbooks/idx/business/default-overview.md" {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
-	if len(plan.CoveredSpecs) != 2 {
+	if len(plan.CoveredSpecs) != 3 {
 		t.Fatalf("covered specs = %+v", plan.CoveredSpecs)
 	}
 	got := contextPaths(response)
 	for _, want := range []string{
+		"wikis/playbooks/idx/business/index.md",
 		"wikis/playbooks/idx/business/default-overview.md",
-		"wikis/spec/idx/business/s-per-cust-amt.md",
-		"wikis/spec/idx/business/s-sale-amt.md",
+		"wikis/spec/idx/business/index.md",
+		"wikis/spec/idx/business/c-inventory.md",
 	} {
 		if !hasString(got, want) {
 			t.Fatalf("missing %s in %#v", want, got)
 		}
 	}
+	for _, unwanted := range []string{
+		"wikis/spec/idx/business/s-per-cust-amt.md",
+		"wikis/spec/idx/business/s-sale-amt.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("single metric covered spec should not be expanded in combo context: %s in %#v", unwanted, got)
+		}
+	}
 	if hasString(got, "wikis/templates/idx/business/default-overview.md") {
 		t.Fatalf("template should not be in context files: %#v", got)
+	}
+	for _, unwanted := range []string{
+		"wikis/spec/index.md",
+		"wikis/spec/idx/index.md",
+		"wikis/playbooks/index.md",
+		"wikis/playbooks/idx/index.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("unexpected ancestor index %s in %#v", unwanted, got)
+		}
+	}
+}
+
+func TestBuildWithWikisIndexPrefersLongerRecallTerm(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "19点前滚动7天会员复购率")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-bf19-member-repurchase-rate.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	for _, unwanted := range []string{
+		"wikis/spec/idx/business/s-member-repurchase-rate.md",
+		"wikis/playbooks/idx/business/s-member-repurchase-rate.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("shorter recall term should be suppressed, got %s in %#v", unwanted, got)
+		}
+	}
+	want := []string{
+		"wikis/spec/idx/business/index.md",
+		"wikis/spec/idx/business/s-bf19-member-repurchase-rate.md",
+		"wikis/playbooks/idx/business/index.md",
+		"wikis/playbooks/idx/business/s-bf19-member-repurchase-rate.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestBuildWithWikisIndexFuzzyMemberRepurchaseRate(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "会员复购为什么下降")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-member-repurchase-rate.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	for _, want := range []string{
+		"wikis/spec/idx/business/s-member-repurchase-rate.md",
+		"wikis/playbooks/idx/business/s-member-repurchase-rate.md",
+	} {
+		if !hasString(got, want) {
+			t.Fatalf("missing %s in %#v", want, got)
+		}
 	}
 }
 
@@ -129,6 +203,18 @@ label: 客单价
 ---
 # 客单价
 `)
+	writeContextFile(t, root, "wikis/spec/idx/business/s-member-repurchase-rate.md", `---
+name: member_repurchase_rate
+label: 会员复购率
+---
+# 会员复购率
+`)
+	writeContextFile(t, root, "wikis/spec/idx/business/s-bf19-member-repurchase-rate.md", `---
+name: bf19_member_repurchase_rate
+label: 19点前滚动7天会员复购率
+---
+# 19点前滚动7天会员复购率
+`)
 	writeContextFile(t, root, "wikis/spec/idx/business/c-inventory.md", `---
 aliases: ["库存概念"]
 ---
@@ -136,9 +222,12 @@ aliases: ["库存概念"]
 `)
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-sale-amt.md", "# 销售额取数\n")
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-per-cust-amt.md", "# 客单价取数\n")
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-member-repurchase-rate.md", "# 会员复购率取数\n")
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率取数\n")
 	writeContextFile(t, root, "wikis/playbooks/idx/business/default-overview.md", `---
 aliases: ["经营概览"]
 covers:
+  - spec/idx/business/c-inventory.md
   - spec/idx/business/s-sale-amt.md
   - spec/idx/business/s-per-cust-amt.md
 ---
@@ -146,6 +235,8 @@ covers:
 `)
 	writeContextFile(t, root, "wikis/templates/idx/business/s-sale-amt.md", "# 销售额模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-per-cust-amt.md", "# 客单价模板\n")
+	writeContextFile(t, root, "wikis/templates/idx/business/s-member-repurchase-rate.md", "# 会员复购率模板\n")
+	writeContextFile(t, root, "wikis/templates/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/default-overview.md", "# 经营概览模板\n")
 	if _, err := wikis.BuildIndex(root, false); err != nil {
 		t.Fatal(err)

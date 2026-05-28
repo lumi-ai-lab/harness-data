@@ -7,6 +7,7 @@ import (
 
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
+	"harness-data/cli/internal/retrieval"
 	"harness-data/cli/internal/sessionstate"
 	"harness-data/cli/internal/wikis"
 )
@@ -33,11 +34,15 @@ type WikiPlan struct {
 }
 
 func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, error) {
-	resolver, err := harness.NewPathResolver(root)
+	index, err := wikis.LoadRuntimeIndex(root)
 	if err != nil {
 		return harness.ContextResponse{}, WikiPlan{}, err
 	}
-	index, err := wikis.LoadRuntimeIndex(root)
+	return BuildWithRuntimeIndex(root, question, index)
+}
+
+func BuildWithRuntimeIndex(root, question string, index wikis.RuntimeIndex) (harness.ContextResponse, WikiPlan, error) {
+	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		return harness.ContextResponse{}, WikiPlan{}, err
 	}
@@ -66,6 +71,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 
 	hits := recallHits(index, question)
 	ordinarySpecs, conceptSpecs, directCombos := classifyHits(hits)
+	ordinarySpecs = collapseEquivalentMetricSpecs(ordinarySpecs)
 	sortRuntimeDocsByPath(ordinarySpecs)
 	sortRuntimeDocsByPath(conceptSpecs)
 	sortRuntimeDocsByPath(directCombos)
@@ -93,9 +99,9 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		if _, ok := byPath[playbookPath]; ok {
 			if _, ok := byPath[templatePath]; ok {
 				plan = WikiPlan{Mode: sessionstate.ModeSingle, SelectedPlaybook: playbookPath, SelectedTemplate: templatePath}
-				addIndexChain(add, byPath, spec.Path, "spec index")
+				addNearestIndex(add, byPath, spec.Path, "spec index")
 				add(spec.Path, "matched spec")
-				addIndexChain(add, byPath, playbookPath, "playbook index")
+				addNearestIndex(add, byPath, playbookPath, "playbook index")
 				add(playbookPath, "selected playbook")
 				break
 			}
@@ -126,7 +132,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	case len(conceptSpecs) > 0:
 		plan.Reason = "concept_only"
 		for _, spec := range conceptSpecs {
-			addIndexChain(add, byPath, spec.Path, "spec index")
+			addNearestIndex(add, byPath, spec.Path, "spec index")
 			add(spec.Path, "matched concept spec")
 		}
 	default:
@@ -145,20 +151,29 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 
 func recallHits(index wikis.RuntimeIndex, question string) []wikis.RuntimeDocument {
 	byPath := index.DocsByPath
+	matches := RecallMatches(index, question, 0)
 	seen := map[string]bool{}
 	var docs []wikis.RuntimeDocument
-	for _, item := range index.Recall {
-		if item.Term == "" || !strings.Contains(question, item.Term) || seen[item.TargetPath] {
+	for _, match := range matches {
+		if seen[match.TargetPath] {
 			continue
 		}
-		doc, ok := byPath[item.TargetPath]
+		doc, ok := byPath[match.TargetPath]
 		if !ok {
 			continue
 		}
-		seen[item.TargetPath] = true
+		seen[match.TargetPath] = true
 		docs = append(docs, doc)
 	}
 	return docs
+}
+
+func RecallMatches(index wikis.RuntimeIndex, question string, top int) []retrieval.Match {
+	items := make([]retrieval.Item, 0, len(index.Recall))
+	for _, item := range index.Recall {
+		items = append(items, retrieval.Item{Term: item.Term, TargetPath: item.TargetPath})
+	}
+	return retrieval.Search(items, question, retrieval.Options{TopN: top})
 }
 
 func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wikis.RuntimeDocument, []wikis.RuntimeDocument) {
@@ -180,46 +195,72 @@ func sortRuntimeDocsByPath(docs []wikis.RuntimeDocument) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
 
-func addIndexChain(add func(string, string), byPath map[string]wikis.RuntimeDocument, docPath, reason string) {
-	parts := strings.Split(docPath, "/")
-	if len(parts) < 2 {
+func collapseEquivalentMetricSpecs(specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
+	byKey := map[string]wikis.RuntimeDocument{}
+	for _, spec := range specs {
+		key := path.Base(spec.Path)
+		if existing, ok := byKey[key]; ok && preferMetricSpec(existing, spec) {
+			continue
+		}
+		byKey[key] = spec
+	}
+	out := make([]wikis.RuntimeDocument, 0, len(byKey))
+	for _, spec := range byKey {
+		out = append(out, spec)
+	}
+	sortRuntimeDocsByPath(out)
+	return out
+}
+
+func preferMetricSpec(current, candidate wikis.RuntimeDocument) bool {
+	if strings.HasPrefix(current.Domain, "cmr/") != strings.HasPrefix(candidate.Domain, "cmr/") {
+		return strings.HasPrefix(current.Domain, "cmr/")
+	}
+	return current.Path < candidate.Path
+}
+
+func addNearestIndex(add func(string, string), byPath map[string]wikis.RuntimeDocument, docPath, reason string) {
+	dir := path.Dir(docPath)
+	if dir == "." {
 		return
 	}
-	root := parts[0]
-	if _, ok := byPath[root+"/index.md"]; ok {
-		add(root+"/index.md", reason)
+	indexPath := path.Join(dir, "index.md")
+	if indexPath == docPath {
+		return
 	}
-	var current []string
-	for _, part := range parts[1 : len(parts)-1] {
-		current = append(current, part)
-		indexPath := root + "/" + path.Join(append(current, "index.md")...)
-		if _, ok := byPath[indexPath]; ok {
-			add(indexPath, reason)
-		}
+	if _, ok := byPath[indexPath]; ok {
+		add(indexPath, reason)
 	}
 }
 
 func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, specs []wikis.RuntimeDocument) {
 	for _, spec := range specs {
-		addIndexChain(add, byPath, spec.Path, "spec index")
+		addNearestIndex(add, byPath, spec.Path, "spec index")
 		add(spec.Path, "matched spec")
 		playbookPath := wikis.SamePath(spec.Path, "playbooks")
 		if _, ok := byPath[playbookPath]; ok {
-			addIndexChain(add, byPath, playbookPath, "playbook index")
+			addNearestIndex(add, byPath, playbookPath, "playbook index")
 			add(playbookPath, "matched playbook")
 		}
 	}
 }
 
 func addComboFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, combo wikis.RuntimeDocument) {
-	addIndexChain(add, byPath, combo.Path, "combo playbook index")
+	addNearestIndex(add, byPath, combo.Path, "combo playbook index")
 	add(combo.Path, "selected combo playbook")
 	covers := append([]string{}, combo.Covers...)
 	sort.Strings(covers)
 	for _, cover := range covers {
-		addIndexChain(add, byPath, cover, "covered spec index")
+		if isSingleMetricSpecPath(cover) {
+			continue
+		}
+		addNearestIndex(add, byPath, cover, "covered spec index")
 		add(cover, "covered spec")
 	}
+}
+
+func isSingleMetricSpecPath(logical string) bool {
+	return strings.HasPrefix(logical, "spec/") && strings.HasPrefix(path.Base(logical), "s-")
 }
 
 func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {

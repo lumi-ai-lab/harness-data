@@ -20,7 +20,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
-	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/repurchase.md", "wikis/playbooks/cmr/member/repurchase.md"} {
+	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md", "wikis/playbooks/cmr/member/s-member-repurchase-no-difference-rate.md"} {
 		if !got[want] {
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
 		}
@@ -38,7 +38,7 @@ func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range response.ContextFiles {
-		if ref.Path == "wikis/spec/cmr/member/index.md" || ref.Path == "wikis/spec/cmr/member/repurchase.md" {
+		if ref.Path == "wikis/spec/cmr/member/index.md" || ref.Path == "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md" {
 			t.Fatalf("unexpected member spec: %#v", response.ContextFiles)
 		}
 	}
@@ -67,9 +67,9 @@ func TestMultiDomainContextRecall(t *testing.T) {
 		got[ref.Path] = true
 	}
 	for _, want := range []string{
-		"wikis/spec/cmr/member/repurchase.md",
+		"wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md",
 		"wikis/spec/cmr/store-manager/s-net-profit.md",
-		"wikis/playbooks/cmr/member/repurchase.md",
+		"wikis/playbooks/cmr/member/s-member-repurchase-no-difference-rate.md",
 		"wikis/playbooks/cmr/store-manager/s-net-profit.md",
 	} {
 		if !got[want] {
@@ -92,7 +92,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/spec/cmr/member/repurchase.md"} {
+	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
@@ -285,9 +285,14 @@ func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: combo", "selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "wikis/spec/cmr/business/s-sale-amt.md", "wikis/spec/cmr/business/s-per-cust-amt.md"} {
+	for _, want := range []string{"Harness mode: combo", "selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "coveredSpecs:", "spec/cmr/business/s-sale-amt.md", "spec/cmr/business/s-per-cust-amt.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
+		}
+	}
+	for _, unwanted := range []string{"- wikis/spec/cmr/business/s-sale-amt.md", "- wikis/spec/cmr/business/s-per-cust-amt.md"} {
+		if bytes.Contains([]byte(context), []byte(unwanted)) {
+			t.Fatalf("single metric covered spec should not be required contextFile: %s in %s", unwanted, context)
 		}
 	}
 
@@ -325,9 +330,9 @@ func TestBusinessBrandProductEffectivenessContextSelectsDrillPlaybook(t *testing
 		got[ref.Path] = true
 	}
 	for _, want := range []string{
-		"wikis/spec/cmr/business/brand-product-effectiveness.md",
+		"wikis/spec/cmr/business/s-brand-product-effectiveness.md",
 		"wikis/routing/business-brand-product-effectiveness.md",
-		"wikis/playbooks/cmr/business/brand-product-effectiveness.md",
+		"wikis/playbooks/cmr/business/s-brand-product-effectiveness.md",
 	} {
 		if !got[want] {
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
@@ -351,7 +356,7 @@ func TestBusinessOverviewStillSelectsDefaultPlaybook(t *testing.T) {
 	if !got["wikis/playbooks/cmr/business/default-overview.md"] {
 		t.Fatalf("missing business default playbook in %#v", response.ContextFiles)
 	}
-	if got["wikis/playbooks/cmr/business/brand-product-effectiveness.md"] {
+	if got["wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"] {
 		t.Fatalf("unexpected brand product playbook in %#v", response.ContextFiles)
 	}
 	if got["wikis/playbooks/cmr/business/cust-penetration-rate/cust-penetration-rate.md"] {
@@ -900,7 +905,7 @@ func TestBusinessPrePriceProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 	if got["wikis/playbooks/cmr/business/default-overview.md"] {
 		t.Fatalf("unexpected default overview playbook in %#v", response.ContextFiles)
 	}
-	if got["wikis/playbooks/cmr/business/brand-product-effectiveness.md"] {
+	if got["wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"] {
 		t.Fatalf("unexpected brand product effectiveness root playbook in %#v", response.ContextFiles)
 	}
 }
@@ -1044,7 +1049,7 @@ func TestBusinessOrderArticleRateContextSelectsMetricPlaybook(t *testing.T) {
 	if got["wikis/playbooks/cmr/business/default-overview.md"] {
 		t.Fatalf("unexpected default overview playbook in %#v", response.ContextFiles)
 	}
-	if got["wikis/playbooks/cmr/business/brand-product-effectiveness.md"] {
+	if got["wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"] {
 		t.Fatalf("unexpected brand product effectiveness root playbook in %#v", response.ContextFiles)
 	}
 }
@@ -1074,7 +1079,7 @@ func TestBusinessOrderStoresContextSelectsMetricPlaybook(t *testing.T) {
 	if got["wikis/playbooks/cmr/business/brand-product-effectiveness/order-article-rate.md"] {
 		t.Fatalf("unexpected order article rate playbook in %#v", response.ContextFiles)
 	}
-	if got["wikis/playbooks/cmr/business/brand-product-effectiveness.md"] {
+	if got["wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"] {
 		t.Fatalf("unexpected brand product effectiveness root playbook in %#v", response.ContextFiles)
 	}
 }
@@ -1131,7 +1136,7 @@ func TestBusinessPriceIndexContextSelectsMetricPlaybook(t *testing.T) {
 	if got["wikis/playbooks/cmr/business/default-overview.md"] {
 		t.Fatalf("unexpected default overview playbook in %#v", response.ContextFiles)
 	}
-	if got["wikis/playbooks/cmr/business/brand-product-effectiveness.md"] {
+	if got["wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"] {
 		t.Fatalf("unexpected brand product effectiveness root playbook in %#v", response.ContextFiles)
 	}
 }
@@ -1385,7 +1390,7 @@ func TestClaudeHookSelectsBrandProductEffectivenessTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`"selected_playbook": "wikis/playbooks/cmr/business/brand-product-effectiveness.md"`,
+		`"selected_playbook": "wikis/playbooks/cmr/business/s-brand-product-effectiveness.md"`,
 		`"selected_template": "templates/business/brand-product-effectiveness-report.md"`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
@@ -2241,7 +2246,7 @@ func TestClaudeHookSelectsPrePriceProfitRateTemplate(t *testing.T) {
 	if bytes.Contains(data, []byte(`playbooks/cmr/business/default-overview.md`)) {
 		t.Fatalf("unexpected default playbook candidate in %s", string(data))
 	}
-	if bytes.Contains(data, []byte(`playbooks/cmr/business/brand-product-effectiveness.md`)) {
+	if bytes.Contains(data, []byte(`playbooks/cmr/business/s-brand-product-effectiveness.md`)) {
 		t.Fatalf("unexpected brand product effectiveness root candidate in %s", string(data))
 	}
 }
@@ -2460,7 +2465,7 @@ func TestClaudeHookSelectsOrderArticleRateTemplate(t *testing.T) {
 	if bytes.Contains(data, []byte(`playbooks/cmr/business/default-overview.md`)) {
 		t.Fatalf("unexpected default playbook candidate in %s", string(data))
 	}
-	if bytes.Contains(data, []byte(`playbooks/cmr/business/brand-product-effectiveness.md`)) {
+	if bytes.Contains(data, []byte(`playbooks/cmr/business/s-brand-product-effectiveness.md`)) {
 		t.Fatalf("unexpected brand product effectiveness root candidate in %s", string(data))
 	}
 }
@@ -2505,7 +2510,7 @@ func TestClaudeHookSelectsOrderStoresTemplate(t *testing.T) {
 	if bytes.Contains(data, []byte(`playbooks/cmr/business/brand-product-effectiveness/order-article-rate.md`)) {
 		t.Fatalf("unexpected order article rate candidate in %s", string(data))
 	}
-	if bytes.Contains(data, []byte(`playbooks/cmr/business/brand-product-effectiveness.md`)) {
+	if bytes.Contains(data, []byte(`playbooks/cmr/business/s-brand-product-effectiveness.md`)) {
 		t.Fatalf("unexpected brand product effectiveness root candidate in %s", string(data))
 	}
 }
@@ -2592,7 +2597,7 @@ func TestClaudeHookSelectsPriceIndexTemplate(t *testing.T) {
 	if bytes.Contains(data, []byte(`playbooks/cmr/business/default-overview.md`)) {
 		t.Fatalf("unexpected default playbook candidate in %s", string(data))
 	}
-	if bytes.Contains(data, []byte(`playbooks/cmr/business/brand-product-effectiveness.md`)) {
+	if bytes.Contains(data, []byte(`playbooks/cmr/business/s-brand-product-effectiveness.md`)) {
 		t.Fatalf("unexpected brand product effectiveness root candidate in %s", string(data))
 	}
 }

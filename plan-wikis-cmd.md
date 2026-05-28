@@ -202,18 +202,18 @@
 ### 普通 Spec 命中后的 Context 展开
 
 - 用户问题命中普通 spec 后，contextFiles 采用 spec 与 playbook 两边路径共同展开的规则。
-- 需要加入 spec 路径上的所有 `index.md`，例如命中 `spec/idx/business-manager/s-sale-amt.md` 时加入 `spec/index.md`、`spec/idx/index.md`、`spec/idx/business-manager/index.md`。
+- 需要加入 spec 文档所在目录最近一级 `index.md`，例如命中 `spec/idx/business-manager/s-sale-amt.md` 时只加入 `spec/idx/business-manager/index.md`。
 - 需要加入命中的普通 spec 文档。
-- 需要加入同路径 playbook 路径上的所有 `index.md`，例如加入 `playbooks/index.md`、`playbooks/idx/index.md`、`playbooks/idx/business-manager/index.md`。
+- 需要加入同路径 playbook 所在目录最近一级 `index.md`，例如只加入 `playbooks/idx/business-manager/index.md`。
 - 需要加入同路径 playbook 文档，例如 `playbooks/idx/business-manager/s-sale-amt.md`。
 - 不在 context 阶段加入 template；template 仍然只能在取数完成并执行 inject-template 后注入。
 
 ### 组合 Playbook 命中后的 Context 展开
 
 - 用户问题命中组合 playbook 后，contextFiles 采用组合 playbook 与 `covers` spec 共同展开的规则。
-- 需要加入组合 playbook 路径上的所有 `index.md`。
+- 需要加入组合 playbook 所在目录最近一级 `index.md`。
 - 需要加入命中的组合 playbook 文档。
-- 需要加入 `covers` 中每个 spec 路径上的所有 `index.md`。
+- 需要加入 `covers` 中每个 spec 所在目录最近一级 `index.md`。
 - 需要加入 `covers` 中的每个 spec 文档。
 - 第一版对 `covers` 中的 spec 全部加入，不做数量裁剪；如果 context 过大，后续应通过拆分组合 playbook 或优化组合范围解决。
 - 不在 context 阶段加入 template；template 仍然只能在取数完成并执行 inject-template 后注入。
@@ -238,9 +238,9 @@
 - 命中多个普通 spec，但没有组合 playbook 的 `covers` 完整覆盖全部命中 spec 时，进入自由分析模式。
 - 多个组合 playbook 候选同优先级并列，Harness 无法唯一选择时，进入自由分析模式。
 - 完全没有命中时，contextFiles 只加入顶层入口 `spec/index.md`、`playbooks/index.md`，前提是文件存在。
-- 只命中 `c-` spec 时，contextFiles 加入该 `c-` spec 路径上的所有 spec `index.md`，以及命中的 `c-` spec。
-- 多普通 spec 命中但没有组合 playbook 完整覆盖时，contextFiles 加入每个命中 spec 路径上的所有 spec `index.md`、每个命中的 spec、每个对应 playbook 路径上的所有 playbook `index.md`、每个对应 playbook。
-- 多个组合 playbook 候选并列时，contextFiles 加入所有候选组合 playbook 路径上的 `index.md`、所有候选组合 playbook、每个候选 `covers` 中 spec 路径上的 `index.md`、每个 `covers` spec。
+- 只命中 `c-` spec 时，contextFiles 加入该 `c-` spec 所在目录最近一级 spec `index.md`，以及命中的 `c-` spec。
+- 多普通 spec 命中但没有组合 playbook 完整覆盖时，contextFiles 加入每个命中 spec 所在目录最近一级 spec `index.md`、每个命中的 spec、每个对应 playbook 所在目录最近一级 playbook `index.md`、每个对应 playbook。
+- 多个组合 playbook 候选并列时，contextFiles 加入所有候选组合 playbook 所在目录最近一级 `index.md`、所有候选组合 playbook、每个候选 `covers` 中 spec 所在目录最近一级 `index.md`、每个 `covers` spec。
 - 自由分析模式永远不加入 `templates/**`。
 - 自由分析模式永远不执行 `inject-template`。
 - 自由分析模式可以读取 spec 和 playbook 作为口径、取数和分析参考，但最终输出必须是一份自由组织的报告，不套用单指标或组合 template。

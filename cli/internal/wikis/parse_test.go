@@ -222,13 +222,28 @@ func TestLoadRuntimeIndexFallsBackToFullIndex(t *testing.T) {
 func TestBuildIndexSkipChecksStillRejectsDuplicateRecall(t *testing.T) {
 	root := testValidWikiRoot(t)
 	writeFile(t, root, "wikis/spec/idx/business-manager/s-profit-amt.md", `---
-name: sale_amt
+name: profit_amt
 label: 利润额
+aliases: ["销售金额"]
 ---
 # 利润额
 `)
 	if _, err := BuildIndex(root, true); err == nil {
-		t.Fatal("expected duplicate recall to block skip-checks build")
+		t.Fatal("expected duplicate alias recall to block skip-checks build")
+	}
+}
+
+func TestBuildIndexAllowsDuplicateLabelsAcrossDomains(t *testing.T) {
+	root := testValidWikiRoot(t)
+	writeFile(t, root, "wikis/spec/cmr/business/index.md", "# Business\n")
+	writeFile(t, root, "wikis/spec/cmr/business/s-sale-amt.md", `---
+name: cmr_sale_amt
+label: 销售额
+---
+# 销售额
+`)
+	if _, err := BuildIndex(root, true); err != nil {
+		t.Fatalf("duplicate labels should not block index build: %v", err)
 	}
 }
 

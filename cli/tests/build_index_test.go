@@ -33,8 +33,8 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	for _, doc := range index.Docs {
 		docs[doc.Path] = doc
 	}
-	if docs["spec/cmr/member/repurchase.md"].ID != "spec/cmr/member/repurchase" {
-		t.Fatalf("member repurchase not indexed: %+v", docs["spec/cmr/member/repurchase.md"])
+	if docs["spec/cmr/member/s-member-repurchase-no-difference-rate.md"].ID != "spec/cmr/member/s-member-repurchase-no-difference-rate" {
+		t.Fatalf("member repurchase not indexed: %+v", docs["spec/cmr/member/s-member-repurchase-no-difference-rate.md"])
 	}
 	memberPlaybook := docs["playbooks/cmr/member/default-overview.md"]
 	if !memberPlaybook.Playbook.IsCombo || memberPlaybook.Playbook.TemplatePath != "templates/cmr/member/default-overview.md" {
