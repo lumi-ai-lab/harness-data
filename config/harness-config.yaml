@@ -2,7 +2,6 @@
 
 paths:
   spec: wikis/spec
-  routing: wikis/routing
   playbooks: wikis/playbooks
   templates: wikis/templates
 

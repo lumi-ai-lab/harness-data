@@ -280,11 +280,10 @@ func defaultConfig() Config {
 func pathsFromKnowledge(knowledge string) PathsConfig {
 	knowledge = filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(knowledge))))
 	if knowledge == "" || knowledge == "." {
-		return PathsConfig{Spec: "spec", Routing: "routing", Playbooks: "playbooks", Templates: "templates"}
+		return PathsConfig{Spec: "spec", Playbooks: "playbooks", Templates: "templates"}
 	}
 	return PathsConfig{
 		Spec:      knowledge + "/spec",
-		Routing:   knowledge + "/routing",
 		Playbooks: knowledge + "/playbooks",
 		Templates: knowledge + "/templates",
 	}
@@ -293,7 +292,6 @@ func pathsFromKnowledge(knowledge string) PathsConfig {
 func validatePathsConfig(source string, cfg PathsConfig) error {
 	for name, rel := range map[string]string{
 		"spec":      cfg.Spec,
-		"routing":   cfg.Routing,
 		"playbooks": cfg.Playbooks,
 		"templates": cfg.Templates,
 	} {
@@ -303,6 +301,9 @@ func validatePathsConfig(source string, cfg PathsConfig) error {
 		if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "/../") {
 			return fmt.Errorf("%s: paths.%s must be a repository-relative path", source, name)
 		}
+	}
+	if cfg.Routing != "" && (filepath.IsAbs(cfg.Routing) || cfg.Routing == ".." || strings.HasPrefix(cfg.Routing, "../") || strings.Contains(cfg.Routing, "/../")) {
+		return fmt.Errorf("%s: paths.routing must be a repository-relative path", source)
 	}
 	return nil
 }

@@ -233,7 +233,7 @@ aliases: ["销售金额"]
 	}
 }
 
-func TestBuildIndexAllowsDuplicateLabelsAcrossDomains(t *testing.T) {
+func TestBuildIndexRejectsDuplicateLabelsAcrossDomains(t *testing.T) {
 	root := testValidWikiRoot(t)
 	writeFile(t, root, "wikis/spec/cmr/business/index.md", "# Business\n")
 	writeFile(t, root, "wikis/spec/cmr/business/s-sale-amt.md", `---
@@ -242,8 +242,8 @@ label: 销售额
 ---
 # 销售额
 `)
-	if _, err := BuildIndex(root, true); err != nil {
-		t.Fatalf("duplicate labels should not block index build: %v", err)
+	if _, err := BuildIndex(root, true); err == nil {
+		t.Fatal("expected duplicate label recall to block skip-checks build")
 	}
 }
 
@@ -252,7 +252,6 @@ func testWikiRoot(t *testing.T) string {
 	root := t.TempDir()
 	writeFile(t, root, "config/harness-config.yaml", `paths:
   spec: wikis/spec
-  routing: wikis/routing
   playbooks: wikis/playbooks
   templates: wikis/templates
 `)

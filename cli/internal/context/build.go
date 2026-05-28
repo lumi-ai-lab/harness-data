@@ -265,15 +265,12 @@ func isSingleMetricSpecPath(logical string) bool {
 
 func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
 	required := map[string]bool{}
-	commonDomain := ""
-	for i, spec := range specs {
+	domains := make([]string, 0, len(specs))
+	for _, spec := range specs {
 		required[spec.Path] = true
-		if i == 0 {
-			commonDomain = spec.Domain
-		} else if commonDomain != spec.Domain {
-			commonDomain = ""
-		}
+		domains = append(domains, spec.Domain)
 	}
+	commonDomain := commonDomainAncestor(domains)
 	var candidates []wikis.RuntimeDocument
 	for _, doc := range docs {
 		if doc.Kind != wikis.KindPlaybook || !playbookIsCombo(doc) || playbookTemplatePath(doc) == "" {
@@ -313,6 +310,31 @@ func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument)
 	}
 	sortRuntimeDocsByPath(candidates)
 	return candidates
+}
+
+func commonDomainAncestor(domains []string) string {
+	if len(domains) == 0 {
+		return ""
+	}
+	common := strings.Split(strings.Trim(domains[0], "/"), "/")
+	if len(common) == 1 && common[0] == "" {
+		return ""
+	}
+	for _, domain := range domains[1:] {
+		parts := strings.Split(strings.Trim(domain, "/"), "/")
+		if len(parts) == 1 && parts[0] == "" {
+			return ""
+		}
+		n := 0
+		for n < len(common) && n < len(parts) && common[n] == parts[n] {
+			n++
+		}
+		common = common[:n]
+		if len(common) == 0 {
+			return ""
+		}
+	}
+	return strings.Join(common, "/")
 }
 
 func filterCombos(docs []wikis.RuntimeDocument, keep func(wikis.RuntimeDocument) bool) []wikis.RuntimeDocument {

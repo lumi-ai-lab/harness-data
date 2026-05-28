@@ -344,7 +344,7 @@ func runWikiCheckContext(root string, args []string) (wikis.CheckResult, error) 
 	}
 	result := makeCLICheckResult(checkName, errs, wikis.CheckOptions{MaxErrors: *maxErrors})
 	if *jsonOut {
-		return result, printJSON(result)
+		return result, printJSON(checkJSONEnvelope([]wikis.CheckResult{result}))
 	}
 	printCheckResult(result)
 	return result, nil
@@ -635,7 +635,7 @@ func runSingleWikiCheck(root, name string, args []string) (wikis.CheckResult, er
 		return wikis.CheckResult{}, err
 	}
 	if *jsonOut {
-		return result, printJSON(result)
+		return result, printJSON(checkJSONEnvelope([]wikis.CheckResult{result}))
 	}
 	printCheckResult(result)
 	return result, nil
@@ -658,12 +658,26 @@ func runWikiCheckAll(root string, args []string) ([]wikis.CheckResult, error) {
 		return nil, err
 	}
 	if *jsonOut {
-		return results, printJSON(map[string]any{"ok": checkResultsOK(results), "results": results, "totalErrors": totalCheckErrors(results)})
+		return results, printJSON(checkJSONEnvelope(results))
 	}
 	for _, result := range results {
 		printCheckResult(result)
 	}
 	return results, nil
+}
+
+type checkOutput struct {
+	OK          bool                `json:"ok"`
+	TotalErrors int                 `json:"totalErrors"`
+	Results     []wikis.CheckResult `json:"results"`
+}
+
+func checkJSONEnvelope(results []wikis.CheckResult) checkOutput {
+	return checkOutput{
+		OK:          checkResultsOK(results),
+		TotalErrors: totalCheckErrors(results),
+		Results:     results,
+	}
 }
 
 func checkResultsOK(results []wikis.CheckResult) bool {

@@ -27,19 +27,25 @@ func RunCheck(root, name string, opts CheckOptions) (CheckResult, error) {
 	var errs []CheckError
 	switch name {
 	case CheckIndexMD:
-		errs = checkIndexMD(corpus)
+		errs = checkIndexMD(corpus, opts)
 	case CheckTitles:
 		errs = filterParseErrs(parseErrs, "missing_h1", "multiple_h1")
 	case CheckFrontmatter:
-		errs = append(filterParseErrs(parseErrs, "unknown_frontmatter_field", "invalid_frontmatter_type", "invalid_covers_type"), checkFrontmatter(corpus)...)
+		errs = filterParseErrs(parseErrs, "unknown_frontmatter_field", "invalid_frontmatter_type", "invalid_covers_type")
+		if !(opts.FailFast && len(errs) > 0) {
+			errs = append(errs, checkFrontmatter(corpus, opts)...)
+		}
 	case CheckAliases:
-		errs = checkAliases(corpus)
+		errs = checkAliases(corpus, opts)
 	case CheckCovers:
-		errs = checkCovers(corpus)
+		errs = checkCovers(corpus, opts)
 	case CheckLinks:
-		errs = checkLinks(corpus)
+		errs = checkLinks(corpus, opts)
 	default:
 		return CheckResult{}, fmt.Errorf("unknown wikis check: %s", name)
+	}
+	if opts.FailFast && len(errs) > 1 {
+		errs = errs[:1]
 	}
 	for i := range errs {
 		errs[i].Check = name
@@ -126,7 +132,7 @@ func filterParseErrs(errs []CheckError, codes ...string) []CheckError {
 	return out
 }
 
-func checkIndexMD(c Corpus) []CheckError {
+func checkIndexMD(c Corpus, opts CheckOptions) []CheckError {
 	dirs := map[string]bool{}
 	for _, doc := range c.Docs {
 		if strings.HasPrefix(doc.Path, "routing/") {
@@ -152,84 +158,138 @@ func checkIndexMD(c Corpus) []CheckError {
 		indexPath := dir + "/index.md"
 		if c.ByPath[indexPath] == nil {
 			errs = append(errs, CheckError{Path: dir, Code: "missing_index_md", Message: "directory is missing index.md", Target: indexPath})
+			if opts.FailFast {
+				return errs
+			}
 		}
 	}
 	return errs
 }
 
-func checkFrontmatter(c Corpus) []CheckError {
+func checkFrontmatter(c Corpus, opts CheckOptions) []CheckError {
 	var errs []CheckError
+	add := func(err CheckError) bool {
+		errs = append(errs, err)
+		return opts.FailFast
+	}
 	for _, doc := range c.Docs {
 		switch {
 		case doc.Kind == KindSpec && doc.SpecType == SpecTypeMetric:
 			if !doc.HasFrontmatter {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_frontmatter", Message: "metric spec must have frontmatter"})
+				if add(CheckError{Path: doc.Path, Code: "missing_frontmatter", Message: "metric spec must have frontmatter"}) {
+					return errs
+				}
 				continue
 			}
 			if doc.Name == "" {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_name", Message: "metric spec must have name", Target: "name"})
+				if add(CheckError{Path: doc.Path, Code: "missing_name", Message: "metric spec must have name", Target: "name"}) {
+					return errs
+				}
 			}
 			if doc.Label == "" {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_label", Message: "metric spec must have label", Target: "label"})
+				if add(CheckError{Path: doc.Path, Code: "missing_label", Message: "metric spec must have label", Target: "label"}) {
+					return errs
+				}
 			}
 		case doc.Kind == KindPlaybook && doc.Playbook.IsCombo:
 			if !doc.HasFrontmatter {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_frontmatter", Message: "combo playbook must have frontmatter"})
+				if add(CheckError{Path: doc.Path, Code: "missing_frontmatter", Message: "combo playbook must have frontmatter"}) {
+					return errs
+				}
 				continue
 			}
 			if doc.Aliases == nil {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_required_field", Message: "combo playbook must have aliases", Target: "aliases"})
+				if add(CheckError{Path: doc.Path, Code: "missing_required_field", Message: "combo playbook must have aliases", Target: "aliases"}) {
+					return errs
+				}
 			}
 			if doc.Covers == nil {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_covers", Message: "combo playbook must have covers", Target: "covers"})
+				if add(CheckError{Path: doc.Path, Code: "missing_covers", Message: "combo playbook must have covers", Target: "covers"}) {
+					return errs
+				}
 			}
 		}
 	}
 	return errs
 }
 
-func checkAliases(c Corpus) []CheckError {
+func checkAliases(c Corpus, opts CheckOptions) []CheckError {
 	var errs []CheckError
+	add := func(err CheckError) bool {
+		errs = append(errs, err)
+		return opts.FailFast
+	}
 	global := map[string]CheckError{}
 	for _, doc := range c.Docs {
 		if doc.Kind == KindSpec && doc.SpecType == SpecTypeMetric {
 			if doc.Name == "" {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_name", Message: "metric spec must have name", Target: "name"})
+				if add(CheckError{Path: doc.Path, Code: "missing_name", Message: "metric spec must have name", Target: "name"}) {
+					return errs
+				}
 			}
 			if doc.Label == "" {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_label", Message: "metric spec must have label", Target: "label"})
+				if add(CheckError{Path: doc.Path, Code: "missing_label", Message: "metric spec must have label", Target: "label"}) {
+					return errs
+				}
 			}
 		}
 		if doc.Kind == KindPlaybook && doc.Playbook.IsSingle && len(doc.Aliases) > 0 {
-			errs = append(errs, CheckError{Path: doc.Path, Code: "alias_not_allowed", Message: "single metric playbook must not maintain aliases", Target: "aliases"})
+			if add(CheckError{Path: doc.Path, Code: "alias_not_allowed", Message: "single metric playbook must not maintain aliases", Target: "aliases"}) {
+				return errs
+			}
 		}
 		if doc.Kind == KindPlaybook && doc.Playbook.IsCombo && len(doc.Aliases) == 0 {
-			errs = append(errs, CheckError{Path: doc.Path, Code: "missing_required_field", Message: "combo playbook must maintain aliases", Target: "aliases"})
+			if add(CheckError{Path: doc.Path, Code: "missing_required_field", Message: "combo playbook must maintain aliases", Target: "aliases"}) {
+				return errs
+			}
 		}
 		seen := map[string]bool{}
 		for _, alias := range doc.Aliases {
 			if seen[alias] {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "duplicate_alias", Message: "duplicate alias in document", Value: alias})
+				if add(CheckError{Path: doc.Path, Code: "duplicate_alias", Message: "duplicate alias in document", Value: alias}) {
+					return errs
+				}
 			}
 			seen[alias] = true
 		}
-		for field, values := range recallValues(doc) {
-			for _, value := range values {
+		for _, recall := range orderedRecallValues(doc) {
+			for _, value := range recall.Values {
 				if value == "" {
 					continue
 				}
-				if field == "name" || field == "label" {
-					continue
-				}
 				if other, ok := global[value]; ok {
-					errs = append(errs, CheckError{Path: doc.Path, Code: "duplicate_recall_value", Message: "duplicate recall value", Target: field, Value: value, Other: other.Path})
+					if add(CheckError{Path: doc.Path, Code: "duplicate_recall_value", Message: "duplicate recall value", Target: recall.Field, Value: value, Other: other.Path}) {
+						return errs
+					}
 				} else {
-					global[value] = CheckError{Path: doc.Path, Target: field}
+					global[value] = CheckError{Path: doc.Path, Target: recall.Field}
 				}
 			}
 		}
 	}
 	return errs
+}
+
+type recallFieldValues struct {
+	Field  string
+	Values []string
+}
+
+func orderedRecallValues(doc Document) []recallFieldValues {
+	var out []recallFieldValues
+	if doc.Kind == KindSpec {
+		if doc.SpecType == SpecTypeMetric || doc.Name != "" || doc.Label != "" || len(doc.Aliases) > 0 {
+			out = append(out,
+				recallFieldValues{Field: "name", Values: []string{doc.Name}},
+				recallFieldValues{Field: "label", Values: []string{doc.Label}},
+				recallFieldValues{Field: "aliases", Values: doc.Aliases},
+			)
+		}
+	}
+	if doc.Kind == KindPlaybook && doc.Playbook.IsCombo {
+		out = append(out, recallFieldValues{Field: "aliases", Values: doc.Aliases})
+	}
+	return out
 }
 
 func recallValues(doc Document) map[string][]string {
@@ -247,45 +307,65 @@ func recallValues(doc Document) map[string][]string {
 	return out
 }
 
-func checkCovers(c Corpus) []CheckError {
+func checkCovers(c Corpus, opts CheckOptions) []CheckError {
 	var errs []CheckError
+	add := func(err CheckError) bool {
+		errs = append(errs, err)
+		return opts.FailFast
+	}
 	for _, doc := range c.Docs {
 		if doc.Kind != KindPlaybook || !doc.Playbook.IsCombo {
 			continue
 		}
 		if doc.Covers == nil {
-			errs = append(errs, CheckError{Path: doc.Path, Code: "missing_covers", Message: "combo playbook must maintain covers", Target: "covers"})
+			if add(CheckError{Path: doc.Path, Code: "missing_covers", Message: "combo playbook must maintain covers", Target: "covers"}) {
+				return errs
+			}
 			continue
 		}
 		for _, cover := range doc.Covers {
 			if !strings.HasPrefix(cover, "spec/") || !strings.HasSuffix(cover, ".md") {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "invalid_cover_path", Message: "cover must reference a spec logical path", Value: cover})
+				if add(CheckError{Path: doc.Path, Code: "invalid_cover_path", Message: "cover must reference a spec logical path", Value: cover}) {
+					return errs
+				}
 				continue
 			}
 			if !c.SpecPaths[cover] {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_cover_target", Message: "cover target does not exist", Value: cover})
+				if add(CheckError{Path: doc.Path, Code: "missing_cover_target", Message: "cover target does not exist", Value: cover}) {
+					return errs
+				}
 			}
 		}
 	}
 	return errs
 }
 
-func checkLinks(c Corpus) []CheckError {
+func checkLinks(c Corpus, opts CheckOptions) []CheckError {
 	var errs []CheckError
+	add := func(err CheckError) bool {
+		errs = append(errs, err)
+		return opts.FailFast
+	}
 	for _, doc := range c.Docs {
 		switch {
 		case doc.Kind == KindSpec && doc.SpecType == SpecTypeMetric:
 			playbookPath := SamePath(doc.Path, "playbooks")
 			if c.ByPath[playbookPath] == nil {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_playbook", Message: "metric spec is missing same-path playbook", Target: playbookPath})
+				if add(CheckError{Path: doc.Path, Code: "missing_playbook", Message: "metric spec is missing same-path playbook", Target: playbookPath}) {
+					return errs
+				}
 			}
 		case doc.Kind == KindPlaybook && !doc.IsIndex:
 			if c.ByPath[doc.Playbook.TemplatePath] == nil {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "missing_template", Message: "playbook is missing same-path template", Target: doc.Playbook.TemplatePath})
+				if add(CheckError{Path: doc.Path, Code: "missing_template", Message: "playbook is missing same-path template", Target: doc.Playbook.TemplatePath}) {
+					return errs
+				}
 			}
 		case doc.Kind == KindTemplate && !doc.IsIndex:
 			if c.ByPath[doc.Template.PlaybookPath] == nil {
-				errs = append(errs, CheckError{Path: doc.Path, Code: "orphan_template", Message: "template is missing same-path playbook", Target: doc.Template.PlaybookPath})
+				if add(CheckError{Path: doc.Path, Code: "orphan_template", Message: "template is missing same-path playbook", Target: doc.Template.PlaybookPath}) {
+					return errs
+				}
 			}
 		}
 	}

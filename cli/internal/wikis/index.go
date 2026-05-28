@@ -56,11 +56,13 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 				"spec":      cfg.Spec,
 				"playbooks": cfg.Playbooks,
 				"templates": cfg.Templates,
-				"routing":   cfg.Routing,
 			},
 		},
 		Docs:   corpus.Docs,
 		Recall: buildRecall(corpus.Docs),
+	}
+	if cfg.Routing != "" {
+		idx.Meta.Paths["routing"] = cfg.Routing
 	}
 	runtime := buildRuntimeIndex(idx)
 	if err := writeIndexAtomic(root, idx); err != nil {

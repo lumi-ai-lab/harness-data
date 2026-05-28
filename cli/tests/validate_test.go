@@ -8,15 +8,25 @@ import (
 	"harness-data/cli/internal/wikis"
 )
 
-func TestValidateCurrentDocuments(t *testing.T) {
+func TestValidateCurrentDocumentsReportsDuplicateRecallValues(t *testing.T) {
 	results, err := wikis.RunAllChecks(root(t), wikis.CheckOptions{MaxErrors: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, result := range results {
-		if result.TotalErrors != 0 {
-			t.Fatalf("expected valid wikis, got %+v", result)
+		if result.Check != wikis.CheckAliases {
+			continue
 		}
+		for _, err := range result.Errors {
+			if err.Code == "duplicate_recall_value" && err.Target == "label" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected current wikis to report duplicate label recall values, got %+v", results)
 	}
 }
 

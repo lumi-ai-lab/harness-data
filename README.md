@@ -46,7 +46,6 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - `cli/`：Data Harness CLI 源码和 Go 测试。
 - `config/harness-config.yaml`：Harness 统一配置，集中维护知识库路径和 QDM CLI 绝对路径。
 - `wikis/`：业务知识库根目录，可作为 git submodule 管理。
-- `wikis/routing/`：Agent 读取后的取数路由规则。
 - `wikis/playbooks/`：分析流程与必要证据来源。
 - `wikis/spec/`：报告指标归属和业务知识权威说明。
 - `wikis/templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
@@ -57,12 +56,11 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 ```yaml
 paths:
   spec: wikis/spec
-  routing: wikis/routing
   playbooks: wikis/playbooks
   templates: wikis/templates
 ```
 
-未配置时默认兼容根目录 `spec/`、`routing/`、`playbooks/`、`templates/` 结构。Wiki 检查和索引内部统一使用 `spec/...`、`playbooks/...`、`templates/...` 逻辑路径；context 输出使用可直接读取的物理相对路径。
+未配置时默认兼容根目录 `spec/`、`playbooks/`、`templates/` 结构。Wiki 检查和索引内部统一使用 `spec/...`、`playbooks/...`、`templates/...` 逻辑路径；context 输出使用可直接读取的物理相对路径。
 
 ## Context 输出
 
@@ -96,7 +94,7 @@ printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli co
 }
 ```
 
-`additionalContext` 只包含时间上下文、必须读取的 `contextFiles`、执行指令和约束；不会输出 `query_type=...`，也不会注入 spec、routing、playbook 或 template 正文。
+`additionalContext` 只包含时间上下文、必须读取的 `contextFiles`、执行指令和约束；不会输出 `query_type=...`，也不会注入 spec、playbook 或 template 正文。
 
 ## PostToolUse 输出
 
@@ -111,7 +109,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 - 取数命令：记录对应 report 的必需模块，不输出 additionalContext。
 - `bin/data-harness-cli inject-template`：根据当前 session 中的 selected playbook 注入其绑定的 template。
-- template 注入满足：只注入 selected playbook 绑定的 `templates/*-report.md` 正文，不注入 spec、routing 或 playbook。
+- template 注入满足：只注入 selected playbook 绑定的 template 正文，不注入 spec 或 playbook。
 
 ## 召回原则
 
