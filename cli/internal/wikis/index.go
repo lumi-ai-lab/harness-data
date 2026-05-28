@@ -11,7 +11,10 @@ import (
 	"harness-data/cli/internal/harness"
 )
 
-const IndexRel = ".harness/index/wikis-index.json"
+const (
+	IndexRel        = ".harness/index/wikis-index.json"
+	RuntimeIndexRel = ".harness/index/wikis-runtime-index.json"
+)
 
 type CheckFailedError struct {
 	Total int
@@ -59,14 +62,21 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 		Docs:   corpus.Docs,
 		Recall: buildRecall(corpus.Docs),
 	}
+	runtime := buildRuntimeIndex(idx)
 	if err := writeIndexAtomic(root, idx); err != nil {
 		return BuildIndexResult{}, err
 	}
+	if err := writeRuntimeIndexAtomic(root, runtime); err != nil {
+		return BuildIndexResult{}, err
+	}
 	return BuildIndexResult{
-		Path:          IndexRel,
-		ChecksSkipped: skipChecks,
-		DocCount:      len(idx.Docs),
-		RecallCount:   len(idx.Recall),
+		Path:               IndexRel,
+		RuntimePath:        RuntimeIndexRel,
+		ChecksSkipped:      skipChecks,
+		DocCount:           len(idx.Docs),
+		RecallCount:        len(idx.Recall),
+		RuntimeDocCount:    len(runtime.DocsByPath),
+		RuntimeRecallCount: len(runtime.Recall),
 	}, nil
 }
 
@@ -78,6 +88,25 @@ func LoadIndex(root string) (Index, error) {
 	var idx Index
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return Index{}, err
+	}
+	return idx, nil
+}
+
+func LoadRuntimeIndex(root string) (RuntimeIndex, error) {
+	data, err := os.ReadFile(filepath.Join(root, RuntimeIndexRel))
+	if err != nil {
+		if os.IsNotExist(err) {
+			idx, loadErr := LoadIndex(root)
+			if loadErr != nil {
+				return RuntimeIndex{}, loadErr
+			}
+			return buildRuntimeIndex(idx), nil
+		}
+		return RuntimeIndex{}, err
+	}
+	var idx RuntimeIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return RuntimeIndex{}, err
 	}
 	return idx, nil
 }
@@ -96,6 +125,36 @@ func checkReliableBuildInputs(root string) error {
 		}
 	}
 	return nil
+}
+
+func buildRuntimeIndex(idx Index) RuntimeIndex {
+	docsByPath := map[string]RuntimeDocument{}
+	for _, doc := range idx.Docs {
+		runtimeDoc := RuntimeDocument{
+			Path:     doc.Path,
+			Kind:     doc.Kind,
+			Domain:   doc.Domain,
+			SpecType: doc.SpecType,
+			Covers:   doc.Covers,
+		}
+		if doc.Playbook != (PlaybookRef{}) {
+			playbook := doc.Playbook
+			runtimeDoc.Playbook = &playbook
+		}
+		docsByPath[doc.Path] = runtimeDoc
+	}
+	recall := make([]RuntimeRecallItem, 0, len(idx.Recall))
+	for _, item := range idx.Recall {
+		recall = append(recall, RuntimeRecallItem{
+			Term:       item.Term,
+			TargetPath: item.TargetPath,
+		})
+	}
+	return RuntimeIndex{
+		Meta:       idx.Meta,
+		DocsByPath: docsByPath,
+		Recall:     recall,
+	}
 }
 
 func buildRecall(docs []Document) []RecallItem {
@@ -128,21 +187,30 @@ func buildRecall(docs []Document) []RecallItem {
 }
 
 func writeIndexAtomic(root string, idx Index) error {
-	dir := filepath.Join(root, ".harness", "index")
+	return writeJSONAtomic(root, IndexRel, idx)
+}
+
+func writeRuntimeIndexAtomic(root string, idx RuntimeIndex) error {
+	return writeJSONAtomic(root, RuntimeIndexRel, idx)
+}
+
+func writeJSONAtomic(root, rel string, value any) error {
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	dir := filepath.Dir(full)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(idx, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	tmp := filepath.Join(dir, fmt.Sprintf("wikis-index.json.tmp.%d", os.Getpid()))
+	tmp := filepath.Join(dir, fmt.Sprintf("%s.tmp.%d", filepath.Base(rel), os.Getpid()))
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, filepath.Join(root, IndexRel)); err != nil {
+	if err := os.Rename(tmp, full); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

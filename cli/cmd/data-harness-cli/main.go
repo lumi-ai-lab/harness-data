@@ -219,7 +219,7 @@ func runWikiBuildIndex(root string, args []string) (wikis.BuildIndexResult, erro
 	if *jsonOut {
 		return result, printJSON(result)
 	}
-	fmt.Printf("built %s docs=%d recall=%d checksSkipped=%v\n", result.Path, result.DocCount, result.RecallCount, result.ChecksSkipped)
+	fmt.Printf("built %s docs=%d recall=%d runtime=%s runtimeDocs=%d checksSkipped=%v\n", result.Path, result.DocCount, result.RecallCount, result.RuntimePath, result.RuntimeDocCount, result.ChecksSkipped)
 	return result, nil
 }
 

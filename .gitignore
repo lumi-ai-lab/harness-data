@@ -14,12 +14,12 @@ __pycache__/
 # Local Claude hook state
 .claude/hooks/state/
 
+# Generated harness data and local compiled binaries
+.harness/
+bin/
+
 # Local logs and temp files
 *.log
 *.tmp
 *.swp
 *~
-
-# Compiled official harness CLI entrypoint is intentionally tracked.
-!bin/
-!bin/data-harness-cli

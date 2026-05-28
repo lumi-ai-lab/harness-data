@@ -43,4 +43,11 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	if index.Meta.Version != 1 || index.Meta.ChecksSkipped {
 		t.Fatalf("bad index meta: %+v", index.Meta)
 	}
+	runtime, err := wikis.LoadRuntimeIndex(root(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.DocsByPath["playbooks/cmr/member/default-overview.md"].Playbook.TemplatePath != "templates/cmr/member/default-overview.md" {
+		t.Fatalf("member runtime playbook missing template: %+v", runtime.DocsByPath["playbooks/cmr/member/default-overview.md"])
+	}
 }

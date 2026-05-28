@@ -91,6 +91,26 @@ type Index struct {
 	Recall []RecallItem `json:"recall"`
 }
 
+type RuntimeIndex struct {
+	Meta       IndexMeta                  `json:"meta"`
+	DocsByPath map[string]RuntimeDocument `json:"docsByPath"`
+	Recall     []RuntimeRecallItem        `json:"recall"`
+}
+
+type RuntimeDocument struct {
+	Path     string       `json:"path"`
+	Kind     Kind         `json:"kind"`
+	Domain   string       `json:"domain,omitempty"`
+	SpecType SpecType     `json:"specType,omitempty"`
+	Playbook *PlaybookRef `json:"playbook,omitempty"`
+	Covers   []string     `json:"covers,omitempty"`
+}
+
+type RuntimeRecallItem struct {
+	Term       string `json:"term"`
+	TargetPath string `json:"targetPath"`
+}
+
 type IndexMeta struct {
 	Version       int               `json:"version"`
 	GeneratedAt   string            `json:"generatedAt"`
@@ -107,8 +127,11 @@ type RecallItem struct {
 }
 
 type BuildIndexResult struct {
-	Path          string `json:"path"`
-	ChecksSkipped bool   `json:"checksSkipped"`
-	DocCount      int    `json:"docCount"`
-	RecallCount   int    `json:"recallCount"`
+	Path               string `json:"path"`
+	RuntimePath        string `json:"runtimePath"`
+	ChecksSkipped      bool   `json:"checksSkipped"`
+	DocCount           int    `json:"docCount"`
+	RecallCount        int    `json:"recallCount"`
+	RuntimeDocCount    int    `json:"runtimeDocCount"`
+	RuntimeRecallCount int    `json:"runtimeRecallCount"`
 }

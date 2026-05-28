@@ -143,7 +143,7 @@ func TestBuildIndexWritesStableAtomicIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Path != IndexRel || result.DocCount == 0 || result.RecallCount != 4 || result.ChecksSkipped {
+	if result.Path != IndexRel || result.RuntimePath != RuntimeIndexRel || result.DocCount == 0 || result.RuntimeDocCount != result.DocCount || result.RecallCount != 4 || result.RuntimeRecallCount != result.RecallCount || result.ChecksSkipped {
 		t.Fatalf("unexpected build result: %+v", result)
 	}
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(IndexRel)))
@@ -157,11 +157,26 @@ func TestBuildIndexWritesStableAtomicIndex(t *testing.T) {
 	if !strings.Contains(content, `"version": 1`) || !strings.Contains(content, `"rule": "strict_contains"`) || !strings.Contains(content, `"checksSkipped": false`) {
 		t.Fatalf("index content missing expected fields:\n%s", content)
 	}
+	runtime, err := LoadRuntimeIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.DocsByPath["spec/idx/business-manager/s-sale-amt.md"].Path == "" {
+		t.Fatalf("runtime index missing sale amt doc: %+v", runtime.DocsByPath)
+	}
+	runtimeData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(RuntimeIndexRel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(runtimeData), `"title"`) || strings.Contains(string(runtimeData), `"id"`) || strings.Contains(string(runtimeData), `"isIndex"`) {
+		t.Fatalf("runtime index should not include full document fields:\n%s", string(runtimeData))
+	}
 }
 
 func TestBuildIndexDoesNotReplaceExistingIndexWhenChecksFail(t *testing.T) {
 	root := testWikiRoot(t)
 	writeFile(t, root, IndexRel, "old\n")
+	writeFile(t, root, RuntimeIndexRel, "old runtime\n")
 	writeFile(t, root, "wikis/spec/idx/business-manager/s-sale-amt.md", `---
 name: sale_amt
 label: 销售额
@@ -177,6 +192,30 @@ label: 销售额
 	}
 	if string(data) != "old\n" {
 		t.Fatalf("expected old index to remain, got %q", string(data))
+	}
+	runtimeData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(RuntimeIndexRel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(runtimeData) != "old runtime\n" {
+		t.Fatalf("expected old runtime index to remain, got %q", string(runtimeData))
+	}
+}
+
+func TestLoadRuntimeIndexFallsBackToFullIndex(t *testing.T) {
+	root := testValidWikiRoot(t)
+	if _, err := BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(RuntimeIndexRel))); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := LoadRuntimeIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.DocsByPath["spec/idx/business-manager/s-sale-amt.md"].Path == "" || len(runtime.Recall) != 4 {
+		t.Fatalf("unexpected fallback runtime index: %+v", runtime)
 	}
 }
 

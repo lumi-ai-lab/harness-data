@@ -37,19 +37,16 @@ func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, er
 	if err != nil {
 		return harness.ContextResponse{}, WikiPlan{}, err
 	}
-	index, err := wikis.LoadIndex(root)
+	index, err := wikis.LoadRuntimeIndex(root)
 	if err != nil {
 		return harness.ContextResponse{}, WikiPlan{}, err
 	}
-	response, plan := buildFromWikisIndex(resolver, index, question)
+	response, plan := buildFromWikisRuntimeIndex(resolver, index, question)
 	return response, plan, nil
 }
 
-func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, question string) (harness.ContextResponse, WikiPlan) {
-	byPath := map[string]wikis.Document{}
-	for _, doc := range index.Docs {
-		byPath[doc.Path] = doc
-	}
+func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.RuntimeIndex, question string) (harness.ContextResponse, WikiPlan) {
+	byPath := index.DocsByPath
 	var refs []harness.FileRef
 	seen := map[string]bool{}
 	add := func(logical, reason string) {
@@ -69,9 +66,9 @@ func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, quest
 
 	hits := recallHits(index, question)
 	ordinarySpecs, conceptSpecs, directCombos := classifyHits(hits)
-	sortDocsByPath(ordinarySpecs)
-	sortDocsByPath(conceptSpecs)
-	sortDocsByPath(directCombos)
+	sortRuntimeDocsByPath(ordinarySpecs)
+	sortRuntimeDocsByPath(conceptSpecs)
+	sortRuntimeDocsByPath(directCombos)
 
 	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
 	switch {
@@ -80,7 +77,7 @@ func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, quest
 		plan = WikiPlan{
 			Mode:             sessionstate.ModeCombo,
 			SelectedPlaybook: combo.Path,
-			SelectedTemplate: combo.Playbook.TemplatePath,
+			SelectedTemplate: playbookTemplatePath(combo),
 			CoveredSpecs:     append([]string{}, combo.Covers...),
 		}
 		addComboFiles(add, byPath, combo)
@@ -104,15 +101,15 @@ func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, quest
 			}
 		}
 		plan.Reason = "single_spec_missing_playbook_or_template"
-		addFreeSpecFiles(add, byPath, []wikis.Document{spec})
+		addFreeSpecFiles(add, byPath, []wikis.RuntimeDocument{spec})
 	case len(ordinarySpecs) > 1:
-		candidates := coveringCombos(index.Docs, ordinarySpecs)
+		candidates := coveringCombos(allRuntimeDocs(index.DocsByPath), ordinarySpecs)
 		if len(candidates) == 1 {
 			combo := candidates[0]
 			plan = WikiPlan{
 				Mode:             sessionstate.ModeCombo,
 				SelectedPlaybook: combo.Path,
-				SelectedTemplate: combo.Playbook.TemplatePath,
+				SelectedTemplate: playbookTemplatePath(combo),
 				CoveredSpecs:     append([]string{}, combo.Covers...),
 			}
 			addComboFiles(add, byPath, combo)
@@ -146,13 +143,10 @@ func buildFromWikisIndex(resolver harness.PathResolver, index wikis.Index, quest
 	return response, plan
 }
 
-func recallHits(index wikis.Index, question string) []wikis.Document {
-	byPath := map[string]wikis.Document{}
-	for _, doc := range index.Docs {
-		byPath[doc.Path] = doc
-	}
+func recallHits(index wikis.RuntimeIndex, question string) []wikis.RuntimeDocument {
+	byPath := index.DocsByPath
 	seen := map[string]bool{}
-	var docs []wikis.Document
+	var docs []wikis.RuntimeDocument
 	for _, item := range index.Recall {
 		if item.Term == "" || !strings.Contains(question, item.Term) || seen[item.TargetPath] {
 			continue
@@ -167,26 +161,26 @@ func recallHits(index wikis.Index, question string) []wikis.Document {
 	return docs
 }
 
-func classifyHits(hits []wikis.Document) ([]wikis.Document, []wikis.Document, []wikis.Document) {
-	var ordinarySpecs, conceptSpecs, directCombos []wikis.Document
+func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wikis.RuntimeDocument, []wikis.RuntimeDocument) {
+	var ordinarySpecs, conceptSpecs, directCombos []wikis.RuntimeDocument
 	for _, doc := range hits {
 		switch {
 		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeMetric:
 			ordinarySpecs = append(ordinarySpecs, doc)
 		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeConcept:
 			conceptSpecs = append(conceptSpecs, doc)
-		case doc.Kind == wikis.KindPlaybook && doc.Playbook.IsCombo:
+		case doc.Kind == wikis.KindPlaybook && playbookIsCombo(doc):
 			directCombos = append(directCombos, doc)
 		}
 	}
 	return ordinarySpecs, conceptSpecs, directCombos
 }
 
-func sortDocsByPath(docs []wikis.Document) {
+func sortRuntimeDocsByPath(docs []wikis.RuntimeDocument) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
 
-func addIndexChain(add func(string, string), byPath map[string]wikis.Document, docPath, reason string) {
+func addIndexChain(add func(string, string), byPath map[string]wikis.RuntimeDocument, docPath, reason string) {
 	parts := strings.Split(docPath, "/")
 	if len(parts) < 2 {
 		return
@@ -205,7 +199,7 @@ func addIndexChain(add func(string, string), byPath map[string]wikis.Document, d
 	}
 }
 
-func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.Document, specs []wikis.Document) {
+func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, specs []wikis.RuntimeDocument) {
 	for _, spec := range specs {
 		addIndexChain(add, byPath, spec.Path, "spec index")
 		add(spec.Path, "matched spec")
@@ -217,7 +211,7 @@ func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.Document
 	}
 }
 
-func addComboFiles(add func(string, string), byPath map[string]wikis.Document, combo wikis.Document) {
+func addComboFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, combo wikis.RuntimeDocument) {
 	addIndexChain(add, byPath, combo.Path, "combo playbook index")
 	add(combo.Path, "selected combo playbook")
 	covers := append([]string{}, combo.Covers...)
@@ -228,7 +222,7 @@ func addComboFiles(add func(string, string), byPath map[string]wikis.Document, c
 	}
 }
 
-func coveringCombos(docs []wikis.Document, specs []wikis.Document) []wikis.Document {
+func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
 	required := map[string]bool{}
 	commonDomain := ""
 	for i, spec := range specs {
@@ -239,9 +233,9 @@ func coveringCombos(docs []wikis.Document, specs []wikis.Document) []wikis.Docum
 			commonDomain = ""
 		}
 	}
-	var candidates []wikis.Document
+	var candidates []wikis.RuntimeDocument
 	for _, doc := range docs {
-		if doc.Kind != wikis.KindPlaybook || !doc.Playbook.IsCombo || doc.Playbook.TemplatePath == "" {
+		if doc.Kind != wikis.KindPlaybook || !playbookIsCombo(doc) || playbookTemplatePath(doc) == "" {
 			continue
 		}
 		covered := map[string]bool{}
@@ -268,20 +262,20 @@ func coveringCombos(docs []wikis.Document, specs []wikis.Document) []wikis.Docum
 			minCovers = len(candidate.Covers)
 		}
 	}
-	candidates = filterCombos(candidates, func(doc wikis.Document) bool { return len(doc.Covers) == minCovers })
+	candidates = filterCombos(candidates, func(doc wikis.RuntimeDocument) bool { return len(doc.Covers) == minCovers })
 	if len(candidates) <= 1 || commonDomain == "" {
 		return candidates
 	}
-	domainMatches := filterCombos(candidates, func(doc wikis.Document) bool { return doc.Domain == commonDomain })
+	domainMatches := filterCombos(candidates, func(doc wikis.RuntimeDocument) bool { return doc.Domain == commonDomain })
 	if len(domainMatches) > 0 {
 		candidates = domainMatches
 	}
-	sortDocsByPath(candidates)
+	sortRuntimeDocsByPath(candidates)
 	return candidates
 }
 
-func filterCombos(docs []wikis.Document, keep func(wikis.Document) bool) []wikis.Document {
-	var out []wikis.Document
+func filterCombos(docs []wikis.RuntimeDocument, keep func(wikis.RuntimeDocument) bool) []wikis.RuntimeDocument {
+	var out []wikis.RuntimeDocument
 	for _, doc := range docs {
 		if keep(doc) {
 			out = append(out, doc)
@@ -290,7 +284,7 @@ func filterCombos(docs []wikis.Document, keep func(wikis.Document) bool) []wikis
 	return out
 }
 
-func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.Document) []sessionstate.PlaybookCandidate {
+func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.RuntimeDocument) []sessionstate.PlaybookCandidate {
 	if plan.SelectedPlaybook == "" {
 		return nil
 	}
@@ -301,13 +295,33 @@ func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.Document) []sessi
 	return []sessionstate.PlaybookCandidate{candidateFromDoc(doc, "selected")}
 }
 
-func candidateFromDoc(doc wikis.Document, reason string) sessionstate.PlaybookCandidate {
+func candidateFromDoc(doc wikis.RuntimeDocument, reason string) sessionstate.PlaybookCandidate {
 	return sessionstate.PlaybookCandidate{
 		Path:     doc.Path,
-		Template: doc.Playbook.TemplatePath,
+		Template: playbookTemplatePath(doc),
 		Domain:   doc.Domain,
 		Reason:   reason,
 	}
+}
+
+func playbookIsCombo(doc wikis.RuntimeDocument) bool {
+	return doc.Playbook != nil && doc.Playbook.IsCombo
+}
+
+func playbookTemplatePath(doc wikis.RuntimeDocument) string {
+	if doc.Playbook == nil {
+		return ""
+	}
+	return doc.Playbook.TemplatePath
+}
+
+func allRuntimeDocs(byPath map[string]wikis.RuntimeDocument) []wikis.RuntimeDocument {
+	docs := make([]wikis.RuntimeDocument, 0, len(byPath))
+	for _, doc := range byPath {
+		docs = append(docs, doc)
+	}
+	sortRuntimeDocsByPath(docs)
+	return docs
 }
 
 func instructionForPlan(plan WikiPlan) string {
