@@ -19,21 +19,22 @@ const (
 )
 
 type Document struct {
-	ID             string      `json:"id"`
-	Path           string      `json:"path"`
-	PhysicalRel    string      `json:"-"`
-	Kind           Kind        `json:"kind"`
-	Domain         string      `json:"domain"`
-	Title          string      `json:"title"`
-	Name           string      `json:"name,omitempty"`
-	Label          string      `json:"label,omitempty"`
-	Aliases        []string    `json:"aliases,omitempty"`
-	Covers         []string    `json:"covers,omitempty"`
-	IsIndex        bool        `json:"isIndex"`
-	HasFrontmatter bool        `json:"-"`
-	SpecType       SpecType    `json:"specType,omitempty"`
-	Playbook       PlaybookRef `json:"playbook,omitempty"`
-	Template       TemplateRef `json:"template,omitempty"`
+	ID              string      `json:"id"`
+	Path            string      `json:"path"`
+	PhysicalRel     string      `json:"-"`
+	Kind            Kind        `json:"kind"`
+	Domain          string      `json:"domain"`
+	Title           string      `json:"title"`
+	Name            string      `json:"name,omitempty"`
+	Label           string      `json:"label,omitempty"`
+	Aliases         []string    `json:"aliases,omitempty"`
+	NegativeAliases []string    `json:"negativeAliases,omitempty"`
+	Covers          []string    `json:"covers,omitempty"`
+	IsIndex         bool        `json:"isIndex"`
+	HasFrontmatter  bool        `json:"-"`
+	SpecType        SpecType    `json:"specType,omitempty"`
+	Playbook        PlaybookRef `json:"playbook,omitempty"`
+	Template        TemplateRef `json:"template,omitempty"`
 }
 
 type PlaybookRef struct {

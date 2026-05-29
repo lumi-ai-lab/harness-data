@@ -161,7 +161,7 @@ func run() error {
 
 func runWikis(root string, args []string) error {
 	if len(args) < 1 {
-		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|check-all|build-index|sync-index-md>")}
+		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|aliases|check-all|build-index|sync-index-md>")}
 	}
 	switch args[0] {
 	case "check-index-md", "check-titles", "check-frontmatter", "check-aliases", "check-covers", "check-links":
@@ -187,6 +187,11 @@ func runWikis(root string, args []string) error {
 	case "recall-debug":
 		if err := runWikiRecallDebug(root, args[1:]); err != nil {
 			return exitCodeError{Code: 2, Err: err}
+		}
+	case "aliases":
+		code, err := runWikiAliases(root, args[1:])
+		if err != nil {
+			return exitCodeError{Code: code, Err: err}
 		}
 	case "check-all":
 		results, err := runWikiCheckAll(root, args[1:])
@@ -222,6 +227,153 @@ func runWikis(root string, args []string) error {
 		return exitCodeError{Code: 2, Err: fmt.Errorf("unknown wikis command: %s", args[0])}
 	}
 	return nil
+}
+
+func runWikiAliases(root string, args []string) (int, error) {
+	if len(args) < 1 {
+		return 2, fmt.Errorf("usage: data-harness-cli wikis aliases <report|export|lint|import>")
+	}
+	switch args[0] {
+	case "report":
+		return 0, runWikiAliasesReport(root, args[1:])
+	case "export":
+		return 0, runWikiAliasesExport(root, args[1:])
+	case "lint":
+		result, err := runWikiAliasesLint(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if len(result.Errors) > 0 {
+			return 1, fmt.Errorf("aliases lint failed with %d error(s)", len(result.Errors))
+		}
+		return 0, nil
+	case "import":
+		result, err := runWikiAliasesImport(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if len(result.Lint.Errors) > 0 {
+			return 1, fmt.Errorf("aliases import failed lint with %d error(s)", len(result.Lint.Errors))
+		}
+		return 0, nil
+	default:
+		return 2, fmt.Errorf("unknown wikis aliases command: %s", args[0])
+	}
+}
+
+func runWikiAliasesReport(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis aliases report", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("aliases report does not accept positional arguments")
+	}
+	report, err := wikis.BuildAliasesReport(root)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(report)
+	}
+	fmt.Printf("spec files: %d\n", report.SpecFiles)
+	fmt.Printf("spec with aliases: %d\n", report.SpecWithAliases)
+	fmt.Printf("spec with negative_aliases: %d\n\n", report.SpecWithNegativeAliases)
+	fmt.Printf("playbook files: %d\n", report.PlaybookFiles)
+	fmt.Printf("playbook with aliases: %d\n", report.PlaybookWithAliases)
+	fmt.Printf("playbook with negative_aliases: %d\n\n", report.PlaybookWithNegativeAliases)
+	fmt.Printf("duplicate aliases: %d\n", report.DuplicateAliases)
+	fmt.Printf("label conflicts: %d\n", report.DuplicateLabels)
+	fmt.Printf("placeholder short docs: %d\n", report.PlaceholderShortDocs)
+	return nil
+}
+
+func runWikiAliasesExport(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis aliases export", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	out := fs.String("out", "", "output file")
+	format := fs.String("format", "yaml", "output format: yaml or json")
+	include := fs.String("include", "spec,playbooks", "comma-separated targets: spec,playbooks")
+	rootLabel := fs.String("root", "wikis", "wiki root label written to export metadata")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("aliases export does not accept positional arguments")
+	}
+	if *out == "" {
+		return fmt.Errorf("aliases export requires --out")
+	}
+	data, err := wikis.ExportAliases(root, splitCSV(*include))
+	if err != nil {
+		return err
+	}
+	data.Root = *rootLabel
+	switch *format {
+	case "yaml", "yml":
+		return wikis.WriteAliasesYAML(*out, data)
+	case "json":
+		encoded, err := wikis.MarshalAliasesJSON(data)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(*out, encoded, 0o644)
+	default:
+		return fmt.Errorf("unsupported aliases export --format: %s", *format)
+	}
+}
+
+func runWikiAliasesLint(root string, args []string) (wikis.AliasesLintResult, error) {
+	fs := flag.NewFlagSet("wikis aliases lint", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "aliases yaml/json file")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.AliasesLintResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.AliasesLintResult{}, fmt.Errorf("aliases lint does not accept positional arguments")
+	}
+	if *file == "" {
+		return wikis.AliasesLintResult{}, fmt.Errorf("aliases lint requires --file")
+	}
+	result, err := wikis.LintAliasesFile(root, *file)
+	if err != nil {
+		return wikis.AliasesLintResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printAliasesLint(result)
+	return result, nil
+}
+
+func runWikiAliasesImport(root string, args []string) (wikis.AliasesImportResult, error) {
+	fs := flag.NewFlagSet("wikis aliases import", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "aliases yaml/json file")
+	apply := fs.Bool("apply", false, "write changes")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.AliasesImportResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.AliasesImportResult{}, fmt.Errorf("aliases import does not accept positional arguments")
+	}
+	if *file == "" {
+		return wikis.AliasesImportResult{}, fmt.Errorf("aliases import requires --file")
+	}
+	result, err := wikis.ImportAliases(root, *file, *apply)
+	if err != nil {
+		return wikis.AliasesImportResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printAliasesImport(result)
+	return result, nil
 }
 
 func runWikiBuildIndex(root string, args []string) (wikis.BuildIndexResult, error) {
@@ -734,6 +886,87 @@ func printCheckResult(result wikis.CheckResult) {
 		}
 		fmt.Println()
 	}
+}
+
+func printAliasesLint(result wikis.AliasesLintResult) {
+	for _, issue := range result.Errors {
+		fmt.Printf("ERROR %s", issue.Code)
+		printAliasesIssue(issue)
+	}
+	for _, issue := range result.Warnings {
+		fmt.Printf("WARN %s", issue.Code)
+		printAliasesIssue(issue)
+	}
+	if len(result.Errors) == 0 && len(result.Warnings) == 0 {
+		fmt.Println("aliases lint ok")
+	}
+}
+
+func printAliasesIssue(issue wikis.AliasesLintIssue) {
+	if issue.Item != "" {
+		fmt.Printf("\titem=%s", issue.Item)
+	}
+	if issue.Field != "" {
+		fmt.Printf("\tfield=%s", issue.Field)
+	}
+	if issue.Value != "" {
+		fmt.Printf("\tvalue=%s", issue.Value)
+	}
+	fmt.Printf("\t%s\n", issue.Message)
+}
+
+func printAliasesImport(result wikis.AliasesImportResult) {
+	if len(result.Lint.Errors) > 0 {
+		printAliasesLint(result.Lint)
+		return
+	}
+	if result.Applied {
+		fmt.Println("APPLIED")
+		fmt.Println()
+		fmt.Printf("updated files: %d\n", result.FilesToUpdate)
+		fmt.Printf("aliases added: %d\n", result.AliasesAdded)
+		fmt.Printf("negative_aliases added: %d\n", result.NegativeAliasesAdded)
+		return
+	}
+	fmt.Println("DRY RUN")
+	fmt.Println()
+	for _, change := range result.Changes {
+		fmt.Printf("UPDATE %s\n", change.Path)
+		printAliasDiff("aliases", change.AliasesAdded, change.AliasesRemoved)
+		printAliasDiff("negative_aliases", change.NegativeAliasesAdded, change.NegativeAliasesRemoved)
+		fmt.Println()
+	}
+	fmt.Println("SUMMARY")
+	fmt.Printf("  files scanned: %d\n", result.FilesScanned)
+	fmt.Printf("  files to update: %d\n", result.FilesToUpdate)
+	fmt.Printf("  aliases added: %d\n", result.AliasesAdded)
+	fmt.Printf("  negative_aliases added: %d\n", result.NegativeAliasesAdded)
+	fmt.Println()
+	fmt.Println("No files were changed. Re-run with --apply to write changes.")
+}
+
+func printAliasDiff(name string, added, removed []string) {
+	if len(added) == 0 && len(removed) == 0 {
+		return
+	}
+	fmt.Printf("  %s:\n", name)
+	for _, value := range added {
+		fmt.Printf("    + %s\n", value)
+	}
+	for _, value := range removed {
+		fmt.Printf("    - %s\n", value)
+	}
+}
+
+func splitCSV(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func rootStart() string {

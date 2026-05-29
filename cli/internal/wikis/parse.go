@@ -14,10 +14,11 @@ import (
 )
 
 var allowedFrontmatter = map[string]bool{
-	"name":    true,
-	"label":   true,
-	"aliases": true,
-	"covers":  true,
+	"name":             true,
+	"label":            true,
+	"aliases":          true,
+	"negative_aliases": true,
+	"covers":           true,
 }
 
 type LoadCorpusOptions struct {
@@ -131,6 +132,7 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		doc.Name, _ = fm.Fields["name"].(string)
 		doc.Label, _ = fm.Fields["label"].(string)
 		doc.Aliases, _ = fm.Fields["aliases"].([]string)
+		doc.NegativeAliases, _ = fm.Fields["negative_aliases"].([]string)
 		doc.Covers, _ = fm.Fields["covers"].([]string)
 	}
 	errs := fmErrs
@@ -289,7 +291,7 @@ func parseFrontmatter(logical string, data []byte) (Frontmatter, []CheckError) {
 				continue
 			}
 			fm.Fields[key] = cleanScalar(value)
-		case "aliases", "covers":
+		case "aliases", "negative_aliases", "covers":
 			values, ok := parseStringArray(lines, &i, end, value)
 			if !ok {
 				code := "invalid_frontmatter_type"
