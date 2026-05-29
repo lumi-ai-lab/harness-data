@@ -20,7 +20,16 @@ var allowedFrontmatter = map[string]bool{
 	"covers":  true,
 }
 
+type LoadCorpusOptions struct {
+	FailFastParse bool
+	ParseCodes    map[string]bool
+}
+
 func LoadCorpus(root string) (Corpus, []CheckError, error) {
+	return LoadCorpusWithOptions(root, LoadCorpusOptions{})
+}
+
+func LoadCorpusWithOptions(root string, opts LoadCorpusOptions) (Corpus, []CheckError, error) {
 	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		return Corpus{}, nil, err
@@ -51,6 +60,9 @@ func LoadCorpus(root string) (Corpus, []CheckError, error) {
 		}
 		errs = append(errs, parseErrs...)
 		docs = append(docs, doc)
+		if opts.FailFastParse && hasSelectedParseErr(parseErrs, opts.ParseCodes) {
+			break
+		}
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 	byPath := map[string]*Document{}
@@ -58,6 +70,21 @@ func LoadCorpus(root string) (Corpus, []CheckError, error) {
 		byPath[docs[i].Path] = &docs[i]
 	}
 	return Corpus{Root: root, Docs: docs, ByPath: byPath, SpecPaths: specSet}, errs, nil
+}
+
+func hasSelectedParseErr(errs []CheckError, codes map[string]bool) bool {
+	if len(errs) == 0 {
+		return false
+	}
+	if len(codes) == 0 {
+		return true
+	}
+	for _, err := range errs {
+		if codes[err.Code] {
+			return true
+		}
+	}
+	return false
 }
 
 func ParseDocument(resolver harness.PathResolver, logical string, specSet map[string]bool) (Document, []CheckError, error) {

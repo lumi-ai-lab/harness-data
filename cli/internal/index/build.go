@@ -27,7 +27,7 @@ func Build(root string) (BuildResult, error) {
 	if err != nil {
 		return BuildResult{}, err
 	}
-	routingDocs, err := scan(resolver, "routing")
+	routingDocs, err := scanOptional(resolver, "routing")
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -44,8 +44,10 @@ func Build(root string) (BuildResult, error) {
 	if err := writeIndex(root, "spec-index.json", result.Spec); err != nil {
 		return BuildResult{}, err
 	}
-	if err := writeIndex(root, "routing-index.json", result.Routing); err != nil {
-		return BuildResult{}, err
+	if resolver.Paths.Routing != "" || len(routingDocs) > 0 {
+		if err := writeIndex(root, "routing-index.json", result.Routing); err != nil {
+			return BuildResult{}, err
+		}
 	}
 	if err := writeIndex(root, "playbook-index.json", result.Playbook); err != nil {
 		return BuildResult{}, err
@@ -60,7 +62,7 @@ func AllDocuments(root string) ([]harness.Document, error) {
 	}
 	var all []harness.Document
 	for _, dir := range []string{"spec", "routing", "playbooks"} {
-		docs, err := scan(resolver, dir)
+		docs, err := scanOptional(resolver, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -92,6 +94,17 @@ func scan(resolver harness.PathResolver, dir string) ([]harness.Document, error)
 	})
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 	return docs, err
+}
+
+func scanOptional(resolver harness.PathResolver, dir string) ([]harness.Document, error) {
+	base := resolver.KnowledgePath(dir)
+	if _, err := os.Stat(base); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return scan(resolver, dir)
 }
 
 func makeIndex(root string, docs []harness.Document) harness.IndexFile {

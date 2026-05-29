@@ -20,7 +20,18 @@ const (
 var AllCheckNames = []string{CheckIndexMD, CheckTitles, CheckFrontmatter, CheckAliases, CheckCovers, CheckLinks}
 
 func RunCheck(root, name string, opts CheckOptions) (CheckResult, error) {
-	corpus, parseErrs, err := LoadCorpus(root)
+	corpusOpts := LoadCorpusOptions{}
+	if opts.FailFast {
+		switch name {
+		case CheckTitles:
+			corpusOpts.FailFastParse = true
+			corpusOpts.ParseCodes = parseCodeSet("missing_h1", "multiple_h1")
+		case CheckFrontmatter:
+			corpusOpts.FailFastParse = true
+			corpusOpts.ParseCodes = parseCodeSet("unknown_frontmatter_field", "invalid_frontmatter_type", "invalid_covers_type")
+		}
+	}
+	corpus, parseErrs, err := LoadCorpusWithOptions(root, corpusOpts)
 	if err != nil {
 		return CheckResult{}, err
 	}
@@ -130,6 +141,14 @@ func filterParseErrs(errs []CheckError, codes ...string) []CheckError {
 		}
 	}
 	return out
+}
+
+func parseCodeSet(codes ...string) map[string]bool {
+	allowed := map[string]bool{}
+	for _, code := range codes {
+		allowed[code] = true
+	}
+	return allowed
 }
 
 func checkIndexMD(c Corpus, opts CheckOptions) []CheckError {

@@ -304,9 +304,9 @@ func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument)
 	if len(candidates) <= 1 || commonDomain == "" {
 		return candidates
 	}
-	domainMatches := filterCombos(candidates, func(doc wikis.RuntimeDocument) bool { return doc.Domain == commonDomain })
-	if len(domainMatches) > 0 {
-		candidates = domainMatches
+	closestDomainMatches := closestCombosByDomain(candidates, commonDomain)
+	if len(closestDomainMatches) > 0 {
+		candidates = closestDomainMatches
 	}
 	sortRuntimeDocsByPath(candidates)
 	return candidates
@@ -345,6 +345,50 @@ func filterCombos(docs []wikis.RuntimeDocument, keep func(wikis.RuntimeDocument)
 		}
 	}
 	return out
+}
+
+func closestCombosByDomain(docs []wikis.RuntimeDocument, commonDomain string) []wikis.RuntimeDocument {
+	best := -1
+	var out []wikis.RuntimeDocument
+	for _, doc := range docs {
+		distance, ok := domainDistance(doc.Domain, commonDomain)
+		if !ok {
+			continue
+		}
+		if best == -1 || distance < best {
+			best = distance
+			out = out[:0]
+		}
+		if distance == best {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
+func domainDistance(candidate, target string) (int, bool) {
+	candidate = strings.Trim(candidate, "/")
+	target = strings.Trim(target, "/")
+	if candidate == "" || target == "" {
+		return 0, candidate == target
+	}
+	if candidate == target {
+		return 0, true
+	}
+	candidateParts := strings.Split(candidate, "/")
+	targetParts := strings.Split(target, "/")
+	common := 0
+	for common < len(candidateParts) && common < len(targetParts) && candidateParts[common] == targetParts[common] {
+		common++
+	}
+	if common == 0 {
+		return 0, false
+	}
+	isAncestorOrDescendant := common == len(candidateParts) || common == len(targetParts)
+	if !isAncestorOrDescendant {
+		return 0, false
+	}
+	return (len(candidateParts) - common) + (len(targetParts) - common), true
 }
 
 func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.RuntimeDocument) []sessionstate.PlaybookCandidate {
