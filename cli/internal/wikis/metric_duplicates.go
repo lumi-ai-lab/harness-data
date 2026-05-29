@@ -22,14 +22,14 @@ const (
 )
 
 type MetricDuplicatesReport struct {
-	MetricFilesScanned       int                    `json:"metricFilesScanned"`
-	DuplicateLabelGroups     int                    `json:"duplicateLabelGroups"`
-	DuplicateChineseGroups   int                    `json:"duplicateChineseGroups"`
-	DuplicateCodeGroups      int                    `json:"duplicateCodeGroups"`
-	DuplicateNameGroups      int                    `json:"duplicateNameGroups"`
-	DuplicateBasenameGroups  int                    `json:"duplicateBasenameGroups"`
-	CrossSystemGroups        int                    `json:"crossSystemGroups"`
-	Groups                   []MetricDuplicateGroup `json:"groups,omitempty"`
+	MetricFilesScanned      int                    `json:"metricFilesScanned"`
+	DuplicateLabelGroups    int                    `json:"duplicateLabelGroups"`
+	DuplicateChineseGroups  int                    `json:"duplicateChineseGroups"`
+	DuplicateCodeGroups     int                    `json:"duplicateCodeGroups"`
+	DuplicateNameGroups     int                    `json:"duplicateNameGroups"`
+	DuplicateBasenameGroups int                    `json:"duplicateBasenameGroups"`
+	CrossSystemGroups       int                    `json:"crossSystemGroups"`
+	Groups                  []MetricDuplicateGroup `json:"groups,omitempty"`
 }
 
 type MetricDuplicatesFile struct {
@@ -37,6 +37,23 @@ type MetricDuplicatesFile struct {
 	Root        string                 `json:"root"`
 	GeneratedBy string                 `json:"generated_by"`
 	Groups      []MetricDuplicateGroup `json:"groups"`
+}
+
+type LiteMetricDuplicatesFile struct {
+	Version    int                        `json:"version"`
+	Format     string                     `json:"format"`
+	Duplicates []LiteMetricDuplicateGroup `json:"duplicates"`
+}
+
+type LiteMetricDuplicateGroup struct {
+	By        string   `json:"by"`
+	Value     string   `json:"value"`
+	Label     string   `json:"label,omitempty"`
+	Severity  string   `json:"severity"`
+	Files     []string `json:"files"`
+	Canonical string   `json:"canonical"`
+	Action    string   `json:"action"`
+	Notes     string   `json:"notes"`
 }
 
 type MetricDuplicateGroup struct {
@@ -67,9 +84,9 @@ type MetricDuplicateDecision struct {
 }
 
 type MetricDuplicatesLintResult struct {
-	OK       bool                         `json:"ok"`
-	Errors   []MetricDuplicatesLintIssue  `json:"errors"`
-	Warnings []MetricDuplicatesLintIssue  `json:"warnings"`
+	OK       bool                        `json:"ok"`
+	Errors   []MetricDuplicatesLintIssue `json:"errors"`
+	Warnings []MetricDuplicatesLintIssue `json:"warnings"`
 }
 
 type MetricDuplicatesLintIssue struct {
@@ -93,10 +110,10 @@ type MetricDuplicatesImportResult struct {
 }
 
 type MetricDuplicatesImportChange struct {
-	Group  string                         `json:"group"`
-	Path   string                         `json:"path"`
-	Fields map[string]string              `json:"fields"`
-	Before map[string]string              `json:"before,omitempty"`
+	Group  string            `json:"group"`
+	Path   string            `json:"path"`
+	Fields map[string]string `json:"fields"`
+	Before map[string]string `json:"before,omitempty"`
 }
 
 type metricSpec struct {
@@ -156,8 +173,33 @@ func ExportMetricDuplicates(root, rootLabel string) (MetricDuplicatesFile, error
 	}, nil
 }
 
+func ExportMetricDuplicatesLite(root string) (LiteMetricDuplicatesFile, error) {
+	groups, _, err := buildMetricDuplicateGroups(root)
+	if err != nil {
+		return LiteMetricDuplicatesFile{}, err
+	}
+	out := LiteMetricDuplicatesFile{Version: 1, Format: "lite"}
+	for _, group := range groups {
+		files := make([]string, 0, len(group.Files))
+		for _, file := range group.Files {
+			files = append(files, file.Path)
+		}
+		out.Duplicates = append(out.Duplicates, LiteMetricDuplicateGroup{
+			By:        group.MatchType,
+			Value:     group.Value,
+			Label:     group.Label,
+			Severity:  group.Severity,
+			Files:     files,
+			Canonical: group.Decision.Canonical,
+			Action:    group.Decision.Action,
+			Notes:     group.Decision.Notes,
+		})
+	}
+	return out, nil
+}
+
 func LintMetricDuplicatesFile(root, file string) (MetricDuplicatesLintResult, error) {
-	data, err := ReadMetricDuplicatesFile(file)
+	data, err := ReadMetricDuplicatesFile(root, file)
 	if err != nil {
 		return MetricDuplicatesLintResult{}, err
 	}
@@ -165,7 +207,7 @@ func LintMetricDuplicatesFile(root, file string) (MetricDuplicatesLintResult, er
 }
 
 func ImportMetricDuplicates(root, file string, apply bool) (MetricDuplicatesImportResult, error) {
-	data, err := ReadMetricDuplicatesFile(file)
+	data, err := ReadMetricDuplicatesFile(root, file)
 	if err != nil {
 		return MetricDuplicatesImportResult{}, err
 	}
@@ -246,8 +288,26 @@ func MarshalMetricDuplicatesJSON(data MetricDuplicatesFile) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
+func MarshalMetricDuplicatesLiteJSON(data LiteMetricDuplicatesFile) ([]byte, error) {
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
 func WriteMetricDuplicatesYAML(file string, data MetricDuplicatesFile) error {
 	out := FormatMetricDuplicatesYAML(data)
+	if dir := filepath.Dir(file); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(file, []byte(out), 0o644)
+}
+
+func WriteMetricDuplicatesLiteYAML(file string, data LiteMetricDuplicatesFile) error {
+	out := FormatMetricDuplicatesLiteYAML(data)
 	if dir := filepath.Dir(file); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -287,19 +347,119 @@ func FormatMetricDuplicatesYAML(data MetricDuplicatesFile) string {
 	return b.String()
 }
 
-func ReadMetricDuplicatesFile(file string) (MetricDuplicatesFile, error) {
+func FormatMetricDuplicatesLiteYAML(data LiteMetricDuplicatesFile) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "version: %d\n", data.Version)
+	writeScalar(&b, 0, "format", "lite")
+	b.WriteString("duplicates:\n")
+	for _, group := range data.Duplicates {
+		fmt.Fprintf(&b, "  - by: %s\n", quoteYAML(group.By))
+		writeScalar(&b, 4, "value", group.Value)
+		writeScalar(&b, 4, "label", group.Label)
+		writeScalar(&b, 4, "severity", group.Severity)
+		b.WriteString("    files:\n")
+		for _, file := range group.Files {
+			fmt.Fprintf(&b, "      - %s\n", quoteYAML(file))
+		}
+		writeScalar(&b, 4, "canonical", group.Canonical)
+		writeScalar(&b, 4, "action", group.Action)
+		writeScalar(&b, 4, "notes", group.Notes)
+	}
+	return b.String()
+}
+
+func ReadMetricDuplicatesFile(root, file string) (MetricDuplicatesFile, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return MetricDuplicatesFile{}, err
 	}
 	if strings.HasSuffix(file, ".json") {
+		var probe struct {
+			Format     string          `json:"format"`
+			Groups     json.RawMessage `json:"groups"`
+			Duplicates json.RawMessage `json:"duplicates"`
+		}
+		if err := json.Unmarshal(data, &probe); err != nil {
+			return MetricDuplicatesFile{}, err
+		}
+		if probe.Format == "lite" || len(probe.Duplicates) > 0 {
+			var lite LiteMetricDuplicatesFile
+			if err := json.Unmarshal(data, &lite); err != nil {
+				return MetricDuplicatesFile{}, err
+			}
+			return NormalizeMetricDuplicates(root, lite)
+		}
 		var out MetricDuplicatesFile
 		if err := json.Unmarshal(data, &out); err != nil {
 			return MetricDuplicatesFile{}, err
 		}
 		return out, nil
 	}
+	if metricDuplicatesYAMLIsLite(data) {
+		lite, err := parseLiteMetricDuplicatesYAML(data)
+		if err != nil {
+			return MetricDuplicatesFile{}, err
+		}
+		return NormalizeMetricDuplicates(root, lite)
+	}
 	return parseMetricDuplicatesYAML(data)
+}
+
+func NormalizeMetricDuplicates(root string, data LiteMetricDuplicatesFile) (MetricDuplicatesFile, error) {
+	specs, err := loadMetricSpecs(root)
+	if err != nil {
+		return MetricDuplicatesFile{}, err
+	}
+	specByPath := map[string]metricSpec{}
+	for _, spec := range specs {
+		specByPath[spec.Path] = spec
+	}
+	out := MetricDuplicatesFile{Version: data.Version}
+	if out.Version == 0 {
+		out.Version = 1
+	}
+	for _, lite := range data.Duplicates {
+		group := MetricDuplicateGroup{
+			ID:        metricDuplicateID(lite.By, lite.Value),
+			MatchType: lite.By,
+			Label:     lite.Label,
+			Value:     lite.Value,
+			Severity:  lite.Severity,
+			Decision: MetricDuplicateDecision{
+				Canonical: lite.Canonical,
+				Action:    lite.Action,
+				Notes:     lite.Notes,
+			},
+		}
+		for _, filePath := range lite.Files {
+			item := MetricDuplicateFileItem{Path: filePath, Status: "undecided"}
+			if spec, ok := specByPath[filePath]; ok {
+				item.Domain = spec.Domain
+				item.Group = spec.Group
+				item.Name = spec.Name
+				item.Code = spec.Code
+				item.Label = spec.Label
+			}
+			group.Files = append(group.Files, item)
+		}
+		if group.Label == "" {
+			group.Label = duplicateGroupLabel(group.MatchType, group.Value)
+		}
+		if group.Severity == "" {
+			if metricDuplicateCrossSystem(group.Files) {
+				group.Severity = "error"
+			} else {
+				group.Severity = "warn"
+			}
+		}
+		if metricDuplicateCrossSystem(group.Files) || group.Severity == "error" {
+			group.Reason = "同一指标不应同时出现在 CMR 和 IDX"
+		} else {
+			group.Reason = "精确重复命中，需要人工确认唯一 canonical owner"
+		}
+		out.Groups = append(out.Groups, group)
+	}
+	return out, nil
 }
 
 func LintMetricDuplicates(root string, data MetricDuplicatesFile) MetricDuplicatesLintResult {
@@ -704,6 +864,123 @@ func parseMetricDuplicatesYAML(data []byte) (MetricDuplicatesFile, error) {
 		out.Version = 1
 	}
 	return out, nil
+}
+
+func metricDuplicatesYAMLIsLite(data []byte) bool {
+	lines := strings.Split(string(data), "\n")
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := splitYAMLKV(line)
+		if !ok {
+			continue
+		}
+		if key == "format" && cleanYAMLScalar(value) == "lite" {
+			return true
+		}
+		if key == "duplicates" {
+			return true
+		}
+		if key == "groups" {
+			return false
+		}
+	}
+	return false
+}
+
+func parseLiteMetricDuplicatesYAML(data []byte) (LiteMetricDuplicatesFile, error) {
+	lines := strings.Split(string(data), "\n")
+	var out LiteMetricDuplicatesFile
+	var group *LiteMetricDuplicateGroup
+	section := ""
+	subsection := ""
+	for _, raw := range lines {
+		raw = strings.TrimRight(raw, " \t")
+		if strings.TrimSpace(raw) == "" || strings.HasPrefix(strings.TrimSpace(raw), "#") {
+			continue
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " "))
+		line := strings.TrimSpace(raw)
+		if indent == 0 {
+			key, value, ok := splitYAMLKV(line)
+			if !ok {
+				continue
+			}
+			switch key {
+			case "version":
+				fmt.Sscanf(value, "%d", &out.Version)
+			case "format":
+				out.Format = cleanYAMLScalar(value)
+			case "duplicates":
+				section = "duplicates"
+			}
+			continue
+		}
+		if section != "duplicates" {
+			continue
+		}
+		if indent == 2 && strings.HasPrefix(line, "- ") {
+			out.Duplicates = append(out.Duplicates, LiteMetricDuplicateGroup{})
+			group = &out.Duplicates[len(out.Duplicates)-1]
+			subsection = ""
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			if key, value, ok := splitYAMLKV(rest); ok {
+				setLiteMetricDuplicateField(group, key, value)
+			}
+			continue
+		}
+		if group == nil {
+			continue
+		}
+		if indent == 4 {
+			key, value, ok := splitYAMLKV(line)
+			if !ok {
+				continue
+			}
+			if key == "files" {
+				subsection = "files"
+				continue
+			}
+			subsection = ""
+			setLiteMetricDuplicateField(group, key, value)
+			continue
+		}
+		if subsection == "files" && indent == 6 && strings.HasPrefix(line, "- ") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			if key, rawValue, ok := splitYAMLKV(value); ok && key == "path" {
+				value = rawValue
+			}
+			group.Files = append(group.Files, cleanYAMLScalar(value))
+		}
+	}
+	if out.Version == 0 {
+		out.Version = 1
+	}
+	if out.Format == "" {
+		out.Format = "lite"
+	}
+	return out, nil
+}
+
+func setLiteMetricDuplicateField(group *LiteMetricDuplicateGroup, key, value string) {
+	switch key {
+	case "by":
+		group.By = cleanYAMLScalar(value)
+	case "value":
+		group.Value = cleanYAMLScalar(value)
+	case "label":
+		group.Label = cleanYAMLScalar(value)
+	case "severity":
+		group.Severity = cleanYAMLScalar(value)
+	case "canonical":
+		group.Canonical = cleanYAMLScalar(value)
+	case "action":
+		group.Action = cleanYAMLScalar(value)
+	case "notes":
+		group.Notes = cleanYAMLScalar(value)
+	}
 }
 
 func canonicalFrontmatterFields(data []byte) map[string]string {

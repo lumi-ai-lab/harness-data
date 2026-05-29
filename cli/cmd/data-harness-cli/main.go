@@ -291,7 +291,7 @@ func runWikiMetricDuplicatesExport(root string, args []string) error {
 	fs := flag.NewFlagSet("wikis metric-duplicates export", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	out := fs.String("out", "", "output file")
-	format := fs.String("format", "yaml", "output format: yaml or json")
+	format := fs.String("format", "lite", "output format: lite, full, or json")
 	rootLabel := fs.String("root", "wikis", "wiki root label written to export metadata")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -302,14 +302,24 @@ func runWikiMetricDuplicatesExport(root string, args []string) error {
 	if *out == "" {
 		return fmt.Errorf("metric-duplicates export requires --out")
 	}
-	data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
-	if err != nil {
-		return err
-	}
 	switch *format {
-	case "yaml", "yml":
+	case "lite", "yaml", "yml":
+		data, err := wikis.ExportMetricDuplicatesLite(root)
+		if err != nil {
+			return err
+		}
+		return wikis.WriteMetricDuplicatesLiteYAML(*out, data)
+	case "full":
+		data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
+		if err != nil {
+			return err
+		}
 		return wikis.WriteMetricDuplicatesYAML(*out, data)
 	case "json":
+		data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
+		if err != nil {
+			return err
+		}
 		encoded, err := wikis.MarshalMetricDuplicatesJSON(data)
 		if err != nil {
 			return err
@@ -436,7 +446,7 @@ func runWikiAliasesExport(root string, args []string) error {
 	fs := flag.NewFlagSet("wikis aliases export", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	out := fs.String("out", "", "output file")
-	format := fs.String("format", "yaml", "output format: yaml or json")
+	format := fs.String("format", "lite", "output format: lite, full, yaml, json, or lite-json")
 	include := fs.String("include", "spec,playbooks", "comma-separated targets: spec,playbooks")
 	rootLabel := fs.String("root", "wikis", "wiki root label written to export metadata")
 	if err := fs.Parse(args); err != nil {
@@ -448,16 +458,37 @@ func runWikiAliasesExport(root string, args []string) error {
 	if *out == "" {
 		return fmt.Errorf("aliases export requires --out")
 	}
-	data, err := wikis.ExportAliases(root, splitCSV(*include))
-	if err != nil {
-		return err
-	}
-	data.Root = *rootLabel
 	switch *format {
-	case "yaml", "yml":
+	case "lite", "yaml", "yml":
+		data, err := wikis.ExportAliasesLite(root, splitCSV(*include))
+		if err != nil {
+			return err
+		}
+		return wikis.WriteAliasesLiteYAML(*out, data)
+	case "full":
+		data, err := wikis.ExportAliases(root, splitCSV(*include))
+		if err != nil {
+			return err
+		}
+		data.Root = *rootLabel
 		return wikis.WriteAliasesYAML(*out, data)
 	case "json":
+		data, err := wikis.ExportAliases(root, splitCSV(*include))
+		if err != nil {
+			return err
+		}
+		data.Root = *rootLabel
 		encoded, err := wikis.MarshalAliasesJSON(data)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(*out, encoded, 0o644)
+	case "lite-json":
+		data, err := wikis.ExportAliasesLite(root, splitCSV(*include))
+		if err != nil {
+			return err
+		}
+		encoded, err := wikis.MarshalAliasesLiteJSON(data)
 		if err != nil {
 			return err
 		}
