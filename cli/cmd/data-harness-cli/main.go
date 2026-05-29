@@ -161,7 +161,7 @@ func run() error {
 
 func runWikis(root string, args []string) error {
 	if len(args) < 1 {
-		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|aliases|check-all|build-index|sync-index-md>")}
+		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|aliases|metric-duplicates|check-all|build-index|sync-index-md>")}
 	}
 	switch args[0] {
 	case "check-index-md", "check-titles", "check-frontmatter", "check-aliases", "check-covers", "check-links":
@@ -190,6 +190,11 @@ func runWikis(root string, args []string) error {
 		}
 	case "aliases":
 		code, err := runWikiAliases(root, args[1:])
+		if err != nil {
+			return exitCodeError{Code: code, Err: err}
+		}
+	case "metric-duplicates":
+		code, err := runWikiMetricDuplicates(root, args[1:])
 		if err != nil {
 			return exitCodeError{Code: code, Err: err}
 		}
@@ -227,6 +232,143 @@ func runWikis(root string, args []string) error {
 		return exitCodeError{Code: 2, Err: fmt.Errorf("unknown wikis command: %s", args[0])}
 	}
 	return nil
+}
+
+func runWikiMetricDuplicates(root string, args []string) (int, error) {
+	if len(args) < 1 {
+		return 2, fmt.Errorf("usage: data-harness-cli wikis metric-duplicates <report|export|lint|import>")
+	}
+	switch args[0] {
+	case "report":
+		return 0, runWikiMetricDuplicatesReport(root, args[1:])
+	case "export":
+		return 0, runWikiMetricDuplicatesExport(root, args[1:])
+	case "lint":
+		result, err := runWikiMetricDuplicatesLint(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if len(result.Errors) > 0 {
+			return 1, fmt.Errorf("metric-duplicates lint failed with %d error(s)", len(result.Errors))
+		}
+		return 0, nil
+	case "import":
+		result, err := runWikiMetricDuplicatesImport(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if len(result.Lint.Errors) > 0 {
+			return 1, fmt.Errorf("metric-duplicates import failed lint with %d error(s)", len(result.Lint.Errors))
+		}
+		return 0, nil
+	default:
+		return 2, fmt.Errorf("unknown wikis metric-duplicates command: %s", args[0])
+	}
+}
+
+func runWikiMetricDuplicatesReport(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis metric-duplicates report", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("metric-duplicates report does not accept positional arguments")
+	}
+	report, err := wikis.BuildMetricDuplicatesReport(root)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(report)
+	}
+	printMetricDuplicatesReport(report)
+	return nil
+}
+
+func runWikiMetricDuplicatesExport(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis metric-duplicates export", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	out := fs.String("out", "", "output file")
+	format := fs.String("format", "yaml", "output format: yaml or json")
+	rootLabel := fs.String("root", "wikis", "wiki root label written to export metadata")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("metric-duplicates export does not accept positional arguments")
+	}
+	if *out == "" {
+		return fmt.Errorf("metric-duplicates export requires --out")
+	}
+	data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
+	if err != nil {
+		return err
+	}
+	switch *format {
+	case "yaml", "yml":
+		return wikis.WriteMetricDuplicatesYAML(*out, data)
+	case "json":
+		encoded, err := wikis.MarshalMetricDuplicatesJSON(data)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(*out, encoded, 0o644)
+	default:
+		return fmt.Errorf("unsupported metric-duplicates export --format: %s", *format)
+	}
+}
+
+func runWikiMetricDuplicatesLint(root string, args []string) (wikis.MetricDuplicatesLintResult, error) {
+	fs := flag.NewFlagSet("wikis metric-duplicates lint", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "duplicate metrics yaml/json file")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.MetricDuplicatesLintResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.MetricDuplicatesLintResult{}, fmt.Errorf("metric-duplicates lint does not accept positional arguments")
+	}
+	if *file == "" {
+		return wikis.MetricDuplicatesLintResult{}, fmt.Errorf("metric-duplicates lint requires --file")
+	}
+	result, err := wikis.LintMetricDuplicatesFile(root, *file)
+	if err != nil {
+		return wikis.MetricDuplicatesLintResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printMetricDuplicatesLint(result)
+	return result, nil
+}
+
+func runWikiMetricDuplicatesImport(root string, args []string) (wikis.MetricDuplicatesImportResult, error) {
+	fs := flag.NewFlagSet("wikis metric-duplicates import", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "duplicate metrics yaml/json file")
+	apply := fs.Bool("apply", false, "write changes")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.MetricDuplicatesImportResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.MetricDuplicatesImportResult{}, fmt.Errorf("metric-duplicates import does not accept positional arguments")
+	}
+	if *file == "" {
+		return wikis.MetricDuplicatesImportResult{}, fmt.Errorf("metric-duplicates import requires --file")
+	}
+	result, err := wikis.ImportMetricDuplicates(root, *file, *apply)
+	if err != nil {
+		return wikis.MetricDuplicatesImportResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printMetricDuplicatesImport(result)
+	return result, nil
 }
 
 func runWikiAliases(root string, args []string) (int, error) {
@@ -900,6 +1042,100 @@ func printAliasesLint(result wikis.AliasesLintResult) {
 	if len(result.Errors) == 0 && len(result.Warnings) == 0 {
 		fmt.Println("aliases lint ok")
 	}
+}
+
+func printMetricDuplicatesReport(report wikis.MetricDuplicatesReport) {
+	fmt.Printf("metric files scanned: %d\n", report.MetricFilesScanned)
+	fmt.Printf("duplicate label groups: %d\n", report.DuplicateLabelGroups)
+	fmt.Printf("duplicate chinese name groups: %d\n", report.DuplicateChineseGroups)
+	fmt.Printf("duplicate code groups: %d\n", report.DuplicateCodeGroups)
+	fmt.Printf("duplicate name groups: %d\n", report.DuplicateNameGroups)
+	fmt.Printf("duplicate basename groups: %d\n", report.DuplicateBasenameGroups)
+	fmt.Printf("cross-system duplicate groups: %d\n", report.CrossSystemGroups)
+	fmt.Println()
+	for _, group := range report.Groups {
+		if group.Severity == "error" {
+			fmt.Printf("ERROR cross-system duplicate:\n")
+		} else {
+			fmt.Printf("WARN duplicate %s:\n", group.MatchType)
+		}
+		if group.Label != "" {
+			fmt.Printf("  label: %s\n", group.Label)
+		}
+		if group.Value != "" && group.Value != group.Label {
+			fmt.Printf("  value: %s\n", group.Value)
+		}
+		fmt.Println("  files:")
+		for _, file := range group.Files {
+			fmt.Printf("    - %s\n", file.Path)
+		}
+		fmt.Println()
+	}
+}
+
+func printMetricDuplicatesLint(result wikis.MetricDuplicatesLintResult) {
+	for _, issue := range result.Errors {
+		fmt.Printf("ERROR %s", issue.Code)
+		printMetricDuplicatesIssue(issue)
+	}
+	for _, issue := range result.Warnings {
+		fmt.Printf("WARN %s", issue.Code)
+		printMetricDuplicatesIssue(issue)
+	}
+	if len(result.Errors) == 0 && len(result.Warnings) == 0 {
+		fmt.Println("metric-duplicates lint ok")
+	}
+}
+
+func printMetricDuplicatesIssue(issue wikis.MetricDuplicatesLintIssue) {
+	if issue.Group != "" {
+		fmt.Printf("\tgroup=%s", issue.Group)
+	}
+	if issue.Field != "" {
+		fmt.Printf("\tfield=%s", issue.Field)
+	}
+	if issue.Value != "" {
+		fmt.Printf("\tvalue=%s", issue.Value)
+	}
+	fmt.Printf("\t%s\n", issue.Message)
+}
+
+func printMetricDuplicatesImport(result wikis.MetricDuplicatesImportResult) {
+	if len(result.Lint.Errors) > 0 {
+		printMetricDuplicatesLint(result.Lint)
+		return
+	}
+	if result.Applied {
+		fmt.Println("APPLIED")
+		fmt.Println()
+		fmt.Printf("groups applied: %d\n", result.GroupsScanned)
+		fmt.Printf("updated files: %d\n", result.FilesToUpdate)
+		fmt.Printf("canonical marks: %d\n", result.CanonicalMarks)
+		fmt.Printf("deprecated marks: %d\n", result.DeprecatedMarks)
+		fmt.Printf("merge_later marks: %d\n", result.MergeLaterMarks)
+		return
+	}
+	fmt.Println("DRY RUN")
+	fmt.Println()
+	for _, change := range result.Changes {
+		fmt.Printf("GROUP %s\n", change.Group)
+		fmt.Printf("  update:\n")
+		fmt.Printf("    %s\n", change.Path)
+		for _, key := range []string{"canonical_status", "canonical_group", "canonical_target", "canonical_reason"} {
+			if value := change.Fields[key]; value != "" {
+				fmt.Printf("      %s: %s\n", key, value)
+			}
+		}
+		fmt.Println()
+	}
+	fmt.Println("SUMMARY")
+	fmt.Printf("  groups scanned: %d\n", result.GroupsScanned)
+	fmt.Printf("  files to update: %d\n", result.FilesToUpdate)
+	fmt.Printf("  canonical marks: %d\n", result.CanonicalMarks)
+	fmt.Printf("  deprecated marks: %d\n", result.DeprecatedMarks)
+	fmt.Printf("  merge_later marks: %d\n", result.MergeLaterMarks)
+	fmt.Println()
+	fmt.Println("No files were changed. Re-run with --apply to write changes.")
 }
 
 func printAliasesIssue(issue wikis.AliasesLintIssue) {

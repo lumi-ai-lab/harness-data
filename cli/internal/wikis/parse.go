@@ -14,11 +14,15 @@ import (
 )
 
 var allowedFrontmatter = map[string]bool{
-	"name":             true,
-	"label":            true,
-	"aliases":          true,
-	"negative_aliases": true,
-	"covers":           true,
+	"name":               true,
+	"label":              true,
+	"aliases":            true,
+	"negative_aliases":   true,
+	"covers":             true,
+	"canonical_status":   true,
+	"canonical_group":    true,
+	"canonical_target":   true,
+	"canonical_reason":   true,
 }
 
 type LoadCorpusOptions struct {
@@ -285,7 +289,7 @@ func parseFrontmatter(logical string, data []byte) (Frontmatter, []CheckError) {
 			continue
 		}
 		switch key {
-		case "name", "label":
+		case "name", "label", "canonical_status", "canonical_group", "canonical_target", "canonical_reason":
 			if value == "" || strings.HasPrefix(value, "[") {
 				errs = append(errs, CheckError{Path: logical, Code: "invalid_frontmatter_type", Message: "frontmatter field must be a string", Target: key})
 				continue
