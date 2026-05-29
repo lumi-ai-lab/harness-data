@@ -60,6 +60,42 @@ covers:
 	}
 }
 
+func TestParseDocumentParsesSinglePlaybookIntents(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "wikis/playbooks/idx/business-manager/s-sale-amt.md", `---
+intents:
+  current_value:
+    aliases: ["值", "指标值"]
+  trend:
+    aliases:
+      - 趋势
+      - 走势
+---
+# 销售额取数
+`)
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specSet := map[string]bool{"spec/idx/business-manager/s-sale-amt.md": true}
+	playbook, errs, err := ParseDocument(resolver, "playbooks/idx/business-manager/s-sale-amt.md", specSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected parse errors: %+v", errs)
+	}
+	if !playbook.Playbook.IsSingle || playbook.Playbook.IsCombo {
+		t.Fatalf("expected single playbook: %+v", playbook.Playbook)
+	}
+	if got := playbook.Playbook.Intents["current_value"].Aliases; strings.Join(got, ",") != "值,指标值" {
+		t.Fatalf("unexpected current_value aliases: %+v", got)
+	}
+	if got := playbook.Playbook.Intents["trend"].Aliases; strings.Join(got, ",") != "趋势,走势" {
+		t.Fatalf("unexpected trend aliases: %+v", got)
+	}
+}
+
 func TestParseDocumentReportsH1AndUnknownFrontmatter(t *testing.T) {
 	root := testWikiRoot(t)
 	writeFile(t, root, "wikis/spec/idx/business-manager/s-sale-amt.md", `---
@@ -93,6 +129,12 @@ label: 销售额
 aliases: ["销售额", "销售额"]
 ---
 # 销售额
+`)
+	writeFile(t, root, "wikis/spec/idx/business-manager/s-profit-amt.md", `---
+name: profit_amt
+label: 毛利额
+---
+# 毛利额
 `)
 	writeFile(t, root, "wikis/playbooks/index.md", "# Playbooks\n")
 	writeFile(t, root, "wikis/playbooks/idx/index.md", "# Idx\n")
@@ -132,8 +174,43 @@ covers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resultHasCode(links, "missing_template") {
-		t.Fatalf("expected missing_template, got %+v", links.Errors)
+	if !resultHasCode(links, "missing_playbook") || resultHasCode(links, "missing_template") {
+		t.Fatalf("expected missing_playbook without missing_template, got %+v", links.Errors)
+	}
+}
+
+func TestCheckLinksDoesNotRequirePlaybookForReferenceSpecs(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "wikis/spec/common/time-policy.md", `---
+name: common_time_policy
+label: 时间规则
+---
+# 时间规则
+`)
+	writeFile(t, root, "wikis/spec/dim-area/manage-area.md", `---
+name: dim_area_manage_area
+label: 管理区域编码映射
+---
+# 管理区域编码映射
+`)
+	writeFile(t, root, "wikis/spec/idx/business-manager/s-sale-amt.md", `---
+name: sale_amt
+label: 销售额
+---
+# 销售额
+`)
+
+	links, err := RunCheck(root, CheckLinks, CheckOptions{MaxErrors: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resultHasCode(links, "missing_playbook") {
+		t.Fatalf("expected report spec to still require playbook, got %+v", links.Errors)
+	}
+	for _, err := range links.Errors {
+		if strings.HasPrefix(err.Path, "spec/common/") || strings.HasPrefix(err.Path, "spec/dim-") {
+			t.Fatalf("reference spec should not require playbook, got %+v", err)
+		}
 	}
 }
 

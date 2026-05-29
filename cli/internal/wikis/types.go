@@ -38,15 +38,20 @@ type Document struct {
 }
 
 type PlaybookRef struct {
-	IsSingle     bool   `json:"isSingle,omitempty"`
-	IsCombo      bool   `json:"isCombo,omitempty"`
-	SpecPath     string `json:"specPath,omitempty"`
-	TemplatePath string `json:"templatePath,omitempty"`
+	IsSingle     bool                      `json:"isSingle,omitempty"`
+	IsCombo      bool                      `json:"isCombo,omitempty"`
+	SpecPath     string                    `json:"specPath,omitempty"`
+	TemplatePath string                    `json:"templatePath,omitempty"`
+	Intents      map[string]PlaybookIntent `json:"intents,omitempty"`
 }
 
 type TemplateRef struct {
 	PlaybookPath string `json:"playbookPath,omitempty"`
 	IsReport     bool   `json:"isReport,omitempty"`
+}
+
+type PlaybookIntent struct {
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type Frontmatter struct {

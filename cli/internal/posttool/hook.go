@@ -83,6 +83,9 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 		if err := sessionstate.Save(root, sessionID, state); err != nil {
 			return false, Output{}, err
 		}
+		if shouldRequireTemplateInjection(state) {
+			return true, buildOutput(templateInjectionRequiredMessage(state)), nil
+		}
 		return false, Output{}, nil
 	}
 
@@ -143,6 +146,30 @@ func buildOutput(message string) Output {
 			AdditionalContext: message,
 		},
 	}
+}
+
+func shouldRequireTemplateInjection(state sessionstate.File) bool {
+	if state.Mode == sessionstate.ModeFree || state.Mode == "" {
+		return false
+	}
+	if state.SelectedTemplate == "" || state.TemplateInjected {
+		return false
+	}
+	return true
+}
+
+func templateInjectionRequiredMessage(state sessionstate.File) string {
+	var b strings.Builder
+	b.WriteString("QDM_TEMPLATE_REQUIRED: data collection command was recorded for a template-backed Harness plan. Do not answer, summarize, calculate a final report, or read templates/ yet. Run `bin/data-harness-cli inject-template` now. After the PostToolUse hook injects the selected template, use that injected template to produce the final answer.")
+	if state.SelectedPlaybook != "" {
+		b.WriteString(" selectedPlaybook=")
+		b.WriteString(state.SelectedPlaybook)
+	}
+	if state.SelectedTemplate != "" {
+		b.WriteString(" selectedTemplate=")
+		b.WriteString(state.SelectedTemplate)
+	}
+	return b.String()
 }
 
 func recordCommandModules(state sessionstate.File, command string) bool {

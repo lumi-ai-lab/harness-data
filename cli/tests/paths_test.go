@@ -81,12 +81,13 @@ label: "会员"
 	for _, want := range []string{
 		"knowledge/spec/common/index.md",
 		"knowledge/spec/common/time-policy.md",
-		"knowledge/playbooks/common/index.md",
-		"knowledge/playbooks/common/time-policy.md",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %s in %s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "knowledge/playbooks/common/time-policy.md") {
+		t.Fatalf("reference spec should not select playbook in %s", joined)
 	}
 	if strings.Contains(joined, "wikis/") {
 		t.Fatalf("unexpected wikis path in %s", joined)

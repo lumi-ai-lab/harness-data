@@ -11,6 +11,7 @@ const (
 	ModeSingle = "single"
 	ModeCombo  = "combo"
 	ModeFree   = "free"
+	ModeMulti  = "multi_single"
 
 	ModeTemplateReport  = ModeSingle
 	ModeFreeAnalysis    = ModeFree

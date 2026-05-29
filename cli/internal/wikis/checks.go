@@ -28,7 +28,7 @@ func RunCheck(root, name string, opts CheckOptions) (CheckResult, error) {
 			corpusOpts.ParseCodes = parseCodeSet("missing_h1", "multiple_h1")
 		case CheckFrontmatter:
 			corpusOpts.FailFastParse = true
-			corpusOpts.ParseCodes = parseCodeSet("unknown_frontmatter_field", "invalid_frontmatter_type", "invalid_covers_type")
+			corpusOpts.ParseCodes = parseCodeSet("unknown_frontmatter_field", "invalid_frontmatter_type", "invalid_covers_type", "invalid_intents_type")
 		}
 	}
 	corpus, parseErrs, err := LoadCorpusWithOptions(root, corpusOpts)
@@ -228,6 +228,39 @@ func checkFrontmatter(c Corpus, opts CheckOptions) []CheckError {
 				}
 			}
 		}
+		if len(doc.Playbook.Intents) > 0 {
+			if doc.Kind != KindPlaybook || !doc.Playbook.IsSingle {
+				if add(CheckError{Path: doc.Path, Code: "invalid_intents_target", Message: "intents are only allowed on single metric playbooks", Target: "intents"}) {
+					return errs
+				}
+			}
+			for intentName, intent := range doc.Playbook.Intents {
+				if strings.TrimSpace(intentName) == "" {
+					if add(CheckError{Path: doc.Path, Code: "invalid_intents_type", Message: "intent name must not be empty", Target: "intents"}) {
+						return errs
+					}
+				}
+				if len(intent.Aliases) == 0 {
+					if add(CheckError{Path: doc.Path, Code: "invalid_intents_type", Message: "intent aliases must not be empty", Target: "intents." + intentName + ".aliases"}) {
+						return errs
+					}
+				}
+				seen := map[string]bool{}
+				for _, alias := range intent.Aliases {
+					if strings.TrimSpace(alias) == "" {
+						if add(CheckError{Path: doc.Path, Code: "invalid_intents_type", Message: "intent alias must not be empty", Target: "intents." + intentName + ".aliases"}) {
+							return errs
+						}
+					}
+					if seen[alias] {
+						if add(CheckError{Path: doc.Path, Code: "duplicate_intent_alias", Message: "duplicate intent alias in playbook intent", Target: "intents." + intentName + ".aliases", Value: alias}) {
+							return errs
+						}
+					}
+					seen[alias] = true
+				}
+			}
+		}
 	}
 	return errs
 }
@@ -368,15 +401,12 @@ func checkLinks(c Corpus, opts CheckOptions) []CheckError {
 	for _, doc := range c.Docs {
 		switch {
 		case doc.Kind == KindSpec && doc.SpecType == SpecTypeMetric:
+			if IsReferenceSpecPath(doc.Path) {
+				continue
+			}
 			playbookPath := SamePath(doc.Path, "playbooks")
 			if c.ByPath[playbookPath] == nil {
 				if add(CheckError{Path: doc.Path, Code: "missing_playbook", Message: "metric spec is missing same-path playbook", Target: playbookPath}) {
-					return errs
-				}
-			}
-		case doc.Kind == KindPlaybook && !doc.IsIndex:
-			if c.ByPath[doc.Playbook.TemplatePath] == nil {
-				if add(CheckError{Path: doc.Path, Code: "missing_template", Message: "playbook is missing same-path template", Target: doc.Playbook.TemplatePath}) {
 					return errs
 				}
 			}
@@ -389,4 +419,15 @@ func checkLinks(c Corpus, opts CheckOptions) []CheckError {
 		}
 	}
 	return errs
+}
+
+func IsReferenceSpecPath(logical string) bool {
+	if !strings.HasPrefix(logical, "spec/") {
+		return false
+	}
+	rest := strings.TrimPrefix(logical, "spec/")
+	if strings.HasPrefix(rest, "common/") {
+		return true
+	}
+	return strings.HasPrefix(rest, "dim-")
 }

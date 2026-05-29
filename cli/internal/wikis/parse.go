@@ -14,15 +14,16 @@ import (
 )
 
 var allowedFrontmatter = map[string]bool{
-	"name":               true,
-	"label":              true,
-	"aliases":            true,
-	"negative_aliases":   true,
-	"covers":             true,
-	"canonical_status":   true,
-	"canonical_group":    true,
-	"canonical_target":   true,
-	"canonical_reason":   true,
+	"name":             true,
+	"label":            true,
+	"aliases":          true,
+	"negative_aliases": true,
+	"covers":           true,
+	"intents":          true,
+	"canonical_status": true,
+	"canonical_group":  true,
+	"canonical_target": true,
+	"canonical_reason": true,
 }
 
 type LoadCorpusOptions struct {
@@ -138,6 +139,7 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		doc.Aliases, _ = fm.Fields["aliases"].([]string)
 		doc.NegativeAliases, _ = fm.Fields["negative_aliases"].([]string)
 		doc.Covers, _ = fm.Fields["covers"].([]string)
+		doc.Playbook.Intents, _ = fm.Fields["intents"].(map[string]PlaybookIntent)
 	}
 	errs := fmErrs
 	if h1Count == 0 {
@@ -306,9 +308,124 @@ func parseFrontmatter(logical string, data []byte) (Frontmatter, []CheckError) {
 				continue
 			}
 			fm.Fields[key] = values
+		case "intents":
+			intents, ok := parsePlaybookIntents(lines, &i, end, value)
+			if !ok {
+				errs = append(errs, CheckError{Path: logical, Code: "invalid_frontmatter_type", Message: "frontmatter field must be an intents map", Target: key})
+				continue
+			}
+			fm.Fields[key] = intents
 		}
 	}
 	return fm, errs
+}
+
+func parsePlaybookIntents(lines []string, idx *int, end int, value string) (map[string]PlaybookIntent, bool) {
+	if value != "" {
+		return nil, false
+	}
+	out := map[string]PlaybookIntent{}
+	for *idx+1 < end {
+		next := lines[*idx+1]
+		trimmed := strings.TrimSpace(next)
+		if trimmed == "" {
+			(*idx)++
+			continue
+		}
+		indent := len(next) - len(strings.TrimLeft(next, " "))
+		if indent == 0 {
+			break
+		}
+		if indent != 2 {
+			return nil, false
+		}
+		key, nestedValue, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(nestedValue) != "" {
+			return nil, false
+		}
+		intentName := cleanScalar(key)
+		(*idx)++
+		intent := PlaybookIntent{}
+		sawField := false
+		for *idx+1 < end {
+			fieldLine := lines[*idx+1]
+			fieldTrimmed := strings.TrimSpace(fieldLine)
+			if fieldTrimmed == "" {
+				(*idx)++
+				continue
+			}
+			fieldIndent := len(fieldLine) - len(strings.TrimLeft(fieldLine, " "))
+			if fieldIndent <= 2 {
+				break
+			}
+			if fieldIndent != 4 {
+				return nil, false
+			}
+			fieldKey, fieldValue, ok := strings.Cut(fieldTrimmed, ":")
+			if !ok {
+				return nil, false
+			}
+			fieldKey = strings.TrimSpace(fieldKey)
+			fieldValue = strings.TrimSpace(fieldValue)
+			if fieldKey != "aliases" {
+				return nil, false
+			}
+			values, ok := parseIndentedStringArray(lines, idx, end, fieldValue, fieldIndent)
+			if !ok {
+				return nil, false
+			}
+			intent.Aliases = values
+			sawField = true
+		}
+		if !sawField || intent.Aliases == nil {
+			return nil, false
+		}
+		out[intentName] = intent
+	}
+	return out, true
+}
+
+func parseIndentedStringArray(lines []string, idx *int, end int, value string, parentIndent int) ([]string, bool) {
+	if strings.HasPrefix(value, "[") {
+		if !strings.HasSuffix(value, "]") {
+			return nil, false
+		}
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
+		if inner == "" {
+			(*idx)++
+			return []string{}, true
+		}
+		parts := strings.Split(inner, ",")
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			out = append(out, cleanScalar(part))
+		}
+		(*idx)++
+		return out, true
+	}
+	if value != "" {
+		return nil, false
+	}
+	(*idx)++
+	var out []string
+	for *idx+1 < end {
+		next := lines[*idx+1]
+		trimmed := strings.TrimSpace(next)
+		if trimmed == "" {
+			(*idx)++
+			continue
+		}
+		indent := len(next) - len(strings.TrimLeft(next, " "))
+		if indent <= parentIndent {
+			break
+		}
+		if !strings.HasPrefix(trimmed, "- ") {
+			return nil, false
+		}
+		out = append(out, cleanScalar(strings.TrimPrefix(trimmed, "- ")))
+		(*idx)++
+	}
+	return out, true
 }
 
 func parseStringArray(lines []string, idx *int, end int, value string) ([]string, bool) {

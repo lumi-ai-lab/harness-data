@@ -18,14 +18,11 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-sale-amt.md" || plan.SelectedTemplate != "templates/idx/business/s-sale-amt.md" {
+	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-sale-amt.md" || plan.SelectedTemplate != "" {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
 	got := contextPaths(response)
 	want := []string{
-		"wikis/spec/idx/business/index.md",
-		"wikis/spec/idx/business/s-sale-amt.md",
-		"wikis/playbooks/idx/business/index.md",
 		"wikis/playbooks/idx/business/s-sale-amt.md",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -34,14 +31,17 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 	for _, unwanted := range []string{
 		"wikis/spec/index.md",
 		"wikis/spec/idx/index.md",
+		"wikis/spec/idx/business/index.md",
+		"wikis/spec/idx/business/s-sale-amt.md",
 		"wikis/playbooks/index.md",
 		"wikis/playbooks/idx/index.md",
+		"wikis/playbooks/idx/business/index.md",
 	} {
 		if hasString(got, unwanted) {
 			t.Fatalf("unexpected ancestor index %s in %#v", unwanted, got)
 		}
 	}
-	if !strings.Contains(response.Instruction, "Harness mode: single") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md\n") {
+	if !strings.Contains(response.Instruction, "Harness mode: single") || !strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
@@ -92,6 +92,73 @@ func TestBuildWithWikisIndexComboMode(t *testing.T) {
 	}
 }
 
+func TestBuildWithWikisIndexMultiSingleMode(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "销售额和客单价是多少")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeMulti || plan.SelectedPlaybook != "" || plan.SelectedTemplate != "" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if len(plan.SelectedPlaybooks) != 2 {
+		t.Fatalf("selected playbooks = %+v", plan.SelectedPlaybooks)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/playbooks/idx/business/s-per-cust-amt.md",
+		"wikis/playbooks/idx/business/s-sale-amt.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+	for _, unwanted := range []string{
+		"wikis/spec/idx/business/s-per-cust-amt.md",
+		"wikis/spec/idx/business/s-sale-amt.md",
+		"wikis/playbooks/idx/business/default-overview.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("unexpected %s in %#v", unwanted, got)
+		}
+	}
+	if !strings.Contains(response.Instruction, "Harness mode: multi_single") || !strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") {
+		t.Fatalf("unexpected instruction: %s", response.Instruction)
+	}
+}
+
+func TestBuildWithWikisIndexMultiSingleModeUsesPlaybookIntents(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "查看销售额趋势分析和客单价的值")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeMulti || plan.SelectedPlaybook != "" || plan.SelectedTemplate != "" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/playbooks/idx/business/s-per-cust-amt.md",
+		"wikis/playbooks/idx/business/s-sale-amt.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+	if !strings.Contains(response.Instruction, "playbook intent matched by the question") {
+		t.Fatalf("unexpected instruction: %s", response.Instruction)
+	}
+}
+
+func TestBuildWithWikisIndexGenericAnalysisDoesNotUseMultiSingleMode(t *testing.T) {
+	root := testContextWikiRoot(t)
+	_, plan, err := BuildWithPlan(root, "销售额和客单价分析")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode == sessionstate.ModeMulti {
+		t.Fatalf("generic analysis should not use multi_single: %+v", plan)
+	}
+}
+
 func TestBuildWithWikisIndexPrefersLongerRecallTerm(t *testing.T) {
 	root := testContextWikiRoot(t)
 	response, plan, err := BuildWithPlan(root, "19点前滚动7天会员复购率")
@@ -111,9 +178,6 @@ func TestBuildWithWikisIndexPrefersLongerRecallTerm(t *testing.T) {
 		}
 	}
 	want := []string{
-		"wikis/spec/idx/business/index.md",
-		"wikis/spec/idx/business/s-bf19-member-repurchase-rate.md",
-		"wikis/playbooks/idx/business/index.md",
 		"wikis/playbooks/idx/business/s-bf19-member-repurchase-rate.md",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -132,7 +196,6 @@ func TestBuildWithWikisIndexFuzzyMemberRepurchaseRate(t *testing.T) {
 	}
 	got := contextPaths(response)
 	for _, want := range []string{
-		"wikis/spec/idx/business/s-member-repurchase-rate.md",
 		"wikis/playbooks/idx/business/s-member-repurchase-rate.md",
 	} {
 		if !hasString(got, want) {
@@ -165,6 +228,58 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	}
 	if state.Mode != sessionstate.ModeFree || state.Reason != "concept_only" || state.SelectedPlaybook != "" || state.SelectedTemplate != "" {
 		t.Fatalf("unexpected state: %s", string(data))
+	}
+}
+
+func TestBuildWithWikisIndexReferenceSpecDoesNotSelectPlaybook(t *testing.T) {
+	root := t.TempDir()
+	writeContextFile(t, root, "config/harness-config.yaml", `paths:
+  spec: wikis/spec
+  playbooks: wikis/playbooks
+  templates: wikis/templates
+`)
+	for _, rel := range []string{
+		"wikis/spec/index.md",
+		"wikis/spec/dim-area/index.md",
+		"wikis/playbooks/index.md",
+		"wikis/playbooks/dim-area/index.md",
+		"wikis/templates/index.md",
+		"wikis/templates/dim-area/index.md",
+	} {
+		writeContextFile(t, root, rel, "# "+filepath.Base(filepath.Dir(rel))+"\n")
+	}
+	writeContextFile(t, root, "wikis/spec/dim-area/manage-area.md", `---
+name: dim_area_manage_area
+label: 管理区域编码映射
+---
+# 管理区域编码映射
+`)
+	writeContextFile(t, root, "wikis/playbooks/dim-area/manage-area.md", "# manage-area\n")
+	writeContextFile(t, root, "wikis/templates/dim-area/manage-area.md", "# manage-area 模板\n")
+	if _, err := wikis.BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "wikis/playbooks/dim-area/manage-area.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "wikis/templates/dim-area/manage-area.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	response, plan, err := BuildWithPlan(root, "管理区域编码映射")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeFree || plan.SelectedPlaybook != "" || plan.SelectedTemplate != "" || plan.Reason != "reference_spec" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/spec/dim-area/index.md",
+		"wikis/spec/dim-area/manage-area.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
 	}
 }
 
@@ -220,8 +335,25 @@ aliases: ["库存概念"]
 ---
 # 库存概念
 `)
-	writeContextFile(t, root, "wikis/playbooks/idx/business/s-sale-amt.md", "# 销售额取数\n")
-	writeContextFile(t, root, "wikis/playbooks/idx/business/s-per-cust-amt.md", "# 客单价取数\n")
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-sale-amt.md", `---
+intents:
+  current_value:
+    aliases: ["值", "指标值", "是多少", "多少"]
+  trend:
+    aliases:
+      - 趋势
+      - 走势
+      - 趋势分析
+---
+# 销售额取数
+`)
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-per-cust-amt.md", `---
+intents:
+  current_value:
+    aliases: ["值", "指标值", "是多少", "多少"]
+---
+# 客单价取数
+`)
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-member-repurchase-rate.md", "# 会员复购率取数\n")
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率取数\n")
 	writeContextFile(t, root, "wikis/playbooks/idx/business/default-overview.md", `---

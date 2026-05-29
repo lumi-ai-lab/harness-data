@@ -1,6 +1,7 @@
 package context
 
 import (
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -16,7 +17,8 @@ var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
-	"do_not_read_template_before_inject_template",
+	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
+	"when CMR or Indicators CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr or \"$QDM_CAS_CLI\" token --app indicators, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -25,12 +27,13 @@ func Build(root, question string) (harness.ContextResponse, error) {
 }
 
 type WikiPlan struct {
-	Mode             string
-	SelectedPlaybook string
-	SelectedTemplate string
-	CoveredSpecs     []string
-	Reason           string
-	Candidates       []sessionstate.PlaybookCandidate
+	Mode              string
+	SelectedPlaybook  string
+	SelectedTemplate  string
+	SelectedPlaybooks []sessionstate.PlaybookCandidate
+	CoveredSpecs      []string
+	Reason            string
+	Candidates        []sessionstate.PlaybookCandidate
 }
 
 func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, error) {
@@ -58,7 +61,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		if logical == "" {
 			return
 		}
-		if _, ok := byPath[logical]; !ok {
+		if !runtimeDocExists(resolver, byPath, logical) {
 			return
 		}
 		physical := resolver.ResolveRel(logical)
@@ -83,7 +86,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		plan = WikiPlan{
 			Mode:             sessionstate.ModeCombo,
 			SelectedPlaybook: combo.Path,
-			SelectedTemplate: playbookTemplatePath(combo),
+			SelectedTemplate: existingPlaybookTemplatePath(resolver, byPath, combo),
 			CoveredSpecs:     append([]string{}, combo.Covers...),
 		}
 		addComboFiles(add, byPath, combo)
@@ -94,28 +97,37 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		}
 	case len(ordinarySpecs) == 1:
 		spec := ordinarySpecs[0]
-		playbookPath := wikis.SamePath(spec.Path, "playbooks")
-		templatePath := wikis.SamePath(spec.Path, "templates")
-		if _, ok := byPath[playbookPath]; ok {
-			if _, ok := byPath[templatePath]; ok {
-				plan = WikiPlan{Mode: sessionstate.ModeSingle, SelectedPlaybook: playbookPath, SelectedTemplate: templatePath}
-				addNearestIndex(add, byPath, spec.Path, "spec index")
-				add(spec.Path, "matched spec")
-				addNearestIndex(add, byPath, playbookPath, "playbook index")
-				add(playbookPath, "selected playbook")
-				break
-			}
+		if wikis.IsReferenceSpecPath(spec.Path) {
+			plan.Reason = "reference_spec"
+			addFreeSpecFiles(add, byPath, []wikis.RuntimeDocument{spec})
+			break
 		}
-		plan.Reason = "single_spec_missing_playbook_or_template"
+		playbookPath := wikis.SamePath(spec.Path, "playbooks")
+		if runtimeDocExists(resolver, byPath, playbookPath) {
+			plan = WikiPlan{Mode: sessionstate.ModeSingle, SelectedPlaybook: playbookPath}
+			add(playbookPath, "selected playbook")
+			break
+		}
+		plan.Reason = "single_spec_missing_playbook"
 		addFreeSpecFiles(add, byPath, []wikis.RuntimeDocument{spec})
 	case len(ordinarySpecs) > 1:
+		if candidates, ok := multiSingleCandidates(resolver, byPath, question, ordinarySpecs); ok {
+			plan = WikiPlan{
+				Mode:              sessionstate.ModeMulti,
+				SelectedPlaybooks: candidates,
+			}
+			for _, candidate := range candidates {
+				add(candidate.Path, "selected playbook")
+			}
+			break
+		}
 		candidates := coveringCombos(allRuntimeDocs(index.DocsByPath), ordinarySpecs)
 		if len(candidates) == 1 {
 			combo := candidates[0]
 			plan = WikiPlan{
 				Mode:             sessionstate.ModeCombo,
 				SelectedPlaybook: combo.Path,
-				SelectedTemplate: playbookTemplatePath(combo),
+				SelectedTemplate: existingPlaybookTemplatePath(resolver, byPath, combo),
 				CoveredSpecs:     append([]string{}, combo.Covers...),
 			}
 			addComboFiles(add, byPath, combo)
@@ -237,12 +249,23 @@ func addFreeSpecFiles(add func(string, string), byPath map[string]wikis.RuntimeD
 	for _, spec := range specs {
 		addNearestIndex(add, byPath, spec.Path, "spec index")
 		add(spec.Path, "matched spec")
+		if wikis.IsReferenceSpecPath(spec.Path) {
+			continue
+		}
 		playbookPath := wikis.SamePath(spec.Path, "playbooks")
 		if _, ok := byPath[playbookPath]; ok {
 			addNearestIndex(add, byPath, playbookPath, "playbook index")
 			add(playbookPath, "matched playbook")
 		}
 	}
+}
+
+func runtimeDocExists(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, logical string) bool {
+	if _, ok := byPath[logical]; !ok {
+		return false
+	}
+	info, err := os.Stat(resolver.Resolve(logical))
+	return err == nil && !info.IsDir()
 }
 
 func addComboFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, combo wikis.RuntimeDocument) {
@@ -310,6 +333,83 @@ func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument)
 	}
 	sortRuntimeDocsByPath(candidates)
 	return candidates
+}
+
+func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) ([]sessionstate.PlaybookCandidate, bool) {
+	if len(specs) < 2 || isNonDirectMultiSingleQuestion(question) {
+		return nil, false
+	}
+	var candidates []sessionstate.PlaybookCandidate
+	var playbooks []wikis.RuntimeDocument
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		if wikis.IsReferenceSpecPath(spec.Path) {
+			return nil, false
+		}
+		playbookPath := wikis.SamePath(spec.Path, "playbooks")
+		if !runtimeDocExists(resolver, byPath, playbookPath) {
+			return nil, false
+		}
+		doc, ok := byPath[playbookPath]
+		if !ok || seen[doc.Path] {
+			continue
+		}
+		candidate := candidateFromDoc(doc, "selected")
+		candidate.Template = ""
+		candidates = append(candidates, candidate)
+		playbooks = append(playbooks, doc)
+		seen[doc.Path] = true
+	}
+	if !playbooksSupportQuestionIntents(question, playbooks) {
+		return nil, false
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Path < candidates[j].Path })
+	return candidates, len(candidates) >= 2
+}
+
+func isNonDirectMultiSingleQuestion(question string) bool {
+	return hasAny(question, []string{"为什么", "原因", "归因", "关系", "影响", "带动", "拖累", "波动", "下降", "上升", "下滑", "增长", "概览", "报告"})
+}
+
+func playbooksSupportQuestionIntents(question string, playbooks []wikis.RuntimeDocument) bool {
+	if len(playbooks) < 2 {
+		return false
+	}
+	allHaveIntents := true
+	for _, playbook := range playbooks {
+		if playbook.Playbook == nil || len(playbook.Playbook.Intents) == 0 {
+			allHaveIntents = false
+			break
+		}
+	}
+	if !allHaveIntents {
+		return isLegacyMultiSingleValueQuestion(question)
+	}
+	for _, playbook := range playbooks {
+		if !playbookSupportsQuestionIntent(question, playbook) {
+			return false
+		}
+	}
+	return true
+}
+
+func playbookSupportsQuestionIntent(question string, playbook wikis.RuntimeDocument) bool {
+	if playbook.Playbook == nil {
+		return false
+	}
+	for _, intent := range playbook.Playbook.Intents {
+		if hasAny(question, intent.Aliases) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLegacyMultiSingleValueQuestion(question string) bool {
+	if hasAny(question, []string{"分析", "拆解", "走势", "趋势"}) {
+		return false
+	}
+	return hasAny(question, []string{"多少", "是多少", "值", "数值", "看一下", "查一下", "看看", "查询", "分别", "还有", "和", "与", "及", "以及", "都"})
 }
 
 func commonDomainAncestor(domains []string) string {
@@ -392,6 +492,9 @@ func domainDistance(candidate, target string) (int, bool) {
 }
 
 func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.RuntimeDocument) []sessionstate.PlaybookCandidate {
+	if plan.Mode == sessionstate.ModeMulti {
+		return append([]sessionstate.PlaybookCandidate{}, plan.SelectedPlaybooks...)
+	}
 	if plan.SelectedPlaybook == "" {
 		return nil
 	}
@@ -399,7 +502,9 @@ func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.RuntimeDocument) 
 	if !ok {
 		return nil
 	}
-	return []sessionstate.PlaybookCandidate{candidateFromDoc(doc, "selected")}
+	candidate := candidateFromDoc(doc, "selected")
+	candidate.Template = plan.SelectedTemplate
+	return []sessionstate.PlaybookCandidate{candidate}
 }
 
 func candidateFromDoc(doc wikis.RuntimeDocument, reason string) sessionstate.PlaybookCandidate {
@@ -409,6 +514,14 @@ func candidateFromDoc(doc wikis.RuntimeDocument, reason string) sessionstate.Pla
 		Domain:   doc.Domain,
 		Reason:   reason,
 	}
+}
+
+func existingPlaybookTemplatePath(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, doc wikis.RuntimeDocument) string {
+	templatePath := playbookTemplatePath(doc)
+	if templatePath == "" || !runtimeDocExists(resolver, byPath, templatePath) {
+		return ""
+	}
+	return templatePath
 }
 
 func playbookIsCombo(doc wikis.RuntimeDocument) bool {
@@ -432,12 +545,18 @@ func allRuntimeDocs(byPath map[string]wikis.RuntimeDocument) []wikis.RuntimeDocu
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate, invent, or write report files unless the user asks."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate, invent, or write report files unless the user asks. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
-		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". After selected playbook data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not fallback to overview or other report commands unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming area/category/trend rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
+	case sessionstate.ModeMulti:
+		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, follow its selected playbook to collect the user-requested result independently according to the playbook intent matched by the question. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a combo report or attribution analysis."
 	case sessionstate.ModeCombo:
-		return common + " Harness mode: combo. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + " coveredSpecs=" + strings.Join(plan.CoveredSpecs, ",") + ". Use the combo playbook for multi-metric data collection and analysis; do not separately apply multiple single-metric playbooks/templates. After data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+		templateInstruction := "After data collection, answer directly from CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
+		if plan.SelectedTemplate != "" {
+			templateInstruction = "After data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+		}
+		return common + " Harness mode: combo. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + " coveredSpecs=" + strings.Join(plan.CoveredSpecs, ",") + ". Use the combo playbook for multi-metric data collection and analysis; do not separately apply multiple single-metric playbooks/templates. " + templateInstruction
 	default:
 		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/. You may reference specs/playbooks, but must not apply any template."
 	}

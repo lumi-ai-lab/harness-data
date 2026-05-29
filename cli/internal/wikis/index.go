@@ -121,7 +121,7 @@ func checkReliableBuildInputs(root string) error {
 		}
 		for _, checkErr := range result.Errors {
 			switch checkErr.Code {
-			case "invalid_frontmatter_type", "invalid_covers_type", "duplicate_recall_value", "missing_covers", "invalid_cover_path", "missing_cover_target":
+			case "invalid_frontmatter_type", "invalid_covers_type", "invalid_intents_type", "invalid_intents_target", "duplicate_intent_alias", "duplicate_recall_value":
 				return fmt.Errorf("%s: %s: %s", checkErr.Path, checkErr.Code, checkErr.Message)
 			}
 		}
@@ -139,8 +139,11 @@ func buildRuntimeIndex(idx Index) RuntimeIndex {
 			SpecType: doc.SpecType,
 			Covers:   doc.Covers,
 		}
-		if doc.Playbook != (PlaybookRef{}) {
+		if hasPlaybookRef(doc.Playbook) {
 			playbook := doc.Playbook
+			if doc.Playbook.Intents != nil {
+				playbook.Intents = clonePlaybookIntents(doc.Playbook.Intents)
+			}
 			runtimeDoc.Playbook = &playbook
 		}
 		docsByPath[doc.Path] = runtimeDoc
@@ -157,6 +160,21 @@ func buildRuntimeIndex(idx Index) RuntimeIndex {
 		DocsByPath: docsByPath,
 		Recall:     recall,
 	}
+}
+
+func hasPlaybookRef(ref PlaybookRef) bool {
+	return ref.IsSingle || ref.IsCombo || ref.SpecPath != "" || ref.TemplatePath != "" || len(ref.Intents) > 0
+}
+
+func clonePlaybookIntents(in map[string]PlaybookIntent) map[string]PlaybookIntent {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]PlaybookIntent, len(in))
+	for key, intent := range in {
+		out[key] = PlaybookIntent{Aliases: append([]string{}, intent.Aliases...)}
+	}
+	return out
 }
 
 func buildRecall(docs []Document) []RecallItem {

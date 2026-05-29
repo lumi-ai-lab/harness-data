@@ -51,7 +51,8 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	additionalContext, err := buildWikiAdditionalContext(tc, response, plan)
+	authNotes := preflightAuth(root, plan)
+	additionalContext, err := buildWikiAdditionalContext(tc, response, plan, authNotes)
 	if err != nil {
 		return false, Output{}, err
 	}
@@ -72,7 +73,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	}, nil
 }
 
-func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan) (string, error) {
+func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan, authNotes []string) (string, error) {
 	timeJSON, err := json.Marshal(tc)
 	if err != nil {
 		return "", err
@@ -103,6 +104,14 @@ func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse
 			b.WriteString("\n")
 		}
 	}
+	if len(plan.SelectedPlaybooks) > 0 {
+		b.WriteString("selectedPlaybooks:\n")
+		for _, playbook := range plan.SelectedPlaybooks {
+			b.WriteString("- ")
+			b.WriteString(playbook.Path)
+			b.WriteString("\n")
+		}
+	}
 	if plan.Mode == sessionstate.ModeFree {
 		b.WriteString("reason: ")
 		b.WriteString(plan.Reason)
@@ -121,6 +130,14 @@ func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse
 	}
 	b.WriteString("\nInstruction: ")
 	b.WriteString(response.Instruction)
+	if len(authNotes) > 0 {
+		b.WriteString("\n\nAuth preflight:\n")
+		for _, note := range authNotes {
+			b.WriteString("- ")
+			b.WriteString(note)
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString("\n\nConstraints:\n")
 	for _, constraint := range response.Constraints {
 		b.WriteString("- ")
@@ -249,6 +266,9 @@ func buildAdditionalContext(tc timeContext, response harness.ContextResponse, se
 	}
 	if mode == sessionstate.ModeTemplateReport || mode == sessionstate.ModeCompositeReport {
 		b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
+		if mode == sessionstate.ModeTemplateReport {
+			b.WriteString("单指标模式下只能执行 selectedPlaybook 明确列出的数据 CLI；主指标返回空或 null 时，不得自行改用 overview 或其它 report 命令补数，不得用 area/category/trend 行聚合或换算主指标，只能说明主指标 CLI 未返回可用证据。\n")
+		}
 	} else {
 		b.WriteString("\n自由分析模式下禁止读取 templates/ 下的报告模板，禁止等待 template 注入。\n")
 	}
@@ -410,6 +430,8 @@ func writeWikiPlanState(root, sessionID, prompt string, plan WikiPlan) error {
 	case sessionstate.ModeSingle:
 		state.SelectedPlaybook = plan.SelectedPlaybook
 		state.SelectedTemplate = plan.SelectedTemplate
+	case sessionstate.ModeMulti:
+		state.SelectedPlaybooks = append([]sessionstate.PlaybookCandidate{}, plan.SelectedPlaybooks...)
 	case sessionstate.ModeCombo:
 		state.SelectedPlaybook = plan.SelectedPlaybook
 		state.SelectedTemplate = plan.SelectedTemplate

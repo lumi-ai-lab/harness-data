@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"harness-data/cli/internal/harness"
+	"harness-data/cli/internal/retrieval"
 )
 
 type AliasesReport struct {
@@ -94,6 +95,14 @@ type AliasesImportResult struct {
 	NegativeAliasesAdded int                   `json:"negativeAliasesAdded"`
 	Changes              []AliasesImportChange `json:"changes"`
 	Lint                 AliasesLintResult     `json:"lint"`
+}
+
+type AliasesQualityOptions struct {
+	MinAliasRunes           int
+	MaxAliasRunes           int
+	RequireAliases          bool
+	MinSpecAliases          int
+	MinComboPlaybookAliases int
 }
 
 type AliasesImportChange struct {
@@ -237,6 +246,73 @@ func LintAliasesFile(root, file string) (AliasesLintResult, error) {
 		return AliasesLintResult{}, err
 	}
 	return LintAliases(root, aliasesFile), nil
+}
+
+func CheckAliasesQualityFile(root, file string, opts AliasesQualityOptions) (AliasesLintResult, error) {
+	aliasesFile, err := ReadAliasesFile(file)
+	if err != nil {
+		return AliasesLintResult{}, err
+	}
+	return CheckAliasesQuality(root, aliasesFile, opts), nil
+}
+
+func CheckAliasesQuality(root string, data AliasesFile, opts AliasesQualityOptions) AliasesLintResult {
+	if opts.MinAliasRunes == 0 {
+		opts.MinAliasRunes = 3
+	}
+	if opts.MaxAliasRunes == 0 {
+		opts.MaxAliasRunes = 40
+	}
+	result := LintAliases(root, data)
+	add := func(level, code, item, field, value, message string) {
+		issue := AliasesLintIssue{Level: level, Code: code, Item: item, Field: field, Value: value, Message: message}
+		if level == "error" {
+			result.Errors = append(result.Errors, issue)
+		} else {
+			result.Warnings = append(result.Warnings, issue)
+		}
+	}
+
+	data = resolveAliasesPaths(root, data, add)
+	baseItems, err := baseRecallItems(root)
+	if err != nil {
+		add("error", "corpus_load_failed", "", "", "", err.Error())
+		result.OK = false
+		return result
+	}
+	comboPlaybookPaths, err := comboPlaybookPathSet(root)
+	if err != nil {
+		add("error", "corpus_load_failed", "", "", "", err.Error())
+		result.OK = false
+		return result
+	}
+	metricSpecPaths, err := metricSpecPathSet(root)
+	if err != nil {
+		add("error", "corpus_load_failed", "", "", "", err.Error())
+		result.OK = false
+		return result
+	}
+
+	for _, item := range data.Items {
+		checkAliasQualityForField(item, "spec.aliases", item.Paths.Spec, item.Label, item.Code, item.Spec, baseItems, opts, add)
+		checkAliasQualityForField(item, "playbook.aliases", item.Paths.Playbook, item.Label, item.Code, item.Playbook, baseItems, opts, add)
+		if opts.RequireAliases {
+			if item.Spec != nil && len(item.Spec.Aliases) == 0 {
+				add("error", "aliases_required", item.ID, "spec.aliases", "", "aliases must not be empty")
+			}
+			if item.Playbook != nil && len(item.Playbook.Aliases) == 0 {
+				add("error", "aliases_required", item.ID, "playbook.aliases", "", "aliases must not be empty")
+			}
+		}
+		if opts.MinSpecAliases > 0 && item.Spec != nil && metricSpecPaths[aliasLogicalPath(item.Paths.Spec)] && len(item.Spec.Aliases) < opts.MinSpecAliases {
+			add("error", "not_enough_aliases", item.ID, "spec.aliases", "", fmt.Sprintf("spec aliases must have at least %d entries", opts.MinSpecAliases))
+		}
+		if opts.MinComboPlaybookAliases > 0 && item.Playbook != nil && len(item.Playbook.Aliases) < opts.MinComboPlaybookAliases && comboPlaybookPaths[aliasLogicalPath(item.Paths.Playbook)] {
+			add("error", "not_enough_aliases", item.ID, "playbook.aliases", "", fmt.Sprintf("combo playbook aliases must have at least %d entries", opts.MinComboPlaybookAliases))
+		}
+	}
+	result.OK = len(result.Errors) == 0
+	return result
 }
 
 func ImportAliases(root, file string, apply bool) (AliasesImportResult, error) {
@@ -1028,6 +1104,107 @@ func checkAliasList(item, field string, values []string, add func(string, string
 		}
 		seen[value] = true
 	}
+}
+
+func checkAliasQualityForField(item AliasesItem, field, targetPath, label, code string, fields *AliasesFieldSet, baseItems []retrieval.Item, opts AliasesQualityOptions, add func(string, string, string, string, string, string)) {
+	if fields == nil {
+		return
+	}
+	targetLogical := aliasLogicalPath(targetPath)
+	for _, alias := range fields.Aliases {
+		runeLen := len([]rune(alias))
+		if runeLen < opts.MinAliasRunes {
+			add("error", "alias_too_short", item.ID, field, alias, fmt.Sprintf("alias is shorter than %d characters", opts.MinAliasRunes))
+		}
+		if runeLen > opts.MaxAliasRunes {
+			add("warning", "alias_too_long", item.ID, field, alias, fmt.Sprintf("alias is longer than %d characters", opts.MaxAliasRunes))
+		}
+		if containsBracket(alias) {
+			add("error", "alias_contains_brackets", item.ID, field, alias, "alias must not contain brackets")
+		}
+		if normalizedEqual(alias, label) {
+			add("error", "alias_equals_label", item.ID, field, alias, "alias duplicates the metric label")
+		}
+		if normalizedEqual(alias, code) {
+			add("error", "alias_equals_code", item.ID, field, alias, "alias duplicates the metric code")
+		}
+		if targetLogical == "" {
+			continue
+		}
+		for _, match := range retrieval.Search(baseItems, alias, retrieval.Options{TopN: 0}) {
+			if match.TargetPath == targetLogical {
+				add("error", "alias_redundant_with_base_recall", item.ID, field, alias, fmt.Sprintf("alias query already recalls target via label/name: %s", targetLogical))
+				break
+			}
+			add("error", "alias_overlaps_base_recall", item.ID, field, alias, fmt.Sprintf("alias query already recalls via label/name: %s", match.TargetPath))
+			break
+		}
+	}
+}
+
+func baseRecallItems(root string) ([]retrieval.Item, error) {
+	corpus, _, err := LoadCorpus(root)
+	if err != nil {
+		return nil, err
+	}
+	var items []retrieval.Item
+	for _, doc := range corpus.Docs {
+		if doc.Kind != KindSpec {
+			continue
+		}
+		for _, term := range []string{doc.Label, doc.Name} {
+			if term == "" {
+				continue
+			}
+			items = append(items, retrieval.Item{Term: term, TargetPath: doc.Path})
+		}
+	}
+	return items, nil
+}
+
+func comboPlaybookPathSet(root string) (map[string]bool, error) {
+	corpus, _, err := LoadCorpus(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, doc := range corpus.Docs {
+		if doc.Kind == KindPlaybook && doc.Playbook.IsCombo {
+			out[doc.Path] = true
+		}
+	}
+	return out, nil
+}
+
+func metricSpecPathSet(root string) (map[string]bool, error) {
+	corpus, _, err := LoadCorpus(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, doc := range corpus.Docs {
+		if doc.Kind == KindSpec && doc.SpecType == SpecTypeMetric {
+			out[doc.Path] = true
+		}
+	}
+	return out, nil
+}
+
+func aliasLogicalPath(pathValue string) string {
+	pathValue = filepath.ToSlash(strings.TrimSpace(pathValue))
+	pathValue = strings.TrimPrefix(pathValue, "wikis/")
+	return pathValue
+}
+
+func normalizedEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return retrieval.NormalizeChinese(a) == retrieval.NormalizeChinese(b)
+}
+
+func containsBracket(value string) bool {
+	return strings.ContainsAny(value, "()（）[]【】{}")
 }
 
 func isGenericAlias(value string) bool {

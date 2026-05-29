@@ -1,6 +1,7 @@
 package posttool
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,64 @@ func TestInjectTemplateUsesSelectedTemplateAndStripsFrontmatter(t *testing.T) {
 	}
 	if outcome != "template_injected" || again != message {
 		t.Fatalf("repeat injection should return same body, outcome=%s body=%q", outcome, again)
+	}
+}
+
+func TestRunClaudeHookRequiresTemplateAfterDataCommand(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "needs-template"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeSingle,
+		SelectedPlaybook: "playbooks/idx/business/s-sale-amt.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{
+			"command": `qdm-cmr-cli report business indicators --indicator saleAmt --date 2026-05-28`,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := RunClaudeHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "QDM_TEMPLATE_REQUIRED") {
+		t.Fatalf("expected template-required hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
+	}
+}
+
+func TestRunClaudeHookDoesNotRequireTemplateInFreeMode(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "free-data"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID: sessionID,
+		Mode:      sessionstate.ModeFree,
+		Reports:   map[string]*sessionstate.Report{},
+	})
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{
+			"command": `qdm-cmr-cli report business indicators --indicator saleAmt --date 2026-05-28`,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := RunClaudeHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || output.HookSpecificOutput.AdditionalContext != "" {
+		t.Fatalf("free mode should not require template, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
 	}
 }
 

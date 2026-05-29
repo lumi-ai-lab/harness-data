@@ -14,6 +14,7 @@ import (
 	idx "harness-data/cli/internal/index"
 	"harness-data/cli/internal/posttool"
 	"harness-data/cli/internal/retrieval"
+	"harness-data/cli/internal/sessionstate"
 	"harness-data/cli/internal/wikis"
 )
 
@@ -121,18 +122,7 @@ func run() error {
 		if fs.NArg() != 0 {
 			return fmt.Errorf("inject-template does not accept arguments")
 		}
-		sessionID := os.Getenv("CLAUDE_SESSION_ID")
-		if sessionID == "" {
-			sessionID = "unknown"
-		}
-		message, _, _, err := posttool.InjectTemplate(root, sessionID)
-		if err != nil {
-			return err
-		}
-		fmt.Print(message)
-		if !strings.HasSuffix(message, "\n") {
-			fmt.Println()
-		}
+		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current Claude session.")
 	case "show":
 		fs := flag.NewFlagSet("show", flag.ExitOnError)
 		jsonOut := fs.Bool("json", false, "print json")
@@ -400,7 +390,7 @@ func runWikiMetricDuplicatesImport(root string, args []string) (wikis.MetricDupl
 
 func runWikiAliases(root string, args []string) (int, error) {
 	if len(args) < 1 {
-		return 2, fmt.Errorf("usage: data-harness-cli wikis aliases <report|export|lint|import>")
+		return 2, fmt.Errorf("usage: data-harness-cli wikis aliases <report|export|lint|quality|import>")
 	}
 	switch args[0] {
 	case "report":
@@ -416,6 +406,15 @@ func runWikiAliases(root string, args []string) (int, error) {
 			return 1, fmt.Errorf("aliases lint failed with %d error(s)", len(result.Errors))
 		}
 		return 0, nil
+	case "quality":
+		result, err := runWikiAliasesQuality(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if len(result.Errors) > 0 {
+			return 1, fmt.Errorf("aliases quality failed with %d error(s)", len(result.Errors))
+		}
+		return 0, nil
 	case "import":
 		result, err := runWikiAliasesImport(root, args[1:])
 		if err != nil {
@@ -428,6 +427,42 @@ func runWikiAliases(root string, args []string) (int, error) {
 	default:
 		return 2, fmt.Errorf("unknown wikis aliases command: %s", args[0])
 	}
+}
+
+func runWikiAliasesQuality(root string, args []string) (wikis.AliasesLintResult, error) {
+	fs := flag.NewFlagSet("wikis aliases quality", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	file := fs.String("file", "", "aliases yaml/json file")
+	minLength := fs.Int("min-length", 3, "minimum alias length in runes")
+	maxLength := fs.Int("max-length", 40, "maximum alias length in runes")
+	requireAliases := fs.Bool("require-aliases", false, "fail when an included alias section is empty")
+	minSpecAliases := fs.Int("min-spec-aliases", 0, "minimum aliases required for each included spec")
+	minComboPlaybookAliases := fs.Int("min-combo-playbook-aliases", 0, "minimum aliases required for each included combo playbook")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.AliasesLintResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.AliasesLintResult{}, fmt.Errorf("aliases quality does not accept positional arguments")
+	}
+	if *file == "" {
+		return wikis.AliasesLintResult{}, fmt.Errorf("aliases quality requires --file")
+	}
+	result, err := wikis.CheckAliasesQualityFile(root, *file, wikis.AliasesQualityOptions{
+		MinAliasRunes:           *minLength,
+		MaxAliasRunes:           *maxLength,
+		RequireAliases:          *requireAliases,
+		MinSpecAliases:          *minSpecAliases,
+		MinComboPlaybookAliases: *minComboPlaybookAliases,
+	})
+	if err != nil {
+		return wikis.AliasesLintResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printAliasesLint(result)
+	return result, nil
 }
 
 func runWikiAliasesReport(root string, args []string) error {
@@ -858,12 +893,13 @@ type recallDebugResult struct {
 }
 
 type recallDebugPlan struct {
-	Mode             string   `json:"mode"`
-	SelectedPlaybook string   `json:"selectedPlaybook,omitempty"`
-	SelectedTemplate string   `json:"selectedTemplate,omitempty"`
-	CoveredSpecs     []string `json:"coveredSpecs,omitempty"`
-	Reason           string   `json:"reason,omitempty"`
-	Candidates       any      `json:"candidates,omitempty"`
+	Mode              string                           `json:"mode"`
+	SelectedPlaybook  string                           `json:"selectedPlaybook,omitempty"`
+	SelectedPlaybooks []sessionstate.PlaybookCandidate `json:"selectedPlaybooks,omitempty"`
+	SelectedTemplate  string                           `json:"selectedTemplate,omitempty"`
+	CoveredSpecs      []string                         `json:"coveredSpecs,omitempty"`
+	Reason            string                           `json:"reason,omitempty"`
+	Candidates        any                              `json:"candidates,omitempty"`
 }
 
 func runWikiRecallDebug(root string, args []string) error {
@@ -915,12 +951,13 @@ func recallDebugPlanFromWikiPlan(plan dhcontext.WikiPlan) recallDebugPlan {
 		candidates = plan.Candidates
 	}
 	return recallDebugPlan{
-		Mode:             plan.Mode,
-		SelectedPlaybook: plan.SelectedPlaybook,
-		SelectedTemplate: plan.SelectedTemplate,
-		CoveredSpecs:     plan.CoveredSpecs,
-		Reason:           plan.Reason,
-		Candidates:       candidates,
+		Mode:              plan.Mode,
+		SelectedPlaybook:  plan.SelectedPlaybook,
+		SelectedPlaybooks: plan.SelectedPlaybooks,
+		SelectedTemplate:  plan.SelectedTemplate,
+		CoveredSpecs:      plan.CoveredSpecs,
+		Reason:            plan.Reason,
+		Candidates:        candidates,
 	}
 }
 
@@ -944,6 +981,13 @@ func printRecallDebug(result recallDebugResult) {
 	fmt.Printf("mode=%s\n", result.Plan.Mode)
 	if result.Plan.SelectedPlaybook != "" {
 		fmt.Printf("selectedPlaybook=%s\n", result.Plan.SelectedPlaybook)
+	}
+	if len(result.Plan.SelectedPlaybooks) > 0 {
+		var paths []string
+		for _, playbook := range result.Plan.SelectedPlaybooks {
+			paths = append(paths, playbook.Path)
+		}
+		fmt.Printf("selectedPlaybooks=%s\n", strings.Join(paths, ", "))
 	}
 	if result.Plan.SelectedTemplate != "" {
 		fmt.Printf("selectedTemplate=%s\n", result.Plan.SelectedTemplate)

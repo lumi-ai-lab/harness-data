@@ -214,12 +214,12 @@ func renderPlaybookIndex(b *strings.Builder, c Corpus, dir string) {
 		fmt.Fprintln(b, "暂无。")
 		fmt.Fprintln(b)
 	} else {
-		fmt.Fprintln(b, "| 指标 | playbook | spec | template |")
-		fmt.Fprintln(b, "| --- | --- | --- | --- |")
+		fmt.Fprintln(b, "| 指标 | playbook | spec |")
+		fmt.Fprintln(b, "| --- | --- | --- |")
 		for _, doc := range singles {
 			specPath := doc.Playbook.SpecPath
 			metric := metricName(c, specPath)
-			fmt.Fprintf(b, "| %s | `%s` | `%s` | `%s` |\n", tableCell(metric), path.Base(doc.Path), specPath, doc.Playbook.TemplatePath)
+			fmt.Fprintf(b, "| %s | `%s` | `%s` |\n", tableCell(metric), path.Base(doc.Path), specPath)
 		}
 		fmt.Fprintln(b)
 	}
@@ -233,7 +233,11 @@ func renderPlaybookIndex(b *strings.Builder, c Corpus, dir string) {
 		fmt.Fprintln(b, "| Playbook | aliases | covers | template |")
 		fmt.Fprintln(b, "| --- | --- | --- | --- |")
 		for _, doc := range combos {
-			fmt.Fprintf(b, "| `%s` | %s | %d specs | `%s` |\n", path.Base(doc.Path), tableCell(strings.Join(doc.Aliases, ", ")), len(doc.Covers), doc.Playbook.TemplatePath)
+			templatePath := doc.Playbook.TemplatePath
+			if c.ByPath[templatePath] == nil {
+				templatePath = "-"
+			}
+			fmt.Fprintf(b, "| `%s` | %s | %d specs | `%s` |\n", path.Base(doc.Path), tableCell(strings.Join(doc.Aliases, ", ")), len(doc.Covers), templatePath)
 		}
 		fmt.Fprintln(b)
 	}
