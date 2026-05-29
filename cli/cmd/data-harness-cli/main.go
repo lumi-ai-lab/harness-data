@@ -308,17 +308,26 @@ func runWikiMetricDuplicatesExport(root string, args []string) error {
 		if err != nil {
 			return err
 		}
+		if len(data.Duplicates) == 0 {
+			return skipEmptyMetricDuplicatesExport(*out)
+		}
 		return wikis.WriteMetricDuplicatesLiteYAML(*out, data)
 	case "full":
 		data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
 		if err != nil {
 			return err
 		}
+		if len(data.Groups) == 0 {
+			return skipEmptyMetricDuplicatesExport(*out)
+		}
 		return wikis.WriteMetricDuplicatesYAML(*out, data)
 	case "json":
 		data, err := wikis.ExportMetricDuplicates(root, *rootLabel)
 		if err != nil {
 			return err
+		}
+		if len(data.Groups) == 0 {
+			return skipEmptyMetricDuplicatesExport(*out)
 		}
 		encoded, err := wikis.MarshalMetricDuplicatesJSON(data)
 		if err != nil {
@@ -328,6 +337,14 @@ func runWikiMetricDuplicatesExport(root string, args []string) error {
 	default:
 		return fmt.Errorf("unsupported metric-duplicates export --format: %s", *format)
 	}
+}
+
+func skipEmptyMetricDuplicatesExport(out string) error {
+	if err := os.Remove(out); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	fmt.Printf("no metric duplicates found; no export generated: %s\n", out)
+	return nil
 }
 
 func runWikiMetricDuplicatesLint(root string, args []string) (wikis.MetricDuplicatesLintResult, error) {

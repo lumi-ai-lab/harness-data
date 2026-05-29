@@ -26,9 +26,25 @@ type AliasesReport struct {
 
 type AliasesFile struct {
 	Version int           `json:"version"`
-	Root    string        `json:"root"`
-	Targets []string      `json:"targets"`
-	Items   []AliasesItem `json:"items"`
+	Format  string        `json:"format,omitempty"`
+	Root    string        `json:"root,omitempty"`
+	Targets []string      `json:"targets,omitempty"`
+	Items   []AliasesItem `json:"items,omitempty"`
+}
+
+type LiteAliasesFile struct {
+	Version   int               `json:"version"`
+	Format    string            `json:"format"`
+	Specs     []LiteAliasesItem `json:"specs"`
+	Playbooks []LiteAliasesItem `json:"playbooks"`
+}
+
+type LiteAliasesItem struct {
+	ID              string   `json:"id"`
+	Label           string   `json:"label,omitempty"`
+	Code            string   `json:"code,omitempty"`
+	Aliases         []string `json:"aliases"`
+	NegativeAliases []string `json:"negative_aliases"`
 }
 
 type AliasesItem struct {
@@ -184,6 +200,37 @@ func ExportAliases(root string, targets []string) (AliasesFile, error) {
 	return AliasesFile{Version: 1, Root: commonWikiRoot(resolver), Targets: sortedTargets(targetSet), Items: items}, nil
 }
 
+func ExportAliasesLite(root string, targets []string) (LiteAliasesFile, error) {
+	corpus, _, err := LoadCorpus(root)
+	if err != nil {
+		return LiteAliasesFile{}, err
+	}
+	targetSet := aliasTargetSet(targets)
+	var specs []LiteAliasesItem
+	var playbooks []LiteAliasesItem
+	for _, doc := range corpus.Docs {
+		if !isAliasTarget(doc) || !aliasTargetAllowed(targetSet, doc.Kind) {
+			continue
+		}
+		item := LiteAliasesItem{
+			ID:              strings.ReplaceAll(strings.TrimSuffix(aliasFileKey(doc.Path), ".md"), "/", "."),
+			Label:           doc.Label,
+			Aliases:         doc.Aliases,
+			NegativeAliases: doc.NegativeAliases,
+		}
+		if doc.Kind == KindSpec {
+			item.Code = doc.Name
+			specs = append(specs, item)
+		}
+		if doc.Kind == KindPlaybook {
+			playbooks = append(playbooks, item)
+		}
+	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].ID < specs[j].ID })
+	sort.Slice(playbooks, func(i, j int) bool { return playbooks[i].ID < playbooks[j].ID })
+	return LiteAliasesFile{Version: 1, Format: "lite", Specs: specs, Playbooks: playbooks}, nil
+}
+
 func LintAliasesFile(root, file string) (AliasesLintResult, error) {
 	aliasesFile, err := ReadAliasesFile(file)
 	if err != nil {
@@ -202,6 +249,7 @@ func ImportAliases(root, file string, apply bool) (AliasesImportResult, error) {
 	if len(lint.Errors) > 0 {
 		return result, nil
 	}
+	aliasesFile = resolveAliasesPaths(root, aliasesFile, nil)
 	for _, item := range aliasesFile.Items {
 		targets := []struct {
 			path   string
@@ -252,6 +300,24 @@ func ReadAliasesFile(file string) (AliasesFile, error) {
 		return AliasesFile{}, err
 	}
 	if strings.HasSuffix(file, ".json") {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(data, &probe); err != nil {
+			return AliasesFile{}, err
+		}
+		if _, ok := probe["specs"]; ok {
+			var lite LiteAliasesFile
+			if err := json.Unmarshal(data, &lite); err != nil {
+				return AliasesFile{}, err
+			}
+			return liteAliasesToAliasesFile(lite), nil
+		}
+		if _, ok := probe["playbooks"]; ok {
+			var lite LiteAliasesFile
+			if err := json.Unmarshal(data, &lite); err != nil {
+				return AliasesFile{}, err
+			}
+			return liteAliasesToAliasesFile(lite), nil
+		}
 		var out AliasesFile
 		if err := json.Unmarshal(data, &out); err != nil {
 			return AliasesFile{}, err
@@ -263,6 +329,16 @@ func ReadAliasesFile(file string) (AliasesFile, error) {
 
 func WriteAliasesYAML(file string, data AliasesFile) error {
 	out := FormatAliasesYAML(data)
+	if dir := filepath.Dir(file); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(file, []byte(out), 0o644)
+}
+
+func WriteAliasesLiteYAML(file string, data LiteAliasesFile) error {
+	out := FormatAliasesLiteYAML(data)
 	if dir := filepath.Dir(file); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -306,6 +382,21 @@ func FormatAliasesYAML(data AliasesFile) string {
 	return b.String()
 }
 
+func FormatAliasesLiteYAML(data LiteAliasesFile) string {
+	var b strings.Builder
+	if data.Version == 0 {
+		data.Version = 1
+	}
+	if data.Format == "" {
+		data.Format = "lite"
+	}
+	fmt.Fprintf(&b, "version: %d\n", data.Version)
+	fmt.Fprintf(&b, "format: %s\n", quoteYAML(data.Format))
+	writeLiteSection(&b, "specs", data.Specs, true)
+	writeLiteSection(&b, "playbooks", data.Playbooks, false)
+	return b.String()
+}
+
 func LintAliases(root string, data AliasesFile) AliasesLintResult {
 	var result AliasesLintResult
 	add := func(level, code, item, field, value, message string) {
@@ -337,6 +428,7 @@ func LintAliases(root string, data AliasesFile) AliasesLintResult {
 			}
 		}
 	}
+	data = resolveAliasesPaths(root, data, add)
 	for _, item := range data.Items {
 		checkAliasPath(root, item, item.Paths.Spec, "spec", add)
 		checkAliasPath(root, item, item.Paths.Playbook, "playbook", add)
@@ -409,15 +501,75 @@ func parseAliasesYAML(data []byte) (AliasesFile, error) {
 			switch key {
 			case "version":
 				fmt.Sscanf(value, "%d", &out.Version)
+			case "format":
+				out.Format = cleanYAMLScalar(value)
 			case "root":
 				out.Root = cleanYAMLScalar(value)
-			case "targets", "items":
+			case "targets", "items", "specs", "playbooks":
 				section = key
 			}
 			continue
 		}
 		if section == "targets" && indent == 2 && strings.HasPrefix(line, "- ") {
 			out.Targets = append(out.Targets, cleanYAMLScalar(strings.TrimPrefix(line, "- ")))
+			continue
+		}
+		if section == "specs" || section == "playbooks" {
+			if indent == 2 && strings.HasPrefix(line, "- ") {
+				out.Items = append(out.Items, AliasesItem{})
+				item = &out.Items[len(out.Items)-1]
+				out.Format = "lite"
+				subsection = section
+				arrayTarget = nil
+				if section == "specs" {
+					item.Spec = &AliasesFieldSet{}
+				} else {
+					item.Playbook = &AliasesFieldSet{}
+				}
+				rest := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+				if key, value, ok := splitYAMLKV(rest); ok && key == "id" {
+					item.ID = cleanYAMLScalar(value)
+				}
+				continue
+			}
+			if item == nil {
+				continue
+			}
+			fields := item.Spec
+			if section == "playbooks" {
+				fields = item.Playbook
+			}
+			if indent == 4 {
+				key, value, ok := splitYAMLKV(line)
+				if !ok {
+					continue
+				}
+				arrayTarget = nil
+				switch key {
+				case "id":
+					item.ID = cleanYAMLScalar(value)
+				case "label":
+					item.Label = cleanYAMLScalar(value)
+				case "code":
+					item.Code = cleanYAMLScalar(value)
+				case "aliases":
+					if value != "" && !isInlineYAMLArray(value) {
+						return AliasesFile{}, fmt.Errorf("aliases must be an array")
+					}
+					fields.Aliases = parseInlineYAMLArray(value)
+					arrayTarget = &fields.Aliases
+				case "negative_aliases":
+					if value != "" && !isInlineYAMLArray(value) {
+						return AliasesFile{}, fmt.Errorf("negative_aliases must be an array")
+					}
+					fields.NegativeAliases = parseInlineYAMLArray(value)
+					arrayTarget = &fields.NegativeAliases
+				}
+				continue
+			}
+			if indent == 6 && arrayTarget != nil && strings.HasPrefix(line, "- ") {
+				*arrayTarget = append(*arrayTarget, cleanYAMLScalar(strings.TrimPrefix(line, "- ")))
+			}
 			continue
 		}
 		if section != "items" {
@@ -514,6 +666,103 @@ func parseAliasesYAML(data []byte) (AliasesFile, error) {
 		out.Version = 1
 	}
 	return out, nil
+}
+
+func liteAliasesToAliasesFile(lite LiteAliasesFile) AliasesFile {
+	out := AliasesFile{Version: lite.Version, Format: "lite"}
+	if out.Version == 0 {
+		out.Version = 1
+	}
+	for _, spec := range lite.Specs {
+		out.Items = append(out.Items, AliasesItem{
+			ID:    spec.ID,
+			Label: spec.Label,
+			Code:  spec.Code,
+			Spec:  &AliasesFieldSet{Aliases: spec.Aliases, NegativeAliases: spec.NegativeAliases},
+		})
+	}
+	for _, playbook := range lite.Playbooks {
+		out.Items = append(out.Items, AliasesItem{
+			ID:       playbook.ID,
+			Label:    playbook.Label,
+			Code:     playbook.Code,
+			Playbook: &AliasesFieldSet{Aliases: playbook.Aliases, NegativeAliases: playbook.NegativeAliases},
+		})
+	}
+	return out
+}
+
+func resolveAliasesPaths(root string, data AliasesFile, add func(string, string, string, string, string, string)) AliasesFile {
+	needsResolve := data.Format == "lite"
+	if !needsResolve {
+		for _, item := range data.Items {
+			if item.Spec != nil && item.Paths.Spec == "" {
+				needsResolve = true
+			}
+			if item.Playbook != nil && item.Paths.Playbook == "" {
+				needsResolve = true
+			}
+		}
+	}
+	if !needsResolve {
+		return data
+	}
+	corpus, _, err := LoadCorpus(root)
+	if err != nil {
+		if add != nil {
+			add("error", "corpus_load_failed", "", "", "", err.Error())
+		}
+		return data
+	}
+	specs := map[string]Document{}
+	playbooks := map[string]Document{}
+	for _, doc := range corpus.Docs {
+		if !isAliasTarget(doc) {
+			continue
+		}
+		id := strings.ReplaceAll(strings.TrimSuffix(aliasFileKey(doc.Path), ".md"), "/", ".")
+		if doc.Kind == KindSpec {
+			specs[id] = doc
+		}
+		if doc.Kind == KindPlaybook {
+			playbooks[id] = doc
+		}
+	}
+	for i := range data.Items {
+		item := &data.Items[i]
+		if item.Spec != nil && item.Paths.Spec == "" {
+			doc, ok := specs[item.ID]
+			if !ok {
+				if add != nil {
+					add("error", "id_not_found", item.ID, "id", item.ID, "spec id not found in corpus")
+				}
+			} else {
+				item.Paths.Spec = doc.PhysicalRel
+				item.FileKey = aliasFileKey(doc.Path)
+				if item.Label == "" {
+					item.Label = doc.Label
+				}
+				if item.Code == "" {
+					item.Code = doc.Name
+				}
+			}
+		}
+		if item.Playbook != nil && item.Paths.Playbook == "" {
+			doc, ok := playbooks[item.ID]
+			if !ok {
+				if add != nil {
+					add("error", "id_not_found", item.ID, "id", item.ID, "playbook id not found in corpus")
+				}
+			} else {
+				item.Paths.Playbook = doc.PhysicalRel
+				item.FileKey = aliasFileKey(doc.Path)
+				if item.Label == "" {
+					item.Label = doc.Label
+				}
+			}
+		}
+	}
+	return data
 }
 
 func rewriteAliasFrontmatter(data []byte, aliases, negativeAliases []string) []byte {
@@ -672,6 +921,27 @@ func writeArray(b *strings.Builder, indent int, key string, values []string) {
 	for _, value := range values {
 		fmt.Fprintf(b, "%s- %s\n", strings.Repeat(" ", indent+2), quoteYAML(value))
 	}
+}
+
+func writeLiteSection(b *strings.Builder, name string, items []LiteAliasesItem, includeCode bool) {
+	fmt.Fprintf(b, "%s:\n", name)
+	for _, item := range items {
+		fmt.Fprintf(b, "  - id: %s\n", quoteYAML(item.ID))
+		writeScalar(b, 4, "label", item.Label)
+		if includeCode {
+			writeScalar(b, 4, "code", item.Code)
+		}
+		writeArrayLite(b, 4, "aliases", item.Aliases)
+		writeArrayLite(b, 4, "negative_aliases", item.NegativeAliases)
+	}
+}
+
+func writeArrayLite(b *strings.Builder, indent int, key string, values []string) {
+	if len(values) == 0 {
+		fmt.Fprintf(b, "%s%s: []\n", strings.Repeat(" ", indent), key)
+		return
+	}
+	writeArray(b, indent, key, values)
 }
 
 func writeFrontmatterArray(b *strings.Builder, key string, values []string) {
@@ -860,6 +1130,14 @@ func isIndentedYAMLLine(line string) bool {
 }
 
 func MarshalAliasesJSON(data AliasesFile) ([]byte, error) {
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+func MarshalAliasesLiteJSON(data LiteAliasesFile) ([]byte, error) {
 	out, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return nil, err
