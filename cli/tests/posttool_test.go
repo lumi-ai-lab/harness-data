@@ -1620,9 +1620,9 @@ func TestPosttoolInjectTemplateUsesFreeAnalysisForAmbiguousPlaybooks(t *testing.
 	}
 }
 
-func TestPosttoolInjectTemplateUsesCompositeTemplate(t *testing.T) {
+func TestPosttoolInjectTemplateRefusesMultiSingleTemplate(t *testing.T) {
 	root := root(t)
-	sessionID := "go-posttool-composite"
+	sessionID := "go-posttool-multi-single"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "销售额和客单价最近怎么样？")
 
@@ -1631,28 +1631,24 @@ func TestPosttoolInjectTemplateUsesCompositeTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("expected composite template output")
+		t.Fatal("expected posttool output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"经营分析深度报告模板", "核心指标总览"} {
+	for _, want := range []string{"no selectedPlaybook", "Do not guess a template"} {
 		if !stringsContains(context, want) {
 			t.Fatalf("missing %q in %s", want, context)
 		}
 	}
 
 	state := readPosttoolState(t, root, sessionID)
-	if state["mode"] != "combo" {
+	if state["mode"] != "multi_single" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
-	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
+	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	if state["template_injected"] != true {
-		t.Fatalf("expected root template_injected in %#v", state)
-	}
-	report := state["reports"].(map[string]any)["template"].(map[string]any)
-	if report["template_injected"] != true {
-		t.Fatalf("expected report template_injected in %#v", report)
+	if state["template_injected"] == true {
+		t.Fatalf("did not expect root template_injected in %#v", state)
 	}
 }
 

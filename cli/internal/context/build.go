@@ -368,29 +368,14 @@ func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wiki
 }
 
 func isNonDirectMultiSingleQuestion(question string) bool {
-	return hasAny(question, []string{"为什么", "原因", "归因", "关系", "影响", "带动", "拖累", "波动", "下降", "上升", "下滑", "增长", "概览", "报告"})
+	return hasAny(question, []string{"为什么", "原因", "归因", "影响", "带动", "拖累", "波动", "下降", "上升", "下滑", "增长", "关系", "拆解", "分析", "概览", "报告"})
 }
 
 func playbooksSupportQuestionIntents(question string, playbooks []wikis.RuntimeDocument) bool {
 	if len(playbooks) < 2 {
 		return false
 	}
-	allHaveIntents := true
-	for _, playbook := range playbooks {
-		if playbook.Playbook == nil || len(playbook.Playbook.Intents) == 0 {
-			allHaveIntents = false
-			break
-		}
-	}
-	if !allHaveIntents {
-		return isLegacyMultiSingleValueQuestion(question)
-	}
-	for _, playbook := range playbooks {
-		if !playbookSupportsQuestionIntent(question, playbook) {
-			return false
-		}
-	}
-	return true
+	return !isNonDirectMultiSingleQuestion(question)
 }
 
 func playbookSupportsQuestionIntent(question string, playbook wikis.RuntimeDocument) bool {
@@ -550,7 +535,7 @@ func instructionForPlan(plan WikiPlan) string {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not fallback to overview or other report commands unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming area/category/trend rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
 	case sessionstate.ModeMulti:
-		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, follow its selected playbook to collect the user-requested result independently according to the playbook intent matched by the question. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a combo report or attribution analysis."
+		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a combo report or attribution analysis."
 	case sessionstate.ModeCombo:
 		templateInstruction := "After data collection, answer directly from CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
 		if plan.SelectedTemplate != "" {

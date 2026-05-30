@@ -263,8 +263,8 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	}
 }
 
-func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
-	sessionID := "go-context-composite-multi-metric"
+func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
+	sessionID := "go-context-multi-single-multi-metric"
 	root := root(t)
 	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -285,14 +285,14 @@ func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: combo", "selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "coveredSpecs:", "spec/cmr/business/s-sale-amt.md", "spec/cmr/business/s-per-cust-amt.md"} {
+	for _, want := range []string{"Harness mode: multi_single", "selectedPlaybooks:", "playbooks/cmr/business/s-sale-amt.md", "playbooks/cmr/business/s-per-cust-amt.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
 	}
-	for _, unwanted := range []string{"- wikis/spec/cmr/business/s-sale-amt.md", "- wikis/spec/cmr/business/s-per-cust-amt.md"} {
+	for _, unwanted := range []string{"selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "- wikis/spec/cmr/business/s-sale-amt.md", "- wikis/spec/cmr/business/s-per-cust-amt.md"} {
 		if bytes.Contains([]byte(context), []byte(unwanted)) {
-			t.Fatalf("single metric covered spec should not be required contextFile: %s in %s", unwanted, context)
+			t.Fatalf("unexpected combo/spec context: %s in %s", unwanted, context)
 		}
 	}
 
@@ -304,18 +304,18 @@ func TestClaudeHookMultiMetricUsesCompositeMode(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state["mode"] != "combo" {
+	if state["mode"] != "multi_single" {
 		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
 	}
-	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
+	if state["selected_playbook"] != nil {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
+	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	covered, ok := state["covered_specs"].([]any)
-	if !ok || len(covered) == 0 {
-		t.Fatalf("covered_specs = %#v", state["covered_specs"])
+	selected, ok := state["selected_playbooks"].([]any)
+	if !ok || len(selected) != 2 {
+		t.Fatalf("selected_playbooks = %#v", state["selected_playbooks"])
 	}
 }
 

@@ -126,9 +126,9 @@ func TestBuildWithWikisIndexMultiSingleMode(t *testing.T) {
 	}
 }
 
-func TestBuildWithWikisIndexMultiSingleModeUsesPlaybookIntents(t *testing.T) {
+func TestBuildWithWikisIndexMultiSingleModeDefaultsWithoutValueIntent(t *testing.T) {
 	root := testContextWikiRoot(t)
-	response, plan, err := BuildWithPlan(root, "查看销售额趋势分析和客单价的值")
+	response, plan, err := BuildWithPlan(root, "销售额和客单价")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestBuildWithWikisIndexMultiSingleModeUsesPlaybookIntents(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
 	}
-	if !strings.Contains(response.Instruction, "playbook intent matched by the question") {
+	if !strings.Contains(response.Instruction, "default to current-value collection") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
@@ -156,6 +156,59 @@ func TestBuildWithWikisIndexGenericAnalysisDoesNotUseMultiSingleMode(t *testing.
 	}
 	if plan.Mode == sessionstate.ModeMulti {
 		t.Fatalf("generic analysis should not use multi_single: %+v", plan)
+	}
+}
+
+func TestBuildWithWikisIndexCMRStoreManagerMultiSingleDefaultsToCurrentValue(t *testing.T) {
+	root := testCMRStoreManagerWikiRoot(t)
+	for _, question := range []string{
+		"净增门店数, 存量门店数, 还有停业门店数呢?",
+		"净增门店数, 存量门店数, 停业门店数",
+	} {
+		response, plan, err := BuildWithPlan(root, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Mode != sessionstate.ModeMulti || plan.SelectedPlaybook != "" || plan.SelectedTemplate != "" {
+			t.Fatalf("%q unexpected plan: %+v", question, plan)
+		}
+		got := contextPaths(response)
+		want := []string{
+			"wikis/playbooks/cmr/store-manager/s-increase-stores.md",
+			"wikis/playbooks/cmr/store-manager/s-stock-stores.md",
+			"wikis/playbooks/cmr/store-manager/s-stop-business-stores.md",
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%q context paths:\n%s", question, strings.Join(got, "\n"))
+		}
+		for _, unwanted := range []string{
+			"wikis/spec/cmr/store-manager/index.md",
+			"wikis/spec/cmr/store-manager/s-increase-stores.md",
+			"wikis/spec/cmr/store-manager/s-stock-stores.md",
+			"wikis/spec/cmr/store-manager/s-stop-business-stores.md",
+		} {
+			if hasString(got, unwanted) {
+				t.Fatalf("%q unexpected %s in %#v", question, unwanted, got)
+			}
+		}
+	}
+}
+
+func TestBuildWithWikisIndexCMRStoreManagerNonDirectQuestionsDoNotUseMultiSingle(t *testing.T) {
+	root := testCMRStoreManagerWikiRoot(t)
+	for _, question := range []string{
+		"净增门店数和存量门店数分析",
+		"净增门店数和存量门店数为什么变化",
+		"净增门店数和存量门店数有什么关系",
+		"净增门店数、存量门店数、停业门店数做个报告",
+	} {
+		_, plan, err := BuildWithPlan(root, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Mode == sessionstate.ModeMulti {
+			t.Fatalf("%q should not use multi_single: %+v", question, plan)
+		}
 	}
 }
 
@@ -370,6 +423,72 @@ covers:
 	writeContextFile(t, root, "wikis/templates/idx/business/s-member-repurchase-rate.md", "# 会员复购率模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/default-overview.md", "# 经营概览模板\n")
+	if _, err := wikis.BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func testCMRStoreManagerWikiRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeContextFile(t, root, "config/harness-config.yaml", `paths:
+  spec: wikis/spec
+  routing: wikis/routing
+  playbooks: wikis/playbooks
+  templates: wikis/templates
+`)
+	for _, rel := range []string{
+		"wikis/spec/index.md",
+		"wikis/spec/cmr/index.md",
+		"wikis/spec/cmr/store-manager/index.md",
+		"wikis/playbooks/index.md",
+		"wikis/playbooks/cmr/index.md",
+		"wikis/playbooks/cmr/store-manager/index.md",
+		"wikis/templates/index.md",
+		"wikis/templates/cmr/index.md",
+		"wikis/templates/cmr/store-manager/index.md",
+	} {
+		writeContextFile(t, root, rel, "# "+filepath.Base(filepath.Dir(rel))+"\n")
+	}
+	writeContextFile(t, root, "wikis/spec/cmr/store-manager/s-increase-stores.md", `---
+name: increaseStores
+label: 净增门店数
+---
+# 净增门店数
+`)
+	writeContextFile(t, root, "wikis/spec/cmr/store-manager/s-stock-stores.md", `---
+name: stockStores
+label: 存量门店数
+---
+# 存量门店数
+`)
+	writeContextFile(t, root, "wikis/spec/cmr/store-manager/s-stop-business-stores.md", `---
+name: stopBusinessStores
+label: 停业门店数
+---
+# 停业门店数
+`)
+	for _, item := range []struct {
+		path  string
+		label string
+	}{
+		{"wikis/playbooks/cmr/store-manager/s-increase-stores.md", "净增门店数"},
+		{"wikis/playbooks/cmr/store-manager/s-stock-stores.md", "存量门店数"},
+		{"wikis/playbooks/cmr/store-manager/s-stop-business-stores.md", "停业门店数"},
+	} {
+		writeContextFile(t, root, item.path, `---
+intents:
+  current_value:
+    aliases: ["值", "指标值", "是多少", "多少", "查看", "查询", "看一下"]
+  trend:
+    aliases: ["趋势", "走势", "趋势分析"]
+  area_performance:
+    aliases: ["区域表现", "区域排名", "区域对比"]
+---
+# `+item.label+`取数
+`)
+	}
 	if _, err := wikis.BuildIndex(root, false); err != nil {
 		t.Fatal(err)
 	}
