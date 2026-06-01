@@ -1,0 +1,236 @@
+---
+name: "{{ frontmatter_name }}"
+label: "{{ label }}取数手册"
+intents:
+  current_value:
+    aliases:
+      - 值
+      - 指标值
+      - 是多少
+      - 多少
+      - 查看
+      - 查询
+      - 看一下
+  trend:
+    aliases:
+      - 趋势
+      - 走势
+      - 趋势分析
+  area_performance:
+    aliases:
+      - 区域表现
+      - 区域排名
+      - 区域对比
+      - 哪个区域高
+      - 哪个区域低
+
+---
+
+# {{ label }}取数手册
+
+## 适用问题
+
+用户询问{{ label }}{{ alias_phrase }}或 `{{ code }}` 的当前值、趋势或区域表现时，使用本手册。
+
+{{ label }}属于 CMR 公司报表。当前值使用新版 CMR CLI 的 `dupont` 命令查询；趋势使用 `trend` 命令查询；区域表现使用 `area` 命令查询。本手册只处理围绕{{ label }}的取数，不处理原因归因、综合报告、品类过滤、品类表现或指标关系判断。
+
+## 公司报表时间粒度限制
+
+公司报表不支持日维度查询，只支持周和月维度。不要对公司报表生成 `--date` 命令。
+
+用户询问“昨天”“今天”“某个具体日期”时，必须先把该日期转换为其所在的 QDM 业务周，然后使用 `--week <YYYY-NN>` 查询。业务周用 `search weeks` 返回的 `startDate`、`endDate` 和 `value` 判断，不要使用 ISO 周或自行拼接周编码。
+
+日期转业务周示例：用户问 2026-05-30 的{{ label }}，先查询业务周：
+
+```bash
+source config/qdm-cli-paths.env
+"$QDM_CMR_CLI" search weeks --page-size 20
+```
+
+如果返回 `2026-第21周(2026-05-25至2026-05-31)` 且 `value` 为 `2026-21`，则当前值查询必须使用：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_week_example }}
+```
+
+最终回答必须说明：公司报表只支持周/月口径，用户给出的日期已转换为所在业务周。
+
+## 指标识别规则
+
+{{ metric_identity_notes }}
+
+## 默认查询口径
+
+当用户没有指定任何过滤条件时，默认查询：
+
+- 报表：公司报表，`--report company`
+- 指标：{{ label }}，稳定 code 为 `{{ code }}`
+- 时间：昨天所在的 QDM 业务周，按 `spec/common/time-policy.md` 和 `search weeks` 解析为 `--week <YYYY-NN>`
+- 区域：CLI 默认区域，即 `管理区域 / CN00 / 全国(不含港澳)`
+- 品类：固定过滤为全品类，即 `大分类 / 00 / 全品类`；公司报表不支持细分品类或品类下钻
+
+默认当前值查询命令：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_default_command }}
+```
+
+最终回答中必须说明口径是“全国、全品类”，其中全品类是公司报表固定口径。不要把文档示例中的数值当成真实结果。
+
+## 查询入口选择
+
+根据用户问题选择一个取数入口。用户只问“{{ label }}是多少”“{{ label }}的值”“看一下{{ label }}”时，默认查询当前值。
+
+| 用户意图 | CLI 命令 | 说明 |
+| --- | --- | --- |
+| 当前值、指标值、是多少 | `dupont` | {{ current_query_description }} |
+| 趋势、走势、最近变化 | `trend` | {{ trend_query_description }} |
+| 区域表现、区域排名、哪个区域高或低 | `area` | {{ area_query_description }} |
+
+不要因为用户问趋势或区域表现就切换到归因分析；这些问题仍然是{{ label }}这个单指标在不同维度下的取数。公司报表的品类过滤固定为全品类，不支持细分品类、品类下钻或品类表现。
+
+## 时间过滤
+
+公司报表时间参数只能使用周或月，不支持日维度。不要组合多个时间参数，也不要用日期范围模拟周或月。
+
+| 用户表达 | CLI 参数 | 说明 |
+| --- | --- | --- |
+| 未指定时间 | `--week <昨天所在业务周>` | 默认查昨天所在 QDM 业务周 |
+| 今天、今日 | `--week <current_date 所在业务周>` | 用 `search weeks` 确认当前日期所在业务周 |
+| 昨天、昨日 | `--week <current_date - 1 所在业务周>` | 用 `search weeks` 确认昨日所在业务周 |
+| 具体日期 | `--week <该日期所在业务周>` | 用 `search weeks` 的 `startDate/endDate` 判断日期落在哪个 `value` |
+| 本周、这周、最近一周 | `--week <当前业务周>` | 业务周用 `search weeks` 辅助确认 |
+| 上周 | `--week <上一业务周>` | 取 `search weeks` 中当前周后一条 |
+| 本月、这个月 | `--month YYYY-MM` | 当前月份 |
+| 上月 | `--month YYYY-MM` | 上一月份 |
+
+示例：查询 2026-05-28 全国、全品类{{ label }}。先确认 2026-05-28 所在业务周，再使用该周 `value`：
+
+```bash
+source config/qdm-cli-paths.env
+"$QDM_CMR_CLI" search weeks --page-size 20
+{{ current_value_week_example }}
+```
+
+示例：查询 2026-21 周全国、全品类{{ label }}：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_week_example }}
+```
+
+示例：查询 2026-05 月全国、全品类{{ label }}：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_month_example }}
+```
+
+## 区域过滤
+
+用户指定区域、大区、督导、门店范围时，需要增加区域过滤。区域维度和值必须以 CLI 可识别值为准；不确定时先用 `search stores` 查询。
+
+区域名称数字归一化规则：
+
+- 管理区域、大区、门店名称中出现阿拉伯数字时，查询前必须转换为中文数字。
+- 例如用户说“粤东1区”，实际查询应使用“粤东一区”。
+- 这个规则也适用于类似“粤西2区”“长沙2区”“广州XX第2店”等区域或门店名称；优先将名称归一化后再执行 `search stores` 或 `dupont`。
+- 如果归一化后仍无法确认编码，先用对应区域维度执行 `search stores`，不要自行猜测编码。
+
+常用区域过滤参数：
+
+| 用户表达 | CLI 参数 |
+| --- | --- |
+| 全国、全国不含港澳 | 不额外传区域参数，使用默认 `管理区域 / CN00` |
+| 某管理区域，如粤西区 | `--area-type 管理区域 --area 粤西区` |
+| 某区域编码，如 CN01 | `--area-type 管理区域 --area CN01` |
+| 某大区，如粤东一区 | `--area-type 大区 --area 粤东一区` |
+| 某督导，如张龙 | `--area-type 督导 --area 张龙` |
+| 某门店，如广州华景北店 | `--area-type 门店 --area 广州华景北店` |
+| 不确定区域名或编码 | 先执行 `search stores --type <区域维度> --keyword <关键词>` |
+
+搜索区域示例：
+
+```bash
+source config/qdm-cli-paths.env
+"$QDM_CMR_CLI" search stores --type 管理区域 --keyword 粤西区
+```
+
+查询大区“粤东一区”的{{ label }}：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_area_region_example }}
+```
+
+如果用户问“粤东一区下面有哪些维度”“粤东一区下一级是什么”“继续下钻粤东一区”，这不是指标表现查询。先确认父级 ID，再使用 `search stores child-list --parent <父级ID>` 查询下一级维度清单。
+
+## 品类过滤固定全品类
+
+公司报表支持品类过滤，但过滤条件固定为全品类：`大分类 / 00 / 全品类`。这表示查询请求始终使用全品类口径，不支持切换到水果、蔬菜、某个中分类、某个商品分类或商品范围。
+
+用户询问某个细分品类下的{{ label }}时，不要生成细分品类查询命令，也不要静默把用户指定的细分品类当作已生效过滤条件。必须先说明：公司报表的品类过滤只能固定为全品类，{{ label }}不能按细分品类查询；如继续查询，只能返回全品类固定口径的结果。
+
+用户询问“各品类{{ label }}”“{{ label }}品类排名”“哪个品类{{ label }}高或低”“继续下钻品类”等品类表现或品类下钻问题时，必须说明公司报表没有品类表现或细分品类下钻数据。不要改用经营分析报表，不要调用品类搜索，不要调用公司报表品类表现接口，也不要把空结果当成指标证据。
+
+## 组合过滤
+
+时间、区域、固定全品类可以组合使用，但每类过滤只保留一个明确口径。品类过滤只能是全品类；用户给出细分品类条件时，必须说明该细分品类条件不能生效，而不是静默降级为全品类查询。
+
+查询粤西区、2026-05-28 所在业务周、全品类固定口径的{{ label }}：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_region_example }}
+```
+
+## 当前值查询
+
+{{ current_value_method }}
+
+查询默认口径的{{ label }}当前值：
+
+```bash
+source config/qdm-cli-paths.env
+{{ current_value_week_example }}
+```
+
+## 趋势查询
+
+{{ trend_query_block }}
+
+## 区域表现查询
+
+{{ area_query_block }}
+
+## 回复后的追问引导
+
+回答{{ label }}查询结果后，可以给出 1-2 个后续追问建议。追问建议只能基于本手册已定义的能力生成，不要引导用户询问本手册未覆盖的归因、诊断、预测、经营建议、品类过滤、品类表现或跨指标分析。
+
+可引导的追问范围仅限：
+
+{{ followup_capabilities }}
+- 已支持过滤：时间、区域。
+- 固定口径：品类口径始终为全品类，不支持用户切换到细分品类。
+- 下级区域清单：使用 `search stores child-list` 查询该区域下一级维度。
+
+生成追问建议时不要重复用户刚刚问过的同一查询入口，不推荐“为什么{{ label }}低”“{{ label }}受哪些因素影响”“怎么改善{{ label }}”“给经营建议”等本手册明确不处理的问题。
+
+## 输出要求
+
+{{ primary_value_rule }}
+- 趋势结果必须来自 `trend` 输出中的时间点和值。
+- 区域表现必须来自 `area` 输出中的区域维度和值。
+- 下级区域清单必须来自 `search stores child-list` 输出中的 `value` 和 `label`。
+- 指标名称以 CLI 输出中的 `indicatorName` 为准。
+- 指标 code 以 CLI 输出中的 `indicatorCode` 为准。
+- 过滤口径必须在最终回答中说明，包括时间、区域、品类=全品类（固定）。
+- 如果用户指定细分品类口径，必须说明公司报表的品类过滤只能固定为全品类，不能生成细分品类查询命令。
+- 不估算、不补造缺失值，不使用文档示例数值替代真实取数。
+- CLI 返回空数组、null、`rows: []` 或无可用值时，直接说明未返回可用指标证据。
+- 不把 `child-list` 返回的维度清单解释为{{ label }}指标结果。
+- 不把经营分析、用户报表的结果当成公司报表{{ label }}结果。
+- 不把经营分析报表的品类能力套用到公司报表{{ label }}。
+- 单指标问题取数后直接回复指标值和必要口径，不执行 `bin/data-harness-cli inject-template`。

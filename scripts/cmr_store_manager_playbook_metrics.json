@@ -1,0 +1,20 @@
+[
+  {"label": "闭店数", "code": "closeStores"},
+  {"label": "门店其他支出", "code": "storeOtherFee"},
+  {"label": "员工工资", "code": "storeTotalSalary"},
+  {"label": "人效", "code": "laborEffective"},
+  {"label": "坪效", "code": "areaEffective"},
+  {"label": "租金和物业管理费", "code": "storeDormTotalRent"},
+  {"label": "门店人数", "code": "storeNum"},
+  {"label": "盈亏平衡点", "code": "breakEvenPoint"},
+  {"label": "店铺水电费", "code": "waterRent"},
+  {"label": "待开业门店数", "code": "unopenStores"},
+  {"label": "门店净利润", "code": "netProfit"},
+  {"label": "开店数", "code": "openStores"},
+  {"label": "门店面积", "code": "storeArea"},
+  {"label": "存量门店数", "code": "stockStores"},
+  {"label": "营业门店数", "code": "stores"},
+  {"label": "停业超30天门店数", "code": "stop30dayStores"},
+  {"label": "停业门店数", "code": "stopBusinessStores"},
+  {"label": "净增门店数", "code": "increaseStores"}
+]
