@@ -34,6 +34,12 @@ docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-d
 
 镜像包名为 `ghcr.io/lumi-ai-lab/harness-data-cli`。推送 `v*` Git tag 时会发布同名版本标签和 `latest` 标签；普通 `master` push 只做容器构建验证，不推送镜像。
 
+版本标签同时提供多架构入口和显式架构标签：
+
+- `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1`
+- `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-amd64`
+- `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-arm64`
+
 验证与调试：
 
 ```bash

@@ -26,6 +26,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -37,22 +40,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Build multi-arch image
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: docker/build-push-action@v6
         with:
-          images: ${{ env.IMAGE_NAME }}
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
           tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            ${{ env.IMAGE_NAME }}:ci-${{ github.run_id }}
           labels: |
             org.opencontainers.image.source=https://github.com/lumi-ai-lab/harness-data
             org.opencontainers.image.description=Data Harness CLI for QDM runtime constraint data
 
-      - name: Build and publish
+      - name: Publish multi-arch image tag
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/lumi-ai-lab/harness-data
+            org.opencontainers.image.description=Data Harness CLI for QDM runtime constraint data
+
+      - name: Build linux/amd64 image tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}-linux-amd64
+            ${{ env.IMAGE_NAME }}:latest-linux-amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/lumi-ai-lab/harness-data
+            org.opencontainers.image.description=Data Harness CLI for QDM runtime constraint data
+
+      - name: Build linux/arm64 image tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}-linux-arm64
+            ${{ env.IMAGE_NAME }}:latest-linux-arm64
+          labels: |
+            org.opencontainers.image.source=https://github.com/lumi-ai-lab/harness-data
+            org.opencontainers.image.description=Data Harness CLI for QDM runtime constraint data
