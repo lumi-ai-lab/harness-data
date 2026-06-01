@@ -44,20 +44,41 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
 - `cli/`：Data Harness CLI 源码和 Go 测试。
-- `config/harness-config.yaml`：Harness 统一配置，集中维护知识库路径和 QDM CLI 绝对路径。
+- `config/harness-config.yaml.example`：Harness 统一配置模板；本地运行前复制为 `config/harness-config.yaml` 并填入本机 QDM CLI 绝对路径。
+- `config/qdm-cli-paths.env.example`：QDM CLI 环境变量模板；本地运行前复制为 `config/qdm-cli-paths.env`。
 - `wikis/`：业务知识库根目录，可作为 git submodule 管理。
 - `wikis/playbooks/`：分析流程与必要证据来源。
 - `wikis/spec/`：报告指标归属和业务知识权威说明。
 - `wikis/templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
 - `tests/`：Python 集成测试。
 
-`config/harness-config.yaml` 是受限 YAML，目前支持 `paths` 和 `cli` 两个 section。当前已预配置：
+### 本地配置
+
+真实配置文件包含本机绝对路径，不提交到 Git。首次运行前先从 example 生成本地配置：
+
+```bash
+cp config/harness-config.yaml.example config/harness-config.yaml
+cp config/qdm-cli-paths.env.example config/qdm-cli-paths.env
+```
+
+然后把两个文件里的 `/absolute/path/to/...` 改成当前机器上的 QDM CLI 路径。需要在 shell 中使用这些 CLI 环境变量时，执行：
+
+```bash
+source config/qdm-cli-paths.env
+```
+
+`config/harness-config.yaml` 是受限 YAML，目前支持 `paths` 和 `cli` 两个 section。example 默认提供：
 
 ```yaml
 paths:
   spec: wikis/spec
   playbooks: wikis/playbooks
   templates: wikis/templates
+
+cli:
+  qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
+  qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
+  qdm_cas_cli: /absolute/path/to/cas-cli
 ```
 
 未配置时默认兼容根目录 `spec/`、`playbooks/`、`templates/` 结构。Wiki 检查和索引内部统一使用 `spec/...`、`playbooks/...`、`templates/...` 逻辑路径；context 输出使用可直接读取的物理相对路径。

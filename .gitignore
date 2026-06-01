@@ -3,6 +3,8 @@
 .env
 .env.*
 !.env.example
+config/harness-config.yaml
+config/qdm-cli-paths.env
 
 # macOS
 .DS_Store
@@ -13,10 +15,15 @@ __pycache__/
 
 # Local Claude hook state
 .claude/hooks/state/
+.claude-bak/
 
 # Generated harness data and local compiled binaries
 .harness/
 bin/
+
+# Local/generated business data samples
+*-cmr-response.json
+scripts/*.json
 
 # Local logs and temp files
 *.log
