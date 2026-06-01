@@ -40,6 +40,14 @@ docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-d
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-amd64`
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-arm64`
 
+GitHub Releases 同时提供可直接下载的 CLI 二进制包：
+
+- `data-harness-cli-v0.0.1-windows-amd64.zip`
+- `data-harness-cli-v0.0.1-linux-amd64.tar.gz`
+- `data-harness-cli-v0.0.1-darwin-amd64.tar.gz`
+- `data-harness-cli-v0.0.1-darwin-arm64.tar.gz`
+- 每个压缩包都有对应的 `.sha256` 校验文件
+
 验证与调试：
 
 ```bash

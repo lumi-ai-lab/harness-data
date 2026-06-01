@@ -1,0 +1,116 @@
+name: Publish CLI Release
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-amd64
+            goos: windows
+            goarch: amd64
+            binary: data-harness-cli.exe
+            archive: zip
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+            binary: data-harness-cli
+            archive: tar.gz
+          - target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+            binary: data-harness-cli
+            archive: tar.gz
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            binary: data-harness-cli
+            archive: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          mkdir -p build dist
+          go build -trimpath -ldflags="-s -w" -o "build/${{ matrix.binary }}" ./cli/cmd/data-harness-cli
+
+      - name: Package artifact
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+          ARCHIVE: ${{ matrix.archive }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${REF_NAME}"
+          else
+            version="ci-${RUN_ID}"
+          fi
+
+          base="data-harness-cli-${version}-${TARGET}"
+          if [[ "${ARCHIVE}" == "zip" ]]; then
+            (cd build && zip "../dist/${base}.zip" "${BINARY}")
+            asset="dist/${base}.zip"
+          else
+            tar -C build -czf "dist/${base}.tar.gz" "${BINARY}"
+            asset="dist/${base}.tar.gz"
+          fi
+
+          shasum -a 256 "${asset}" > "${asset}.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-harness-cli-${{ matrix.target }}
+          path: |
+            dist/*
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true
