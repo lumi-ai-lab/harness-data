@@ -24,6 +24,16 @@ Claude Code 的 `PostToolUse` hook 调用：
 go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
 ```
 
+也可以直接使用 GHCR 上发布的 CLI 容器镜像：
+
+```bash
+docker run --rm ghcr.io/lumi-ai-lab/harness-data-cli:latest --help
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-data-cli:latest context --question "华东区最近会员复购为什么下降？" --json
+docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-data-cli:latest wikis check-all
+```
+
+镜像包名为 `ghcr.io/lumi-ai-lab/harness-data-cli`。推送 `v*` Git tag 时会发布同名版本标签和 `latest` 标签；普通 `master` push 只做容器构建验证，不推送镜像。
+
 验证与调试：
 
 ```bash

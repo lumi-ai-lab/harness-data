@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+.harness
+bin
+config/harness-config.yaml
+config/qdm-cli-paths.env
+**/.DS_Store
+**/*_test.go

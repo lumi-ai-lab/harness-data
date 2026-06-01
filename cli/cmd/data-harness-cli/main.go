@@ -50,7 +50,11 @@ func asExitCodeError(err error, target *exitCodeError) bool {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: data-harness-cli <wikis|context|inject-template|posttool|show>")
+		return errors.New(usageText())
+	}
+	if os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "help" {
+		printUsage()
+		return nil
 	}
 	root, err := harness.FindRoot(rootStart())
 	if err != nil {
@@ -147,6 +151,14 @@ func run() error {
 		return fmt.Errorf("unknown command: %s", os.Args[1])
 	}
 	return nil
+}
+
+func printUsage() {
+	fmt.Println(usageText())
+}
+
+func usageText() string {
+	return "usage: data-harness-cli <wikis|context|inject-template|posttool|show>"
 }
 
 func runWikis(root string, args []string) error {
