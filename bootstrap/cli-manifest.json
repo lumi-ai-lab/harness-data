@@ -16,10 +16,6 @@
           "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.2/data-harness-cli-v0.0.2-darwin-amd64.tar.gz",
           "sha256": ""
         },
-        "linux-arm64": {
-          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.2/data-harness-cli-v0.0.2-linux-arm64.tar.gz",
-          "sha256": ""
-        },
         "linux-amd64": {
           "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.2/data-harness-cli-v0.0.2-linux-amd64.tar.gz",
           "sha256": ""
