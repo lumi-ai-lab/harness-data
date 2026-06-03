@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "node:test";
@@ -11,15 +12,16 @@ import { readManifest } from "../src/lib/manifest.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
 });
 
 test("loads package version", () => {
-  assert.equal(packageVersion(), "0.0.1");
+  assert.equal(packageVersion(), pkg.version);
 });
 
 test("resolves platform and state paths", () => {
