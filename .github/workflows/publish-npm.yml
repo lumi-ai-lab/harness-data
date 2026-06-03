@@ -15,9 +15,6 @@ on:
     secrets:
       NPM_TOKEN:
         required: true
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
