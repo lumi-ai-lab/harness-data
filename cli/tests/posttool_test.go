@@ -14,7 +14,7 @@ import (
 
 func TestPosttoolBrandProductEffectivenessInjectsDrillTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-brand-product-effectiveness"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的品效情况")
@@ -48,7 +48,7 @@ func TestPosttoolBrandProductEffectivenessInjectsDrillTemplate(t *testing.T) {
 
 func TestPosttoolCustPenetrationRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-cust-penetration-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的客数渗透率情况")
@@ -82,7 +82,7 @@ func TestPosttoolCustPenetrationRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolSaleAmtInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-sale-amt"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的销售额情况")
@@ -116,7 +116,7 @@ func TestPosttoolSaleAmtInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19SaleRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-sale-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前销售占比情况")
@@ -153,7 +153,7 @@ func TestPosttoolBf19SaleRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19SaleWeightInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-sale-weight"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前销售重量情况")
@@ -193,7 +193,7 @@ func TestPosttoolBf19SaleWeightInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolSatisfiedRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-satisfied-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的订单满足率情况")
@@ -236,7 +236,7 @@ func TestPosttoolSatisfiedRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolCustNumInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-cust-num"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的客数情况")
@@ -270,7 +270,7 @@ func TestPosttoolCustNumInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19CustNumInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-cust-num"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前客数情况")
@@ -307,7 +307,7 @@ func TestPosttoolBf19CustNumInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19CategoryStoreCustRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-category-store-cust-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前PI值情况")
@@ -344,7 +344,7 @@ func TestPosttoolBf19CategoryStoreCustRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19MemberRepurchaseRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-member-repurchase-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前复购率情况")
@@ -384,7 +384,7 @@ func TestPosttoolBf19MemberRepurchaseRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPerCustAmtInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-per-cust-amt"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的客单价情况")
@@ -418,7 +418,7 @@ func TestPosttoolPerCustAmtInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19PerCustAmtInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-per-cust-amt"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前客单价情况")
@@ -455,7 +455,7 @@ func TestPosttoolBf19PerCustAmtInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19AvgPieceNumInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-avg-piece-num"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前单均件数情况")
@@ -492,7 +492,7 @@ func TestPosttoolBf19AvgPieceNumInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolBf19PerPieceAmtInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-bf19-per-piece-amt"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的19点前件单价情况")
@@ -532,7 +532,7 @@ func TestPosttoolBf19PerPieceAmtInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolFullLinkStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-full-link-store-profit-notax-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的全链路毛利率情况")
@@ -566,7 +566,7 @@ func TestPosttoolFullLinkStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T)
 
 func TestPosttoolProfitRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-profit-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的门店毛利率情况")
@@ -603,7 +603,7 @@ func TestPosttoolProfitRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolScmStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-scm-store-profit-notax-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的供应链毛利率情况")
@@ -643,7 +643,7 @@ func TestPosttoolScmStoreProfitNotaxRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolFullLinkStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-full-link-store-profit-amt-notax"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的全链路毛利额情况")
@@ -680,7 +680,7 @@ func TestPosttoolFullLinkStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) 
 
 func TestPosttoolProfitAmtInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-profit-amt"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的门店毛利额情况")
@@ -717,7 +717,7 @@ func TestPosttoolProfitAmtInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolScmStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-scm-store-profit-amt-notax"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的供应链毛利额情况")
@@ -757,7 +757,7 @@ func TestPosttoolScmStoreProfitAmtNotaxInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPrePriceProfitRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-pre-price-profit-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的定价毛利率情况")
@@ -794,7 +794,7 @@ func TestPosttoolPrePriceProfitRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPreProfitRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-pre-profit-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的预期毛利率情况")
@@ -831,7 +831,7 @@ func TestPosttoolPreProfitRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolScmPromotionTotalRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-scm-promotion-total-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的出库折让率情况")
@@ -871,7 +871,7 @@ func TestPosttoolScmPromotionTotalRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolHourDiscountRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-hour-discount-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的时段折扣率情况")
@@ -911,7 +911,7 @@ func TestPosttoolHourDiscountRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPromotionDiscountRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-promotion-discount-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的促销折扣率情况")
@@ -951,7 +951,7 @@ func TestPosttoolPromotionDiscountRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolOrderArticleRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-order-article-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的商品订购渗透率情况")
@@ -988,7 +988,7 @@ func TestPosttoolOrderArticleRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolOrderStoresInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-order-stores"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的订购门店数情况")
@@ -1028,7 +1028,7 @@ func TestPosttoolOrderStoresInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolStoreCanOrdersInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-store-can-orders"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的可订门店数情况")
@@ -1068,7 +1068,7 @@ func TestPosttoolStoreCanOrdersInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPriceIndexInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-price-index"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的售价价格指数(线上)情况")
@@ -1105,7 +1105,7 @@ func TestPosttoolPriceIndexInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolPurchasePriceIndexInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-purchase-price-index"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的采购价格指数情况")
@@ -1142,7 +1142,7 @@ func TestPosttoolPurchasePriceIndexInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolLostRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-lost-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的损耗率情况")
@@ -1179,7 +1179,7 @@ func TestPosttoolLostRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolActiveVenderNumInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-active-vender-num"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的活跃供应商数情况")
@@ -1213,7 +1213,7 @@ func TestPosttoolActiveVenderNumInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolCentralInstockRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-central-instock-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的集采入库占比情况")
@@ -1250,7 +1250,7 @@ func TestPosttoolCentralInstockRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolThreeRateScoreInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-three-rate-score"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的三率综合得分情况")
@@ -1287,7 +1287,7 @@ func TestPosttoolThreeRateScoreInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolVendorAccuracyRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-vendor-accuracy-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的准确率情况")
@@ -1324,7 +1324,7 @@ func TestPosttoolVendorAccuracyRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolVendorIntimeRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-vendor-intime-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的准点率情况")
@@ -1364,7 +1364,7 @@ func TestPosttoolVendorIntimeRateInjectsMetricTemplate(t *testing.T) {
 
 func TestPosttoolVendorQualificationRateInjectsMetricTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-vendor-qualification-rate"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的合格率情况")
@@ -1406,7 +1406,7 @@ func TestPosttoolVendorQualificationRateInjectsMetricTemplate(t *testing.T) {
 }
 
 func TestPosttoolFinancialSignalDoesNotInjectWithoutSelectedTemplate(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-financial"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "查看昨天的财务报表")
@@ -1454,7 +1454,7 @@ func TestPosttoolFinancialSignalDoesNotInjectWithoutSelectedTemplate(t *testing.
 }
 
 func TestPosttoolReportsMissingModulesBeforeSignal(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-missing"
 	cleanupPosttoolState(t, root, sessionID)
 
@@ -1474,7 +1474,7 @@ func TestPosttoolReportsMissingModulesBeforeSignal(t *testing.T) {
 }
 
 func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-diag-member"
 	cleanupPosttoolState(t, root, sessionID)
 	t.Setenv("QDM_HARNESS_DIAG", "1")
@@ -1509,7 +1509,7 @@ func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 }
 
 func TestPosttoolInjectTemplateUsesFreeAnalysisForAmbiguousPlaybooks(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-ambiguous"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "会员复购和门店净利润最近为什么下降？")
@@ -1534,7 +1534,7 @@ func TestPosttoolInjectTemplateUsesFreeAnalysisForAmbiguousPlaybooks(t *testing.
 }
 
 func TestPosttoolInjectTemplateRefusesMultiSingleTemplate(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-multi-single"
 	cleanupPosttoolState(t, root, sessionID)
 	writeContextState(t, root, sessionID, "销售额和客单价最近怎么样？")
@@ -1566,7 +1566,7 @@ func TestPosttoolInjectTemplateRefusesMultiSingleTemplate(t *testing.T) {
 }
 
 func TestPosttoolInjectTemplateReportsMissingTemplate(t *testing.T) {
-	root := root(t)
+	root := currentRootWithIndex(t)
 	sessionID := "go-posttool-missing-template"
 	cleanupPosttoolState(t, root, sessionID)
 	state := map[string]any{

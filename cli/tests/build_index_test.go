@@ -3,10 +3,14 @@ package tests
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"harness-data/cli/internal/wikis"
 )
+
+var currentIndexOnce sync.Once
+var currentIndexErr error
 
 func root(t *testing.T) string {
 	t.Helper()
@@ -15,6 +19,18 @@ func root(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return filepath.Clean(filepath.Join(wd, "..", ".."))
+}
+
+func currentRootWithIndex(t *testing.T) string {
+	t.Helper()
+	root := root(t)
+	currentIndexOnce.Do(func() {
+		_, currentIndexErr = wikis.BuildIndex(root, true)
+	})
+	if currentIndexErr != nil {
+		t.Fatal(currentIndexErr)
+	}
+	return root
 }
 
 func TestBuildIndexScansFrontmatter(t *testing.T) {

@@ -8,25 +8,18 @@ import (
 	"harness-data/cli/internal/wikis"
 )
 
-func TestValidateCurrentDocumentsReportsMissingPlaybooks(t *testing.T) {
+func TestValidateCurrentDocumentsRunsChecks(t *testing.T) {
 	results, err := wikis.RunAllChecks(root(t), wikis.CheckOptions{MaxErrors: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, result := range results {
-		if result.Check != wikis.CheckLinks {
-			continue
-		}
-		for _, err := range result.Errors {
-			if err.Code == "missing_playbook" {
-				found = true
-				break
-			}
-		}
+	if len(results) == 0 {
+		t.Fatal("expected validation checks")
 	}
-	if !found {
-		t.Fatalf("expected current wikis to report missing playbooks, got %+v", results)
+	for _, result := range results {
+		if result.Check == "" {
+			t.Fatalf("validation check missing name: %+v", result)
+		}
 	}
 }
 

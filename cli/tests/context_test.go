@@ -12,7 +12,7 @@ import (
 )
 
 func TestMemberRepurchaseContext(t *testing.T) {
-	response, err := dhcontext.Build(root(t), "华东区最近会员复购为什么下降？")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "华东区最近会员复购为什么下降？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 }
 
 func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
-	response, err := dhcontext.Build(root(t), "门店净利润最近表现")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "门店净利润最近表现")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
 }
 
 func TestMemberCategoryUnsupported(t *testing.T) {
-	response, err := dhcontext.Build(root(t), "全品类用户报表")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "全品类用户报表")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestMemberCategoryUnsupported(t *testing.T) {
 }
 
 func TestMultiDomainContextRecall(t *testing.T) {
-	response, err := dhcontext.Build(root(t), "会员复购和门店净利润最近为什么下降？")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店净利润最近为什么下降？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestMultiDomainContextRecall(t *testing.T) {
 
 func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 	payload := bytes.NewBufferString(`{"prompt":"会员复购为什么下降？"}`)
-	ok, output, err := dhcontext.RunClaudeHook(root(t), payload.Bytes())
+	ok, output, err := dhcontext.RunClaudeHook(currentRootWithIndex(t), payload.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 
 func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 	sessionID := "go-context-payload-session"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 
 func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	sessionID := "go-context-reset-state"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 
 func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	sessionID := "go-context-free-analysis"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -264,7 +264,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 
 func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 	sessionID := "go-context-multi-single-multi-metric"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -320,7 +320,7 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 
 func TestBusinessBrandProductEffectivenessContextSelectsDrillPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的品效情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的品效情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestBusinessBrandProductEffectivenessContextSelectsDrillPlaybook(t *testing
 
 func TestBusinessOverviewStillSelectsDefaultPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天经营情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天经营情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestBusinessOverviewStillSelectsDefaultPlaybook(t *testing.T) {
 
 func TestBusinessCustPenetrationRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的客数渗透率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的客数渗透率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestBusinessCustPenetrationRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessSaleAmtContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的销售额情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的销售额情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +413,7 @@ func TestBusinessSaleAmtContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19SaleRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前销售占比情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前销售占比情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestBusinessBf19SaleRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19SaleWeightContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前销售重量情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前销售重量情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,7 @@ func TestBusinessBf19SaleWeightContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessSatisfiedRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的订单满足率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的订单满足率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestBusinessSatisfiedRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessCustNumContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的客数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的客数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestBusinessCustNumContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19CustNumContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前客数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前客数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestBusinessBf19CustNumContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19CategoryStoreCustRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前PI值情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前PI值情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestBusinessBf19CategoryStoreCustRateContextSelectsMetricPlaybook(t *testin
 
 func TestBusinessBf19MemberRepurchaseRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前复购率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前复购率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +611,7 @@ func TestBusinessBf19MemberRepurchaseRateContextSelectsMetricPlaybook(t *testing
 
 func TestBusinessPerCustAmtContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的客单价情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的客单价情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestBusinessPerCustAmtContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19PerCustAmtContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前客单价情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前客单价情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +662,7 @@ func TestBusinessBf19PerCustAmtContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19AvgPieceNumContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前单均件数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前单均件数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +689,7 @@ func TestBusinessBf19AvgPieceNumContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessBf19PerPieceAmtContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的19点前件单价情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的19点前件单价情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestBusinessBf19PerPieceAmtContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessFullLinkStoreProfitNotaxRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的全链路毛利率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的全链路毛利率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +743,7 @@ func TestBusinessFullLinkStoreProfitNotaxRateContextSelectsMetricPlaybook(t *tes
 
 func TestBusinessProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的门店毛利率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的门店毛利率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -770,7 +770,7 @@ func TestBusinessProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessScmStoreProfitNotaxRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的供应链毛利率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的供应链毛利率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestBusinessScmStoreProfitNotaxRateContextSelectsMetricPlaybook(t *testing.
 
 func TestBusinessFullLinkStoreProfitAmtNotaxContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的全链路毛利额情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的全链路毛利额情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -827,7 +827,7 @@ func TestBusinessFullLinkStoreProfitAmtNotaxContextSelectsMetricPlaybook(t *test
 
 func TestBusinessProfitAmtContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的门店毛利额情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的门店毛利额情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +854,7 @@ func TestBusinessProfitAmtContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessScmStoreProfitAmtNotaxContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的供应链毛利额情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的供应链毛利额情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +884,7 @@ func TestBusinessScmStoreProfitAmtNotaxContextSelectsMetricPlaybook(t *testing.T
 
 func TestBusinessPrePriceProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的定价毛利率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的定价毛利率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -911,7 +911,7 @@ func TestBusinessPrePriceProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessPreProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的预期毛利率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的预期毛利率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,7 +938,7 @@ func TestBusinessPreProfitRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessScmPromotionTotalRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的出库折让率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的出库折让率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -968,7 +968,7 @@ func TestBusinessScmPromotionTotalRateContextSelectsMetricPlaybook(t *testing.T)
 
 func TestBusinessHourDiscountRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的时段折扣率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的时段折扣率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,7 +998,7 @@ func TestBusinessHourDiscountRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessPromotionDiscountRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的促销折扣率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的促销折扣率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1028,7 +1028,7 @@ func TestBusinessPromotionDiscountRateContextSelectsMetricPlaybook(t *testing.T)
 
 func TestBusinessOrderArticleRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的商品订购渗透率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的商品订购渗透率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,7 +1055,7 @@ func TestBusinessOrderArticleRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessOrderStoresContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的订购门店数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的订购门店数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,7 +1085,7 @@ func TestBusinessOrderStoresContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessStoreCanOrdersContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的可订门店数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的可订门店数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1115,7 +1115,7 @@ func TestBusinessStoreCanOrdersContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessPriceIndexContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的售价价格指数(线上)情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的售价价格指数(线上)情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1142,7 +1142,7 @@ func TestBusinessPriceIndexContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessPurchasePriceIndexContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的采购价格指数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的采购价格指数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1169,7 +1169,7 @@ func TestBusinessPurchasePriceIndexContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessLostRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的损耗率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的损耗率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1196,7 +1196,7 @@ func TestBusinessLostRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessActiveVenderNumContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的活跃供应商数情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的活跃供应商数情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1220,7 +1220,7 @@ func TestBusinessActiveVenderNumContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessCentralInstockRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的集采入库占比情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的集采入库占比情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1247,7 +1247,7 @@ func TestBusinessCentralInstockRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessThreeRateScoreContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的三率综合得分情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的三率综合得分情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1274,7 +1274,7 @@ func TestBusinessThreeRateScoreContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessVendorAccuracyRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的准确率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的准确率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,7 +1301,7 @@ func TestBusinessVendorAccuracyRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessVendorIntimeRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的准点率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的准点率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1331,7 +1331,7 @@ func TestBusinessVendorIntimeRateContextSelectsMetricPlaybook(t *testing.T) {
 
 func TestBusinessVendorQualificationRateContextSelectsMetricPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
-	response, err := dhcontext.Build(root(t), "查看昨天的合格率情况")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的合格率情况")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1365,7 +1365,7 @@ func TestBusinessVendorQualificationRateContextSelectsMetricPlaybook(t *testing.
 func TestClaudeHookSelectsBrandProductEffectivenessTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-brand-product-effectiveness"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1404,7 +1404,7 @@ func TestClaudeHookSelectsBrandProductEffectivenessTemplate(t *testing.T) {
 func TestClaudeHookSelectsCustPenetrationRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-cust-penetration-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1443,7 +1443,7 @@ func TestClaudeHookSelectsCustPenetrationRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsSaleAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-sale-amt"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1482,7 +1482,7 @@ func TestClaudeHookSelectsSaleAmtTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19SaleRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-sale-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1524,7 +1524,7 @@ func TestClaudeHookSelectsBf19SaleRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19SaleWeightTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-sale-weight"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1569,7 +1569,7 @@ func TestClaudeHookSelectsBf19SaleWeightTemplate(t *testing.T) {
 func TestClaudeHookSelectsSatisfiedRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-satisfied-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1617,7 +1617,7 @@ func TestClaudeHookSelectsSatisfiedRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsCustNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-cust-num"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1659,7 +1659,7 @@ func TestClaudeHookSelectsCustNumTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19CustNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-cust-num"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1701,7 +1701,7 @@ func TestClaudeHookSelectsBf19CustNumTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19CategoryStoreCustRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-category-store-cust-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1743,7 +1743,7 @@ func TestClaudeHookSelectsBf19CategoryStoreCustRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19MemberRepurchaseRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-member-repurchase-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1788,7 +1788,7 @@ func TestClaudeHookSelectsBf19MemberRepurchaseRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsPerCustAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-per-cust-amt"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1827,7 +1827,7 @@ func TestClaudeHookSelectsPerCustAmtTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19PerCustAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-per-cust-amt"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1869,7 +1869,7 @@ func TestClaudeHookSelectsBf19PerCustAmtTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19AvgPieceNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-avg-piece-num"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1911,7 +1911,7 @@ func TestClaudeHookSelectsBf19AvgPieceNumTemplate(t *testing.T) {
 func TestClaudeHookSelectsBf19PerPieceAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-per-piece-amt"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1956,7 +1956,7 @@ func TestClaudeHookSelectsBf19PerPieceAmtTemplate(t *testing.T) {
 func TestClaudeHookSelectsFullLinkStoreProfitNotaxRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-full-link-store-profit-notax-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -1995,7 +1995,7 @@ func TestClaudeHookSelectsFullLinkStoreProfitNotaxRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-profit-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2037,7 +2037,7 @@ func TestClaudeHookSelectsProfitRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsScmStoreProfitNotaxRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-store-profit-notax-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2082,7 +2082,7 @@ func TestClaudeHookSelectsScmStoreProfitNotaxRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsFullLinkStoreProfitAmtNotaxTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-full-link-store-profit-amt-notax"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2124,7 +2124,7 @@ func TestClaudeHookSelectsFullLinkStoreProfitAmtNotaxTemplate(t *testing.T) {
 func TestClaudeHookSelectsProfitAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-profit-amt"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2166,7 +2166,7 @@ func TestClaudeHookSelectsProfitAmtTemplate(t *testing.T) {
 func TestClaudeHookSelectsScmStoreProfitAmtNotaxTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-store-profit-amt-notax"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2211,7 +2211,7 @@ func TestClaudeHookSelectsScmStoreProfitAmtNotaxTemplate(t *testing.T) {
 func TestClaudeHookSelectsPrePriceProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-pre-price-profit-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2253,7 +2253,7 @@ func TestClaudeHookSelectsPrePriceProfitRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsPreProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-pre-profit-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2295,7 +2295,7 @@ func TestClaudeHookSelectsPreProfitRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsScmPromotionTotalRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-promotion-total-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2340,7 +2340,7 @@ func TestClaudeHookSelectsScmPromotionTotalRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsHourDiscountRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-hour-discount-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2385,7 +2385,7 @@ func TestClaudeHookSelectsHourDiscountRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsPromotionDiscountRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-promotion-discount-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2430,7 +2430,7 @@ func TestClaudeHookSelectsPromotionDiscountRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsOrderArticleRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-order-article-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2472,7 +2472,7 @@ func TestClaudeHookSelectsOrderArticleRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsOrderStoresTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-order-stores"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2517,7 +2517,7 @@ func TestClaudeHookSelectsOrderStoresTemplate(t *testing.T) {
 func TestClaudeHookSelectsStoreCanOrdersTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-store-can-orders"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2562,7 +2562,7 @@ func TestClaudeHookSelectsStoreCanOrdersTemplate(t *testing.T) {
 func TestClaudeHookSelectsPriceIndexTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-price-index"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2604,7 +2604,7 @@ func TestClaudeHookSelectsPriceIndexTemplate(t *testing.T) {
 func TestClaudeHookSelectsPurchasePriceIndexTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-purchase-price-index"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2646,7 +2646,7 @@ func TestClaudeHookSelectsPurchasePriceIndexTemplate(t *testing.T) {
 func TestClaudeHookSelectsLostRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-lost-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2688,7 +2688,7 @@ func TestClaudeHookSelectsLostRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsActiveVenderNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-active-vender-num"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2727,7 +2727,7 @@ func TestClaudeHookSelectsActiveVenderNumTemplate(t *testing.T) {
 func TestClaudeHookSelectsCentralInstockRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-central-instock-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2769,7 +2769,7 @@ func TestClaudeHookSelectsCentralInstockRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsThreeRateScoreTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-three-rate-score"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2811,7 +2811,7 @@ func TestClaudeHookSelectsThreeRateScoreTemplate(t *testing.T) {
 func TestClaudeHookSelectsVendorAccuracyRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-accuracy-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2853,7 +2853,7 @@ func TestClaudeHookSelectsVendorAccuracyRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsVendorIntimeRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-intime-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -2898,7 +2898,7 @@ func TestClaudeHookSelectsVendorIntimeRateTemplate(t *testing.T) {
 func TestClaudeHookSelectsVendorQualificationRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-qualification-rate"
-	root := root(t)
+	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
