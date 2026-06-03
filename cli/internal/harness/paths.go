@@ -80,7 +80,7 @@ func LoadConfig(root string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return loadLegacyPathsConfig(root, cfg)
+			return loadLegacyPathsConfig(root, defaultConfigForRoot(root))
 		}
 		return Config{}, err
 	}
@@ -282,6 +282,14 @@ func defaultConfig() Config {
 	return Config{
 		Paths: pathsFromKnowledge("."),
 	}
+}
+
+func defaultConfigForRoot(root string) Config {
+	cfg := defaultConfig()
+	if exists(filepath.Join(root, "wikis", "spec")) || exists(filepath.Join(root, "wikis", "playbooks")) {
+		cfg.Paths = pathsFromKnowledge("wikis")
+	}
+	return cfg
 }
 
 func pathsFromKnowledge(knowledge string) PathsConfig {
