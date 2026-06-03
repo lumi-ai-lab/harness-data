@@ -176,6 +176,13 @@ jobs:
         with:
           go-version-file: cli/go.mod
 
+      - name: Build wikis index
+        working-directory: cli
+        run: |
+          go run ./cmd/data-harness-cli wikis build-index --skip-checks
+          test -s ../.harness/index/wikis-index.json
+          test -s ../.harness/index/wikis-runtime-index.json
+
       - name: Test Go CLI
         working-directory: cli
         run: go test ./...
