@@ -23,6 +23,8 @@ __pycache__/
 # Generated harness data and local compiled binaries
 .harness/
 bin/
+!npm/bin/
+!npm/bin/**
 .bootstrap-cache/
 .bootstrap-cache*/
 
