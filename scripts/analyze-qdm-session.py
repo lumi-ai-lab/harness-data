@@ -11,7 +11,6 @@ from typing import Any
 
 
 REPORT_KEYWORDS = {
-    "business-overview": ("business-overview", "report business", "经营分析", "经营分析指标归属规范"),
     "store-overview": ("store-overview", "report store", "门店管理", "门店管理指标归属规范"),
     "member-overview": (
         "member-overview",

@@ -37,8 +37,8 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	if docs["spec/cmr/member/s-member-repurchase-no-difference-rate.md"].ID != "spec/cmr/member/s-member-repurchase-no-difference-rate" {
 		t.Fatalf("member repurchase not indexed: %+v", docs["spec/cmr/member/s-member-repurchase-no-difference-rate.md"])
 	}
-	memberPlaybook := docs["playbooks/cmr/member/default-overview.md"]
-	if !memberPlaybook.Playbook.IsCombo || memberPlaybook.Playbook.TemplatePath != "templates/cmr/member/default-overview.md" {
+	memberPlaybook := docs["playbooks/cmr/member/s-member-repurchase-no-difference-rate.md"]
+	if !memberPlaybook.Playbook.IsSingle || memberPlaybook.Playbook.TemplatePath != "templates/cmr/member/s-member-repurchase-no-difference-rate.md" {
 		t.Fatalf("member playbook = %+v", memberPlaybook)
 	}
 	if index.Meta.Version != 1 || index.Meta.ChecksSkipped {
@@ -48,8 +48,8 @@ func TestBuildIndexScansFrontmatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.DocsByPath["playbooks/cmr/member/default-overview.md"].Playbook.TemplatePath != "templates/cmr/member/default-overview.md" {
-		t.Fatalf("member runtime playbook missing template: %+v", runtime.DocsByPath["playbooks/cmr/member/default-overview.md"])
+	if runtime.DocsByPath["playbooks/cmr/member/s-member-repurchase-no-difference-rate.md"].Playbook.TemplatePath != "templates/cmr/member/s-member-repurchase-no-difference-rate.md" {
+		t.Fatalf("member runtime playbook missing template: %+v", runtime.DocsByPath["playbooks/cmr/member/s-member-repurchase-no-difference-rate.md"])
 	}
 }
 
@@ -82,19 +82,11 @@ label: 会员报告契约
 	testWriteFile(t, root, "wikis/playbooks/cmr/member/index.md", "# Member\n")
 	testWriteFile(t, root, "wikis/playbooks/cmr/member/s-member-repurchase-no-difference-rate.md", "# 会员复购率 Playbook\n")
 	testWriteFile(t, root, "wikis/playbooks/cmr/member/report-contract.md", "# 会员报告契约 Playbook\n")
-	testWriteFile(t, root, "wikis/playbooks/cmr/member/default-overview.md", `---
-aliases: ["会员概览"]
-covers:
-  - spec/cmr/member/report-contract.md
----
-# 会员概览
-`)
 	testWriteFile(t, root, "wikis/templates/index.md", "# Templates\n")
 	testWriteFile(t, root, "wikis/templates/cmr/index.md", "# CMR\n")
 	testWriteFile(t, root, "wikis/templates/cmr/member/index.md", "# Member\n")
 	testWriteFile(t, root, "wikis/templates/cmr/member/s-member-repurchase-no-difference-rate.md", "# 会员复购率 Template\n")
 	testWriteFile(t, root, "wikis/templates/cmr/member/report-contract.md", "# 会员报告契约 Template\n")
-	testWriteFile(t, root, "wikis/templates/cmr/member/default-overview.md", "# 会员概览 Template\n")
 	return root
 }
 

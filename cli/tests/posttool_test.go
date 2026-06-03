@@ -12,92 +12,6 @@ import (
 	"harness-data/cli/internal/posttool"
 )
 
-func TestPosttoolRecordsParallelBusinessModules(t *testing.T) {
-	root := root(t)
-	sessionID := "go-posttool-business-parallel"
-	cleanupPosttoolState(t, root, sessionID)
-
-	command := `
-qdm-cmr-cli report business overview --date 2026-05-20 --ai &
-qdm-cmr-cli report business indicators --date 2026-05-20 --ai &
-qdm-cmr-cli report business tree --values --date 2026-05-20 &
-qdm-cmr-cli report business area --date 2026-05-20 --ai &
-qdm-cmr-cli report business category --date 2026-05-20 --ai &
-qdm-cmr-cli report business trend --date 2026-05-20 --ai &
-wait
-`
-	ok, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, command))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Fatal("module command should not inject context")
-	}
-
-	state := readPosttoolState(t, root, sessionID)
-	report := state["reports"].(map[string]any)["business-overview"].(map[string]any)
-	if got := stringSlice(report["recorded_modules"]); !sameStrings(got, []string{"overview", "indicators", "tree", "area", "category", "trend"}) {
-		t.Fatalf("recorded_modules = %#v", got)
-	}
-}
-
-func TestPosttoolBusinessSignalInjectsTemplateOnce(t *testing.T) {
-	root := root(t)
-	sessionID := "go-posttool-business-signal"
-	cleanupPosttoolState(t, root, sessionID)
-	writeContextState(t, root, sessionID, "查看昨天经营情况")
-
-	for _, module := range []string{"overview", "indicators", "tree", "area", "category", "trend"} {
-		command := `qdm-cmr-cli report business ` + module + ` --date 2026-05-20`
-		if module == "tree" {
-			command = `qdm-cmr-cli report business tree --values --date 2026-05-20`
-		}
-		if ok, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, command)); err != nil {
-			t.Fatal(err)
-		} else if ok {
-			t.Fatalf("module command should not inject context: %s", command)
-		}
-	}
-
-	ok, output, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected template output")
-	}
-	context := output.HookSpecificOutput.AdditionalContext
-	if !strings.Contains(context, "经营分析深度报告模板") {
-		t.Fatalf("missing business template in %s", context)
-	}
-	if strings.Contains(context, "QDM 报告生成阶段上下文") || strings.Contains(context, "## Template: templates/business-overview-report.md") {
-		t.Fatalf("unexpected wrapper in %s", context)
-	}
-
-	state := readPosttoolState(t, root, sessionID)
-	report := state["reports"].(map[string]any)["business-overview"].(map[string]any)
-	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
-		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
-	}
-	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
-		t.Fatalf("selected_template = %#v", state["selected_template"])
-	}
-	if state["template_injected"] != true {
-		t.Fatalf("expected root template_injected in %#v", state)
-	}
-	if _, ok := report["spec_injected"]; ok {
-		t.Fatalf("did not expect legacy spec_injected in %#v", report)
-	}
-
-	ok, output, err = posttool.RunClaudeHook(root, bashPayload(t, sessionID, "bin/data-harness-cli inject-template"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "经营分析深度报告模板") {
-		t.Fatalf("expected repeat injection of same template body, got ok=%v output=%#v", ok, output)
-	}
-}
-
 func TestPosttoolBrandProductEffectivenessInjectsDrillTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	root := root(t)
@@ -1491,7 +1405,7 @@ func TestPosttoolVendorQualificationRateInjectsMetricTemplate(t *testing.T) {
 	}
 }
 
-func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
+func TestPosttoolFinancialSignalDoesNotInjectWithoutSelectedTemplate(t *testing.T) {
 	root := root(t)
 	sessionID := "go-posttool-financial"
 	cleanupPosttoolState(t, root, sessionID)
@@ -1519,24 +1433,23 @@ func TestPosttoolFinancialSignalInjectsOnlyTemplate(t *testing.T) {
 		t.Fatal("expected template output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"财务核心指标深度报告模板", "## 一、报告概述"} {
+	for _, want := range []string{"QDM_FREE_ANALYSIS", "Do not run inject-template"} {
 		if !stringsContains(context, want) {
-			t.Fatalf("missing %q in template context", want)
+			t.Fatalf("missing %q in template context: %s", want, context)
 		}
 	}
-	for _, unexpected := range []string{"QDM 报告生成阶段上下文", "## Template: templates/financial-overview-report.md", "财务核心指标归属规范", "财务核心指标报告合同"} {
+	for _, unexpected := range []string{"财务核心指标深度报告模板", "## 一、报告概述", "QDM 报告生成阶段上下文", "## Template: templates/financial-overview-report.md", "财务核心指标归属规范", "财务核心指标报告合同"} {
 		if stringsContains(context, unexpected) {
 			t.Fatalf("unexpected %q in template-only context", unexpected)
 		}
 	}
 
 	state := readPosttoolState(t, root, sessionID)
-	report := state["reports"].(map[string]any)["financial-overview"].(map[string]any)
-	if got := stringSlice(report["recorded_modules"]); !sameStrings(got, []string{"indicators", "tree", "table"}) {
-		t.Fatalf("recorded_modules = %#v", got)
+	if reports, ok := state["reports"].(map[string]any); ok && reports["financial-overview"] != nil {
+		t.Fatalf("business module commands should not mutate report state: %#v", reports["financial-overview"])
 	}
-	if state["template_injected"] != true {
-		t.Fatalf("expected root template_injected in %#v", state)
+	if state["template_injected"] == true {
+		t.Fatalf("did not expect root template_injected in %#v", state)
 	}
 }
 
@@ -1579,10 +1492,10 @@ func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 	if event["event"] != "inject_template" {
 		t.Fatalf("event = %#v", event)
 	}
-	if event["selected_playbook"] != "playbooks/cmr/member/default-overview.md" {
+	if event["selected_playbook"] != "" {
 		t.Fatalf("selected_playbook = %#v", event["selected_playbook"])
 	}
-	if event["template_path"] != "templates/cmr/member/default-overview.md" {
+	if event["template_path"] != "" {
 		t.Fatalf("template_path = %#v", event["template_path"])
 	}
 	for _, unexpected := range []string{"template_signal", "template_signal_arg", "spec_path"} {
@@ -1590,7 +1503,7 @@ func TestPosttoolTemplateDiagnosticsRecordSelectedTemplate(t *testing.T) {
 			t.Fatalf("unexpected %s in %#v", unexpected, event)
 		}
 	}
-	if event["outcome"] != "template_injected" {
+	if event["outcome"] != "free_mode_no_template" {
 		t.Fatalf("outcome = %#v", event["outcome"])
 	}
 }
@@ -1696,7 +1609,7 @@ func writePosttoolState(t *testing.T, root, sessionID string, state map[string]a
 		t.Fatal(err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1722,8 +1635,8 @@ func bashPayload(t *testing.T, sessionID, command string) []byte {
 func cleanupPosttoolState(t *testing.T, root, sessionID string) {
 	t.Helper()
 	paths := []string{
-		filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json"),
-		filepath.Join(root, ".claude", "hooks", "state", "diagnostics", sessionID+".jsonl"),
+		filepath.Join(root, ".harness", "state", "business-report", sessionID+".json"),
+		filepath.Join(root, ".harness", "state", "diagnostics", sessionID+".jsonl"),
 	}
 	remove := func() {
 		for _, path := range paths {
@@ -1738,7 +1651,7 @@ func cleanupPosttoolState(t *testing.T, root, sessionID string) {
 
 func readPosttoolState(t *testing.T, root, sessionID string) map[string]any {
 	t.Helper()
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1752,7 +1665,7 @@ func readPosttoolState(t *testing.T, root, sessionID string) map[string]any {
 
 func readDiagnosticEvents(t *testing.T, root, sessionID string) []map[string]any {
 	t.Helper()
-	path := filepath.Join(root, ".claude", "hooks", "state", "diagnostics", sessionID+".jsonl")
+	path := filepath.Join(root, ".harness", "state", "diagnostics", sessionID+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

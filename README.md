@@ -14,9 +14,91 @@ Claude Code 的 `PostToolUse` hook 调用：
 "$CLAUDE_PROJECT_DIR/bin/data-harness-cli" posttool --format claude-hook
 ```
 
+Codex 使用 `.codex/hooks.json` 配置同等事件：
+
+- `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
+- `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
+
+本仓库的 `.agents/codex` 可链接为项目级 `.codex` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+
 `context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/spec`、`wikis/playbooks` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
 ## 常用命令
+
+一键交互式初始化：
+
+```bash
+npx @lumi-ai-lab/harness-data install
+```
+
+安装器访问 GitHub 私有仓库时默认使用 `--git-protocol auto`：先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，如果本机没有可用 GitHub SSH key 或无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
+
+`qdm-cmr-cli`、`qdm-indicators-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-cmr-cli`、`pengmide/qdm-indicators-cli`、`pengmide/qdm-cas-cli`。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
+
+强制使用 SSH：
+
+```bash
+npx @lumi-ai-lab/harness-data install --git-protocol ssh
+```
+
+强制使用 HTTPS：
+
+```bash
+npx @lumi-ai-lab/harness-data install --git-protocol https
+```
+
+指定安装目录：
+
+```bash
+npx @lumi-ai-lab/harness-data install --dir ~/harness-data
+```
+
+非交互安装需要显式选择 Agent，并指向已经通过 `cas-cli config set-credentials` 配置好的 CAS credential 目录：
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --yes \
+  --agent codex \
+  --cas-config-dir /secure/path/to/cas
+```
+
+CI 或非交互环境可用 token 环境变量完成 HTTPS 访问；同一个 token 也会用于下载私有 qdm CLI Release asset。token 不会写入 remote URL、安装状态或项目配置。
+
+```bash
+GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
+  --yes \
+  --agent codex \
+  --git-protocol https \
+  --github-token-env GITHUB_TOKEN \
+  --cas-config-dir /secure/path/to/cas
+```
+
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 4 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators token、构建索引，并把 `.agents/claude` 或 `.agents/codex` 链接为本地 `.claude` / `.codex`。
+
+更新工作目录：
+
+```bash
+npx @lumi-ai-lab/harness-data update --dir ~/harness-data
+```
+
+仅检查可用更新：
+
+```bash
+npx @lumi-ai-lab/harness-data update --check --dir ~/harness-data
+```
+
+诊断当前环境：
+
+```bash
+npx @lumi-ai-lab/harness-data doctor --dir ~/harness-data
+```
+
+全局安装作为可选方式：
+
+```bash
+npm install -g @lumi-ai-lab/harness-data
+harness-data doctor --dir ~/harness-data
+```
 
 重新编译正式入口：
 
@@ -48,6 +130,25 @@ GitHub Releases 同时提供可直接下载的 CLI 二进制包：
 - `data-harness-cli-v0.0.1-darwin-arm64.tar.gz`
 - 每个压缩包都有对应的 `.sha256` 校验文件
 
+## 发布流程
+
+推荐使用 GitHub Actions 里的 `Release` workflow 做总编排发布：
+
+```bash
+gh workflow run release.yml \
+  -f version=0.0.2 \
+  -f wikis_ref=master
+```
+
+`version` 不带 `v`；workflow 会自动生成 `v0.0.2` tag。`cas_cli_version`、`cmr_cli_version`、`indicators_cli_version` 留空时沿用 `bootstrap/cli-manifest.json` 当前版本；需要升级外部 CLI 时传不带 `v` 的版本号。
+
+总编排会按顺序更新 npm 版本、CLI manifest 和 `wikis` submodule 指针，执行 `npm test` / `npm pack --dry-run` / `go test ./...`，提交 release commit，创建 tag，发布 `data-harness-cli` GitHub Release assets，发布 GHCR 镜像，确认 Release assets 可访问后再发布 npm 包。
+
+需要配置 GitHub Actions secrets：
+
+- `NPM_TOKEN`：发布 `@lumi-ai-lab/harness-data` 到 npm registry。
+- `RELEASE_GH_TOKEN`：可选；当默认 `GITHUB_TOKEN` 无法读取私有 `harness-data-wikis` submodule 或跨仓库资源时使用。
+
 验证与调试：
 
 ```bash
@@ -64,8 +165,10 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 目录结构
 
-- `.claude/settings.json`：注册 Claude Code hook，调用 `context --format claude-hook` 和 `posttool --format claude-hook`。
+- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude` 或 `.codex`。
+- `bootstrap/cli-manifest.json`：npm 安装器下载 4 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
+- `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
 - `cli/`：Data Harness CLI 源码和 Go 测试。
 - `config/harness-config.yaml.example`：Harness 统一配置模板；本地运行前复制为 `config/harness-config.yaml` 并填入本机 QDM CLI 绝对路径。
@@ -158,7 +261,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 召回原则
 
-- 运行时从 `.harness/index/wikis-runtime-index.json` 的 recall term 召回 `spec` 和 combo `playbook`。
+- 运行时从 `.harness/index/wikis-runtime-index.json` 的 recall term 召回 `spec`，并按同路径规则选择单指标 playbook。
 - 召回先做中文轻量 normalize：去空白、去常见标点、全角 ASCII 转半角，仅保留中文、数字、字母。
 - 精确包含命中最高优先级；非精确命中使用中文 bigram/trigram 覆盖率打分。
 - 1 字、2 字 term 只允许精确包含；3 字 term 需要完整 bigram 覆盖；4 字及以上 term 需要至少 2 个 bigram 且覆盖率不低于 0.5。
@@ -177,7 +280,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 诊断
 
-默认不写诊断。设置 `QDM_HARNESS_DIAG=1` 后，hook 会向 `.claude/hooks/state/diagnostics/<session>.jsonl` 追加 context 发现诊断，核心字段包括：
+默认不写诊断。设置 `QDM_HARNESS_DIAG=1` 后，hook 会向 `.harness/state/diagnostics/<session>.jsonl` 追加 context 发现诊断，核心字段包括：
 
 - `matched_domains`
 - `context_files`

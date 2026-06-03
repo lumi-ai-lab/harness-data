@@ -96,13 +96,15 @@ func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse
 		b.WriteString(plan.SelectedTemplate)
 		b.WriteString("\n")
 	}
-	if len(plan.CoveredSpecs) > 0 {
-		b.WriteString("coveredSpecs:\n")
-		for _, spec := range plan.CoveredSpecs {
-			b.WriteString("- ")
-			b.WriteString(spec)
-			b.WriteString("\n")
+	if plan.TemplateSelection.Status != "" {
+		b.WriteString("templateSelection: ")
+		b.WriteString(plan.TemplateSelection.Status)
+		if plan.TemplateSelection.Reason != "" {
+			b.WriteString(" (")
+			b.WriteString(plan.TemplateSelection.Reason)
+			b.WriteString(")")
 		}
+		b.WriteString("\n")
 	}
 	if len(plan.SelectedPlaybooks) > 0 {
 		b.WriteString("selectedPlaybooks:\n")
@@ -176,105 +178,6 @@ func buildTimeContext(prompt string, resolver harness.PathResolver) timeContext 
 	}
 }
 
-type reportSelection struct {
-	Mode              string
-	SelectedPlaybooks []sessionstate.PlaybookCandidate
-	SelectedTemplate  string
-	Composite         *sessionstate.CompositeSelection
-}
-
-func buildAdditionalContext(tc timeContext, response harness.ContextResponse, selection reportSelection, candidates []sessionstate.PlaybookCandidate) (string, error) {
-	timeJSON, err := json.Marshal(tc)
-	if err != nil {
-		return "", err
-	}
-	mode := selection.Mode
-	var b strings.Builder
-	b.WriteString("# Data Harness Context\n\n")
-	b.WriteString("时间解析 JSON：`")
-	b.Write(timeJSON)
-	b.WriteString("`\n\n")
-	b.WriteString("必须先读取以下 contextFiles：\n")
-	for _, ref := range response.ContextFiles {
-		b.WriteString("- ")
-		b.WriteString(ref.Path)
-		if ref.Reason != "" {
-			b.WriteString(" (")
-			b.WriteString(ref.Reason)
-			b.WriteString(")")
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("\n读取完 contextFiles 后，再判断取数路径并执行数据 CLI。\n")
-	b.WriteString("\nHarness mode: ")
-	b.WriteString(mode)
-	b.WriteString("\n")
-	switch mode {
-	case sessionstate.ModeTemplateReport:
-		if response.Instruction != "" {
-			b.WriteString("\nInstruction: ")
-			b.WriteString(response.Instruction)
-			b.WriteString("\n")
-		}
-	case sessionstate.ModeCompositeReport:
-		b.WriteString("\nInstruction: 当前问题命中多个同域指标，进入多指标组合报告模式。读取全部 contextFiles 后，按 selected playbooks 完成取数；取数完成后执行 `bin/data-harness-cli inject-template`，最终必须使用组合 template 输出一份综合报告，不得分别套用多个单指标 template。\n")
-		b.WriteString("\nSelected playbooks:\n")
-		for _, candidate := range selection.SelectedPlaybooks {
-			b.WriteString("- ")
-			b.WriteString(candidate.Path)
-			if candidate.Template != "" {
-				b.WriteString(" -> ")
-				b.WriteString(candidate.Template)
-			}
-			if candidate.Reason != "" {
-				b.WriteString(" (")
-				b.WriteString(candidate.Reason)
-				b.WriteString(")")
-			}
-			b.WriteString("\n")
-		}
-		if selection.SelectedTemplate != "" {
-			b.WriteString("\nComposite template: ")
-			b.WriteString(selection.SelectedTemplate)
-			b.WriteString("\n")
-		}
-	default:
-		b.WriteString("\nInstruction: 当前没有唯一可用的 playbook/template，进入自由分析模式。不要执行 `bin/data-harness-cli inject-template`，不要读取 templates/ 下的报告模板。读取 contextFiles 后，基于 CLI 证据自由组织分析报告；候选 playbook 只能作为取数参考，不能作为模板门禁。\n")
-		if len(candidates) > 0 {
-			b.WriteString("\nPlaybook candidates for reference only:\n")
-			for _, candidate := range candidates {
-				b.WriteString("- ")
-				b.WriteString(candidate.Path)
-				if candidate.Template != "" {
-					b.WriteString(" -> ")
-					b.WriteString(candidate.Template)
-				}
-				if candidate.Reason != "" {
-					b.WriteString(" (")
-					b.WriteString(candidate.Reason)
-					b.WriteString(")")
-				}
-				b.WriteString("\n")
-			}
-		}
-	}
-	b.WriteString("\nConstraints:\n")
-	for _, constraint := range response.Constraints {
-		b.WriteString("- ")
-		b.WriteString(constraint)
-		b.WriteString("\n")
-	}
-	if mode == sessionstate.ModeTemplateReport || mode == sessionstate.ModeCompositeReport {
-		b.WriteString("\n禁止在 inject-template 成功前读取 templates/ 下的报告模板。\n")
-		if mode == sessionstate.ModeTemplateReport {
-			b.WriteString("单指标模式下只能执行 selectedPlaybook 明确列出的数据 CLI；主指标返回空或 null 时，不得自行改用 overview 或其它 report 命令补数，不得用 area/category/trend 行聚合或换算主指标，只能说明主指标 CLI 未返回可用证据。\n")
-		}
-	} else {
-		b.WriteString("\n自由分析模式下禁止读取 templates/ 下的报告模板，禁止等待 template 注入。\n")
-	}
-	return b.String(), nil
-}
-
 func recordDiagnostic(root, sessionID, prompt, context string, tc timeContext, response harness.ContextResponse) error {
 	event := map[string]any{
 		"ts":              time.Now().UTC().Format(time.RFC3339Nano),
@@ -292,7 +195,7 @@ func recordDiagnostic(root, sessionID, prompt, context string, tc timeContext, r
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(root, ".claude", "hooks", "state", "diagnostics")
+	dir := sessionstate.DiagnosticsDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -382,33 +285,6 @@ func hookSessionID(payload promptPayload) string {
 	return sessionID
 }
 
-func writeSelectedPlaybookState(root, sessionID, prompt string, candidates []sessionstate.PlaybookCandidate, selection reportSelection) error {
-	state, err := sessionstate.Load(root, sessionID)
-	if err != nil {
-		return err
-	}
-	state.Mode = selection.Mode
-	state.Prompt = prompt
-	state.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	state.PlaybookCandidates = candidates
-	state.SelectedPlaybook = ""
-	state.SelectedTemplate = ""
-	state.SelectedPlaybooks = nil
-	state.Composite = nil
-	state.TemplateInjected = false
-	state.Reports = map[string]*sessionstate.Report{}
-	if selection.Mode == sessionstate.ModeTemplateReport && len(candidates) == 1 {
-		state.SelectedPlaybook = candidates[0].Path
-		state.SelectedTemplate = candidates[0].Template
-	}
-	if selection.Mode == sessionstate.ModeCompositeReport {
-		state.SelectedPlaybooks = selection.SelectedPlaybooks
-		state.SelectedTemplate = selection.SelectedTemplate
-		state.Composite = selection.Composite
-	}
-	return sessionstate.Save(root, sessionID, state)
-}
-
 func writeWikiPlanState(root, sessionID, prompt string, plan WikiPlan) error {
 	state, err := sessionstate.Load(root, sessionID)
 	if err != nil {
@@ -422,7 +298,6 @@ func writeWikiPlanState(root, sessionID, prompt string, plan WikiPlan) error {
 	state.SelectedTemplate = ""
 	state.SelectedPlaybooks = nil
 	state.Composite = nil
-	state.CoveredSpecs = nil
 	state.Reason = ""
 	state.TemplateInjected = false
 	state.Reports = map[string]*sessionstate.Report{}
@@ -432,147 +307,13 @@ func writeWikiPlanState(root, sessionID, prompt string, plan WikiPlan) error {
 		state.SelectedTemplate = plan.SelectedTemplate
 	case sessionstate.ModeMulti:
 		state.SelectedPlaybooks = append([]sessionstate.PlaybookCandidate{}, plan.SelectedPlaybooks...)
-	case sessionstate.ModeCombo:
+	case sessionstate.ModeReport:
 		state.SelectedPlaybook = plan.SelectedPlaybook
 		state.SelectedTemplate = plan.SelectedTemplate
-		state.CoveredSpecs = append([]string{}, plan.CoveredSpecs...)
 	case sessionstate.ModeFree:
 		state.Reason = plan.Reason
 	}
 	return sessionstate.Save(root, sessionID, state)
-}
-
-func selectReportMode(prompt string, candidates []sessionstate.PlaybookCandidate) reportSelection {
-	if len(candidates) == 1 {
-		return reportSelection{Mode: sessionstate.ModeTemplateReport}
-	}
-	if selected, composite := compositePlaybooks(prompt, candidates); len(selected) >= 2 {
-		return reportSelection{
-			Mode:              sessionstate.ModeCompositeReport,
-			SelectedPlaybooks: selected,
-			SelectedTemplate:  compositeTemplateForDomain(composite.Domain),
-			Composite:         composite,
-		}
-	}
-	return reportSelection{Mode: sessionstate.ModeFreeAnalysis}
-}
-
-func compositePlaybooks(prompt string, candidates []sessionstate.PlaybookCandidate) ([]sessionstate.PlaybookCandidate, *sessionstate.CompositeSelection) {
-	if len(candidates) < 2 || !hasCompositeSignal(prompt) {
-		return nil, nil
-	}
-	byFamily := map[string][]sessionstate.PlaybookCandidate{}
-	domainByFamily := map[string]string{}
-	for _, candidate := range candidates {
-		if candidate.Domain == "" || candidate.Template == "" {
-			continue
-		}
-		if strings.Contains(candidate.Path, "/default-overview.md") {
-			continue
-		}
-		family := playbookFamily(candidate.Path)
-		if family == "" {
-			continue
-		}
-		key := candidate.Domain + "\x00" + family
-		byFamily[key] = append(byFamily[key], candidate)
-		domainByFamily[key] = candidate.Domain
-	}
-	var best []sessionstate.PlaybookCandidate
-	bestKey := ""
-	for key, items := range byFamily {
-		items = uniqueCandidates(items)
-		if len(items) > len(best) || (len(items) == len(best) && preferCompositeFamily(key, bestKey)) {
-			best = items
-			bestKey = key
-		}
-	}
-	if len(best) < 2 {
-		return nil, nil
-	}
-	sort.Slice(best, func(i, j int) bool { return best[i].Path < best[j].Path })
-	composite := &sessionstate.CompositeSelection{
-		Type:    compositeType(prompt),
-		Domain:  domainByFamily[bestKey],
-		Metrics: metricNames(best),
-	}
-	return best, composite
-}
-
-func playbookFamily(path string) string {
-	parts := strings.Split(path, "/")
-	for i, part := range parts {
-		if part != "playbooks" || i+2 >= len(parts) {
-			continue
-		}
-		return parts[i+1] + "/" + parts[i+2]
-	}
-	return ""
-}
-
-func preferCompositeFamily(candidate, current string) bool {
-	if current == "" {
-		return true
-	}
-	candidateFamily := strings.SplitN(candidate, "\x00", 2)
-	currentFamily := strings.SplitN(current, "\x00", 2)
-	if len(candidateFamily) == 2 && len(currentFamily) == 2 {
-		if candidateFamily[1] == "cmr/business" && currentFamily[1] != "cmr/business" {
-			return true
-		}
-		if candidateFamily[1] != currentFamily[1] {
-			return candidateFamily[1] < currentFamily[1]
-		}
-	}
-	return candidate < current
-}
-
-func hasCompositeSignal(prompt string) bool {
-	return hasAny(prompt, []string{"和", "与", "及", "以及", "还有", "同时", "一起", "都", "共同", "关系", "是否因为", "是不是因为", "影响", "带动", "拖累", "为什么", "原因", "归因"})
-}
-
-func compositeType(prompt string) string {
-	switch {
-	case hasAny(prompt, []string{"关系", "是否因为", "是不是因为", "影响", "带动", "拖累"}):
-		return "relation"
-	case hasAny(prompt, []string{"为什么", "原因", "归因", "哪些区域", "哪些品类"}):
-		return "attribution"
-	default:
-		return "overview"
-	}
-}
-
-func compositeTemplateForDomain(domain string) string {
-	switch domain {
-	case "business":
-		return "templates/cmr/business/multi-metric-report.md"
-	default:
-		return "templates/common/multi-metric-report.md"
-	}
-}
-
-func uniqueCandidates(candidates []sessionstate.PlaybookCandidate) []sessionstate.PlaybookCandidate {
-	seen := map[string]bool{}
-	var out []sessionstate.PlaybookCandidate
-	for _, candidate := range candidates {
-		if seen[candidate.Path] {
-			continue
-		}
-		seen[candidate.Path] = true
-		out = append(out, candidate)
-	}
-	return out
-}
-
-func metricNames(candidates []sessionstate.PlaybookCandidate) []string {
-	var metrics []string
-	for _, candidate := range candidates {
-		name := strings.TrimSuffix(filepath.Base(candidate.Path), ".md")
-		if name != "" {
-			metrics = append(metrics, name)
-		}
-	}
-	return metrics
 }
 
 func keywordHits(refs []harness.FileRef) []map[string]string {

@@ -17,7 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 METRICS_JSON = ROOT / "scripts" / "cmr_business_playbook_metrics.json"
 INDEX_MD = ROOT / "wikis" / "playbooks" / "cmr" / "business" / "index.md"
-STATE_DIR = ROOT / ".claude" / "hooks" / "state" / "business-report"
+STATE_DIR = ROOT / ".harness" / "state" / "business-report"
 DEFAULT_SAMPLE_PLAYBOOKS = [
     "s-sale-amt.md",
     "s-cust-num.md",

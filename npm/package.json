@@ -1,0 +1,22 @@
+{
+  "name": "@lumi-ai-lab/harness-data",
+  "version": "0.0.1",
+  "description": "Installer and updater for Harness Data",
+  "type": "module",
+  "bin": {
+    "harness-data": "bin/harness-data.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,6 +1,21 @@
 name: Publish CLI Release
 
 on:
+  workflow_call:
+    inputs:
+      version_tag:
+        description: Release tag, for example v0.0.2
+        required: false
+        type: string
+      ref:
+        description: Git ref to checkout
+        required: false
+        type: string
+      publish:
+        description: Publish GitHub Release assets
+        required: false
+        default: false
+        type: boolean
   pull_request:
     branches:
       - master
@@ -46,6 +61,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -69,9 +86,12 @@ jobs:
           ARCHIVE: ${{ matrix.archive }}
           REF_NAME: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
+          VERSION_TAG: ${{ inputs.version_tag || '' }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ -n "${VERSION_TAG}" ]]; then
+            version="${VERSION_TAG}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${REF_NAME}"
           else
             version="ci-${RUN_ID}"
@@ -99,7 +119,7 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: inputs.publish || startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Download build artifacts
@@ -111,6 +131,7 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version_tag || github.ref_name }}
           files: |
             dist/*
           generate_release_notes: true

@@ -9,13 +9,12 @@ import (
 
 const (
 	ModeSingle = "single"
-	ModeCombo  = "combo"
 	ModeFree   = "free"
 	ModeMulti  = "multi_single"
+	ModeReport = "report"
 
-	ModeTemplateReport  = ModeSingle
-	ModeFreeAnalysis    = ModeFree
-	ModeCompositeReport = ModeCombo
+	ModeTemplateReport = ModeReport
+	ModeFreeAnalysis   = ModeFree
 )
 
 type PlaybookCandidate struct {
@@ -32,7 +31,6 @@ type File struct {
 	StartedAt          string              `json:"started_at,omitempty"`
 	SelectedPlaybook   string              `json:"selected_playbook,omitempty"`
 	SelectedTemplate   string              `json:"selected_template,omitempty"`
-	CoveredSpecs       []string            `json:"covered_specs,omitempty"`
 	Reason             string              `json:"reason,omitempty"`
 	SelectedPlaybooks  []PlaybookCandidate `json:"selected_playbooks,omitempty"`
 	PlaybookCandidates []PlaybookCandidate `json:"playbook_candidates,omitempty"`
@@ -105,7 +103,11 @@ func Save(root, sessionID string, state File) error {
 }
 
 func Dir(root string) string {
-	return filepath.Join(root, ".claude", "hooks", "state", "business-report")
+	return filepath.Join(root, ".harness", "state", "business-report")
+}
+
+func DiagnosticsDir(root string) string {
+	return filepath.Join(root, ".harness", "state", "diagnostics")
 }
 
 func Path(root, sessionID string) string {

@@ -98,9 +98,10 @@ type Index struct {
 }
 
 type RuntimeIndex struct {
-	Meta       IndexMeta                  `json:"meta"`
-	DocsByPath map[string]RuntimeDocument `json:"docsByPath"`
-	Recall     []RuntimeRecallItem        `json:"recall"`
+	Meta              IndexMeta                  `json:"meta"`
+	DocsByPath        map[string]RuntimeDocument `json:"docsByPath"`
+	Recall            []RuntimeRecallItem        `json:"recall"`
+	TemplateSelection []TemplateSelectionRule    `json:"templateSelection,omitempty"`
 }
 
 type RuntimeDocument struct {
@@ -115,6 +116,22 @@ type RuntimeDocument struct {
 type RuntimeRecallItem struct {
 	Term       string `json:"term"`
 	TargetPath string `json:"targetPath"`
+}
+
+type TemplateSelectionPolicy struct {
+	Version   int                     `json:"version"`
+	Templates []TemplateSelectionRule `json:"templates"`
+}
+
+type TemplateSelectionRule struct {
+	ID       string   `json:"id"`
+	Playbook string   `json:"playbook"`
+	Template string   `json:"template"`
+	Type     string   `json:"type"`
+	Domain   string   `json:"domain,omitempty"`
+	Covers   []string `json:"covers,omitempty"`
+	Intents  []string `json:"intents,omitempty"`
+	Priority int      `json:"priority,omitempty"`
 }
 
 type IndexMeta struct {

@@ -18,14 +18,7 @@ aliases: ["销售额", "销售金额"]
 ---
 # 销售额
 `)
-	writeFile(t, root, "wikis/playbooks/idx/business-manager/default-overview.md", `---
-aliases:
-  - 经营概览
-covers:
-  - spec/idx/business-manager/s-sale-amt.md
----
-# 经营概览
-`)
+	writeFile(t, root, "wikis/playbooks/idx/business-manager/s-sale-amt.md", "# 销售额取数\n")
 	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		t.Fatal(err)
@@ -45,17 +38,17 @@ covers:
 		t.Fatalf("unexpected spec frontmatter: %+v", spec)
 	}
 
-	playbook, errs, err := ParseDocument(resolver, "playbooks/idx/business-manager/default-overview.md", specSet)
+	playbook, errs, err := ParseDocument(resolver, "playbooks/idx/business-manager/s-sale-amt.md", specSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(errs) != 0 {
 		t.Fatalf("unexpected playbook parse errors: %+v", errs)
 	}
-	if !playbook.Playbook.IsCombo || playbook.Playbook.IsSingle {
-		t.Fatalf("expected combo playbook: %+v", playbook.Playbook)
+	if !playbook.Playbook.IsSingle {
+		t.Fatalf("expected single playbook: %+v", playbook.Playbook)
 	}
-	if playbook.Playbook.TemplatePath != "templates/idx/business-manager/default-overview.md" {
+	if playbook.Playbook.TemplatePath != "templates/idx/business-manager/s-sale-amt.md" {
 		t.Fatalf("unexpected template path: %s", playbook.Playbook.TemplatePath)
 	}
 }
@@ -85,7 +78,7 @@ intents:
 	if len(errs) != 0 {
 		t.Fatalf("unexpected parse errors: %+v", errs)
 	}
-	if !playbook.Playbook.IsSingle || playbook.Playbook.IsCombo {
+	if !playbook.Playbook.IsSingle {
 		t.Fatalf("expected single playbook: %+v", playbook.Playbook)
 	}
 	if got := playbook.Playbook.Intents["current_value"].Aliases; strings.Join(got, ",") != "值,指标值" {
@@ -118,7 +111,7 @@ name: sale_amt
 	}
 }
 
-func TestRunChecksFindsFrontmatterAliasesCoversAndLinks(t *testing.T) {
+func TestRunChecksFindsFrontmatterAliasesAndLinks(t *testing.T) {
 	root := testWikiRoot(t)
 	writeFile(t, root, "wikis/spec/index.md", "# Specs\n")
 	writeFile(t, root, "wikis/spec/idx/index.md", "# Idx\n")
@@ -144,14 +137,6 @@ aliases: ["不允许"]
 ---
 # 销售额取数
 `)
-	writeFile(t, root, "wikis/playbooks/idx/business-manager/default-overview.md", `---
-aliases: ["经营概览"]
-covers:
-  - playbooks/idx/business-manager/s-sale-amt.md
-  - spec/idx/business-manager/missing.md
----
-# 经营概览
-`)
 	writeFile(t, root, "wikis/templates/index.md", "# Templates\n")
 	writeFile(t, root, "wikis/templates/idx/index.md", "# Idx\n")
 	writeFile(t, root, "wikis/templates/idx/business-manager/index.md", "# Business\n")
@@ -162,13 +147,6 @@ covers:
 	}
 	if !resultHasCode(aliases, "duplicate_alias") || !resultHasCode(aliases, "alias_not_allowed") {
 		t.Fatalf("expected alias errors, got %+v", aliases.Errors)
-	}
-	covers, err := RunCheck(root, CheckCovers, CheckOptions{MaxErrors: 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resultHasCode(covers, "invalid_cover_path") || !resultHasCode(covers, "missing_cover_target") {
-		t.Fatalf("expected cover errors, got %+v", covers.Errors)
 	}
 	links, err := RunCheck(root, CheckLinks, CheckOptions{MaxErrors: 20})
 	if err != nil {
@@ -220,7 +198,7 @@ func TestBuildIndexWritesStableAtomicIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Path != IndexRel || result.RuntimePath != RuntimeIndexRel || result.DocCount == 0 || result.RuntimeDocCount != result.DocCount || result.RecallCount != 4 || result.RuntimeRecallCount != result.RecallCount || result.ChecksSkipped {
+	if result.Path != IndexRel || result.RuntimePath != RuntimeIndexRel || result.DocCount == 0 || result.RuntimeDocCount != result.DocCount || result.RecallCount != 3 || result.RuntimeRecallCount != result.RecallCount || result.ChecksSkipped {
 		t.Fatalf("unexpected build result: %+v", result)
 	}
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(IndexRel)))
@@ -291,7 +269,7 @@ func TestLoadRuntimeIndexFallsBackToFullIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.DocsByPath["spec/idx/business-manager/s-sale-amt.md"].Path == "" || len(runtime.Recall) != 4 {
+	if runtime.DocsByPath["spec/idx/business-manager/s-sale-amt.md"].Path == "" || len(runtime.Recall) != 3 {
 		t.Fatalf("unexpected fallback runtime index: %+v", runtime)
 	}
 }
@@ -352,18 +330,10 @@ aliases: ["销售金额"]
 	writeFile(t, root, "wikis/playbooks/idx/index.md", "# Idx\n")
 	writeFile(t, root, "wikis/playbooks/idx/business-manager/index.md", "# Business\n")
 	writeFile(t, root, "wikis/playbooks/idx/business-manager/s-sale-amt.md", "# 销售额取数\n")
-	writeFile(t, root, "wikis/playbooks/idx/business-manager/default-overview.md", `---
-aliases: ["经营概览"]
-covers:
-  - spec/idx/business-manager/s-sale-amt.md
----
-# 经营概览
-`)
 	writeFile(t, root, "wikis/templates/index.md", "# Templates\n")
 	writeFile(t, root, "wikis/templates/idx/index.md", "# Idx\n")
 	writeFile(t, root, "wikis/templates/idx/business-manager/index.md", "# Business\n")
 	writeFile(t, root, "wikis/templates/idx/business-manager/s-sale-amt.md", "# 销售额报告\n")
-	writeFile(t, root, "wikis/templates/idx/business-manager/default-overview.md", "# 经营概览报告\n")
 	return root
 }
 

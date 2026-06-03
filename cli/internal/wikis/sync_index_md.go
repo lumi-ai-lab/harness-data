@@ -197,14 +197,14 @@ func renderSpecIndex(b *strings.Builder, c Corpus, dir string) {
 }
 
 func renderPlaybookIndex(b *strings.Builder, c Corpus, dir string) {
-	singles, combos := playbookDocsInDir(c.Docs, dir)
+	singles, reports := playbookDocsInDir(c.Docs, dir)
 	children := childDirs(c.Docs, dir)
 	fmt.Fprintln(b, "### 能力地图")
 	fmt.Fprintln(b)
 	fmt.Fprintln(b, "| 能力 | 代表条目 | 数量 |")
 	fmt.Fprintln(b, "| --- | --- | --- |")
 	writeCapabilityRow(b, "单指标取数", representativeDocNames(singles), len(singles))
-	writeCapabilityRow(b, "组合报告", representativeDocNames(combos), len(combos))
+	writeCapabilityRow(b, "报告型取数", representativeDocNames(reports), len(reports))
 	writeCapabilityRow(b, "下级领域", representativeDirs(children), len(children))
 	fmt.Fprintln(b)
 
@@ -224,20 +224,18 @@ func renderPlaybookIndex(b *strings.Builder, c Corpus, dir string) {
 		fmt.Fprintln(b)
 	}
 
-	fmt.Fprintln(b, "### 组合 Playbooks")
+	fmt.Fprintln(b, "### 报告型 Playbooks")
 	fmt.Fprintln(b)
-	if len(combos) == 0 {
+	if len(reports) == 0 {
 		fmt.Fprintln(b, "暂无。")
 		fmt.Fprintln(b)
 	} else {
-		fmt.Fprintln(b, "| Playbook | aliases | covers | template |")
-		fmt.Fprintln(b, "| --- | --- | --- | --- |")
-		for _, doc := range combos {
-			templatePath := doc.Playbook.TemplatePath
-			if c.ByPath[templatePath] == nil {
-				templatePath = "-"
-			}
-			fmt.Fprintf(b, "| `%s` | %s | %d specs | `%s` |\n", path.Base(doc.Path), tableCell(strings.Join(doc.Aliases, ", ")), len(doc.Covers), templatePath)
+		fmt.Fprintln(b, "| 报告 | playbook | spec |")
+		fmt.Fprintln(b, "| --- | --- | --- |")
+		for _, doc := range reports {
+			specPath := doc.Playbook.SpecPath
+			report := metricName(c, specPath)
+			fmt.Fprintf(b, "| %s | `%s` | `%s` |\n", tableCell(report), path.Base(doc.Path), specPath)
 		}
 		fmt.Fprintln(b)
 	}
@@ -277,20 +275,20 @@ func specDocsInDir(docs []Document, dir string) ([]Document, []Document) {
 }
 
 func playbookDocsInDir(docs []Document, dir string) ([]Document, []Document) {
-	var singles, combos []Document
+	var singles, reports []Document
 	for _, doc := range docs {
 		if doc.Kind != KindPlaybook || doc.IsIndex || path.Dir(doc.Path) != dir {
 			continue
 		}
 		if doc.Playbook.IsSingle {
 			singles = append(singles, doc)
-		} else {
-			combos = append(combos, doc)
+		} else if strings.HasPrefix(path.Base(doc.Path), "r-") {
+			reports = append(reports, doc)
 		}
 	}
 	sortDocs(singles)
-	sortDocs(combos)
-	return singles, combos
+	sortDocs(reports)
+	return singles, reports
 }
 
 func childDirs(docs []Document, dir string) []string {

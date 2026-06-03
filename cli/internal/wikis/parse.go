@@ -112,7 +112,8 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		HasFrontmatter: fm.Present,
 	}
 	if strings.HasPrefix(logical, "spec/") && !doc.IsIndex {
-		if strings.HasPrefix(path.Base(logical), "c-") {
+		base := path.Base(logical)
+		if strings.HasPrefix(base, "c-") || strings.HasPrefix(base, "r-") {
 			doc.SpecType = SpecTypeConcept
 		} else {
 			doc.SpecType = SpecTypeMetric
@@ -123,10 +124,8 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		templatePath := SamePath(logical, "templates")
 		doc.Playbook.SpecPath = specPath
 		doc.Playbook.TemplatePath = templatePath
-		if specSet[specPath] {
+		if specSet[specPath] && strings.HasPrefix(path.Base(logical), "s-") {
 			doc.Playbook.IsSingle = true
-		} else {
-			doc.Playbook.IsCombo = true
 		}
 	}
 	if strings.HasPrefix(logical, "templates/") && !doc.IsIndex {

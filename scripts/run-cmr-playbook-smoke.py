@@ -16,7 +16,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE_DIR = ROOT / ".claude" / "hooks" / "state" / "business-report"
+STATE_DIR = ROOT / ".harness" / "state" / "business-report"
 
 
 @dataclass(frozen=True)

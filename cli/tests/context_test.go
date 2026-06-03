@@ -20,7 +20,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
-	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md", "wikis/playbooks/cmr/member/s-member-repurchase-no-difference-rate.md"} {
+	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md"} {
 		if !got[want] {
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
 		}
@@ -69,7 +69,6 @@ func TestMultiDomainContextRecall(t *testing.T) {
 	for _, want := range []string{
 		"wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md",
 		"wikis/spec/cmr/store-manager/s-net-profit.md",
-		"wikis/playbooks/cmr/member/s-member-repurchase-no-difference-rate.md",
 		"wikis/playbooks/cmr/store-manager/s-net-profit.md",
 	} {
 		if !got[want] {
@@ -97,7 +96,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
 	}
-	for _, want := range []string{"data-harness-cli inject-template", "do_not_read_template_before_inject_template"} {
+	for _, want := range []string{"Do not run bin/data-harness-cli inject-template", "do_not_read_or_use_templates_unless_selectedTemplate_is_set"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
@@ -110,7 +109,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 	sessionID := "go-context-payload-session"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -133,20 +132,20 @@ func TestClaudeHookUsesPayloadSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"session_id": "` + sessionID + `"`, `"selected_template": "templates/cmr/member/default-overview.md"`} {
+	for _, want := range []string{`"session_id": "` + sessionID + `"`, `"mode": "free"`, `"reason": "no_recall_hit"`} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, string(data))
 		}
 	}
-	if !bytes.Contains(data, []byte(`"mode": "combo"`)) {
-		t.Fatalf("missing combo mode in %s", string(data))
+	if bytes.Contains(data, []byte(`"selected_template"`)) || bytes.Contains(data, []byte(`"selected_playbook"`)) {
+		t.Fatalf("unexpected selection in %s", string(data))
 	}
 }
 
 func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	sessionID := "go-context-reset-state"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -192,16 +191,16 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	if state["prompt"] != prompt {
 		t.Fatalf("prompt = %#v", state["prompt"])
 	}
-	if state["mode"] != "combo" {
+	if state["mode"] != "free" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
 	if state["started_at"] == "" {
 		t.Fatalf("missing started_at in %s", string(data))
 	}
-	if state["selected_playbook"] != "playbooks/cmr/business/default-overview.md" {
+	if state["selected_playbook"] != nil {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/default-overview.md" {
+	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != false {
@@ -216,7 +215,7 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	sessionID := "go-context-free-analysis"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -235,7 +234,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: free", "Do not run bin/data-harness-cli inject-template", "wikis/playbooks/cmr/business/default-overview.md", "wikis/playbooks/cmr/member/default-overview.md"} {
+	for _, want := range []string{"Harness mode: free", "Do not run bin/data-harness-cli inject-template", "wikis/spec/index.md", "wikis/playbooks/index.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
@@ -258,7 +257,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	if state["reason"] != "multiple_combo_alias_hits" {
+	if state["reason"] != "no_recall_hit" {
 		t.Fatalf("reason = %#v", state["reason"])
 	}
 }
@@ -266,7 +265,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 	sessionID := "go-context-multi-single-multi-metric"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -292,7 +291,7 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 	}
 	for _, unwanted := range []string{"selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "- wikis/spec/cmr/business/s-sale-amt.md", "- wikis/spec/cmr/business/s-per-cust-amt.md"} {
 		if bytes.Contains([]byte(context), []byte(unwanted)) {
-			t.Fatalf("unexpected combo/spec context: %s in %s", unwanted, context)
+			t.Fatalf("unexpected report/spec context: %s in %s", unwanted, context)
 		}
 	}
 
@@ -1367,7 +1366,7 @@ func TestClaudeHookSelectsBrandProductEffectivenessTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-brand-product-effectiveness"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1406,7 +1405,7 @@ func TestClaudeHookSelectsCustPenetrationRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-cust-penetration-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1445,7 +1444,7 @@ func TestClaudeHookSelectsSaleAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-sale-amt"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1484,7 +1483,7 @@ func TestClaudeHookSelectsBf19SaleRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-sale-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1526,7 +1525,7 @@ func TestClaudeHookSelectsBf19SaleWeightTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-sale-weight"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1571,7 +1570,7 @@ func TestClaudeHookSelectsSatisfiedRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-satisfied-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1619,7 +1618,7 @@ func TestClaudeHookSelectsCustNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-cust-num"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1661,7 +1660,7 @@ func TestClaudeHookSelectsBf19CustNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-cust-num"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1703,7 +1702,7 @@ func TestClaudeHookSelectsBf19CategoryStoreCustRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-category-store-cust-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1745,7 +1744,7 @@ func TestClaudeHookSelectsBf19MemberRepurchaseRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-member-repurchase-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1790,7 +1789,7 @@ func TestClaudeHookSelectsPerCustAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-per-cust-amt"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1829,7 +1828,7 @@ func TestClaudeHookSelectsBf19PerCustAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-per-cust-amt"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1871,7 +1870,7 @@ func TestClaudeHookSelectsBf19AvgPieceNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-avg-piece-num"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1913,7 +1912,7 @@ func TestClaudeHookSelectsBf19PerPieceAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-bf19-per-piece-amt"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1958,7 +1957,7 @@ func TestClaudeHookSelectsFullLinkStoreProfitNotaxRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-full-link-store-profit-notax-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -1997,7 +1996,7 @@ func TestClaudeHookSelectsProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-profit-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2039,7 +2038,7 @@ func TestClaudeHookSelectsScmStoreProfitNotaxRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-store-profit-notax-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2084,7 +2083,7 @@ func TestClaudeHookSelectsFullLinkStoreProfitAmtNotaxTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-full-link-store-profit-amt-notax"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2126,7 +2125,7 @@ func TestClaudeHookSelectsProfitAmtTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-profit-amt"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2168,7 +2167,7 @@ func TestClaudeHookSelectsScmStoreProfitAmtNotaxTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-store-profit-amt-notax"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2213,7 +2212,7 @@ func TestClaudeHookSelectsPrePriceProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-pre-price-profit-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2255,7 +2254,7 @@ func TestClaudeHookSelectsPreProfitRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-pre-profit-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2297,7 +2296,7 @@ func TestClaudeHookSelectsScmPromotionTotalRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-scm-promotion-total-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2342,7 +2341,7 @@ func TestClaudeHookSelectsHourDiscountRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-hour-discount-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2387,7 +2386,7 @@ func TestClaudeHookSelectsPromotionDiscountRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-promotion-discount-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2432,7 +2431,7 @@ func TestClaudeHookSelectsOrderArticleRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-order-article-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2474,7 +2473,7 @@ func TestClaudeHookSelectsOrderStoresTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-order-stores"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2519,7 +2518,7 @@ func TestClaudeHookSelectsStoreCanOrdersTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-store-can-orders"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2564,7 +2563,7 @@ func TestClaudeHookSelectsPriceIndexTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-price-index"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2606,7 +2605,7 @@ func TestClaudeHookSelectsPurchasePriceIndexTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-purchase-price-index"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2648,7 +2647,7 @@ func TestClaudeHookSelectsLostRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-lost-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2690,7 +2689,7 @@ func TestClaudeHookSelectsActiveVenderNumTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-active-vender-num"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2729,7 +2728,7 @@ func TestClaudeHookSelectsCentralInstockRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-central-instock-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2771,7 +2770,7 @@ func TestClaudeHookSelectsThreeRateScoreTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-three-rate-score"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2813,7 +2812,7 @@ func TestClaudeHookSelectsVendorAccuracyRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-accuracy-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2855,7 +2854,7 @@ func TestClaudeHookSelectsVendorIntimeRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-intime-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -2900,7 +2899,7 @@ func TestClaudeHookSelectsVendorQualificationRateTemplate(t *testing.T) {
 	t.Skip("legacy template-per-metric assertion; covered by wikis path resolver tests")
 	sessionID := "go-context-vendor-qualification-rate"
 	root := root(t)
-	path := filepath.Join(root, ".claude", "hooks", "state", "business-report", sessionID+".json")
+	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}

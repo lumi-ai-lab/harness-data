@@ -13,13 +13,18 @@ config/qdm-cli-paths.env
 __pycache__/
 *.py[cod]
 
-# Local Claude hook state
-.claude/hooks/state/
+# Local agent links
+.claude/
+.claude
+.codex/
+.codex
 .claude-bak/
 
 # Generated harness data and local compiled binaries
 .harness/
 bin/
+.bootstrap-cache/
+.bootstrap-cache*/
 
 # Local/generated business data samples
 *-cmr-response.json

@@ -196,6 +196,13 @@ func NewPathResolver(root string) (PathResolver, error) {
 	return PathResolver{Root: root, Paths: cfg}, nil
 }
 
+func NewPathResolverWithPaths(root string, cfg PathsConfig) (PathResolver, error) {
+	if err := validatePathsConfig("runtime index", cfg); err != nil {
+		return PathResolver{}, err
+	}
+	return PathResolver{Root: root, Paths: cfg}, nil
+}
+
 func (r PathResolver) Resolve(rel string) string {
 	return filepath.Join(r.Root, filepath.FromSlash(r.ResolveRel(rel)))
 }

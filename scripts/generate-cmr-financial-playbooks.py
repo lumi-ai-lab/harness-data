@@ -198,7 +198,7 @@ def render_direct_snippets(metric: Metric) -> dict[str, str]:
         "current_query_description": f"查询满足过滤条件后的{metric.label}值，按 CLI 查询名 `{metric.cli_indicator_name}` 直查",
         "trend_query_description": f"查询{metric.label}按时间展开的趋势点",
         "area_query_description": f"查询{metric.label}按区域展开的表现",
-        "current_value_method": f"当前值查询使用 `dupont --report company {arg} --week <YYYY-NN>`。如果用户问具体日期，先转成所在业务周，再执行该命令。",
+        "current_value_method": f"当前值查询使用 `dupont --report company {arg} --week <YYYY-NN>`。如果用户问具体日期，先转成所在业务周，再执行该命令。当前值只查询用户显式给出的口径；未明确要求同比、环比、趋势、排名或额外对比时，不查询历史同期/上期，也不查询未提到的区域。",
         "current_value_default_command": f'"$QDM_CMR_CLI" dupont --report company {arg} --week <YYYY-NN>',
         "current_value_week_example": f'"$QDM_CMR_CLI" dupont --report company {arg} --week 2026-21',
         "current_value_month_example": f'"$QDM_CMR_CLI" dupont --report company {arg} --month 2026-05',
@@ -215,6 +215,8 @@ source config/qdm-cli-paths.env
 
 趋势输出中只使用 CLI 返回的时间点和值。不要自行补齐缺失日期，也不要根据相邻点推算数值。""",
         "area_query_block": f"""用户询问“各区域{metric.label}”“哪个区域{metric.label}高”“哪个区域{metric.label}低”“区域排名”时，使用 `area`。区域表现命令固定查询 `grouping=storeId`，可以继续叠加时间过滤。
+
+如果用户只是要求某一个或多个明确区域的当前值，即使表达中包含“全国和某区域”，也不是区域表现查询；应使用 `dupont` 分别查询这些明确口径。只有用户要求区域展开、排名、最高/最低、各区域对比时才使用 `area`。
 
 区域层级必须按 CLI 实际返回判断，不要只按用户原词或命令参数猜测：
 
@@ -264,7 +266,7 @@ def render_code_filter_snippets(metric: Metric) -> dict[str, str]:
         "current_query_description": f"查询公司报表全量结果后，按 `indicatorCode == {metric.code}` 精确取得{metric.label}值",
         "trend_query_description": f"当前 CLI 未提供按 `indicatorCode={metric.code}` 查询趋势的稳定入口",
         "area_query_description": f"当前 CLI 未提供按 `indicatorCode={metric.code}` 查询区域表现的稳定入口",
-        "current_value_method": f"当前值查询使用 `dupont --report company --week <YYYY-NN>` 返回公司报表全量指标，然后只取 `indicatorCode == {metric.code}` 的那一项。该策略是{metric.label}的最短路径，因为接口返回的 `indicatorName` 可能只是 `{metric.response_indicator_name}`。",
+        "current_value_method": f"当前值查询使用 `dupont --report company --week <YYYY-NN>` 返回公司报表全量指标，然后只取 `indicatorCode == {metric.code}` 的那一项。该策略是{metric.label}的最短路径，因为接口返回的 `indicatorName` 可能只是 `{metric.response_indicator_name}`。当前值只查询用户显式给出的口径；未明确要求同比、环比、趋势、排名或额外对比时，不查询历史同期/上期，也不查询未提到的区域。",
         "current_value_default_command": '"$QDM_CMR_CLI" dupont --report company --week <YYYY-NN>',
         "current_value_week_example": '"$QDM_CMR_CLI" dupont --report company --week 2026-21',
         "current_value_month_example": '"$QDM_CMR_CLI" dupont --report company --month 2026-05',

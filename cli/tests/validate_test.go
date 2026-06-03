@@ -8,25 +8,25 @@ import (
 	"harness-data/cli/internal/wikis"
 )
 
-func TestValidateCurrentDocumentsReportsDuplicateRecallValues(t *testing.T) {
+func TestValidateCurrentDocumentsReportsMissingPlaybooks(t *testing.T) {
 	results, err := wikis.RunAllChecks(root(t), wikis.CheckOptions{MaxErrors: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, result := range results {
-		if result.Check != wikis.CheckAliases {
+		if result.Check != wikis.CheckLinks {
 			continue
 		}
 		for _, err := range result.Errors {
-			if err.Code == "duplicate_recall_value" && err.Target == "label" {
+			if err.Code == "missing_playbook" {
 				found = true
 				break
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("expected current wikis to report duplicate label recall values, got %+v", results)
+		t.Fatalf("expected current wikis to report missing playbooks, got %+v", results)
 	}
 }
 

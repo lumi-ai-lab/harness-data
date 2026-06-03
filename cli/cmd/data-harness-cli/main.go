@@ -67,7 +67,7 @@ func run() error {
 		fs := flag.NewFlagSet("context", flag.ExitOnError)
 		question := fs.String("question", "", "question")
 		jsonOut := fs.Bool("json", false, "print json")
-		format := fs.String("format", "text", "output format: text, json, or claude-hook")
+		format := fs.String("format", "text", "output format: text, json, claude-hook, codex-hook, or agent-hook")
 		_ = fs.Parse(os.Args[2:])
 		if *jsonOut {
 			*format = "json"
@@ -87,7 +87,7 @@ func run() error {
 			for _, ref := range response.ContextFiles {
 				fmt.Printf("%s\t%s\n", ref.Path, ref.Reason)
 			}
-		case "claude-hook":
+		case "claude-hook", "codex-hook", "agent-hook":
 			input, err := dhcontext.ReadHookStdin()
 			if err != nil {
 				return err
@@ -104,9 +104,9 @@ func run() error {
 		}
 	case "posttool":
 		fs := flag.NewFlagSet("posttool", flag.ExitOnError)
-		format := fs.String("format", "claude-hook", "output format: claude-hook")
+		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, or agent-hook")
 		_ = fs.Parse(os.Args[2:])
-		if *format != "claude-hook" {
+		if !isAgentHookFormat(*format) {
 			return fmt.Errorf("unsupported posttool --format: %s", *format)
 		}
 		input, err := posttool.ReadHookStdin()
@@ -127,6 +127,8 @@ func run() error {
 			return fmt.Errorf("inject-template does not accept arguments")
 		}
 		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current Claude session.")
+	case "stage":
+		return runStage(os.Args[2:])
 	case "show":
 		fs := flag.NewFlagSet("show", flag.ExitOnError)
 		jsonOut := fs.Bool("json", false, "print json")
@@ -153,17 +155,44 @@ func run() error {
 	return nil
 }
 
+func isAgentHookFormat(format string) bool {
+	switch format {
+	case "claude-hook", "codex-hook", "agent-hook":
+		return true
+	default:
+		return false
+	}
+}
+
 func printUsage() {
 	fmt.Println(usageText())
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|inject-template|posttool|show>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show>"
+}
+
+func runStage(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: data-harness-cli stage <template>")
+	}
+	switch args[0] {
+	case "template":
+		fs := flag.NewFlagSet("stage template", flag.ExitOnError)
+		_ = fs.Parse(args[1:])
+		if fs.NArg() != 0 {
+			return fmt.Errorf("stage template does not accept arguments")
+		}
+		fmt.Println("QDM_STAGE_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current session.")
+	default:
+		return fmt.Errorf("unknown stage command: %s", args[0])
+	}
+	return nil
 }
 
 func runWikis(root string, args []string) error {
 	if len(args) < 1 {
-		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|aliases|metric-duplicates|check-all|build-index|sync-index-md>")}
+		return exitCodeError{Code: 2, Err: fmt.Errorf("usage: data-harness-cli wikis <check-index-md|check-titles|check-frontmatter|check-aliases|check-covers|check-links|check-context|context-stats|recall-debug|templates|aliases|metric-duplicates|check-all|build-index|sync-index-md>")}
 	}
 	switch args[0] {
 	case "check-index-md", "check-titles", "check-frontmatter", "check-aliases", "check-covers", "check-links":
@@ -189,6 +218,11 @@ func runWikis(root string, args []string) error {
 	case "recall-debug":
 		if err := runWikiRecallDebug(root, args[1:]); err != nil {
 			return exitCodeError{Code: 2, Err: err}
+		}
+	case "templates":
+		code, err := runWikiTemplates(root, args[1:])
+		if err != nil {
+			return exitCodeError{Code: code, Err: err}
 		}
 	case "aliases":
 		code, err := runWikiAliases(root, args[1:])
@@ -233,6 +267,84 @@ func runWikis(root string, args []string) error {
 	default:
 		return exitCodeError{Code: 2, Err: fmt.Errorf("unknown wikis command: %s", args[0])}
 	}
+	return nil
+}
+
+func runWikiTemplates(root string, args []string) (int, error) {
+	if len(args) < 1 {
+		return 2, fmt.Errorf("usage: data-harness-cli wikis templates <doctor|select-debug>")
+	}
+	switch args[0] {
+	case "doctor":
+		result, err := runWikiTemplatesDoctor(root, args[1:])
+		if err != nil {
+			return 2, err
+		}
+		if result.Status == "FAIL" {
+			return 1, fmt.Errorf("templates doctor failed with %d error(s)", len(result.Errors))
+		}
+		return 0, nil
+	case "select-debug":
+		return 0, runWikiTemplatesSelectDebug(root, args[1:])
+	default:
+		return 2, fmt.Errorf("unknown wikis templates command: %s", args[0])
+	}
+}
+
+func runWikiTemplatesDoctor(root string, args []string) (wikis.TemplateDoctorResult, error) {
+	fs := flag.NewFlagSet("wikis templates doctor", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	out := fs.String("out", "", "suggested selection yaml output")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return wikis.TemplateDoctorResult{}, err
+	}
+	if fs.NArg() != 0 {
+		return wikis.TemplateDoctorResult{}, fmt.Errorf("templates doctor does not accept positional arguments")
+	}
+	result, err := wikis.BuildTemplateDoctor(root, *out)
+	if err != nil {
+		return wikis.TemplateDoctorResult{}, err
+	}
+	if *jsonOut {
+		return result, printJSON(result)
+	}
+	printTemplatesDoctor(result)
+	return result, nil
+}
+
+func runWikiTemplatesSelectDebug(root string, args []string) error {
+	fs := flag.NewFlagSet("wikis templates select-debug", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	question := fs.String("question", "", "question")
+	jsonOut := fs.Bool("json", false, "print json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("templates select-debug does not accept positional arguments")
+	}
+	if *question == "" {
+		return fmt.Errorf("templates select-debug requires --question")
+	}
+	index, err := wikis.LoadRuntimeIndex(root)
+	if err != nil {
+		return err
+	}
+	response, plan, err := dhcontext.BuildWithRuntimeIndex(root, *question, index)
+	if err != nil {
+		return err
+	}
+	result := recallDebugResult{
+		Question:     *question,
+		Matches:      dhcontext.RecallMatches(index, *question, 20),
+		Plan:         recallDebugPlanFromWikiPlan(plan),
+		ContextFiles: response.ContextFiles,
+	}
+	if *jsonOut {
+		return printJSON(result)
+	}
+	printTemplatesSelectDebug(result)
 	return nil
 }
 
@@ -905,13 +1017,13 @@ type recallDebugResult struct {
 }
 
 type recallDebugPlan struct {
-	Mode              string                           `json:"mode"`
-	SelectedPlaybook  string                           `json:"selectedPlaybook,omitempty"`
-	SelectedPlaybooks []sessionstate.PlaybookCandidate `json:"selectedPlaybooks,omitempty"`
-	SelectedTemplate  string                           `json:"selectedTemplate,omitempty"`
-	CoveredSpecs      []string                         `json:"coveredSpecs,omitempty"`
-	Reason            string                           `json:"reason,omitempty"`
-	Candidates        any                              `json:"candidates,omitempty"`
+	Mode              string                                `json:"mode"`
+	SelectedPlaybook  string                                `json:"selectedPlaybook,omitempty"`
+	SelectedPlaybooks []sessionstate.PlaybookCandidate      `json:"selectedPlaybooks,omitempty"`
+	SelectedTemplate  string                                `json:"selectedTemplate,omitempty"`
+	Reason            string                                `json:"reason,omitempty"`
+	Candidates        any                                   `json:"candidates,omitempty"`
+	TemplateSelection dhcontext.TemplateSelectionDiagnostic `json:"templateSelection,omitempty"`
 }
 
 func runWikiRecallDebug(root string, args []string) error {
@@ -967,9 +1079,9 @@ func recallDebugPlanFromWikiPlan(plan dhcontext.WikiPlan) recallDebugPlan {
 		SelectedPlaybook:  plan.SelectedPlaybook,
 		SelectedPlaybooks: plan.SelectedPlaybooks,
 		SelectedTemplate:  plan.SelectedTemplate,
-		CoveredSpecs:      plan.CoveredSpecs,
 		Reason:            plan.Reason,
 		Candidates:        candidates,
+		TemplateSelection: plan.TemplateSelection,
 	}
 }
 
@@ -1007,8 +1119,56 @@ func printRecallDebug(result recallDebugResult) {
 	if result.Plan.Reason != "" {
 		fmt.Printf("reason=%s\n", result.Plan.Reason)
 	}
-	if len(result.Plan.CoveredSpecs) > 0 {
-		fmt.Printf("coveredSpecs=%s\n", strings.Join(result.Plan.CoveredSpecs, ", "))
+	if result.Plan.TemplateSelection.Status != "" {
+		fmt.Printf("templateSelection=%s reason=%s\n", result.Plan.TemplateSelection.Status, result.Plan.TemplateSelection.Reason)
+		for _, candidate := range result.Plan.TemplateSelection.Candidates {
+			fmt.Printf("templateCandidate score=%d priority=%d template=%s playbook=%s covers=%s intents=%s\n", candidate.Score, candidate.Priority, candidate.Template, candidate.Playbook, strings.Join(candidate.MatchedCovers, ","), strings.Join(candidate.MatchedIntents, ","))
+		}
+	}
+	fmt.Println("contextFiles:")
+	for _, ref := range result.ContextFiles {
+		fmt.Printf("%s\t%s\n", ref.Path, ref.Reason)
+	}
+}
+
+func printTemplatesDoctor(result wikis.TemplateDoctorResult) {
+	fmt.Printf("templates doctor: %s\n", result.Status)
+	fmt.Printf("selection: %s\n", result.SelectionPath)
+	fmt.Printf("rules: %d\n", len(result.Rules))
+	for _, err := range result.Errors {
+		fmt.Printf("FAIL\t%s\n", err)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Printf("WARN\t%s\n", warning)
+	}
+	if len(result.Suggestions) > 0 {
+		fmt.Printf("suggestions: %d\n", len(result.Suggestions))
+		for _, rule := range result.Suggestions {
+			fmt.Printf("suggest\t%s\t%s\t%s\n", rule.ID, rule.Playbook, rule.Template)
+		}
+	}
+	if result.SuggestionWritten {
+		fmt.Printf("wrote %s\n", result.SuggestionPath)
+	}
+}
+
+func printTemplatesSelectDebug(result recallDebugResult) {
+	fmt.Printf("question: %s\n", result.Question)
+	fmt.Printf("mode: %s\n", result.Plan.Mode)
+	if result.Plan.SelectedPlaybook != "" {
+		fmt.Printf("selectedPlaybook: %s\n", result.Plan.SelectedPlaybook)
+	}
+	if result.Plan.SelectedTemplate != "" {
+		fmt.Printf("selectedTemplate: %s\n", result.Plan.SelectedTemplate)
+	}
+	selection := result.Plan.TemplateSelection
+	if selection.Status == "" {
+		fmt.Println("templateSelection: none")
+	} else {
+		fmt.Printf("templateSelection: %s reason=%s\n", selection.Status, selection.Reason)
+	}
+	for _, candidate := range selection.Candidates {
+		fmt.Printf("candidate score=%d priority=%d template=%s playbook=%s covers=%s intents=%s\n", candidate.Score, candidate.Priority, candidate.Template, candidate.Playbook, strings.Join(candidate.MatchedCovers, ","), strings.Join(candidate.MatchedIntents, ","))
 	}
 	fmt.Println("contextFiles:")
 	for _, ref := range result.ContextFiles {

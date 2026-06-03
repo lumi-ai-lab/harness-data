@@ -39,7 +39,7 @@ func TestInjectTemplateUsesSelectedTemplateAndStripsFrontmatter(t *testing.T) {
 	}
 }
 
-func TestRunClaudeHookRequiresTemplateAfterDataCommand(t *testing.T) {
+func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	root := testInjectRoot(t)
 	sessionID := "needs-template"
 	writeInjectState(t, root, sessionID, sessionstate.File{
@@ -53,7 +53,7 @@ func TestRunClaudeHookRequiresTemplateAfterDataCommand(t *testing.T) {
 		"session_id": sessionID,
 		"tool_name":  "Bash",
 		"tool_input": map[string]any{
-			"command": `qdm-cmr-cli report business indicators --indicator saleAmt --date 2026-05-28`,
+			"command": `bin/data-harness-cli stage template`,
 		},
 	}
 	body, err := json.Marshal(payload)
@@ -64,8 +64,8 @@ func TestRunClaudeHookRequiresTemplateAfterDataCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "QDM_TEMPLATE_REQUIRED") {
-		t.Fatalf("expected template-required hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "销售额模板") {
+		t.Fatalf("expected template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestInjectTemplateSelectedTemplateMustExist(t *testing.T) {
 	sessionID := "missing-template"
 	writeInjectState(t, root, sessionID, sessionstate.File{
 		SessionID:        sessionID,
-		Mode:             sessionstate.ModeCombo,
+		Mode:             sessionstate.ModeSingle,
 		SelectedPlaybook: "playbooks/idx/business/default-overview.md",
 		SelectedTemplate: "templates/idx/business/missing.md",
 		Reports:          map[string]*sessionstate.Report{},

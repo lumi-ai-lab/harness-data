@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"harness-data/cli/internal/harness"
@@ -42,6 +43,13 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 	if err != nil {
 		return BuildIndexResult{}, err
 	}
+	templatePolicy, _, err := LoadTemplateSelectionPolicy(root)
+	if err != nil {
+		return BuildIndexResult{}, err
+	}
+	if errs := ValidateTemplateSelectionPolicy(root, templatePolicy); len(errs) > 0 {
+		return BuildIndexResult{}, fmt.Errorf("template selection policy invalid: %s", strings.Join(errs, "; "))
+	}
 	cfg, err := harness.LoadPathsConfig(root)
 	if err != nil {
 		return BuildIndexResult{}, err
@@ -65,6 +73,7 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 		idx.Meta.Paths["routing"] = cfg.Routing
 	}
 	runtime := buildRuntimeIndex(idx)
+	runtime.TemplateSelection = append([]TemplateSelectionRule{}, templatePolicy.Templates...)
 	if err := writeIndexAtomic(root, idx); err != nil {
 		return BuildIndexResult{}, err
 	}

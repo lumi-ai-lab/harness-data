@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "owner": "lumi-ai-lab",
+  "tools": [
+    {
+      "name": "data-harness-cli",
+      "binary": "data-harness-cli",
+      "repo": "lumi-ai-lab/harness-data",
+      "version": "v0.0.1",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.1/data-harness-cli-v0.0.1-darwin-arm64.tar.gz",
+          "sha256": ""
+        },
+        "darwin-amd64": {
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.1/data-harness-cli-v0.0.1-darwin-amd64.tar.gz",
+          "sha256": ""
+        },
+        "linux-arm64": {
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.1/data-harness-cli-v0.0.1-linux-arm64.tar.gz",
+          "sha256": ""
+        },
+        "linux-amd64": {
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.1/data-harness-cli-v0.0.1-linux-amd64.tar.gz",
+          "sha256": ""
+        }
+      }
+    },
+    {
+      "name": "qdm-cmr-cli",
+      "binary": "qdm-cmr-cli",
+      "repo": "pengmide/qdm-cmr-cli",
+      "private": true,
+      "version": "v0.0.1",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/qdm-cmr-cli-v0.0.1-darwin-arm64.tar.gz",
+          "sha256": ""
+        },
+        "darwin-amd64": {
+          "url": "https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/qdm-cmr-cli-v0.0.1-darwin-amd64.tar.gz",
+          "sha256": ""
+        },
+        "linux-arm64": {
+          "url": "https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/qdm-cmr-cli-v0.0.1-linux-arm64.tar.gz",
+          "sha256": ""
+        },
+        "linux-amd64": {
+          "url": "https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/qdm-cmr-cli-v0.0.1-linux-amd64.tar.gz",
+          "sha256": ""
+        }
+      }
+    },
+    {
+      "name": "qdm-indicators-cli",
+      "binary": "qdm-indicators-cli",
+      "repo": "pengmide/qdm-indicators-cli",
+      "private": true,
+      "version": "v0.0.1",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.1/qdm-indicators-cli-v0.0.1-darwin-arm64.tar.gz",
+          "sha256": ""
+        },
+        "darwin-amd64": {
+          "url": "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.1/qdm-indicators-cli-v0.0.1-darwin-amd64.tar.gz",
+          "sha256": ""
+        },
+        "linux-arm64": {
+          "url": "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.1/qdm-indicators-cli-v0.0.1-linux-arm64.tar.gz",
+          "sha256": ""
+        },
+        "linux-amd64": {
+          "url": "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.1/qdm-indicators-cli-v0.0.1-linux-amd64.tar.gz",
+          "sha256": ""
+        }
+      }
+    },
+    {
+      "name": "cas-cli",
+      "binary": "cas-cli",
+      "repo": "pengmide/qdm-cas-cli",
+      "private": true,
+      "version": "v0.0.1",
+      "platforms": {
+        "darwin-arm64": {
+          "url": "https://github.com/pengmide/qdm-cas-cli/releases/download/v0.0.1/cas-cli-v0.0.1-darwin-arm64.tar.gz",
+          "sha256": ""
+        },
+        "darwin-amd64": {
+          "url": "https://github.com/pengmide/qdm-cas-cli/releases/download/v0.0.1/cas-cli-v0.0.1-darwin-amd64.tar.gz",
+          "sha256": ""
+        },
+        "linux-arm64": {
+          "url": "https://github.com/pengmide/qdm-cas-cli/releases/download/v0.0.1/cas-cli-v0.0.1-linux-arm64.tar.gz",
+          "sha256": ""
+        },
+        "linux-amd64": {
+          "url": "https://github.com/pengmide/qdm-cas-cli/releases/download/v0.0.1/cas-cli-v0.0.1-linux-amd64.tar.gz",
+          "sha256": ""
+        }
+      }
+    }
+  ]
+}

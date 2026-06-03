@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"harness-data/cli/internal/harness"
-	idx "harness-data/cli/internal/index"
 	"harness-data/cli/internal/retrieval"
 	"harness-data/cli/internal/sessionstate"
 	"harness-data/cli/internal/wikis"
@@ -31,9 +30,27 @@ type WikiPlan struct {
 	SelectedPlaybook  string
 	SelectedTemplate  string
 	SelectedPlaybooks []sessionstate.PlaybookCandidate
-	CoveredSpecs      []string
 	Reason            string
 	Candidates        []sessionstate.PlaybookCandidate
+	TemplateSelection TemplateSelectionDiagnostic
+}
+
+type TemplateSelectionDiagnostic struct {
+	Status     string                       `json:"status,omitempty"`
+	Reason     string                       `json:"reason,omitempty"`
+	Candidates []TemplateSelectionCandidate `json:"candidates,omitempty"`
+}
+
+type TemplateSelectionCandidate struct {
+	Template       string   `json:"template"`
+	Playbook       string   `json:"playbook"`
+	Score          int      `json:"score"`
+	Priority       int      `json:"priority,omitempty"`
+	MatchedCovers  []string `json:"matchedCovers,omitempty"`
+	MatchedIntents []string `json:"matchedIntents,omitempty"`
+	Domain         string   `json:"domain,omitempty"`
+	Type           string   `json:"type,omitempty"`
+	ID             string   `json:"id,omitempty"`
 }
 
 func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, error) {
@@ -45,12 +62,32 @@ func BuildWithPlan(root, question string) (harness.ContextResponse, WikiPlan, er
 }
 
 func BuildWithRuntimeIndex(root, question string, index wikis.RuntimeIndex) (harness.ContextResponse, WikiPlan, error) {
-	resolver, err := harness.NewPathResolver(root)
+	resolver, err := pathResolverForRuntimeIndex(root, index)
 	if err != nil {
 		return harness.ContextResponse{}, WikiPlan{}, err
 	}
 	response, plan := buildFromWikisRuntimeIndex(resolver, index, question)
 	return response, plan, nil
+}
+
+func pathResolverForRuntimeIndex(root string, index wikis.RuntimeIndex) (harness.PathResolver, error) {
+	if cfg, ok := pathsConfigFromIndex(index.Meta.Paths); ok {
+		return harness.NewPathResolverWithPaths(root, cfg)
+	}
+	return harness.NewPathResolver(root)
+}
+
+func pathsConfigFromIndex(paths map[string]string) (harness.PathsConfig, bool) {
+	if paths == nil {
+		return harness.PathsConfig{}, false
+	}
+	cfg := harness.PathsConfig{
+		Spec:      strings.TrimSpace(paths["spec"]),
+		Routing:   strings.TrimSpace(paths["routing"]),
+		Playbooks: strings.TrimSpace(paths["playbooks"]),
+		Templates: strings.TrimSpace(paths["templates"]),
+	}
+	return cfg, cfg.Spec != "" && cfg.Playbooks != "" && cfg.Templates != ""
 }
 
 func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.RuntimeIndex, question string) (harness.ContextResponse, WikiPlan) {
@@ -73,28 +110,17 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	}
 
 	hits := recallHits(index, question)
-	ordinarySpecs, conceptSpecs, directCombos := classifyHits(hits)
+	ordinarySpecs, conceptSpecs := classifyHits(hits)
 	ordinarySpecs = collapseEquivalentMetricSpecs(ordinarySpecs)
 	sortRuntimeDocsByPath(ordinarySpecs)
 	sortRuntimeDocsByPath(conceptSpecs)
-	sortRuntimeDocsByPath(directCombos)
 
 	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
+	addDefaultFreeFiles := func() {
+		add("spec/index.md", "default free spec index")
+		add("playbooks/index.md", "default free playbook index")
+	}
 	switch {
-	case len(directCombos) == 1:
-		combo := directCombos[0]
-		plan = WikiPlan{
-			Mode:             sessionstate.ModeCombo,
-			SelectedPlaybook: combo.Path,
-			SelectedTemplate: existingPlaybookTemplatePath(resolver, byPath, combo),
-			CoveredSpecs:     append([]string{}, combo.Covers...),
-		}
-		addComboFiles(add, byPath, combo)
-	case len(directCombos) > 1:
-		plan.Reason = "multiple_combo_alias_hits"
-		for _, combo := range directCombos {
-			addComboFiles(add, byPath, combo)
-		}
 	case len(ordinarySpecs) == 1:
 		spec := ordinarySpecs[0]
 		if wikis.IsReferenceSpecPath(spec.Path) {
@@ -121,35 +147,45 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 			}
 			break
 		}
-		candidates := coveringCombos(allRuntimeDocs(index.DocsByPath), ordinarySpecs)
-		if len(candidates) == 1 {
-			combo := candidates[0]
-			plan = WikiPlan{
-				Mode:             sessionstate.ModeCombo,
-				SelectedPlaybook: combo.Path,
-				SelectedTemplate: existingPlaybookTemplatePath(resolver, byPath, combo),
-				CoveredSpecs:     append([]string{}, combo.Covers...),
-			}
-			addComboFiles(add, byPath, combo)
-		} else if len(candidates) > 1 {
-			plan.Reason = "multiple_combo_candidates_tied"
-			for _, combo := range candidates {
-				addComboFiles(add, byPath, combo)
-				plan.Candidates = append(plan.Candidates, candidateFromDoc(combo, "combo candidate"))
-			}
-		} else {
-			plan.Reason = "no_combo_covers_all_specs"
-			addFreeSpecFiles(add, byPath, ordinarySpecs)
-		}
+		plan.Reason = "multi_metric_non_direct"
+		addFreeSpecFiles(add, byPath, ordinarySpecs)
 	case len(conceptSpecs) > 0:
-		plan.Reason = "concept_only"
-		for _, spec := range conceptSpecs {
+		if len(conceptSpecs) == 1 && isReportSpecPath(conceptSpecs[0].Path) {
+			spec := conceptSpecs[0]
+			if !isReportIntentQuestion(question) {
+				addDefaultFreeFiles()
+				break
+			}
+			playbookPath := wikis.SamePath(spec.Path, "playbooks")
+			if runtimeDocExists(resolver, byPath, playbookPath) {
+				playbook := byPath[playbookPath]
+				selection := selectTemplate(index.TemplateSelection, question, []wikis.RuntimeDocument{spec}, playbookPath)
+				selectedTemplate := selectedTemplateFromDiagnostic(selection)
+				if selectedTemplate == "" && selection.Status == "none" && selection.Reason == "no_selection_policy" {
+					selectedTemplate = existingPlaybookTemplatePath(resolver, byPath, playbook)
+				}
+				plan = WikiPlan{
+					Mode:              sessionstate.ModeReport,
+					SelectedPlaybook:  playbookPath,
+					SelectedTemplate:  selectedTemplate,
+					TemplateSelection: selection,
+				}
+				add(spec.Path, "matched report spec")
+				add(playbookPath, "selected report playbook")
+				break
+			}
+			plan.Reason = "report_spec_missing_playbook"
 			addNearestIndex(add, byPath, spec.Path, "spec index")
 			add(spec.Path, "matched concept spec")
+		} else {
+			plan.Reason = "concept_only"
+			for _, spec := range conceptSpecs {
+				addNearestIndex(add, byPath, spec.Path, "spec index")
+				add(spec.Path, "matched concept spec")
+			}
 		}
 	default:
-		add("spec/index.md", "default free spec index")
-		add("playbooks/index.md", "default free playbook index")
+		addDefaultFreeFiles()
 	}
 	plan.Candidates = append(plan.Candidates, candidatesFromPlan(plan, byPath)...)
 	response := harness.ContextResponse{
@@ -188,19 +224,17 @@ func RecallMatches(index wikis.RuntimeIndex, question string, top int) []retriev
 	return retrieval.Search(items, question, retrieval.Options{TopN: top})
 }
 
-func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wikis.RuntimeDocument, []wikis.RuntimeDocument) {
-	var ordinarySpecs, conceptSpecs, directCombos []wikis.RuntimeDocument
+func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wikis.RuntimeDocument) {
+	var ordinarySpecs, conceptSpecs []wikis.RuntimeDocument
 	for _, doc := range hits {
 		switch {
 		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeMetric:
 			ordinarySpecs = append(ordinarySpecs, doc)
 		case doc.Kind == wikis.KindSpec && doc.SpecType == wikis.SpecTypeConcept:
 			conceptSpecs = append(conceptSpecs, doc)
-		case doc.Kind == wikis.KindPlaybook && playbookIsCombo(doc):
-			directCombos = append(directCombos, doc)
 		}
 	}
-	return ordinarySpecs, conceptSpecs, directCombos
+	return ordinarySpecs, conceptSpecs
 }
 
 func sortRuntimeDocsByPath(docs []wikis.RuntimeDocument) {
@@ -268,71 +302,21 @@ func runtimeDocExists(resolver harness.PathResolver, byPath map[string]wikis.Run
 	return err == nil && !info.IsDir()
 }
 
-func addComboFiles(add func(string, string), byPath map[string]wikis.RuntimeDocument, combo wikis.RuntimeDocument) {
-	addNearestIndex(add, byPath, combo.Path, "combo playbook index")
-	add(combo.Path, "selected combo playbook")
-	covers := append([]string{}, combo.Covers...)
-	sort.Strings(covers)
-	for _, cover := range covers {
-		if isSingleMetricSpecPath(cover) {
-			continue
-		}
-		addNearestIndex(add, byPath, cover, "covered spec index")
-		add(cover, "covered spec")
-	}
+func isReportSpecPath(logical string) bool {
+	return strings.HasPrefix(logical, "spec/") && strings.HasPrefix(path.Base(logical), "r-")
 }
 
-func isSingleMetricSpecPath(logical string) bool {
-	return strings.HasPrefix(logical, "spec/") && strings.HasPrefix(path.Base(logical), "s-")
-}
-
-func coveringCombos(docs []wikis.RuntimeDocument, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
-	required := map[string]bool{}
-	domains := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		required[spec.Path] = true
-		domains = append(domains, spec.Domain)
-	}
-	commonDomain := commonDomainAncestor(domains)
-	var candidates []wikis.RuntimeDocument
-	for _, doc := range docs {
-		if doc.Kind != wikis.KindPlaybook || !playbookIsCombo(doc) || playbookTemplatePath(doc) == "" {
-			continue
-		}
-		covered := map[string]bool{}
-		for _, cover := range doc.Covers {
-			covered[cover] = true
-		}
-		ok := true
-		for specPath := range required {
-			if !covered[specPath] {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			candidates = append(candidates, doc)
-		}
-	}
-	if len(candidates) <= 1 {
-		return candidates
-	}
-	minCovers := len(candidates[0].Covers)
-	for _, candidate := range candidates[1:] {
-		if len(candidate.Covers) < minCovers {
-			minCovers = len(candidate.Covers)
-		}
-	}
-	candidates = filterCombos(candidates, func(doc wikis.RuntimeDocument) bool { return len(doc.Covers) == minCovers })
-	if len(candidates) <= 1 || commonDomain == "" {
-		return candidates
-	}
-	closestDomainMatches := closestCombosByDomain(candidates, commonDomain)
-	if len(closestDomainMatches) > 0 {
-		candidates = closestDomainMatches
-	}
-	sortRuntimeDocsByPath(candidates)
-	return candidates
+func isReportIntentQuestion(question string) bool {
+	return hasAny(question, []string{
+		"报告",
+		"诊断",
+		"经营分析",
+		"综合分析",
+		"整体分析",
+		"经营大盘",
+		"业务大盘",
+		"生成经营",
+	})
 }
 
 func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) ([]sessionstate.PlaybookCandidate, bool) {
@@ -397,85 +381,6 @@ func isLegacyMultiSingleValueQuestion(question string) bool {
 	return hasAny(question, []string{"多少", "是多少", "值", "数值", "看一下", "查一下", "看看", "查询", "分别", "还有", "和", "与", "及", "以及", "都"})
 }
 
-func commonDomainAncestor(domains []string) string {
-	if len(domains) == 0 {
-		return ""
-	}
-	common := strings.Split(strings.Trim(domains[0], "/"), "/")
-	if len(common) == 1 && common[0] == "" {
-		return ""
-	}
-	for _, domain := range domains[1:] {
-		parts := strings.Split(strings.Trim(domain, "/"), "/")
-		if len(parts) == 1 && parts[0] == "" {
-			return ""
-		}
-		n := 0
-		for n < len(common) && n < len(parts) && common[n] == parts[n] {
-			n++
-		}
-		common = common[:n]
-		if len(common) == 0 {
-			return ""
-		}
-	}
-	return strings.Join(common, "/")
-}
-
-func filterCombos(docs []wikis.RuntimeDocument, keep func(wikis.RuntimeDocument) bool) []wikis.RuntimeDocument {
-	var out []wikis.RuntimeDocument
-	for _, doc := range docs {
-		if keep(doc) {
-			out = append(out, doc)
-		}
-	}
-	return out
-}
-
-func closestCombosByDomain(docs []wikis.RuntimeDocument, commonDomain string) []wikis.RuntimeDocument {
-	best := -1
-	var out []wikis.RuntimeDocument
-	for _, doc := range docs {
-		distance, ok := domainDistance(doc.Domain, commonDomain)
-		if !ok {
-			continue
-		}
-		if best == -1 || distance < best {
-			best = distance
-			out = out[:0]
-		}
-		if distance == best {
-			out = append(out, doc)
-		}
-	}
-	return out
-}
-
-func domainDistance(candidate, target string) (int, bool) {
-	candidate = strings.Trim(candidate, "/")
-	target = strings.Trim(target, "/")
-	if candidate == "" || target == "" {
-		return 0, candidate == target
-	}
-	if candidate == target {
-		return 0, true
-	}
-	candidateParts := strings.Split(candidate, "/")
-	targetParts := strings.Split(target, "/")
-	common := 0
-	for common < len(candidateParts) && common < len(targetParts) && candidateParts[common] == targetParts[common] {
-		common++
-	}
-	if common == 0 {
-		return 0, false
-	}
-	isAncestorOrDescendant := common == len(candidateParts) || common == len(targetParts)
-	if !isAncestorOrDescendant {
-		return 0, false
-	}
-	return (len(candidateParts) - common) + (len(targetParts) - common), true
-}
-
 func candidatesFromPlan(plan WikiPlan, byPath map[string]wikis.RuntimeDocument) []sessionstate.PlaybookCandidate {
 	if plan.Mode == sessionstate.ModeMulti {
 		return append([]sessionstate.PlaybookCandidate{}, plan.SelectedPlaybooks...)
@@ -509,10 +414,6 @@ func existingPlaybookTemplatePath(resolver harness.PathResolver, byPath map[stri
 	return templatePath
 }
 
-func playbookIsCombo(doc wikis.RuntimeDocument) bool {
-	return doc.Playbook != nil && doc.Playbook.IsCombo
-}
-
 func playbookTemplatePath(doc wikis.RuntimeDocument) string {
 	if doc.Playbook == nil {
 		return ""
@@ -520,420 +421,139 @@ func playbookTemplatePath(doc wikis.RuntimeDocument) string {
 	return doc.Playbook.TemplatePath
 }
 
-func allRuntimeDocs(byPath map[string]wikis.RuntimeDocument) []wikis.RuntimeDocument {
-	docs := make([]wikis.RuntimeDocument, 0, len(byPath))
-	for _, doc := range byPath {
-		docs = append(docs, doc)
+func selectedTemplateFromDiagnostic(selection TemplateSelectionDiagnostic) string {
+	if selection.Status != "selected" || len(selection.Candidates) == 0 {
+		return ""
 	}
-	sortRuntimeDocsByPath(docs)
-	return docs
+	return selection.Candidates[0].Template
+}
+
+func selectTemplate(rules []wikis.TemplateSelectionRule, question string, specs []wikis.RuntimeDocument, playbookPath string) TemplateSelectionDiagnostic {
+	if len(rules) == 0 {
+		return TemplateSelectionDiagnostic{Status: "none", Reason: "no_selection_policy"}
+	}
+	specPaths := map[string]bool{}
+	for _, spec := range specs {
+		specPaths[spec.Path] = true
+	}
+	questionIntents := inferTemplateQuestionIntents(question)
+	var candidates []TemplateSelectionCandidate
+	for _, rule := range rules {
+		if rule.Playbook != playbookPath {
+			continue
+		}
+		candidate := scoreTemplateSelectionRule(rule, specPaths, questionIntents)
+		if candidate.Score <= 0 {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
+		}
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority > candidates[j].Priority
+		}
+		return candidates[i].Template < candidates[j].Template
+	})
+	if len(candidates) == 0 {
+		return TemplateSelectionDiagnostic{Status: "none", Reason: "no_candidate"}
+	}
+	if len(candidates) > 1 && candidates[0].Score == candidates[1].Score && candidates[0].Priority == candidates[1].Priority {
+		return TemplateSelectionDiagnostic{Status: "ambiguous", Reason: "top_candidates_tied", Candidates: candidates}
+	}
+	statusReason := "best_score"
+	if coversAll(candidates[0].MatchedCovers, specPaths) {
+		statusReason = "covers_all_specs"
+	}
+	return TemplateSelectionDiagnostic{Status: "selected", Reason: statusReason, Candidates: candidates}
+}
+
+func scoreTemplateSelectionRule(rule wikis.TemplateSelectionRule, specPaths map[string]bool, questionIntents map[string]bool) TemplateSelectionCandidate {
+	candidate := TemplateSelectionCandidate{
+		Template: rule.Template,
+		Playbook: rule.Playbook,
+		Priority: rule.Priority,
+		Domain:   rule.Domain,
+		Type:     rule.Type,
+		ID:       rule.ID,
+	}
+	for _, cover := range rule.Covers {
+		if specPaths[cover] {
+			candidate.MatchedCovers = append(candidate.MatchedCovers, cover)
+		}
+	}
+	for _, intent := range rule.Intents {
+		if questionIntents[intent] {
+			candidate.MatchedIntents = append(candidate.MatchedIntents, intent)
+		}
+	}
+	if len(candidate.MatchedCovers) == 0 && len(candidate.MatchedIntents) == 0 {
+		return candidate
+	}
+	candidate.Score = rule.Priority
+	candidate.Score += len(candidate.MatchedCovers) * 100
+	candidate.Score += len(candidate.MatchedIntents) * 20
+	if coversAll(candidate.MatchedCovers, specPaths) {
+		candidate.Score += 50
+	}
+	if rule.Type == "report" || rule.Type == "composite" {
+		candidate.Score += 10
+	}
+	sort.Strings(candidate.MatchedCovers)
+	sort.Strings(candidate.MatchedIntents)
+	return candidate
+}
+
+func coversAll(covers []string, specPaths map[string]bool) bool {
+	if len(specPaths) == 0 {
+		return false
+	}
+	covered := map[string]bool{}
+	for _, cover := range covers {
+		covered[cover] = true
+	}
+	for spec := range specPaths {
+		if !covered[spec] {
+			return false
+		}
+	}
+	return true
+}
+
+func inferTemplateQuestionIntents(question string) map[string]bool {
+	intents := map[string]bool{}
+	if isReportIntentQuestion(question) {
+		intents["report"] = true
+	}
+	if hasAny(question, []string{"诊断", "原因", "归因", "分析", "为什么"}) {
+		intents["diagnosis"] = true
+	}
+	if hasAny(question, []string{"趋势", "走势", "变化"}) {
+		intents["trend"] = true
+	}
+	if hasAny(question, []string{"多少", "是多少", "当前", "现在", "查一下", "看一下"}) {
+		intents["current_value"] = true
+	}
+	return intents
 }
 
 func instructionForPlan(plan WikiPlan) string {
 	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate, invent, or write report files unless the user asks. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
-		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not fallback to overview or other report commands unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming area/category/trend rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
+		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
 	case sessionstate.ModeMulti:
-		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a combo report or attribution analysis."
-	case sessionstate.ModeCombo:
-		templateInstruction := "After data collection, answer directly from CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
-		if plan.SelectedTemplate != "" {
-			templateInstruction = "After data collection, run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/ before inject-template."
+		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a report-style analysis."
+	case sessionstate.ModeReport:
+		templateInstruction := "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template. Do not read, open, guess, or use templates/ before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body."
+		if plan.SelectedTemplate == "" {
+			templateInstruction = "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use templates/."
 		}
-		return common + " Harness mode: combo. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + " coveredSpecs=" + strings.Join(plan.CoveredSpecs, ",") + ". Use the combo playbook for multi-metric data collection and analysis; do not separately apply multiple single-metric playbooks/templates. " + templateInstruction
+		return common + " Harness mode: report. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". Read the matched report spec and selected report playbook in contextFiles. Use the report playbook for data collection and JSON handling, and use the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. " + templateInstruction
 	default:
 		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/. You may reference specs/playbooks, but must not apply any template."
-	}
-}
-
-func legacyBuild(root, question string) (harness.ContextResponse, error) {
-	resolver, err := harness.NewPathResolver(root)
-	if err != nil {
-		return harness.ContextResponse{}, err
-	}
-	indexes, err := idx.Build(root)
-	if err != nil {
-		return harness.ContextResponse{}, err
-	}
-	var refs []harness.FileRef
-	seen := map[string]bool{}
-	add := func(path, reason string) {
-		if path == "" {
-			return
-		}
-		physical := resolver.ResolveRel(path)
-		if seen[physical] {
-			return
-		}
-		seen[physical] = true
-		refs = append(refs, harness.FileRef{Path: physical, Reason: reason})
-	}
-
-	add("spec/common/index.md", "default: common spec index")
-	addIndexDefaults(indexes.Spec.Files, resolver.ResolveRel("spec/common/index.md"), "default: common", add)
-
-	allDocs := append(append([]harness.Document{}, indexes.Spec.Files...), indexes.Routing.Files...)
-	allDocs = append(allDocs, indexes.Playbook.Files...)
-
-	domains := recallDomains(question, allDocs)
-	for _, doc := range allDocs {
-		if doc.Domain != "common" && !domains[doc.Domain] {
-			continue
-		}
-		if kw := matchedKeyword(question, doc.Match.Keywords); kw != "" {
-			add(doc.Path, "keyword: "+kw)
-			if isIndexKind(doc.Kind) {
-				addDefaultFiles(doc, "default: "+domainOrKind(doc), add)
-			}
-		}
-		for _, child := range doc.Children {
-			if kw := matchedKeyword(question, child.Keywords); kw != "" {
-				add(child.Path, "child keyword: "+kw)
-				if isIndexKind(doc.Kind) {
-					add(doc.Path, "parent index for: "+child.Path)
-					addDefaultFiles(doc, "default: "+domainOrKind(doc), add)
-				}
-			}
-		}
-	}
-
-	if hasAny(question, []string{"今天", "今日", "昨天", "昨日", "最近", "本周", "这周", "上周", "本月", "这个月", "上月", "日", "周", "月", "年", "202"}) {
-		add("spec/common/time-policy.md", "time expression")
-	}
-	if hasAny(question, []string{"全国", "区域", "华东", "华南", "华北", "华中", "管理区域"}) {
-		add("spec/common/area.md", "area expression")
-	}
-
-	for _, domain := range sortedDomains(domains) {
-		addDomainRouting(resolver, indexes.Routing.Files, domain, question, add)
-		addDomainPlaybooks(indexes.Playbook.Files, domain, question, add)
-	}
-
-	refs = filterLessSpecificKeywordRefs(refs, indexes)
-
-	sort.SliceStable(refs, func(i, j int) bool {
-		return fileRank(resolver, refs[i].Path) < fileRank(resolver, refs[j].Path)
-	})
-
-	return harness.ContextResponse{
-		Question:     question,
-		ContextFiles: refs,
-		Instruction:  "Read all contextFiles before running data CLI. Do not read templates before inject-template succeeds. After data collection for the selected playbook is complete, run bin/data-harness-cli inject-template.",
-		Constraints:  constraints,
-	}, nil
-}
-
-func filterLessSpecificKeywordRefs(refs []harness.FileRef, indexes idx.BuildResult) []harness.FileRef {
-	docsByPath := map[string]harness.Document{}
-	for _, doc := range indexes.Spec.Files {
-		docsByPath[doc.Path] = doc
-	}
-	for _, doc := range indexes.Routing.Files {
-		docsByPath[doc.Path] = doc
-	}
-	for _, doc := range indexes.Playbook.Files {
-		docsByPath[doc.Path] = doc
-	}
-
-	type groupKey struct {
-		domain string
-		kind   string
-	}
-	maxByGroup := map[groupKey]int{}
-	var keywords []string
-	for _, ref := range refs {
-		doc, ok := docsByPath[ref.Path]
-		if !ok || isIndexKind(doc.Kind) {
-			continue
-		}
-		score := keywordReasonScore(ref.Reason)
-		if score == 0 {
-			continue
-		}
-		if kw := keywordFromReason(ref.Reason); kw != "" {
-			keywords = append(keywords, kw)
-		}
-		key := groupKey{domain: doc.Domain, kind: doc.Kind}
-		if score > maxByGroup[key] {
-			maxByGroup[key] = score
-		}
-	}
-
-	var out []harness.FileRef
-	for _, ref := range refs {
-		doc, ok := docsByPath[ref.Path]
-		if !ok || isIndexKind(doc.Kind) {
-			out = append(out, ref)
-			continue
-		}
-		if isDomainOverview(doc.Path) {
-			out = append(out, ref)
-			continue
-		}
-		score := keywordReasonScore(ref.Reason)
-		if score == 0 {
-			out = append(out, ref)
-			continue
-		}
-		if isCoveredKeyword(keywordFromReason(ref.Reason), keywords) {
-			continue
-		}
-		key := groupKey{domain: doc.Domain, kind: doc.Kind}
-		if maxByGroup[key] > score {
-			continue
-		}
-		out = append(out, ref)
-	}
-
-	activeDomains := map[string]bool{}
-	for _, ref := range out {
-		doc, ok := docsByPath[ref.Path]
-		if !ok || doc.Domain == "" || doc.Domain == "common" {
-			continue
-		}
-		if keywordReasonScore(ref.Reason) > 0 {
-			activeDomains[doc.Domain] = true
-		}
-	}
-	if activeDomains["business"] && activeDomains["store"] && storeOnlyHasGenericDoorKeyword(out, docsByPath) {
-		delete(activeDomains, "store")
-	}
-
-	var final []harness.FileRef
-	for _, ref := range out {
-		doc, ok := docsByPath[ref.Path]
-		if !ok || doc.Domain == "" || doc.Domain == "common" || activeDomains[doc.Domain] {
-			final = append(final, ref)
-		}
-	}
-	return final
-}
-
-func storeOnlyHasGenericDoorKeyword(refs []harness.FileRef, docsByPath map[string]harness.Document) bool {
-	hasStore := false
-	for _, ref := range refs {
-		doc, ok := docsByPath[ref.Path]
-		if !ok || doc.Domain != "store" {
-			continue
-		}
-		score := keywordReasonScore(ref.Reason)
-		if score == 0 {
-			continue
-		}
-		hasStore = true
-		kw := keywordFromReason(ref.Reason)
-		if kw != "门店" && kw != "门店管理" {
-			return false
-		}
-	}
-	return hasStore
-}
-
-func PlaybookCandidates(root string, response harness.ContextResponse) ([]sessionstate.PlaybookCandidate, error) {
-	indexes, err := idx.Build(root)
-	if err != nil {
-		return nil, err
-	}
-	playbooks := map[string]harness.Document{}
-	for _, doc := range indexes.Playbook.Files {
-		if doc.Kind == "playbook" && doc.Template != "" {
-			playbooks[doc.Path] = doc
-		}
-	}
-	type candidateWithDomain struct {
-		candidate sessionstate.PlaybookCandidate
-		domain    string
-		score     int
-	}
-	var scoped []candidateWithDomain
-	for _, ref := range response.ContextFiles {
-		doc, ok := playbooks[ref.Path]
-		if !ok {
-			continue
-		}
-		scoped = append(scoped, candidateWithDomain{
-			candidate: sessionstate.PlaybookCandidate{
-				Path:     doc.Path,
-				Template: doc.Template,
-				Domain:   doc.Domain,
-				Reason:   ref.Reason,
-			},
-			domain: doc.Domain,
-			score:  keywordReasonScore(ref.Reason),
-		})
-	}
-	maxByDomain := map[string]int{}
-	for _, item := range scoped {
-		if item.score > maxByDomain[item.domain] {
-			maxByDomain[item.domain] = item.score
-		}
-	}
-	var candidates []sessionstate.PlaybookCandidate
-	for _, item := range scoped {
-		maxScore := maxByDomain[item.domain]
-		if maxScore > 0 && item.score > 0 && item.score < maxScore {
-			continue
-		}
-		candidates = append(candidates, item.candidate)
-	}
-	return candidates, nil
-}
-
-func recallDomains(question string, docs []harness.Document) map[string]bool {
-	domains := map[string]bool{}
-	for _, doc := range docs {
-		if doc.Domain == "" || doc.Domain == "common" {
-			continue
-		}
-		if isIndexKind(doc.Kind) || doc.Kind == "routing" {
-			if matchedKeyword(question, doc.Match.Keywords) != "" {
-				domains[doc.Domain] = true
-				continue
-			}
-			for _, child := range doc.Children {
-				if kw := matchedKeyword(question, child.Keywords); kw != "" && !isGenericDomainKeyword(kw) {
-					domains[doc.Domain] = true
-					break
-				}
-			}
-		}
-	}
-	return domains
-}
-
-func isGenericDomainKeyword(keyword string) bool {
-	switch keyword {
-	case "区域", "品类", "趋势", "利润", "分类", "类目":
-		return true
-	default:
-		return false
-	}
-}
-
-func addIndexDefaults(docs []harness.Document, indexPath, reason string, add func(string, string)) {
-	for _, doc := range docs {
-		if doc.Path == indexPath {
-			addDefaultFiles(doc, reason, add)
-			return
-		}
-	}
-}
-
-func addDefaultFiles(doc harness.Document, reason string, add func(string, string)) {
-	for _, path := range doc.Context.DefaultFiles {
-		add(path, reason)
-	}
-}
-
-func addDomainRouting(resolver harness.PathResolver, docs []harness.Document, domain, question string, add func(string, string)) {
-	for _, doc := range docs {
-		if doc.Domain == domain && doc.Kind == "routing" {
-			if matchedKeyword(question, doc.Match.Keywords) != "" || isOverviewRouting(resolver, doc.Path, domain) {
-				add(doc.Path, "domain routing: "+domain)
-			}
-		}
-	}
-}
-
-func isOverviewRouting(resolver harness.PathResolver, path, domain string) bool {
-	return resolver.LogicalRel(path) == "routing/"+domain+"-overview.md"
-}
-
-func addDomainPlaybooks(docs []harness.Document, domain, question string, add func(string, string)) {
-	matchedChild := map[string]bool{}
-	for _, doc := range docs {
-		if doc.Domain != domain {
-			continue
-		}
-		if doc.Kind == "playbook_index" {
-			add(doc.Path, "default playbook index: "+domain)
-			for _, child := range doc.Children {
-				if kw := matchedKeyword(question, child.Keywords); kw != "" {
-					add(child.Path, "playbook keyword: "+kw)
-					matchedChild[child.Path] = true
-				}
-			}
-		}
-	}
-	hasSpecificChild := false
-	for path := range matchedChild {
-		if !strings.HasSuffix(path, "/default-overview.md") {
-			hasSpecificChild = true
-			break
-		}
-	}
-	for _, doc := range docs {
-		if doc.Domain != domain {
-			continue
-		}
-		if doc.Kind == "playbook" && (matchedKeyword(question, doc.Match.Keywords) != "" || strings.HasSuffix(doc.Path, "/default-overview.md")) {
-			if hasSpecificChild && strings.HasSuffix(doc.Path, "/default-overview.md") && !matchedChild[doc.Path] {
-				continue
-			}
-			add(doc.Path, "default playbook: "+domain)
-		}
-	}
-}
-
-func isIndexKind(kind string) bool {
-	return strings.HasSuffix(kind, "_index")
-}
-
-func domainOrKind(doc harness.Document) string {
-	if doc.Domain != "" {
-		return doc.Domain
-	}
-	return doc.Kind
-}
-
-func matchedDomains(resolver harness.PathResolver, refs []harness.FileRef) []string {
-	seen := map[string]bool{}
-	var domains []string
-	for _, ref := range refs {
-		parts := strings.Split(resolver.LogicalRel(ref.Path), "/")
-		if len(parts) < 3 {
-			continue
-		}
-		domain := parts[1]
-		if domain == "common" || seen[domain] {
-			continue
-		}
-		seen[domain] = true
-		domains = append(domains, domain)
-	}
-	sort.Strings(domains)
-	return domains
-}
-
-func sortedDomains(domains map[string]bool) []string {
-	var out []string
-	for domain := range domains {
-		out = append(out, domain)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func fileRank(resolver harness.PathResolver, path string) int {
-	path = resolver.LogicalRel(path)
-	switch {
-	case path == "spec/common/index.md":
-		return 0
-	case strings.HasPrefix(path, "spec/common/"):
-		return 10
-	case strings.HasSuffix(path, "/index.md") && strings.HasPrefix(path, "spec/"):
-		return 20
-	case strings.HasPrefix(path, "spec/"):
-		return 30
-	case strings.HasPrefix(path, "routing/"):
-		return 40
-	case strings.HasPrefix(path, "playbooks/") && strings.HasSuffix(path, "/index.md"):
-		return 50
-	case strings.HasPrefix(path, "playbooks/"):
-		return 60
-	default:
-		return 70
 	}
 }
 
@@ -944,49 +564,6 @@ func hasAny(s string, keywords []string) bool {
 		}
 	}
 	return false
-}
-
-func matchedKeyword(s string, keywords []string) string {
-	for _, kw := range keywords {
-		if isShadowedByTimeSegmentMetric(s, kw) {
-			continue
-		}
-		if kw != "" && strings.Contains(s, kw) {
-			return kw
-		}
-	}
-	return ""
-}
-
-func isShadowedByTimeSegmentMetric(s, keyword string) bool {
-	if keyword == "" || strings.HasPrefix(keyword, "19点前") {
-		return false
-	}
-	return strings.Contains(s, "19点前"+keyword)
-}
-
-func isDomainOverview(path string) bool {
-	return strings.HasSuffix(path, "-overview.md") || strings.HasSuffix(path, "/default-overview.md")
-}
-
-func keywordReasonScore(reason string) int {
-	keyword := keywordFromReason(reason)
-	if keyword == "" {
-		return 0
-	}
-	return len([]rune(keyword))
-}
-
-func keywordFromReason(reason string) string {
-	for _, marker := range []string{"playbook keyword: ", "keyword: "} {
-		if strings.Contains(reason, marker) {
-			parts := strings.SplitN(reason, marker, 2)
-			if len(parts) == 2 {
-				return parts[1]
-			}
-		}
-	}
-	return ""
 }
 
 func isCoveredKeyword(keyword string, keywords []string) bool {

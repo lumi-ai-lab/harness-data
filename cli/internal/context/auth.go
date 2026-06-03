@@ -50,7 +50,7 @@ func appsForPlan(plan WikiPlan) []string {
 		seen[app] = true
 		apps = append(apps, app)
 	}
-	paths := append([]string{plan.SelectedPlaybook}, plan.CoveredSpecs...)
+	paths := []string{plan.SelectedPlaybook}
 	for _, playbook := range plan.SelectedPlaybooks {
 		paths = append(paths, playbook.Path)
 	}

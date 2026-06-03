@@ -38,10 +38,6 @@ type reportConfig struct {
 }
 
 var reportConfigs = map[string]reportConfig{
-	"business-overview": {
-		Report:          "business",
-		RequiredModules: []string{"overview", "indicators", "tree", "area", "category", "trend"},
-	},
 	"store-overview": {
 		Report:          "store",
 		RequiredModules: []string{"overview"},
@@ -56,7 +52,7 @@ var reportConfigs = map[string]reportConfig{
 	},
 }
 
-var reportOrder = []string{"business-overview", "store-overview", "member-overview", "financial-overview"}
+var reportOrder = []string{"store-overview", "member-overview", "financial-overview"}
 
 func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	var payload Payload
@@ -74,22 +70,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 		sessionID = "unknown"
 	}
 	command := payload.ToolInput.Command
-	state, err := sessionstate.Load(root, sessionID)
-	if err != nil {
-		return false, Output{}, err
-	}
-
-	if recordCommandModules(state, command) {
-		if err := sessionstate.Save(root, sessionID, state); err != nil {
-			return false, Output{}, err
-		}
-		if shouldRequireTemplateInjection(state) {
-			return true, buildOutput(templateInjectionRequiredMessage(state)), nil
-		}
-		return false, Output{}, nil
-	}
-
-	if !isTemplateInjectionCommand(command) {
+	if !isTemplateStageCommand(command) && !isTemplateInjectionCommand(command) {
 		return false, Output{}, nil
 	}
 	message, outcome, templateRel, err := InjectTemplate(root, sessionID)
@@ -240,6 +221,15 @@ func isTemplateInjectionCommand(command string) bool {
 		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
 }
 
+func isTemplateStageCommand(command string) bool {
+	normalized := normalizeCommand(command)
+	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
+		return false
+	}
+	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+}
+
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {
 	if state.SelectedPlaybook == "" {
 		return "", "QDM_INJECT_TEMPLATE no selectedPlaybook in session state. Do not guess a template; continue without template injection."
@@ -329,7 +319,7 @@ func recordTemplateDiagnostic(root, sessionID string, session sessionstate.File,
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(root, ".claude", "hooks", "state", "diagnostics")
+	dir := sessionstate.DiagnosticsDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}

@@ -46,49 +46,62 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 	}
 }
 
-func TestBuildWithWikisIndexComboMode(t *testing.T) {
+func TestBuildWithWikisIndexUsesRuntimePathsWhenConfigMissing(t *testing.T) {
+	root := testContextWikiRoot(t)
+	if err := os.Remove(filepath.Join(root, "config/harness-config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	response, plan, err := BuildWithPlan(root, "看一下销售额")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-sale-amt.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/playbooks/idx/business/s-sale-amt.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestBuildWithWikisIndexMultiMetricAnalysisUsesFreeMode(t *testing.T) {
 	root := testContextWikiRoot(t)
 	response, plan, err := BuildWithPlan(root, "销售额和客单价经营概览")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Mode != sessionstate.ModeCombo || plan.SelectedPlaybook != "playbooks/idx/business/default-overview.md" {
+	if plan.Mode != sessionstate.ModeFree || plan.SelectedPlaybook != "" || plan.SelectedTemplate != "" {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
-	if len(plan.CoveredSpecs) != 3 {
-		t.Fatalf("covered specs = %+v", plan.CoveredSpecs)
+	if plan.Reason != "multi_metric_non_direct" {
+		t.Fatalf("reason = %s", plan.Reason)
 	}
 	got := contextPaths(response)
 	for _, want := range []string{
-		"wikis/playbooks/idx/business/index.md",
-		"wikis/playbooks/idx/business/default-overview.md",
 		"wikis/spec/idx/business/index.md",
-		"wikis/spec/idx/business/c-inventory.md",
+		"wikis/spec/idx/business/s-per-cust-amt.md",
+		"wikis/playbooks/idx/business/s-per-cust-amt.md",
+		"wikis/spec/idx/business/s-sale-amt.md",
+		"wikis/playbooks/idx/business/s-sale-amt.md",
 	} {
 		if !hasString(got, want) {
 			t.Fatalf("missing %s in %#v", want, got)
 		}
 	}
 	for _, unwanted := range []string{
-		"wikis/spec/idx/business/s-per-cust-amt.md",
-		"wikis/spec/idx/business/s-sale-amt.md",
+		"wikis/playbooks/idx/business/default-overview.md",
+		"wikis/templates/idx/business/default-overview.md",
 	} {
 		if hasString(got, unwanted) {
-			t.Fatalf("single metric covered spec should not be expanded in combo context: %s in %#v", unwanted, got)
+			t.Fatalf("unexpected report playbook context: %s in %#v", unwanted, got)
 		}
 	}
-	if hasString(got, "wikis/templates/idx/business/default-overview.md") {
-		t.Fatalf("template should not be in context files: %#v", got)
-	}
-	for _, unwanted := range []string{
-		"wikis/spec/index.md",
-		"wikis/spec/idx/index.md",
-		"wikis/playbooks/index.md",
-		"wikis/playbooks/idx/index.md",
-	} {
-		if hasString(got, unwanted) {
-			t.Fatalf("unexpected ancestor index %s in %#v", unwanted, got)
-		}
+	if !strings.Contains(response.Instruction, "Harness mode: free") || strings.Contains(response.Instruction, "report-style") {
+		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
 
@@ -156,6 +169,35 @@ func TestBuildWithWikisIndexGenericAnalysisDoesNotUseMultiSingleMode(t *testing.
 	}
 	if plan.Mode == sessionstate.ModeMulti {
 		t.Fatalf("generic analysis should not use multi_single: %+v", plan)
+	}
+}
+
+func TestBuildWithWikisIndexReportMode(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "生成2026-05-28经营分析报告")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeReport || plan.SelectedPlaybook != "playbooks/idx/business/r-business-analysis-report.md" || plan.SelectedTemplate != "templates/idx/business/r-business-analysis-report.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/spec/idx/business/r-business-analysis-report.md",
+		"wikis/playbooks/idx/business/r-business-analysis-report.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+	if hasString(got, "wikis/templates/idx/business/r-business-analysis-report.md") {
+		t.Fatalf("template should not be injected during report data collection: %#v", got)
+	}
+	if !strings.Contains(response.Instruction, "Harness mode: report") ||
+		!strings.Contains(response.Instruction, "selectedTemplate=templates/idx/business/r-business-analysis-report.md") ||
+		!strings.Contains(response.Instruction, "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template") ||
+		strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") ||
+		strings.Contains(response.Instruction, "Harness mode: combo") {
+		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
 
@@ -388,6 +430,21 @@ aliases: ["库存概念"]
 ---
 # 库存概念
 `)
+	writeContextFile(t, root, "wikis/spec/idx/business/r-business-analysis-report.md", `---
+name: businessAnalysisReport
+label: 经营综合分析报告
+aliases:
+  - 经营分析报告
+  - 经营综合报告
+  - 经营综分析报告
+  - 经营情况
+  - 销售情况
+  - 经营大盘
+  - 业务情况
+  - 业务大盘
+---
+# 经营综合分析报告
+`)
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-sale-amt.md", `---
 intents:
   current_value:
@@ -409,20 +466,17 @@ intents:
 `)
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-member-repurchase-rate.md", "# 会员复购率取数\n")
 	writeContextFile(t, root, "wikis/playbooks/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率取数\n")
-	writeContextFile(t, root, "wikis/playbooks/idx/business/default-overview.md", `---
-aliases: ["经营概览"]
-covers:
-  - spec/idx/business/c-inventory.md
-  - spec/idx/business/s-sale-amt.md
-  - spec/idx/business/s-per-cust-amt.md
+	writeContextFile(t, root, "wikis/playbooks/idx/business/r-business-analysis-report.md", `---
+name: playbook_business_analysis_report
+label: 经营综合分析报告取数手册
 ---
-# 经营概览
+# 经营综合分析报告取数手册
 `)
+	writeContextFile(t, root, "wikis/templates/idx/business/r-business-analysis-report.md", "# 经营综合分析报告模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-sale-amt.md", "# 销售额模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-per-cust-amt.md", "# 客单价模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-member-repurchase-rate.md", "# 会员复购率模板\n")
 	writeContextFile(t, root, "wikis/templates/idx/business/s-bf19-member-repurchase-rate.md", "# 19点前滚动7天会员复购率模板\n")
-	writeContextFile(t, root, "wikis/templates/idx/business/default-overview.md", "# 经营概览模板\n")
 	if _, err := wikis.BuildIndex(root, false); err != nil {
 		t.Fatal(err)
 	}

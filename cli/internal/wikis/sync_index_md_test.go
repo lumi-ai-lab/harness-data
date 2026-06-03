@@ -16,6 +16,13 @@ label: 销售额
 # 销售额
 `)
 	writeFile(t, root, "wikis/playbooks/idx/business/s-sale-amt.md", "# 销售额取数\n")
+	writeFile(t, root, "wikis/spec/idx/business/c-business-report.md", `---
+name: business_report
+label: 经营综合分析报告
+---
+# 经营综合分析报告
+`)
+	writeFile(t, root, "wikis/playbooks/idx/business/c-business-report.md", "# 经营综合分析报告取数\n")
 	writeFile(t, root, "wikis/templates/idx/business/s-sale-amt.md", "# 销售额报告\n")
 
 	result, err := SyncIndexMD(root, false)
@@ -26,7 +33,7 @@ label: 销售额
 		t.Fatalf("expected index files to be created: %+v", result)
 	}
 	content := readFile(t, root, "wikis/spec/idx/business/index.md")
-	for _, want := range []string{generatedStart, "## 自动索引", "| 销售额 | `sale_amt` | `s-sale-amt.md` | `playbooks/idx/business/s-sale-amt.md` |", generatedEnd} {
+	for _, want := range []string{generatedStart, "## 自动索引", "| 销售额 | `sale_amt` | `s-sale-amt.md` | `playbooks/idx/business/s-sale-amt.md` |", "| `c-business-report.md` | 经营综合分析报告 | 规则或专题指引 |", generatedEnd} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("generated spec index missing %q:\n%s", want, content)
 		}
