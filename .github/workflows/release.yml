@@ -64,7 +64,7 @@ jobs:
         with:
           ref: master
           token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-          submodules: recursive
+          submodules: false
           fetch-depth: 0
 
       - name: Configure git
@@ -75,8 +75,14 @@ jobs:
       - name: Pin wikis submodule
         env:
           WIKIS_REF: ${{ inputs.wikis_ref }}
+          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::RELEASE_GH_TOKEN is required to read the private harness-data-wikis repository"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           git config submodule.wikis.url https://github.com/lumi-ai-lab/harness-data-wikis.git
           git submodule sync wikis
           git submodule update --init wikis
