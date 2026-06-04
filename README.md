@@ -19,7 +19,12 @@ Codex 使用 `.codex/hooks.json` 配置同等事件：
 - `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
 - `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
 
-本仓库的 `.agents/codex` 可链接为项目级 `.codex` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+Pi 使用 `.pi/settings.json` 加载项目扩展：
+
+- `before_agent_start` / `context` 调用 `bin/data-harness-cli context --format agent-hook`
+- `tool_call` 在 `bin/data-harness-cli stage template` / `inject-template` 命令后追加 `posttool --format agent-hook`，并把 `additionalContext` 转成 Pi 可见的命令输出
+
+本仓库的 `.agents/codex` 可链接为项目级 `.codex` 配置，`.agents/pi` 可链接为项目级 `.pi` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
 `context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/spec`、`wikis/playbooks` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
@@ -73,7 +78,9 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
   --cas-config-dir /secure/path/to/cas
 ```
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 4 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators token、构建索引，并把 `.agents/claude` 或 `.agents/codex` 链接为本地 `.claude` / `.codex`。
+`--agent` 支持 `claude`、`codex`、`pi`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi。
+
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 4 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators token、构建索引，并把 `.agents/claude`、`.agents/codex` 或 `.agents/pi` 链接为本地 `.claude` / `.codex` / `.pi`。
 
 更新工作目录：
 
@@ -165,7 +172,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 目录结构
 
-- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude` 或 `.codex`。
+- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex` 或 `.pi`。
 - `bootstrap/cli-manifest.json`：npm 安装器下载 4 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。

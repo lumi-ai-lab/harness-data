@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -9,6 +10,7 @@ import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { readManifest } from "../src/lib/manifest.js";
+import { buildAndCheck } from "../src/commands/install.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -53,4 +55,21 @@ test("private qdm cli tools point at their own repositories", () => {
   assert.equal(byName.get("qdm-cmr-cli").private, true);
   assert.equal(byName.get("qdm-indicators-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+});
+
+test("skip wikis check passes skip checks to build-index", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const logPath = path.join(workspace, "calls.log");
+  const cliPath = path.join(binDir, "data-harness-cli");
+  fs.writeFileSync(cliPath, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logPath}"\n`, { mode: 0o755 });
+
+  await buildAndCheck(workspace, { skipWikisCheck: true, yes: true });
+
+  const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
+  assert.deepEqual(calls, [
+    "wikis build-index --skip-checks",
+    "context --question 会员复购为什么下降？ --json"
+  ]);
 });

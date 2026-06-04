@@ -67,7 +67,7 @@ export async function collectDoctor(workspace, options = {}) {
   add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
   add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
   add("wikis index", fs.existsSync(path.join(workspace, ".harness", "index", "wikis-index.json")) || fs.existsSync(path.join(workspace, ".harness", "index", "wikis-runtime-index.json")));
-  add("Agent hook", agentOk(workspace, "claude") || agentOk(workspace, "codex"));
+  add("Agent hook", agentOk(workspace, "claude") || agentOk(workspace, "codex") || agentOk(workspace, "pi"));
 
   return {
     workspace,

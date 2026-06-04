@@ -1,0 +1,9 @@
+{
+  "enableSkillCommands": true,
+  "extensions": [
+    "./extensions/qdm-harness/index.ts"
+  ],
+  "skills": [
+    "./skills"
+  ]
+}

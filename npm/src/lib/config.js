@@ -29,8 +29,9 @@ export function validateCasConfigDir(dir) {
 
 export function linkAgents(workspace, agent) {
   const pairs = [];
-  if (agent === "claude" || agent === "both") pairs.push([".agents/claude", ".claude"]);
-  if (agent === "codex" || agent === "both") pairs.push([".agents/codex", ".codex"]);
+  if (agent === "claude" || agent === "both" || agent === "all") pairs.push([".agents/claude", ".claude"]);
+  if (agent === "codex" || agent === "both" || agent === "all") pairs.push([".agents/codex", ".codex"]);
+  if (agent === "pi" || agent === "all") pairs.push([".agents/pi", ".pi"]);
   for (const [sourceRel, targetRel] of pairs) {
     const source = path.join(workspace, sourceRel);
     const target = path.join(workspace, targetRel);

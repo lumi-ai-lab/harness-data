@@ -65,9 +65,11 @@ async function configureAuth(workspace, options) {
   return casConfigDir;
 }
 
-async function buildAndCheck(workspace, options) {
+export async function buildAndCheck(workspace, options) {
   const cli = path.join(workspace, "bin", "data-harness-cli");
-  await run(cli, ["wikis", "build-index"], { cwd: workspace, stdio: "inherit" });
+  const buildIndexArgs = ["wikis", "build-index"];
+  if (options.skipWikisCheck) buildIndexArgs.push("--skip-checks");
+  await run(cli, buildIndexArgs, { cwd: workspace, stdio: "inherit" });
   await run(cli, ["context", "--question", "会员复购为什么下降？", "--json"], { cwd: workspace, stdio: "inherit" });
   let runFullCheck = !options.skipWikisCheck;
   if (!options.yes && !options.skipWikisCheck) {

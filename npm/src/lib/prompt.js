@@ -1,6 +1,8 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
+const agentChoices = ["claude", "codex", "pi", "both", "all"];
+
 export async function confirm(message, options = {}) {
   if (options.yes) return true;
   const suffix = options.defaultNo ? " [y/N] " : " [Y/n] ";
@@ -15,13 +17,17 @@ export async function confirm(message, options = {}) {
 }
 
 export async function chooseAgent(options = {}) {
-  if (options.agent) return options.agent;
-  if (options.yes) throw new Error("non-interactive install requires --agent claude|codex|both");
+  if (options.agent) {
+    const value = String(options.agent).trim().toLowerCase();
+    if (!agentChoices.includes(value)) throw new Error("agent must be claude, codex, pi, both, or all");
+    return value;
+  }
+  if (options.yes) throw new Error("non-interactive install requires --agent claude|codex|pi|both|all");
   const rl = readline.createInterface({ input, output });
   try {
-    const answer = (await rl.question("Choose Agent: claude, codex, both [codex] ")).trim().toLowerCase();
+    const answer = (await rl.question("Choose Agent: claude, codex, pi, both, all [codex] ")).trim().toLowerCase();
     const value = answer || "codex";
-    if (!["claude", "codex", "both"].includes(value)) throw new Error("agent must be claude, codex, or both");
+    if (!agentChoices.includes(value)) throw new Error("agent must be claude, codex, pi, both, or all");
     return value;
   } finally {
     rl.close();
