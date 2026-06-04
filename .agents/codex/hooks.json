@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$(git rev-parse --show-toplevel)/bin/data-harness-cli\" context --format codex-hook",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" context --format codex-hook",
             "statusMessage": "Loading QDM Harness context"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$(git rev-parse --show-toplevel)/bin/data-harness-cli\" posttool --format codex-hook",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" posttool --format codex-hook",
             "statusMessage": "Updating QDM Harness state"
           }
         ]
