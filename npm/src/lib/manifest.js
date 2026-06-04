@@ -4,6 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import { commandExists, run } from "./exec.js";
 import { platformKey } from "./platform.js";
+import { action, warn } from "./log.js";
 
 export function readManifest(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -115,7 +116,6 @@ async function downloadAsset(tool, asset, file, options = {}) {
     await download(asset.url, file);
     return;
   }
-  console.log(`Downloading private ${tool.name} asset from ${tool.repo}`);
   if (await downloadPrivateWithGh(asset, file)) return;
   if (await downloadPrivateWithToken(asset, file, options)) return;
   throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}`);
@@ -151,16 +151,16 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const asset = tool.platforms?.[key];
     if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
     const archive = path.join(cacheDir, assetName(asset));
-    console.log(`Downloading ${tool.name} ${tool.version} (${key})`);
+    if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
     await downloadAsset(tool, asset, archive, options);
     const sha = await expectedSha256(tool, asset, options);
     const actualSha = fileSha256(archive);
     if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
-    if (!sha) console.warn(`warning: ${tool.name} has no sha256; continuing without checksum`);
+    if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
     if (archive.endsWith(".zip")) {
-      await run("unzip", ["-o", archive, "-d", binDir], { stdio: "inherit" });
+      await run("unzip", ["-o", archive, "-d", binDir]);
     } else {
-      await run("tar", ["-xzf", archive, "-C", binDir], { stdio: "inherit" });
+      await run("tar", ["-xzf", archive, "-C", binDir]);
     }
     const binary = path.join(binDir, tool.binary);
     if (!fs.existsSync(binary)) throw new Error(`${tool.binary} was not extracted to bin/`);

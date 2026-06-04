@@ -26,7 +26,7 @@ export async function chooseAgent(options = {}) {
   if (options.yes) return "all";
   const rl = readline.createInterface({ input, output });
   try {
-    const answer = (await rl.question("Choose Agent: claude, codex, pi, all [all] ")).trim().toLowerCase();
+    const answer = (await rl.question("选择 Agent：claude, codex, pi, all [all] ")).trim().toLowerCase();
     const value = answer || "all";
     if (!agentChoices.includes(value)) throw new Error("agent must be claude, codex, pi, or all");
     return value;

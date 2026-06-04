@@ -7,8 +7,9 @@ import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/m
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
-import { buildAndCheck, installRuntimeBundle } from "./install.js";
+import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
+import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 
 async function npmLatest() {
   try {
@@ -60,21 +61,20 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   const assetName = toolAssetName(tool, tag, key);
   const asset = releaseAsset(release, assetName);
   if (!asset) {
-    console.warn(`warning: ${tool.name} latest release has no ${assetName}; skipped`);
+    warn(`${tool.name} 最新 release 缺少 ${assetName}，已跳过`);
     return null;
   }
   const current = state.tools?.[tool.name] || {};
   const tagChanged = current.version && current.version !== tag;
   const firstInstall = !current.version;
   if (!tagChanged && !firstInstall) {
-    console.log(`${tool.name}: up to date (${tag})`);
+    ok(`${tool.name} 已是最新 ${tag}`);
     return null;
   }
-  console.log(`${tool.name} has update:`);
-  console.log(`  current: ${current.version || "unknown"}`);
-  console.log(`  remote:  ${tag}`);
-  if (!(await confirm(`Update ${tool.name}?`, { defaultNo: true }))) {
-    console.log(`Skipped ${tool.name}`);
+  action(`发现更新：${tool.name} ${current.version || "unknown"} -> ${tag}`);
+  if (!(await confirm(`是否更新 ${tool.name}？`, { defaultNo: true }))) {
+    skip(tool.name);
+    options.skippedUpdates?.push(`${tool.name} ${tag}`);
     return null;
   }
   const updatedManifest = oneToolManifest(manifest, tool, tag, asset, key);
@@ -82,35 +82,38 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
     ...options,
     manifestOverride: updatedManifest
   });
-  return installed.installedTools?.[tool.name] || { version: tag, asset: assetName };
+  const result = installed.installedTools?.[tool.name] || { version: tag, asset: assetName };
+  ok(`${tool.name} 已更新到 ${tag}`);
+  return result;
 }
 
 async function updateWikis(runtimeDir, options, state) {
   const wikisDir = path.join(runtimeDir, "wikis");
   if (!githubToken(options) && state.installMode !== "github-token") {
-    console.log("wikis: local path mode; check manually");
+    skip("harness-data-wikis 为本地路径模式，请手动检查");
     return null;
   }
   if (!fs.existsSync(path.join(wikisDir, ".git"))) {
-    console.log("wikis: not a git checkout; skipped");
+    skip("harness-data-wikis 不是 git checkout");
     return null;
   }
-  await run("git", ["-C", wikisDir, "fetch", "origin"], { stdio: "inherit" });
+  await run("git", ["-C", wikisDir, "fetch", "origin"]);
   const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim();
   const remote = (await run("git", ["-C", wikisDir, "rev-parse", "origin/HEAD"], { allowFailure: true })).stdout.trim();
   if (!remote || local === remote) {
-    console.log(`wikis: up to date (${local.slice(0, 12)})`);
+    ok(`harness-data-wikis 已是最新 ${shortSha(local)}`);
     return null;
   }
-  console.log("wikis has update:");
-  console.log(`  current: ${local}`);
-  console.log(`  remote:  ${remote}`);
-  if (!(await confirm("Update wikis?", { defaultNo: true }))) {
-    console.log("Skipped wikis");
+  action(`发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
+  if (!(await confirm("是否更新 harness-data-wikis？", { defaultNo: true }))) {
+    skip("harness-data-wikis");
+    options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
     return null;
   }
-  await run("git", ["-C", wikisDir, "pull", "--ff-only"], { stdio: "inherit" });
-  return { commit: (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim() };
+  await run("git", ["-C", wikisDir, "pull", "--ff-only"]);
+  const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim();
+  ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
+  return { commit };
 }
 
 export async function checkUpdates(workspace, options = {}) {
@@ -126,54 +129,85 @@ export async function checkUpdates(workspace, options = {}) {
 export async function updateCommand(options = {}) {
   const runtimeDir = findWorkspaceDir(options.dir);
   if (!fs.existsSync(runtimeDir)) throw new Error(`runtime directory does not exist: ${runtimeDir}`);
+  const key = platformKey();
+  header("Harness Data 更新器", packageVersion(), [
+    `运行目录：${runtimeDir}`,
+    `平台：${key}`
+  ]);
   const state = readUserState();
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
   const nextTools = { ...(state.tools || {}) };
+  const applied = [];
+  const skipped = [];
+  const trackingOptions = { ...options, skippedUpdates: skipped };
 
+  step(1, 6, "检查 installer");
   const latestInstaller = await npmLatest();
   if (latestInstaller && latestInstaller !== packageVersion()) {
-    console.log(`installer has update: ${packageVersion()} -> ${latestInstaller}`);
-    console.log("Run the same npx command again to use the latest npm installer.");
+    warn(`installer 有新版本 ${packageVersion()} -> ${latestInstaller}`);
+    action("请重新执行：npx @lumi-ai-lab/harness-data@latest update");
   } else {
-    console.log(`installer: up to date (${packageVersion()})`);
+    ok(`installer 已是最新 ${packageVersion()}`);
   }
+  blank();
 
+  step(2, 6, "检查 runtime bundle");
   const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
   if (state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) {
-    console.log(`runtime bundle has update: ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
-    if (await confirm("Update runtime bundle?", { defaultNo: true })) {
-      const bundle = await installRuntimeBundle(runtimeDir, { ...options, force: true });
+    action(`发现更新：runtime bundle ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
+    if (await confirm("是否更新 runtime bundle？", { defaultNo: true })) {
+      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true });
       runtimeTag = bundle.tag || runtimeRelease.tag_name;
       changed = true;
+      applied.push(`runtime bundle ${runtimeTag}`);
     } else {
-      console.log("Skipped runtime bundle");
+      skip("runtime bundle");
+      skipped.push(`runtime bundle ${runtimeRelease.tag_name}`);
     }
   } else {
-    console.log(`runtime bundle: up to date (${state.runtimeTag || runtimeRelease.tag_name})`);
+    ok(`runtime bundle 已是最新 ${state.runtimeTag || runtimeRelease.tag_name}`);
   }
+  blank();
 
+  step(3, 6, "检查 CLI 工具");
   for (const tool of manifest.tools || []) {
     if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
-      console.log(`${tool.name}: local path mode; check manually`);
+      skip(`${tool.name} 为本地路径模式，请手动检查`);
       continue;
     }
-    const installed = await maybeUpdateTool(runtimeDir, manifest, tool, options, state);
+    const installed = await maybeUpdateTool(runtimeDir, manifest, tool, trackingOptions, state);
     if (installed) {
       nextTools[tool.name] = installed;
       changed = true;
+      applied.push(`${tool.name} ${installed.version || ""}`.trim());
     }
   }
+  blank();
 
-  const wikis = await updateWikis(runtimeDir, options, state);
-  if (wikis) changed = true;
+  step(4, 6, "检查 Wikis 知识库");
+  const wikis = await updateWikis(runtimeDir, trackingOptions, state);
+  if (wikis) {
+    changed = true;
+    applied.push(`harness-data-wikis ${shortSha(wikis.commit)}`);
+  }
+  blank();
 
+  step(5, 6, "构建 Wikis 索引");
   if (changed) {
-    await buildAndCheck(runtimeDir, options);
-    const doctor = await collectDoctor(runtimeDir, options);
-    for (const check of doctor.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}${check.detail ? ` (${check.detail})` : ""}`);
+    await buildAndCheck(runtimeDir, trackingOptions);
+  } else {
+    skip("没有组件更新");
+  }
+  blank();
+
+  step(6, 6, "安装校验");
+  if (changed) {
+    const doctor = await collectDoctor(runtimeDir, trackingOptions);
+    printDoctorSummary(doctor);
+    if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; update is incomplete");
     writeState(runtimeDir, {
       ...state,
       runtimeTag,
@@ -181,9 +215,27 @@ export async function updateCommand(options = {}) {
       manifestSha256: manifestDigest(manifest),
       lastCheckAt: new Date().toISOString()
     });
-    console.log("Harness Data runtime updated.");
+    blank();
+    console.log(`更新完成：${runtimeDir}`);
+    if (applied.length) {
+      console.log("");
+      console.log("已更新：");
+      for (const item of applied) console.log(`- ${item}`);
+    }
+    if (skipped.length) {
+      console.log("");
+      console.log("已跳过：");
+      for (const item of skipped) console.log(`- ${item}`);
+    }
   } else {
+    skip("没有组件更新");
     writeState(runtimeDir, { ...state, lastCheckAt: new Date().toISOString() });
-    console.log("No selected updates were applied.");
+    blank();
+    console.log(skipped.length ? "没有应用任何更新。" : "没有发现需要更新的内容。");
+    if (skipped.length) {
+      console.log("");
+      console.log("已跳过：");
+      for (const item of skipped) console.log(`- ${item}`);
+    }
   }
 }

@@ -9,6 +9,8 @@ import { binaryName, platformKey } from "../lib/platform.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
+import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
+import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
@@ -17,6 +19,7 @@ async function requireCommands(commands) {
   for (const command of commands) {
     if (!(await commandExists(command))) throw new Error(`missing required command: ${command}`);
   }
+  ok(commands.join(", "));
 }
 
 async function prepareRuntimeDir(options) {
@@ -29,6 +32,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
       fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json"))) {
+    skip("runtime bundle 已存在");
     return { tag: "", skipped: true };
   }
 
@@ -42,6 +46,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
+  action(`下载 harness-data-runtime ${tag}`);
   await downloadReleaseAsset(asset, archive, options);
   if (shaAsset) {
     const shaFile = `${archive}.sha256`;
@@ -51,11 +56,11 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
     if (expected && actual !== expected) throw new Error("runtime bundle sha256 mismatch");
   } else {
-    console.warn("warning: runtime bundle has no sha256 asset; continuing without checksum");
+    warn("runtime bundle 未提供 sha256，已继续安装");
   }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
-  await run("tar", ["-xzf", archive, "-C", extractDir], { stdio: "inherit" });
+  await run("tar", ["-xzf", archive, "-C", extractDir]);
   for (const dir of ["agents", "bootstrap"]) {
     const source = path.join(extractDir, dir);
     if (!fs.existsSync(source)) throw new Error(`runtime bundle missing ${dir}/`);
@@ -69,6 +74,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     fs.copyFileSync(path.join(configSource, file), path.join(runtimeDir, "config", file));
   }
   fs.rmSync(extractDir, { recursive: true, force: true });
+  ok(`runtime bundle ${tag}`);
   return { tag, skipped: false };
 }
 
@@ -83,8 +89,11 @@ function executable(file) {
 
 async function promptExecutable(runtimeDir, name, options = {}) {
   const auto = path.join(runtimeDir, "bin", binaryName(name));
-  if (executable(auto)) return auto;
-  const value = await ask(`Path to ${name}:`, options);
+  if (executable(auto)) {
+    ok(`自动识别 ${name}: ${auto}`);
+    return auto;
+  }
+  const value = await ask(`请输入 ${name} 的绝对路径：`, options);
   const file = path.resolve(value);
   if (!executable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
   return file;
@@ -110,30 +119,35 @@ async function installWikis(runtimeDir, options = {}) {
   const target = path.join(runtimeDir, "wikis");
   if (githubToken(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
-      await run("git", ["-C", target, "pull", "--ff-only"], { stdio: "inherit" });
+      await runGitWithProtocol("https", ["-C", target, "pull", "--ff-only"], options);
     } else {
       fs.rmSync(target, { recursive: true, force: true });
-      await run("git", ["clone", `https://x-access-token:${githubToken(options)}@github.com/${wikisRepo}.git`, target], { stdio: "inherit" });
+      await runGitWithProtocol("https", ["clone", gitUrls.https.wikis, target], options);
     }
-    return { mode: "github", path: target };
+    const commit = (await run("git", ["-C", target, "rev-parse", "HEAD"])).stdout.trim();
+    ok(`harness-data-wikis ${shortSha(commit)}`);
+    return { mode: "github", path: target, commit };
   }
   if (await hasGithubAuth(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
-      await run("git", ["-C", target, "pull", "--ff-only"], { stdio: "inherit" });
+      await run("git", ["-C", target, "pull", "--ff-only"]);
     } else {
       fs.rmSync(target, { recursive: true, force: true });
-      await run("gh", ["repo", "clone", wikisRepo, target], { stdio: "inherit" });
+      await run("gh", ["repo", "clone", wikisRepo, target]);
     }
-    return { mode: "github", path: target };
+    const commit = (await run("git", ["-C", target, "rev-parse", "HEAD"])).stdout.trim();
+    ok(`harness-data-wikis ${shortSha(commit)}`);
+    return { mode: "github", path: target, commit };
   }
 
   const auto = path.join(runtimeDir, "harness-data-wikis");
-  const source = fs.existsSync(auto) ? auto : path.resolve(await ask("Path to harness-data-wikis:", options));
+  const source = fs.existsSync(auto) ? auto : path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
   for (const dir of ["spec", "playbooks", "templates"]) {
     if (!fs.existsSync(path.join(source, dir))) throw new Error(`harness-data-wikis missing ${dir}/: ${source}`);
   }
   fs.rmSync(target, { recursive: true, force: true });
   fs.cpSync(source, target, { recursive: true });
+  ok(`harness-data-wikis 本地路径 ${source}`);
   return { mode: "local-path", source, path: target };
 }
 
@@ -142,12 +156,13 @@ function casConfigDir(runtimeDir) {
 }
 
 async function writeCasCredentials(runtimeDir, options = {}) {
-  const username = await ask("CAS username:", options);
-  const password = await askSecret("CAS password:", options);
+  const username = await ask("CAS 用户名：", options);
+  const password = await askSecret("CAS 密码：", options);
   if (!username || !password) throw new Error("CAS username and password are required");
   const dir = casConfigDir(runtimeDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(dir, "config.json"), `${JSON.stringify({ cas: { username, password } }, null, 2)}\n`, { mode: 0o600 });
+  ok("CAS 凭证已保存到 .qdm-auth/cas/config.json");
   return dir;
 }
 
@@ -155,24 +170,66 @@ async function configureTokens(runtimeDir, casDir) {
   const env = { QDM_CAS_CONFIG_DIR: casDir };
   const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
   const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env, stdio: "inherit" });
+  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env });
+  ok("CMR Token 已配置");
   const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env, stdio: "inherit" });
-  await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env, stdio: "inherit" });
-  await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env, stdio: "inherit" });
+  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env });
+  ok("Indicators Token 已配置");
+  await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
+  await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
 }
 
 export async function buildAndCheck(runtimeDir, options = {}) {
   const cli = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
-  const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, stdio: "inherit", allowFailure: true });
-  if (result.code !== 0) console.warn("warning: wikis build-index --skip-checks failed; continue install and retry manually later");
+  action("执行：data-harness-cli wikis build-index --skip-checks");
+  const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
+  if (result.code !== 0) {
+    warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
+    return { ok: false };
+  }
+  const output = `${result.stdout}\n${result.stderr}`;
+  const docs = output.match(/\bdocs=(\d+)/)?.[1];
+  const recall = output.match(/\brecall=(\d+)/)?.[1];
+  const runtimeDocs = output.match(/\bruntimeDocs=(\d+)/)?.[1];
+  ok([docs ? `docs=${docs}` : "", recall ? `recall=${recall}` : "", runtimeDocs ? `runtimeDocs=${runtimeDocs}` : ""].filter(Boolean).join(", ") || "Wikis 索引已构建");
+  return { ok: true, docs, recall, runtimeDocs };
+}
+
+export function printDoctorSummary(doctor) {
+  const failed = doctor.checks.filter((check) => !check.ok);
+  if (!failed.length) {
+    ok("runtime");
+    ok("wikis/spec");
+    ok("wikis/playbooks");
+    ok("wikis/templates");
+    ok("4 个 CLI");
+    ok("本地配置");
+    ok("CAS 凭证");
+    ok("CMR Token");
+    ok("Indicators Token");
+    ok("Agent Hook");
+    return;
+  }
+  for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
 }
 
 export async function installCommand(options = {}) {
-  platformKey();
+  const key = platformKey();
+  header("Harness Data 安装器", packageVersion(), [
+    `安装目录：${resolveWorkspaceDir(options.dir || process.cwd())}`,
+    `平台：${key}`
+  ]);
+
+  step(1, 8, "检查本机依赖");
   await requireCommands(["git", "tar", "unzip"]);
+  blank();
+
+  step(2, 8, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
   const bundle = await installRuntimeBundle(runtimeDir, options);
+  blank();
+
+  step(3, 8, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
 
@@ -185,17 +242,40 @@ export async function installCommand(options = {}) {
     await installToolsFromManifest(runtimeDir, manifestPath, { ...options, tools: ["data-harness-cli"] });
     localTools = await installLocalTools(runtimeDir, options);
   }
+  ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+  blank();
 
+  step(4, 8, "同步 Wikis 知识库");
   await installWikis(runtimeDir, options);
+  blank();
+
+  step(5, 8, "生成本地配置");
   writeLocalConfig(runtimeDir, { overwrite: true });
+  ok("config/harness-config.yaml");
+  ok("config/qdm-cli-paths.env");
+  blank();
+
+  step(6, 8, "配置 CAS 认证");
   const casDir = await writeCasCredentials(runtimeDir, options);
   await configureTokens(runtimeDir, casDir);
-  await buildAndCheck(runtimeDir, options);
-  linkAgents(runtimeDir, await chooseAgent(options));
+  blank();
 
+  step(7, 8, "构建 Wikis 索引");
+  await buildAndCheck(runtimeDir, options);
+  blank();
+
+  step(8, 8, "配置 Agent Hook");
+  linkAgents(runtimeDir, await chooseAgent(options));
+  for (const [target, source] of [[".claude", "agents/claude"], [".codex", "agents/codex"], [".pi", "agents/pi"]]) {
+    if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
+  }
+  blank();
+
+  console.log("安装校验");
   const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir });
-  for (const check of doctor.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}`);
+  printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
+  blank();
 
   writeState(runtimeDir, {
     installMode: tokenMode ? "github-token" : "local-path",
@@ -206,5 +286,8 @@ export async function installCommand(options = {}) {
     packageVersion: packageVersion(),
     lastCheckAt: new Date().toISOString()
   });
-  console.log(`Harness Data runtime installed: ${runtimeDir}`);
+  console.log(`安装完成：${runtimeDir}`);
+  console.log("");
+  console.log("下一步：");
+  console.log(`cd ${runtimeDir}`);
 }

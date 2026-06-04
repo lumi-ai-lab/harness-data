@@ -72,3 +72,23 @@ test("skip wikis check passes skip checks to build-index", async () => {
     "wikis build-index --skip-checks"
   ]);
 });
+
+test("build index prints concise Chinese summary", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const cliPath = path.join(binDir, "data-harness-cli");
+  fs.writeFileSync(cliPath, `#!/bin/sh\necho 'built .harness/index/wikis-index.json docs=264 recall=1592 runtime=.harness/index/wikis-runtime-index.json runtimeDocs=264 checksSkipped=true'\n`, { mode: 0o755 });
+
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (message = "") => lines.push(String(message));
+    await buildAndCheck(workspace, { yes: true });
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.match(lines.join("\n"), /执行：data-harness-cli wikis build-index --skip-checks/);
+  assert.match(lines.join("\n"), /通过：docs=264, recall=1592, runtimeDocs=264/);
+});
