@@ -36,13 +36,13 @@ export async function main(argv) {
   console.log(`Usage: harness-data <install|update|doctor|version> [options]
 
 Commands:
-  install  Clone/reuse a Harness Data workspace and complete setup
-  update   Check and apply installer, repository, CLI, and wikis updates
+  install  Install a Harness Data runtime in the current directory
+  update   Interactively check and apply runtime, CLI, and wikis updates
   doctor   Diagnose workspace CLI, config, auth, index, and Agent hooks
   version  Print installer, repository, wikis, and manifest versions
 
 Install options:
-  --git-protocol auto|ssh|https      Git protocol for private repositories (default: auto)
-  --github-token-env NAME            Token env var for HTTPS fallback or CI`);
+  --dir PATH                         Runtime directory (default: current directory)
+  --github-token TOKEN               GitHub token for private Release assets`);
   if (unknown) process.exitCode = 1;
 }

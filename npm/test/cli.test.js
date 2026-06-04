@@ -27,8 +27,8 @@ test("loads package version", () => {
 });
 
 test("resolves platform and state paths", () => {
-  assert.match(platformKey(), /^(darwin|linux)-(arm64|amd64)$/);
-  assert.match(defaultWorkspaceDir(), /harness-data/);
+  assert.match(platformKey(), /^(darwin-arm64|darwin-amd64|linux-amd64|windows-amd64)$/);
+  assert.equal(defaultWorkspaceDir(), process.cwd());
   assert.match(userStatePath(), /harness-data-installer/);
 });
 
@@ -69,7 +69,6 @@ test("skip wikis check passes skip checks to build-index", async () => {
 
   const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
   assert.deepEqual(calls, [
-    "wikis build-index --skip-checks",
-    "context --question 会员复购为什么下降？ --json"
+    "wikis build-index --skip-checks"
   ]);
 });

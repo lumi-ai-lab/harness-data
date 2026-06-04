@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const appDir = path.join("lumi-ai-lab", "harness-data");
 const stateDir = path.join("lumi-ai-lab", "harness-data-installer");
 
 export function expandHome(value) {
@@ -13,9 +12,7 @@ export function expandHome(value) {
 }
 
 export function defaultWorkspaceDir() {
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", appDir);
-  if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), appDir);
-  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), appDir);
+  return process.cwd();
 }
 
 export function userStatePath() {
@@ -62,6 +59,6 @@ export function findWorkspaceDir(explicitDir) {
 
 export function looksLikeWorkspace(dir) {
   return fs.existsSync(path.join(dir, "bootstrap", "cli-manifest.json")) &&
-    fs.existsSync(path.join(dir, ".agents")) &&
+    fs.existsSync(path.join(dir, "agents")) &&
     fs.existsSync(path.join(dir, "wikis"));
 }

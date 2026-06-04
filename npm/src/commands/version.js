@@ -1,18 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { findWorkspaceDir } from "../lib/paths.js";
-import { currentCommit, submoduleCommit } from "../lib/git.js";
+import { findWorkspaceDir, readUserState } from "../lib/paths.js";
 import { readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
 
 export async function versionCommand(options = {}) {
   const workspace = findWorkspaceDir(options.dir);
   const manifestPath = path.join(workspace, "bootstrap", "cli-manifest.json");
+  const state = readUserState();
   const result = {
     installer: packageVersion(),
-    workspace,
-    mainCommit: fs.existsSync(workspace) ? await currentCommit(workspace) : "",
-    wikisCommit: fs.existsSync(workspace) ? await submoduleCommit(workspace) : "",
+    runtime: workspace,
+    runtimeTag: state.runtimeTag || "",
+    installMode: state.installMode || "",
     tools: []
   };
   if (fs.existsSync(manifestPath)) {
@@ -26,9 +26,9 @@ export async function versionCommand(options = {}) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     console.log(`installer ${result.installer}`);
-    console.log(`workspace ${result.workspace}`);
-    if (result.mainCommit) console.log(`main ${result.mainCommit}`);
-    if (result.wikisCommit) console.log(`wikis ${result.wikisCommit}`);
+    console.log(`runtime ${result.runtime}`);
+    if (result.runtimeTag) console.log(`runtime bundle ${result.runtimeTag}`);
+    if (result.installMode) console.log(`install mode ${result.installMode}`);
     for (const tool of result.tools) console.log(`${tool.name} ${tool.version}`);
   }
   return result;

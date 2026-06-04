@@ -206,9 +206,10 @@ jobs:
         run: |
           set -euo pipefail
           if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
-            echo "tag already exists: ${VERSION_TAG}" >&2
-            exit 1
+            echo "tag already exists, replacing: ${VERSION_TAG}"
+            git push origin ":refs/tags/${VERSION_TAG}"
           fi
+          git tag -d "$VERSION_TAG" >/dev/null 2>&1 || true
           git tag -a "$VERSION_TAG" -m "$VERSION_TAG"
           git push origin "$VERSION_TAG"
 
@@ -260,6 +261,15 @@ jobs:
             echo "checking $url"
             curl -fsIL "$url" >/dev/null
           done < /tmp/data-harness-assets.txt
+
+      - name: Verify runtime bundle assets
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/harness-data-runtime-${VERSION_TAG}.tar.gz"
+          curl -fsIL "$base" >/dev/null
+          curl -fsIL "${base}.sha256" >/dev/null
 
   npm:
     name: Publish npm installer

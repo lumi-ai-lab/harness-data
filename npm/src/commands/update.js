@@ -4,10 +4,11 @@ import { confirm } from "../lib/prompt.js";
 import { findWorkspaceDir, readUserState, writeState } from "../lib/paths.js";
 import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
-import { behindCount, currentCommit, dirtyPaths, submoduleCommit, submodulePointerChanged, submoduleRemoteBehind } from "../lib/git.js";
 import { packageVersion } from "../lib/package.js";
+import { platformKey } from "../lib/platform.js";
+import { githubToken, latestRelease } from "../lib/github.js";
+import { buildAndCheck, installRuntimeBundle } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { normalizeGitProtocol, repoProtocol, repoUrl, runGitWithProtocol, syncWikisSubmodule } from "../lib/git-auth.js";
 
 async function npmLatest() {
   try {
@@ -20,139 +21,169 @@ async function npmLatest() {
   }
 }
 
-async function remoteManifest(workspace) {
-  const upstream = (await run("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], { cwd: workspace, allowFailure: true })).stdout.trim();
-  if (!upstream) return null;
-  const result = await run("git", ["show", `${upstream}:bootstrap/cli-manifest.json`], { cwd: workspace, allowFailure: true });
-  if (result.code !== 0 || !result.stdout.trim()) return null;
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
+function archiveSuffix(url) {
+  if (url.endsWith(".zip")) return "zip";
+  if (url.endsWith(".tar.gz")) return "tar.gz";
+  return "";
+}
+
+function toolAssetName(tool, tag, key) {
+  const current = tool.platforms?.[key]?.url || "";
+  const suffix = archiveSuffix(current) || (key.startsWith("windows-") ? "zip" : "tar.gz");
+  return `${tool.binary}-${tag}-${key}.${suffix}`;
+}
+
+function releaseAsset(release, name) {
+  return (release.assets || []).find((asset) => asset.name === name);
+}
+
+function oneToolManifest(manifest, tool, tag, asset, key) {
+  return {
+    ...manifest,
+    tools: [{
+      ...tool,
+      version: tag,
+      platforms: {
+        [key]: {
+          url: asset.browser_download_url || `https://github.com/${tool.repo}/releases/download/${tag}/${asset.name}`,
+          sha256: ""
+        }
+      }
+    }]
+  };
+}
+
+async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
+  const key = platformKey();
+  const release = await latestRelease(tool.repo, options);
+  const tag = release.tag_name;
+  const assetName = toolAssetName(tool, tag, key);
+  const asset = releaseAsset(release, assetName);
+  if (!asset) {
+    console.warn(`warning: ${tool.name} latest release has no ${assetName}; skipped`);
     return null;
   }
-}
-
-function versionChanged(current, latest) {
-  return latest && latest !== current;
-}
-
-export async function checkUpdates(workspace, gitOptions = {}) {
-  const manifestPath = path.join(workspace, "bootstrap", "cli-manifest.json");
-  const currentInstaller = packageVersion();
-  const latestInstaller = await npmLatest();
-  const mainBehind = await behindCount(workspace, gitOptions);
-  const wikisBehind = await submoduleRemoteBehind(workspace, "wikis", gitOptions);
-  const manifest = fs.existsSync(manifestPath) ? readManifest(manifestPath) : { tools: [] };
-  const digest = manifestDigest(manifest);
-  const remote = await remoteManifest(workspace);
-  const remoteDigest = remote ? manifestDigest(remote) : "";
-  const state = readUserState();
-  const updates = {
-    installer: { current: currentInstaller, latest: latestInstaller, update: versionChanged(currentInstaller, latestInstaller) },
-    mainRepo: { behind: mainBehind, update: mainBehind > 0 },
-    wikis: { remoteBehind: wikisBehind, pointerChanged: await submodulePointerChanged(workspace), update: wikisBehind > 0 },
-    cli: {
-      digest,
-      remoteDigest,
-      previousDigest: state.manifestSha256 || "",
-      update: Boolean((state.manifestSha256 && state.manifestSha256 !== digest) || (remoteDigest && remoteDigest !== digest)),
-      tools: manifest.tools || [],
-      remoteTools: remote?.tools || []
-    }
-  };
-  updates.wikis.update = updates.wikis.update || updates.wikis.pointerChanged;
-  updates.hasUpdates = updates.installer.update || updates.mainRepo.update || updates.wikis.update || updates.cli.update;
-  return updates;
-}
-
-function printUpdateSummary(updates) {
-  console.log("Update summary:");
-  console.log(`installer: ${updates.installer.current}${updates.installer.latest ? ` -> ${updates.installer.latest}` : " (latest unavailable)"}`);
-  console.log(`main repo: ${updates.mainRepo.behind} commits behind`);
-  console.log(`wikis: ${updates.wikis.remoteBehind} commits behind remote${updates.wikis.pointerChanged ? ", submodule pointer changed" : ""}`);
-  console.log(`CLI manifest: ${updates.cli.update ? "changed" : "unchanged or first check"}`);
-  const remoteByName = new Map(updates.cli.remoteTools.map((tool) => [tool.name, tool]));
-  for (const tool of updates.cli.tools) {
-    const remote = remoteByName.get(tool.name);
-    const target = remote && remote.version !== tool.version ? ` -> ${remote.version}` : "";
-    console.log(`  ${tool.name} ${tool.version}${target}`);
+  const current = state.tools?.[tool.name] || {};
+  const tagChanged = current.version && current.version !== tag;
+  const firstInstall = !current.version;
+  if (!tagChanged && !firstInstall) {
+    console.log(`${tool.name}: up to date (${tag})`);
+    return null;
   }
+  console.log(`${tool.name} has update:`);
+  console.log(`  current: ${current.version || "unknown"}`);
+  console.log(`  remote:  ${tag}`);
+  if (!(await confirm(`Update ${tool.name}?`, { defaultNo: true }))) {
+    console.log(`Skipped ${tool.name}`);
+    return null;
+  }
+  const updatedManifest = oneToolManifest(manifest, tool, tag, asset, key);
+  const installed = await installToolsFromManifest(runtimeDir, path.join(runtimeDir, ".bootstrap-cache", `${tool.name}-manifest.json`), {
+    ...options,
+    manifestOverride: updatedManifest
+  });
+  return installed.installedTools?.[tool.name] || { version: tag, asset: assetName };
 }
 
-async function updateProtocol(workspace, options) {
-  const requested = normalizeGitProtocol(options.gitProtocol);
-  if (requested !== "auto") return requested;
+async function updateWikis(runtimeDir, options, state) {
+  const wikisDir = path.join(runtimeDir, "wikis");
+  if (!githubToken(options) && state.installMode !== "github-token") {
+    console.log("wikis: local path mode; check manually");
+    return null;
+  }
+  if (!fs.existsSync(path.join(wikisDir, ".git"))) {
+    console.log("wikis: not a git checkout; skipped");
+    return null;
+  }
+  await run("git", ["-C", wikisDir, "fetch", "origin"], { stdio: "inherit" });
+  const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim();
+  const remote = (await run("git", ["-C", wikisDir, "rev-parse", "origin/HEAD"], { allowFailure: true })).stdout.trim();
+  if (!remote || local === remote) {
+    console.log(`wikis: up to date (${local.slice(0, 12)})`);
+    return null;
+  }
+  console.log("wikis has update:");
+  console.log(`  current: ${local}`);
+  console.log(`  remote:  ${remote}`);
+  if (!(await confirm("Update wikis?", { defaultNo: true }))) {
+    console.log("Skipped wikis");
+    return null;
+  }
+  await run("git", ["-C", wikisDir, "pull", "--ff-only"], { stdio: "inherit" });
+  return { commit: (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim() };
+}
+
+export async function checkUpdates(workspace, options = {}) {
   const state = readUserState();
-  return state.gitProtocol || await repoProtocol(workspace) || "ssh";
+  const latestInstaller = await npmLatest();
+  return {
+    installer: { current: packageVersion(), latest: latestInstaller, update: Boolean(latestInstaller && latestInstaller !== packageVersion()) },
+    state,
+    hasUpdates: Boolean(latestInstaller && latestInstaller !== packageVersion())
+  };
 }
 
 export async function updateCommand(options = {}) {
-  const workspace = findWorkspaceDir(options.dir);
-  if (!fs.existsSync(workspace)) throw new Error(`workspace does not exist: ${workspace}`);
-  const mainDirty = await dirtyPaths(workspace);
-  const wikisDirty = fs.existsSync(path.join(workspace, "wikis")) ? await dirtyPaths(path.join(workspace, "wikis")) : [];
-  if (mainDirty.length || wikisDirty.length) {
-    console.error("Dirty worktree detected; update will not overwrite local changes.");
-    for (const line of mainDirty) console.error(`main: ${line}`);
-    for (const line of wikisDirty) console.error(`wikis: ${line}`);
-    process.exitCode = 1;
-    return;
+  const runtimeDir = findWorkspaceDir(options.dir);
+  if (!fs.existsSync(runtimeDir)) throw new Error(`runtime directory does not exist: ${runtimeDir}`);
+  const state = readUserState();
+  const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
+  const manifest = readManifest(manifestPath);
+  let changed = false;
+  let runtimeTag = state.runtimeTag || "";
+  const nextTools = { ...(state.tools || {}) };
+
+  const latestInstaller = await npmLatest();
+  if (latestInstaller && latestInstaller !== packageVersion()) {
+    console.log(`installer has update: ${packageVersion()} -> ${latestInstaller}`);
+    console.log("Run the same npx command again to use the latest npm installer.");
+  } else {
+    console.log(`installer: up to date (${packageVersion()})`);
   }
-  const gitProtocol = await updateProtocol(workspace, options);
-  await syncWikisSubmodule(workspace, gitProtocol);
-  const originUrl = await repoUrl(workspace);
-  const updates = await checkUpdates(workspace, { ...options, gitProtocol });
-  printUpdateSummary(updates);
-  if (options.check) {
-    writeState(workspace, {
-      mainCommit: await currentCommit(workspace),
-      wikisCommit: await submoduleCommit(workspace),
-      manifestSha256: updates.cli.digest,
-      packageVersion: packageVersion(),
-      lastCheckAt: new Date().toISOString(),
-      gitProtocol,
-      repoUrl: originUrl
-    });
-    return updates;
-  }
-  if (!updates.hasUpdates) {
-    console.log("No repository or wikis updates detected.");
-    writeState(workspace, {
-      mainCommit: await currentCommit(workspace),
-      wikisCommit: await submoduleCommit(workspace),
-      manifestSha256: updates.cli.digest,
-      packageVersion: packageVersion(),
-      lastCheckAt: new Date().toISOString(),
-      gitProtocol,
-      repoUrl: originUrl
-    });
-    return updates;
-  }
-  if (!(await confirm(`Apply updates to ${workspace}?`, { yes: options.yes, defaultNo: true }))) throw new Error("update cancelled");
-  if (updates.mainRepo.update) {
-    await runGitWithProtocol(gitProtocol, ["pull", "--ff-only"], { ...options, cwd: workspace, stdio: "inherit" });
-  }
-  if (updates.wikis.update || updates.mainRepo.update) {
-    if (!(await confirm("Update wikis submodule? This can change Agent behavior.", { yes: options.yes, defaultNo: true }))) {
-      console.warn("warning: wikis update skipped");
+
+  const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
+  if (state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) {
+    console.log(`runtime bundle has update: ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
+    if (await confirm("Update runtime bundle?", { defaultNo: true })) {
+      const bundle = await installRuntimeBundle(runtimeDir, { ...options, force: true });
+      runtimeTag = bundle.tag || runtimeRelease.tag_name;
+      changed = true;
     } else {
-      await syncWikisSubmodule(workspace, gitProtocol);
-      await runGitWithProtocol(gitProtocol, ["submodule", "update", "--init", "--recursive", "--remote", "wikis"], { ...options, cwd: workspace, stdio: "inherit" });
+      console.log("Skipped runtime bundle");
+    }
+  } else {
+    console.log(`runtime bundle: up to date (${state.runtimeTag || runtimeRelease.tag_name})`);
+  }
+
+  for (const tool of manifest.tools || []) {
+    if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
+      console.log(`${tool.name}: local path mode; check manually`);
+      continue;
+    }
+    const installed = await maybeUpdateTool(runtimeDir, manifest, tool, options, state);
+    if (installed) {
+      nextTools[tool.name] = installed;
+      changed = true;
     }
   }
-  await installToolsFromManifest(workspace, path.join(workspace, "bootstrap", "cli-manifest.json"), options);
-  await run(path.join(workspace, "bin", "data-harness-cli"), ["wikis", "build-index"], { cwd: workspace, stdio: "inherit" });
-  const doctor = await collectDoctor(workspace, options);
-  for (const check of doctor.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}`);
-  if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed after update");
-  writeState(workspace, {
-    mainCommit: await currentCommit(workspace),
-    wikisCommit: await submoduleCommit(workspace),
-    manifestSha256: updates.cli.digest,
-    packageVersion: packageVersion(),
-    lastCheckAt: new Date().toISOString(),
-    gitProtocol,
-    repoUrl: originUrl
-  });
-  console.log(`Harness Data updated: ${workspace}`);
+
+  const wikis = await updateWikis(runtimeDir, options, state);
+  if (wikis) changed = true;
+
+  if (changed) {
+    await buildAndCheck(runtimeDir, options);
+    const doctor = await collectDoctor(runtimeDir, options);
+    for (const check of doctor.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}${check.detail ? ` (${check.detail})` : ""}`);
+    writeState(runtimeDir, {
+      ...state,
+      runtimeTag,
+      tools: nextTools,
+      manifestSha256: manifestDigest(manifest),
+      lastCheckAt: new Date().toISOString()
+    });
+    console.log("Harness Data runtime updated.");
+  } else {
+    writeState(runtimeDir, { ...state, lastCheckAt: new Date().toISOString() });
+    console.log("No selected updates were applied.");
+  }
 }

@@ -13,7 +13,7 @@ export function manifestDigest(manifest) {
   return crypto.createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
-function download(url, file, headers = {}) {
+export function download(url, file, headers = {}) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, { headers }, (response) => {
       if ([301, 302, 307, 308].includes(response.statusCode) && response.headers.location) {
@@ -77,10 +77,7 @@ async function downloadPrivateWithGh(asset, file) {
 }
 
 function githubToken(options = {}) {
-  const name = options.githubTokenEnv;
-  if (!name) return "";
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error("--github-token-env must be a valid environment variable name");
-  return process.env[name] || "";
+  return options.githubToken || process.env.GITHUB_TOKEN || "";
 }
 
 async function githubAssetApiUrl(asset, token) {
@@ -121,7 +118,7 @@ async function downloadAsset(tool, asset, file, options = {}) {
   console.log(`Downloading private ${tool.name} asset from ${tool.repo}`);
   if (await downloadPrivateWithGh(asset, file)) return;
   if (await downloadPrivateWithToken(asset, file, options)) return;
-  throw new Error(`private GitHub Release asset requires gh auth login or --github-token-env GITHUB_TOKEN: ${assetName(asset)}`);
+  throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}`);
 }
 
 async function expectedSha256(tool, asset, options = {}) {
@@ -140,21 +137,25 @@ function fileSha256(file) {
 }
 
 export async function installToolsFromManifest(workspace, manifestPath, options = {}) {
-  const manifest = readManifest(manifestPath);
+  const manifest = options.manifestOverride || readManifest(manifestPath);
+  const only = options.tools ? new Set(options.tools) : null;
   const key = platformKey();
   const cacheDir = path.join(workspace, ".bootstrap-cache");
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(cacheDir, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
+  const installedTools = {};
 
   for (const tool of manifest.tools || []) {
+    if (only && !only.has(tool.name)) continue;
     const asset = tool.platforms?.[key];
     if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
     const archive = path.join(cacheDir, assetName(asset));
     console.log(`Downloading ${tool.name} ${tool.version} (${key})`);
     await downloadAsset(tool, asset, archive, options);
     const sha = await expectedSha256(tool, asset, options);
-    if (sha && fileSha256(archive) !== sha) throw new Error(`${tool.name} sha256 mismatch`);
+    const actualSha = fileSha256(archive);
+    if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
     if (!sha) console.warn(`warning: ${tool.name} has no sha256; continuing without checksum`);
     if (archive.endsWith(".zip")) {
       await run("unzip", ["-o", archive, "-d", binDir], { stdio: "inherit" });
@@ -164,6 +165,12 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const binary = path.join(binDir, tool.binary);
     if (!fs.existsSync(binary)) throw new Error(`${tool.binary} was not extracted to bin/`);
     fs.chmodSync(binary, 0o755);
+    installedTools[tool.name] = {
+      version: tool.version || "",
+      asset: assetName(asset),
+      sha256: sha || actualSha
+    };
   }
+  Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
   return manifest;
 }

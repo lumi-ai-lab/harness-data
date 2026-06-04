@@ -126,6 +126,27 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Checkout runtime templates
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          clean: false
+
+      - name: Package runtime bundle
+        env:
+          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/agents runtime/config runtime/bootstrap
+          cp -R .agents/claude runtime/agents/claude
+          cp -R .agents/codex runtime/agents/codex
+          cp -R .agents/pi runtime/agents/pi
+          cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
+          cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
+          cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
+          tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
+          shasum -a 256 "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" > "dist/harness-data-runtime-${VERSION_TAG}.tar.gz.sha256"
+
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:

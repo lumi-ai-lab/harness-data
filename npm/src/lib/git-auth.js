@@ -40,21 +40,17 @@ function httpsFailureMessage() {
   return [
     "HTTPS access to the private GitHub repositories failed.",
     "Fix by configuring a GitHub SSH key, running gh auth login, enabling Git Credential Manager,",
-    "or passing --github-token-env GITHUB_TOKEN with a token stored in that environment variable."
+    "or passing --github-token TOKEN."
   ].join(" ");
 }
 
 function tokenEnvName(options = {}) {
-  const name = options.githubTokenEnv;
-  if (!name) return "";
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error("--github-token-env must be a valid environment variable name");
-  if (!process.env[name]) throw new Error(`environment variable ${name} is empty or unset`);
-  return name;
+  return options.githubToken || process.env.GITHUB_TOKEN || "";
 }
 
 async function withHttpsAuthEnv(options, callback) {
-  const name = tokenEnvName(options);
-  if (!name) return callback({ GIT_TERMINAL_PROMPT: "0" });
+  const token = tokenEnvName(options);
+  if (!token) return callback({ GIT_TERMINAL_PROMPT: "0" });
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-git-"));
   const askpass = path.join(dir, "askpass.sh");
@@ -62,7 +58,7 @@ async function withHttpsAuthEnv(options, callback) {
     "#!/bin/sh",
     "case \"$1\" in",
     "*Username*) printf '%s\\n' x-access-token ;;",
-    "*Password*) printenv \"$GITHUB_TOKEN_ENV_NAME\" ;;",
+    "*Password*) printf '%s\\n' \"$GITHUB_TOKEN_VALUE\" ;;",
     "*) printf '\\n' ;;",
     "esac",
     ""
@@ -71,7 +67,7 @@ async function withHttpsAuthEnv(options, callback) {
   try {
     return await callback({
       GIT_ASKPASS: askpass,
-      GITHUB_TOKEN_ENV_NAME: name,
+      GITHUB_TOKEN_VALUE: token,
       GIT_TERMINAL_PROMPT: "0"
     });
   } finally {

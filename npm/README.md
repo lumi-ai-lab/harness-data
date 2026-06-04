@@ -1,19 +1,43 @@
 # Harness Data npm installer
 
+Install a Harness Data runtime in the current directory:
+
 ```bash
 npx @lumi-ai-lab/harness-data install
-npx @lumi-ai-lab/harness-data install --git-protocol ssh
-npx @lumi-ai-lab/harness-data install --git-protocol https
-GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install --yes --agent codex --git-protocol https --github-token-env GITHUB_TOKEN --cas-config-dir /secure/path/to/cas
-npx @lumi-ai-lab/harness-data install --yes --agent pi --cas-config-dir /secure/path/to/cas
-npx @lumi-ai-lab/harness-data doctor --dir ~/harness-data
-npx @lumi-ai-lab/harness-data update --dir ~/harness-data
 ```
 
-This package is only the installer and updater. The full Harness Data workspace is cloned and maintained outside the npm package.
+Install into an explicit runtime directory:
 
-Private GitHub repository access defaults to `--git-protocol auto`: SSH is tried first, then HTTPS. HTTPS uses Git Credential Manager, `gh auth login`, or a token supplied through `--github-token-env`; GitHub account passwords are not supported.
+```bash
+npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
+```
 
-The `qdm-cmr-cli`, `qdm-indicators-cli`, and `cas-cli` binaries are downloaded from private GitHub Releases in `pengmide/qdm-cmr-cli`, `pengmide/qdm-indicators-cli`, and `pengmide/qdm-cas-cli`. The installer uses `gh auth login` first and falls back to `--github-token-env`.
+Use a GitHub token for private Release assets:
 
-`--agent` supports `claude`, `codex`, `pi`, `both` (Claude + Codex), and `all` (Claude + Codex + Pi).
+```bash
+npx @lumi-ai-lab/harness-data install --github-token ...
+```
+
+or:
+
+```bash
+GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
+```
+
+Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-indicators-cli`, `qdm-cmr-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively.
+
+Update an existing runtime interactively:
+
+```bash
+npx @lumi-ai-lab/harness-data update
+```
+
+Diagnose a runtime:
+
+```bash
+npx @lumi-ai-lab/harness-data doctor
+```
+
+The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks.
+
+`--agent` supports `claude`, `codex`, `pi`, and `all`; the default is `all`.
