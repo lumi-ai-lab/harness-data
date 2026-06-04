@@ -104,7 +104,7 @@ jobs:
             asset="dist/${base}.tar.gz"
           fi
 
-          shasum -a 256 "${asset}" > "${asset}.sha256"
+          (cd dist && shasum -a 256 "$(basename "${asset}")" > "$(basename "${asset}").sha256")
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -145,7 +145,7 @@ jobs:
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
           cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
-          shasum -a 256 "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" > "dist/harness-data-runtime-${VERSION_TAG}.tar.gz.sha256"
+          (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
