@@ -6,7 +6,7 @@ description: Use QDM Harness context, playbooks, templates, and data CLI constra
 
 Read `README.md` before running QDM data commands.
 
-- Always run from the harness-data repository root.
+- Always run from the harness-data runtime workspace root.
 - Use `source config/qdm-cli-paths.env` before invoking QDM data CLIs from shell snippets.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values or replace missing data with examples.
