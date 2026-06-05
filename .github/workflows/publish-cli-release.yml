@@ -137,7 +137,7 @@ jobs:
           VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p runtime/agents runtime/config runtime/bootstrap
+          mkdir -p dist runtime/agents runtime/config runtime/bootstrap
           cp -R .agents/claude runtime/agents/claude
           cp -R .agents/codex runtime/agents/codex
           cp -R .agents/pi runtime/agents/pi
