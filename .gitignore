@@ -27,6 +27,7 @@ bin/
 !npm/bin/**
 .bootstrap-cache/
 .bootstrap-cache*/
+plan/
 
 # Local/generated business data samples
 *-cmr-response.json
