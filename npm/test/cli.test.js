@@ -11,6 +11,7 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { readManifest } from "../src/lib/manifest.js";
 import { buildAndCheck } from "../src/commands/install.js";
+import { writeLocalConfig } from "../src/lib/config.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -55,6 +56,16 @@ test("private qdm cli tools point at their own repositories", () => {
   assert.equal(byName.get("qdm-cmr-cli").private, true);
   assert.equal(byName.get("qdm-indicators-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+});
+
+test("local config exports workspace CAS config dir", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+
+  writeLocalConfig(workspace, { overwrite: true });
+
+  const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
+  const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
+  assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
 });
 
 test("skip wikis check passes skip checks to build-index", async () => {

@@ -21,6 +21,11 @@ type casConfig struct {
 	} `json:"cas"`
 }
 
+type casConfigLocation struct {
+	Dir  string
+	Path string
+}
+
 func preflightAuth(root string, plan WikiPlan) []string {
 	apps := appsForPlan(plan)
 	if len(apps) == 0 {
@@ -88,10 +93,14 @@ func preflightAppAuth(root string, cfg harness.CLIConfig, app string) string {
 	if cfg.QDMCasCLI == "" {
 		return app + " token invalid and qdm_cas_cli is not configured"
 	}
-	if !casCredentialsConfigured(root) {
-		return app + " token invalid; CAS credentials are not configured, so hook did not start QR login"
+	location, err := casConfigLocationForRoot(root)
+	if err != nil {
+		return fmt.Sprintf("%s token invalid; CAS config path could not be resolved: %v", app, err)
 	}
-	token, err := fetchCASToken(root, cfg.QDMCasCLI, app)
+	if !casCredentialsConfiguredAt(location.Path) {
+		return fmt.Sprintf("%s token invalid; CAS credentials are not configured at %s, so hook did not start QR login", app, location.Path)
+	}
+	token, err := fetchCASToken(root, cfg.QDMCasCLI, app, location.Dir)
 	if err != nil {
 		return fmt.Sprintf("%s token refresh failed: %v", app, err)
 	}
@@ -127,8 +136,10 @@ func checkTargetToken(root, cli string) (bool, error) {
 	return strings.TrimSpace(out) == "true", nil
 }
 
-func fetchCASToken(root, casCLI, app string) (string, error) {
-	out, err := runShortCommand(root, 45*time.Second, casCLI, "token", "--timeout", "40s", "--app", app)
+func fetchCASToken(root, casCLI, app, casConfigDir string) (string, error) {
+	out, err := runShortCommandWithEnv(root, 45*time.Second, map[string]string{
+		"QDM_CAS_CONFIG_DIR": casConfigDir,
+	}, casCLI, "token", "--timeout", "40s", "--app", app)
 	if err != nil {
 		return "", err
 	}
@@ -156,11 +167,15 @@ func setTargetToken(root, cli, token string) error {
 }
 
 func runShortCommand(root string, timeout time.Duration, name string, args ...string) (string, error) {
+	return runShortCommandWithEnv(root, timeout, nil, name, args...)
+}
+
+func runShortCommandWithEnv(root string, timeout time.Duration, env map[string]string, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = root
-	cmd.Env = os.Environ()
+	cmd.Env = commandEnv(env)
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if ctx.Err() == context.DeadlineExceeded {
@@ -175,11 +190,36 @@ func runShortCommand(root string, timeout time.Duration, name string, args ...st
 	return text, nil
 }
 
+func commandEnv(overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return os.Environ()
+	}
+	env := os.Environ()
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			if _, overridden := overrides[key]; overridden {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	for key, value := range overrides {
+		out = append(out, key+"="+value)
+	}
+	return out
+}
+
 func casCredentialsConfigured(root string) bool {
-	path, err := casConfigPath(root)
+	location, err := casConfigLocationForRoot(root)
 	if err != nil {
 		return false
 	}
+	return casCredentialsConfiguredAt(location.Path)
+}
+
+func casCredentialsConfiguredAt(path string) bool {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -192,21 +232,32 @@ func casCredentialsConfigured(root string) bool {
 }
 
 func casConfigPath(root string) (string, error) {
+	location, err := casConfigLocationForRoot(root)
+	if err != nil {
+		return "", err
+	}
+	return location.Path, nil
+}
+
+func casConfigLocationForRoot(root string) (casConfigLocation, error) {
 	if dir := strings.TrimSpace(os.Getenv("QDM_CAS_CONFIG_DIR")); dir != "" {
-		return filepath.Join(dir, "config.json"), nil
+		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
 	}
 	if workspace := strings.TrimSpace(os.Getenv("LUMI_WORKSPACE_PATH")); workspace != "" {
-		return filepath.Join(workspace, ".qdm-auth", "cas", "config.json"), nil
+		dir := filepath.Join(workspace, ".qdm-auth", "cas")
+		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
 	}
 	if root != "" {
-		path := filepath.Join(root, ".qdm-auth", "cas", "config.json")
+		dir := filepath.Join(root, ".qdm-auth", "cas")
+		path := filepath.Join(dir, "config.json")
 		if _, err := os.Stat(path); err == nil {
-			return path, nil
+			return casConfigLocation{Dir: dir, Path: path}, nil
 		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return casConfigLocation{}, err
 	}
-	return filepath.Join(home, ".cas-cli", "config.json"), nil
+	dir := filepath.Join(home, ".cas-cli")
+	return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
 }

@@ -234,7 +234,14 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: free", "Do not run bin/data-harness-cli inject-template", "wikis/spec/index.md", "wikis/playbooks/index.md"} {
+	for _, want := range []string{
+		"Harness mode: free",
+		"Do not run bin/data-harness-cli inject-template",
+		"wikis/spec/cmr/business/index.md",
+		"wikis/spec/cmr/business/r-business-analysis-report.md",
+		"wikis/spec/cmr/member/index.md",
+		"wikis/spec/cmr/member/r-member-analysis-report.md",
+	} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
@@ -257,7 +264,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
-	if state["reason"] != "no_recall_hit" {
+	if state["reason"] != "concept_only" {
 		t.Fatalf("reason = %#v", state["reason"])
 	}
 }
