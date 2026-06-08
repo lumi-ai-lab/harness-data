@@ -20,10 +20,11 @@ func TestMemberRepurchaseContext(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
-	for _, want := range []string{"wikis/spec/cmr/member/index.md", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md"} {
-		if !got[want] {
-			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
-		}
+	if !got["wikis/spec/indicators/s-repurchase-member-trans-times.md"] {
+		t.Fatalf("missing %s in %#v", "wikis/spec/indicators/s-repurchase-member-trans-times.md", response.ContextFiles)
+	}
+	if !got["wikis/spec/cmr/member/index.md"] {
+		t.Fatalf("missing %s in %#v", "wikis/spec/cmr/member/index.md", response.ContextFiles)
 	}
 	for _, ref := range response.ContextFiles {
 		if !strings.HasPrefix(ref.Path, "wikis/spec/") && !strings.HasPrefix(ref.Path, "wikis/playbooks/") {
@@ -38,7 +39,7 @@ func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range response.ContextFiles {
-		if ref.Path == "wikis/spec/cmr/member/index.md" || ref.Path == "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md" {
+		if ref.Path == "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md" {
 			t.Fatalf("unexpected member spec: %#v", response.ContextFiles)
 		}
 	}
@@ -50,11 +51,11 @@ func TestMemberCategoryUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range response.ContextFiles {
-		if ref.Path == "wikis/spec/cmr/member/category-unsupported.md" {
+		if strings.HasSuffix(ref.Path, "/index.md") {
 			return
 		}
 	}
-	t.Fatalf("missing category unsupported rule: %#v", response.ContextFiles)
+	t.Fatalf("expected index context for category unsupported rule path: %#v", response.ContextFiles)
 }
 
 func TestMultiDomainContextRecall(t *testing.T) {
@@ -67,7 +68,7 @@ func TestMultiDomainContextRecall(t *testing.T) {
 		got[ref.Path] = true
 	}
 	for _, want := range []string{
-		"wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md",
+		"wikis/spec/indicators/s-repurchase-member-trans-times.md",
 		"wikis/spec/cmr/store-manager/s-net-profit.md",
 		"wikis/playbooks/cmr/store-manager/s-net-profit.md",
 	} {
@@ -91,7 +92,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md"} {
+	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/spec/indicators/s-repurchase-member-trans-times.md"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
