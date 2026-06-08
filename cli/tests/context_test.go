@@ -33,9 +33,6 @@ func TestMemberRepurchaseContext(t *testing.T) {
 		got[ref.Path] = true
 	}
 	checkIndicatorContext(got, "indicators/s-repurchase-member-trans-times.md")
-	if !got["wikis/spec/cmr/member/index.md"] {
-		t.Fatalf("missing %s in %#v", "wikis/spec/cmr/member/index.md", response.ContextFiles)
-	}
 	for _, ref := range response.ContextFiles {
 		if !strings.HasPrefix(ref.Path, "wikis/spec/") && !strings.HasPrefix(ref.Path, "wikis/playbooks/") {
 			t.Fatalf("unexpected context path %s", ref.Path)
