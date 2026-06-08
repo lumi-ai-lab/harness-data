@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { platformKey } from "../src/lib/platform.js";
+import { binaryName, platformKey } from "../src/lib/platform.js";
 import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
