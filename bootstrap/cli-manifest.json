@@ -6,22 +6,22 @@
       "name": "data-harness-cli",
       "binary": "data-harness-cli",
       "repo": "lumi-ai-lab/harness-data",
-      "version": "v0.0.7",
+      "version": "v0.0.8",
       "platforms": {
         "darwin-arm64": {
-          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.7/data-harness-cli-v0.0.7-darwin-arm64.tar.gz",
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.8/data-harness-cli-v0.0.8-darwin-arm64.tar.gz",
           "sha256": ""
         },
         "darwin-amd64": {
-          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.7/data-harness-cli-v0.0.7-darwin-amd64.tar.gz",
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.8/data-harness-cli-v0.0.8-darwin-amd64.tar.gz",
           "sha256": ""
         },
         "linux-amd64": {
-          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.7/data-harness-cli-v0.0.7-linux-amd64.tar.gz",
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.8/data-harness-cli-v0.0.8-linux-amd64.tar.gz",
           "sha256": ""
         },
         "windows-amd64": {
-          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.7/data-harness-cli-v0.0.7-windows-amd64.zip",
+          "url": "https://github.com/lumi-ai-lab/harness-data/releases/download/v0.0.8/data-harness-cli-v0.0.8-windows-amd64.zip",
           "sha256": ""
         }
       }
