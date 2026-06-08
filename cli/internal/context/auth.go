@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"harness-data/cli/internal/harness"
-	"harness-data/cli/internal/sessionstate"
 )
 
 type casConfig struct {
@@ -27,15 +26,12 @@ type casConfigLocation struct {
 }
 
 func preflightAuth(root string, plan WikiPlan) []string {
-	apps := appsForPlan(plan)
-	if len(apps) == 0 {
-		return nil
-	}
 	cfg, err := harness.LoadConfig(root)
 	if err != nil {
 		return []string{"auth preflight skipped: " + err.Error()}
 	}
-	var notes []string
+	apps := []string{"cmr", "indicators"}
+	notes := make([]string, 0, len(apps))
 	for _, app := range apps {
 		note := preflightAppAuth(root, cfg.CLI, app)
 		if note != "" {
@@ -43,42 +39,6 @@ func preflightAuth(root string, plan WikiPlan) []string {
 		}
 	}
 	return notes
-}
-
-func appsForPlan(plan WikiPlan) []string {
-	seen := map[string]bool{}
-	var apps []string
-	add := func(app string) {
-		if app == "" || seen[app] {
-			return
-		}
-		seen[app] = true
-		apps = append(apps, app)
-	}
-	paths := []string{plan.SelectedPlaybook}
-	for _, playbook := range plan.SelectedPlaybooks {
-		paths = append(paths, playbook.Path)
-	}
-	for _, path := range paths {
-		switch {
-		case strings.Contains(path, "/cmr/") || strings.HasPrefix(path, "playbooks/cmr/") || strings.HasPrefix(path, "spec/cmr/"):
-			add("cmr")
-		case strings.Contains(path, "/idx/") || strings.HasPrefix(path, "playbooks/idx/") || strings.HasPrefix(path, "spec/idx/"):
-			add("indicators")
-		}
-	}
-	for _, candidate := range plan.Candidates {
-		switch {
-		case strings.Contains(candidate.Path, "/cmr/") || strings.HasPrefix(candidate.Path, "playbooks/cmr/") || strings.HasPrefix(candidate.Path, "spec/cmr/"):
-			add("cmr")
-		case strings.Contains(candidate.Path, "/idx/") || strings.HasPrefix(candidate.Path, "playbooks/idx/") || strings.HasPrefix(candidate.Path, "spec/idx/"):
-			add("indicators")
-		}
-	}
-	if plan.Mode == sessionstate.ModeFree {
-		return nil
-	}
-	return apps
 }
 
 func preflightAppAuth(root string, cfg harness.CLIConfig, app string) string {

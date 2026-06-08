@@ -453,7 +453,7 @@ func NormalizeMetricDuplicates(root string, data LiteMetricDuplicatesFile) (Metr
 			}
 		}
 		if metricDuplicateCrossSystem(group.Files) || group.Severity == "error" {
-			group.Reason = "同一指标不应同时出现在 CMR 和 IDX"
+			group.Reason = "同一指标不应同时出现在 CMR 和 Indicators"
 		} else {
 			group.Reason = "精确重复命中，需要人工确认唯一 canonical owner"
 		}
@@ -560,7 +560,7 @@ func buildMetricDuplicateGroups(root string) ([]MetricDuplicateGroup, int, error
 			}
 			if metricDuplicateCrossSystem(files) {
 				group.Severity = "error"
-				group.Reason = "同一指标不应同时出现在 CMR 和 IDX"
+				group.Reason = "同一指标不应同时出现在 CMR 和 Indicators"
 			} else {
 				group.Severity = "warn"
 				group.Reason = "精确重复命中，需要人工确认唯一 canonical owner"
@@ -689,7 +689,7 @@ func metricDuplicateCrossSystem(files []MetricDuplicateFileItem) bool {
 	for _, file := range files {
 		domains[file.Domain] = true
 	}
-	return domains["cmr"] && domains["idx"]
+	return domains["cmr"] && domains["indicators"]
 }
 
 func duplicateGroupLabel(matchType, value string) string {

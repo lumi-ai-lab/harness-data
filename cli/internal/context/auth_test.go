@@ -3,10 +3,123 @@ package context
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"harness-data/cli/internal/harness"
+	"harness-data/cli/internal/sessionstate"
 )
+
+func TestPreflightAuthAlwaysChecksCMRAndIndicators(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
+	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
+	writeValidTokenCLI(t, cmrCLI)
+	writeValidTokenCLI(t, indicatorsCLI)
+	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, "")
+
+	notes := preflightAuth(root, WikiPlan{
+		SelectedPlaybook: "playbooks/unrelated/something.md",
+		Candidates: []sessionstate.PlaybookCandidate{
+			{Path: "playbooks/indicators/s-sale-amt.md"},
+		},
+	})
+
+	want := []string{"cmr token valid", "indicators token valid"}
+	if !reflect.DeepEqual(notes, want) {
+		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
+	}
+}
+
+func TestPreflightAuthChecksBothAppsInFreeMode(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
+	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
+	writeValidTokenCLI(t, cmrCLI)
+	writeValidTokenCLI(t, indicatorsCLI)
+	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, "")
+
+	notes := preflightAuth(root, WikiPlan{Mode: sessionstate.ModeFree})
+
+	want := []string{"cmr token valid", "indicators token valid"}
+	if !reflect.DeepEqual(notes, want) {
+		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
+	}
+}
+
+func TestPreflightAuthMissingCLIConfigDoesNotBlockOtherApp(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
+	writeValidTokenCLI(t, cmrCLI)
+	writePreflightConfig(t, root, cmrCLI, "", "")
+
+	notes := preflightAuth(root, WikiPlan{})
+
+	want := []string{
+		"cmr token valid",
+		"indicators token preflight skipped: target CLI path is not configured",
+	}
+	if !reflect.DeepEqual(notes, want) {
+		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
+	}
+}
+
+func TestPreflightAuthRefreshesOnlyInvalidApp(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	casDir := filepath.Join(root, ".qdm-auth", "cas")
+	writeCasTestConfig(t, casDir)
+	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
+	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
+	casCLI := filepath.Join(binDir, "cas-cli")
+	indicatorTokenFile := filepath.Join(root, "indicator-token")
+	casLog := filepath.Join(root, "cas.log")
+	writeValidTokenCLI(t, cmrCLI)
+	writeRefreshableTokenCLI(t, indicatorsCLI, indicatorTokenFile)
+	writeExecutable(t, casCLI, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+casLog+"'\necho 'Bearer Token:'\necho 'indicators-token'\n")
+	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, casCLI)
+	t.Setenv("QDM_CAS_CONFIG_DIR", "")
+	t.Setenv("LUMI_WORKSPACE_PATH", "")
+
+	notes := preflightAuth(root, WikiPlan{SelectedPlaybook: "playbooks/cmr/business/s-sale-amt.md"})
+
+	want := []string{
+		"cmr token valid",
+		"indicators token refreshed through CAS credentials",
+	}
+	if !reflect.DeepEqual(notes, want) {
+		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
+	}
+	gotCASLog, err := os.ReadFile(casLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCASLog) != "token --timeout 40s --app indicators\n" {
+		t.Fatalf("cas calls = %q", string(gotCASLog))
+	}
+	gotToken, err := os.ReadFile(indicatorTokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotToken) != "indicators-token\n" {
+		t.Fatalf("indicator token = %q", string(gotToken))
+	}
+}
 
 func TestCasConfigPathResolution(t *testing.T) {
 	t.Run("env wins", func(t *testing.T) {
@@ -118,4 +231,39 @@ func writeExecutable(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writePreflightConfig(t *testing.T, root, cmrCLI, indicatorsCLI, casCLI string) {
+	t.Helper()
+	content := "paths:\n" +
+		"  spec: wikis/spec\n" +
+		"  routing: wikis/routing\n" +
+		"  playbooks: wikis/playbooks\n" +
+		"  templates: wikis/templates\n" +
+		"cli:\n"
+	if cmrCLI != "" {
+		content += "  qdm_cmr_cli: " + cmrCLI + "\n"
+	}
+	if indicatorsCLI != "" {
+		content += "  qdm_indicators_cli: " + indicatorsCLI + "\n"
+	}
+	if casCLI != "" {
+		content += "  qdm_cas_cli: " + casCLI + "\n"
+	}
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "harness-config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeValidTokenCLI(t *testing.T, path string) {
+	t.Helper()
+	writeExecutable(t, path, "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"check-token\" ]; then\n  echo true\n  exit 0\nfi\nexit 2\n")
+}
+
+func writeRefreshableTokenCLI(t *testing.T, path, tokenFile string) {
+	t.Helper()
+	writeExecutable(t, path, "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"check-token\" ]; then\n  [ -f '"+tokenFile+"' ] && echo true || echo false\n  exit 0\nfi\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"set-token\" ]; then\n  printf '%s\\n' \"$3\" > '"+tokenFile+"'\n  exit 0\nfi\nexit 2\n")
 }
