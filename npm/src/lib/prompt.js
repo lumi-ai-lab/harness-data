@@ -1,8 +1,7 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Writable } from "node:stream";
-
-const agentChoices = ["claude", "codex", "pi", "all"];
+import { agentChoices, agentChoiceText } from "./config.js";
 
 export async function confirm(message, options = {}) {
   if (options.yes) return true;
@@ -20,15 +19,15 @@ export async function confirm(message, options = {}) {
 export async function chooseAgent(options = {}) {
   if (options.agent) {
     const value = String(options.agent).trim().toLowerCase();
-    if (!agentChoices.includes(value)) throw new Error("agent must be claude, codex, pi, or all");
+    if (!agentChoices.includes(value)) throw new Error(`agent must be ${agentChoiceText}`);
     return value;
   }
   if (options.yes) return "all";
   const rl = readline.createInterface({ input, output });
   try {
-    const answer = (await rl.question("选择 Agent：claude, codex, pi, all [all] ")).trim().toLowerCase();
+    const answer = (await rl.question(`选择 Agent：${agentChoiceText} [all] `)).trim().toLowerCase();
     const value = answer || "all";
-    if (!agentChoices.includes(value)) throw new Error("agent must be claude, codex, pi, or all");
+    if (!agentChoices.includes(value)) throw new Error(`agent must be ${agentChoiceText}`);
     return value;
   } finally {
     rl.close();

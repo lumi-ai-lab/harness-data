@@ -11,7 +11,8 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { readManifest } from "../src/lib/manifest.js";
 import { buildAndCheck } from "../src/commands/install.js";
-import { writeLocalConfig } from "../src/lib/config.js";
+import { collectDoctor } from "../src/commands/doctor.js";
+import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -66,6 +67,79 @@ test("local config exports workspace CAS config dir", () => {
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+});
+
+test("agent choices include OpenClaw, Hermes, both, and all", () => {
+  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
+});
+
+test("links selected agent templates", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+    fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
+  }
+
+  const openclaw = linkAgents(workspace, "openclaw");
+  assert.deepEqual(openclaw, [["agents/openclaw", ".openclaw"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
+
+  const hermes = linkAgents(workspace, "hermes");
+  assert.deepEqual(hermes, [["agents/hermes", ".hermes"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+
+  const both = linkAgents(workspace, "both");
+  assert.deepEqual(both, [["agents/claude", ".claude"], ["agents/codex", ".codex"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".claude")), fs.realpathSync(path.join(workspace, "agents", "claude")));
+  assert.equal(fs.realpathSync(path.join(workspace, ".codex")), fs.realpathSync(path.join(workspace, "agents", "codex")));
+  assert.equal(fs.existsSync(path.join(workspace, ".pi")), false);
+
+  const all = linkAgents(workspace, "all");
+  assert.deepEqual(all, [
+    ["agents/claude", ".claude"],
+    ["agents/codex", ".codex"],
+    ["agents/pi", ".pi"],
+    ["agents/openclaw", ".openclaw"],
+    ["agents/hermes", ".hermes"],
+  ]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
+  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+});
+
+function createDoctorWorkspace(agent) {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const dir of [
+    "agents/claude",
+    "agents/codex",
+    "agents/pi",
+    "agents/openclaw",
+    "agents/hermes",
+    "bootstrap",
+    "wikis/spec",
+    "wikis/playbooks",
+    "wikis/templates",
+    "bin",
+    ".qdm-auth/cas",
+  ]) {
+    fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  }
+
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "config.json"), "{}");
+  for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  writeLocalConfig(workspace, { overwrite: true });
+  linkAgents(workspace, agent);
+  return workspace;
+}
+
+test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
+  for (const agent of ["openclaw", "hermes", "both", "all"]) {
+    const report = await collectDoctor(createDoctorWorkspace(agent));
+    const agentChecks = report.checks.filter((check) => check.name.startsWith("Agent hook"));
+    assert.ok(agentChecks.length > 0);
+    assert.equal(agentChecks.every((check) => check.ok), true, agent);
+  }
 });
 
 test("skip wikis check passes skip checks to build-index", async () => {

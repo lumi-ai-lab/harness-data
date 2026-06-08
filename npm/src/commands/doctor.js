@@ -3,6 +3,7 @@ import path from "node:path";
 import { run } from "../lib/exec.js";
 import { findWorkspaceDir } from "../lib/paths.js";
 import { binaryName } from "../lib/platform.js";
+import { concreteAgentNames } from "../lib/config.js";
 
 function existsExecutable(file) {
   try {
@@ -67,7 +68,12 @@ export async function collectDoctor(workspace, options = {}) {
   add("CAS credentials file", jsonFileValid(path.join(casConfigDir, "config.json")), casConfigDir);
   add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
   add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
-  add("Agent hook", agentOk(workspace, "claude") || agentOk(workspace, "codex") || agentOk(workspace, "pi"));
+  add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
+  for (const name of ["openclaw", "hermes"]) {
+    if (fs.existsSync(path.join(workspace, `.${name}`))) {
+      add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
+    }
+  }
   if (!fs.existsSync(path.join(workspace, ".harness", "index", "wikis-index.json")) &&
       !fs.existsSync(path.join(workspace, ".harness", "index", "wikis-runtime-index.json"))) {
     checks.push({ name: "wikis index", ok: true, detail: "missing; run data-harness-cli wikis build-index --skip-checks" });

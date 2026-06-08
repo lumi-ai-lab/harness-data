@@ -40,4 +40,4 @@ npx @lumi-ai-lab/harness-data doctor
 
 The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks.
 
-`--agent` supports `claude`, `codex`, `pi`, and `all`; the default is `all`.
+`--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.

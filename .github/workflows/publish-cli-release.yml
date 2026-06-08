@@ -142,12 +142,16 @@ jobs:
           cp -R .agents/claude runtime/agents/claude
           cp -R .agents/codex runtime/agents/codex
           cp -R .agents/pi runtime/agents/pi
+          cp -R .agents/openclaw runtime/agents/openclaw
+          cp -R .agents/hermes runtime/agents/hermes
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
           cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
           ln -s agents/claude runtime/.claude
           ln -s agents/codex runtime/.codex
           ln -s agents/pi runtime/.pi
+          ln -s agents/openclaw runtime/.openclaw
+          ln -s agents/hermes runtime/.hermes
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
           (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")
 

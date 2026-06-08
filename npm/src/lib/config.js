@@ -2,6 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { binaryName } from "./platform.js";
 
+export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
+export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
+export const agentLinks = {
+  claude: [["agents/claude", ".claude"]],
+  codex: [["agents/codex", ".codex"]],
+  pi: [["agents/pi", ".pi"]],
+  openclaw: [["agents/openclaw", ".openclaw"]],
+  hermes: [["agents/hermes", ".hermes"]],
+  both: [["agents/claude", ".claude"], ["agents/codex", ".codex"]],
+  all: [
+    ["agents/claude", ".claude"],
+    ["agents/codex", ".codex"],
+    ["agents/pi", ".pi"],
+    ["agents/openclaw", ".openclaw"],
+    ["agents/hermes", ".hermes"],
+  ],
+};
+export const agentChoiceText = agentChoices.join(", ");
+
 export function writeLocalConfig(workspace, options = {}) {
   const configDir = path.join(workspace, "config");
   fs.mkdirSync(configDir, { recursive: true });
@@ -30,10 +49,8 @@ export function validateCasConfigDir(dir) {
 }
 
 export function linkAgents(workspace, agent) {
-  const pairs = [];
-  if (agent === "claude" || agent === "all") pairs.push(["agents/claude", ".claude"]);
-  if (agent === "codex" || agent === "all") pairs.push(["agents/codex", ".codex"]);
-  if (agent === "pi" || agent === "all") pairs.push(["agents/pi", ".pi"]);
+  const pairs = agentLinks[agent];
+  if (!pairs) throw new Error(`agent must be ${agentChoiceText}`);
   for (const [sourceRel, targetRel] of pairs) {
     const source = path.join(workspace, sourceRel);
     const target = path.join(workspace, targetRel);
@@ -41,4 +58,5 @@ export function linkAgents(workspace, agent) {
     if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
     fs.symlinkSync(source, target, "junction");
   }
+  return pairs;
 }

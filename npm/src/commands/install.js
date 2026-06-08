@@ -265,8 +265,8 @@ export async function installCommand(options = {}) {
   blank();
 
   step(8, 8, "配置 Agent Hook");
-  linkAgents(runtimeDir, await chooseAgent(options));
-  for (const [target, source] of [[".claude", "agents/claude"], [".codex", "agents/codex"], [".pi", "agents/pi"]]) {
+  const linkedAgents = linkAgents(runtimeDir, await chooseAgent(options));
+  for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
   blank();
