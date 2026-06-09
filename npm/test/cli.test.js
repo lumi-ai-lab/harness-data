@@ -11,6 +11,7 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { readManifest } from "../src/lib/manifest.js";
 import { buildAndCheck } from "../src/commands/install.js";
+import { updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js";
 
@@ -156,6 +157,52 @@ test("skip wikis check passes skip checks to build-index", async () => {
   assert.deepEqual(calls, [
     "wikis build-index --skip-checks"
   ]);
+});
+
+test("update wikis fetch uses GitHub token for HTTPS remotes", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const wikisDir = path.join(workspace, "wikis");
+  const authLog = path.join(workspace, "auth.log");
+  fs.mkdirSync(path.join(wikisDir, ".git"), { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "git"), `#!/bin/sh
+if [ "$1" = "-C" ]; then
+  shift
+  shift
+fi
+case "$1 $2 $3" in
+  "remote get-url origin")
+    echo "https://github.com/lumi-ai-lab/harness-data-wikis.git"
+    ;;
+  "fetch origin ")
+    if [ -z "$GIT_ASKPASS" ]; then
+      echo "missing askpass" >&2
+      exit 2
+    fi
+    user="$("$GIT_ASKPASS" "Username for 'https://github.com':")"
+    pass="$("$GIT_ASKPASS" "Password for 'https://$user@github.com':")"
+    printf '%s:%s\\n' "$user" "$pass" > "${authLog}"
+    ;;
+  "rev-parse HEAD ")
+    echo "0123456789abcdef"
+    ;;
+  "rev-parse origin/HEAD ")
+    echo "0123456789abcdef"
+    ;;
+  *)
+    echo "unexpected git args: $*" >&2
+    exit 3
+    ;;
+esac
+`, { mode: 0o755 });
+
+  await updateWikis(workspace, {
+    githubToken: "secret-token",
+    env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
+  }, { installMode: "github-token" });
+
+  assert.equal(fs.readFileSync(authLog, "utf8").trim(), "x-access-token:secret-token");
 });
 
 test("build index prints concise Chinese summary", async () => {

@@ -7,6 +7,7 @@ import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/m
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
+import { protocolFromUrl, runGitWithProtocol } from "../lib/git-auth.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
@@ -87,7 +88,14 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   return result;
 }
 
-async function updateWikis(runtimeDir, options, state) {
+async function updateWikisGit(wikisDir, args, options) {
+  const remote = (await run("git", ["-C", wikisDir, "remote", "get-url", "origin"], { ...options, allowFailure: true })).stdout.trim();
+  const protocol = protocolFromUrl(remote);
+  if (!protocol) return run("git", ["-C", wikisDir, ...args], options);
+  return runGitWithProtocol(protocol, ["-C", wikisDir, ...args], options);
+}
+
+export async function updateWikis(runtimeDir, options, state) {
   const wikisDir = path.join(runtimeDir, "wikis");
   if (!githubToken(options) && state.installMode !== "github-token") {
     skip("harness-data-wikis 为本地路径模式，请手动检查");
@@ -97,9 +105,9 @@ async function updateWikis(runtimeDir, options, state) {
     skip("harness-data-wikis 不是 git checkout");
     return null;
   }
-  await run("git", ["-C", wikisDir, "fetch", "origin"]);
-  const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim();
-  const remote = (await run("git", ["-C", wikisDir, "rev-parse", "origin/HEAD"], { allowFailure: true })).stdout.trim();
+  await updateWikisGit(wikisDir, ["fetch", "origin"], options);
+  const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
+  const remote = (await run("git", ["-C", wikisDir, "rev-parse", "origin/HEAD"], { ...options, allowFailure: true })).stdout.trim();
   if (!remote || local === remote) {
     ok(`harness-data-wikis 已是最新 ${shortSha(local)}`);
     return null;
@@ -110,8 +118,8 @@ async function updateWikis(runtimeDir, options, state) {
     options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
     return null;
   }
-  await run("git", ["-C", wikisDir, "pull", "--ff-only"]);
-  const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"])).stdout.trim();
+  await updateWikisGit(wikisDir, ["pull", "--ff-only"], options);
+  const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
   ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
   return { commit };
 }
