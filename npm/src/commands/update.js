@@ -7,6 +7,7 @@ import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/m
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
+import { resolveLatestTool } from "../lib/tool-release.js";
 import { protocolFromUrl, runGitWithProtocol } from "../lib/git-auth.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
@@ -23,48 +24,17 @@ async function npmLatest() {
   }
 }
 
-function archiveSuffix(url) {
-  if (url.endsWith(".zip")) return "zip";
-  if (url.endsWith(".tar.gz")) return "tar.gz";
-  return "";
-}
-
-function toolAssetName(tool, tag, key) {
-  const current = tool.platforms?.[key]?.url || "";
-  const suffix = archiveSuffix(current) || (key.startsWith("windows-") ? "zip" : "tar.gz");
-  return `${tool.binary}-${tag}-${key}.${suffix}`;
-}
-
-function releaseAsset(release, name) {
-  return (release.assets || []).find((asset) => asset.name === name);
-}
-
-function oneToolManifest(manifest, tool, tag, asset, key) {
+function oneToolManifest(manifest, tool) {
   return {
     ...manifest,
-    tools: [{
-      ...tool,
-      version: tag,
-      platforms: {
-        [key]: {
-          url: asset.browser_download_url || `https://github.com/${tool.repo}/releases/download/${tag}/${asset.name}`,
-          sha256: ""
-        }
-      }
-    }]
+    tools: [tool]
   };
 }
 
 async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   const key = platformKey();
-  const release = await latestRelease(tool.repo, options);
-  const tag = release.tag_name;
-  const assetName = toolAssetName(tool, tag, key);
-  const asset = releaseAsset(release, assetName);
-  if (!asset) {
-    warn(`${tool.name} 最新 release 缺少 ${assetName}，已跳过`);
-    return null;
-  }
+  const latestTool = await resolveLatestTool(tool, key, options);
+  const tag = latestTool.version;
   const current = state.tools?.[tool.name] || {};
   const tagChanged = current.version && current.version !== tag;
   const firstInstall = !current.version;
@@ -78,12 +48,12 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
     options.skippedUpdates?.push(`${tool.name} ${tag}`);
     return null;
   }
-  const updatedManifest = oneToolManifest(manifest, tool, tag, asset, key);
+  const updatedManifest = oneToolManifest(manifest, latestTool);
   const installed = await installToolsFromManifest(runtimeDir, path.join(runtimeDir, ".bootstrap-cache", `${tool.name}-manifest.json`), {
     ...options,
     manifestOverride: updatedManifest
   });
-  const result = installed.installedTools?.[tool.name] || { version: tag, asset: assetName };
+  const result = installed.installedTools?.[tool.name] || { version: tag };
   ok(`${tool.name} 已更新到 ${tag}`);
   return result;
 }

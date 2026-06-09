@@ -6,6 +6,7 @@ import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { binaryName, platformKey } from "../lib/platform.js";
+import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
@@ -236,10 +237,13 @@ export async function installCommand(options = {}) {
   let manifest;
   let localTools = {};
   if (tokenMode) {
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, options);
+    manifest = readManifest(manifestPath);
+    const latestManifest = await resolveLatestManifest(manifest, key, options);
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, manifestOverride: latestManifest });
   } else {
     manifest = readManifest(manifestPath);
-    await installToolsFromManifest(runtimeDir, manifestPath, { ...options, tools: ["data-harness-cli"] });
+    const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
+    await installToolsFromManifest(runtimeDir, manifestPath, { ...options, manifestOverride: latestManifest });
     localTools = await installLocalTools(runtimeDir, options);
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);

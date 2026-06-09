@@ -10,6 +10,7 @@ import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { readManifest } from "../src/lib/manifest.js";
+import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck } from "../src/commands/install.js";
 import { updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
@@ -58,6 +59,16 @@ test("private qdm cli tools point at their own repositories", () => {
   assert.equal(byName.get("qdm-cmr-cli").private, true);
   assert.equal(byName.get("qdm-indicators-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+});
+
+test("tool manifest is a latest-release install catalog", () => {
+  const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
+  assert.equal(manifest.schemaVersion, 2);
+  const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
+  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.tar.gz");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
+  assert.equal(tool.version, undefined);
+  assert.equal(tool.platforms["linux-amd64"].url, undefined);
 });
 
 test("local config exports workspace CAS config dir", () => {
