@@ -221,6 +221,8 @@ jobs:
           ref: ${{ needs.prepare.outputs.version_tag }}
 
       - name: Verify data-harness-cli assets
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           set -euo pipefail
           node <<'NODE' > /tmp/data-harness-assets.txt
