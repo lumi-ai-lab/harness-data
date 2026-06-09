@@ -3,7 +3,7 @@ import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
 import { writeLocalConfig, linkAgents } from "../lib/config.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
-import { resolveWorkspaceDir, writeState } from "../lib/paths.js";
+import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -15,6 +15,14 @@ import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
+
+function readInstallState(runtimeDir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(runtimeDir, ".harness", "installer-state.json"), "utf8"));
+  } catch {
+    return readUserState();
+  }
+}
 
 async function requireCommands(commands) {
   for (const command of commands) {
@@ -233,17 +241,18 @@ export async function installCommand(options = {}) {
   step(3, 8, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
+  const installState = readInstallState(runtimeDir);
 
   let manifest;
   let localTools = {};
   if (tokenMode) {
     manifest = readManifest(manifestPath);
     const latestManifest = await resolveLatestManifest(manifest, key, options);
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, manifestOverride: latestManifest });
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
   } else {
     manifest = readManifest(manifestPath);
     const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
-    await installToolsFromManifest(runtimeDir, manifestPath, { ...options, manifestOverride: latestManifest });
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
     localTools = await installLocalTools(runtimeDir, options);
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);

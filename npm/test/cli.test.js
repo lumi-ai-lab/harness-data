@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import os from "node:os";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -9,7 +10,7 @@ import { binaryName, platformKey } from "../src/lib/platform.js";
 import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
-import { readManifest } from "../src/lib/manifest.js";
+import { installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck } from "../src/commands/install.js";
 import { updateWikis } from "../src/commands/update.js";
@@ -19,6 +20,28 @@ import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function reusableToolManifest(key) {
+  return {
+    schemaVersion: 2,
+    tools: [{
+      name: "data-harness-cli",
+      binary: "data-harness-cli",
+      repo: "lumi-ai-lab/harness-data",
+      version: "v9.9.9",
+      platforms: {
+        [key]: {
+          url: `https://127.0.0.1:1/data-harness-cli-v9.9.9-${key}.tar.gz`,
+          sha256: ""
+        }
+      }
+    }]
+  };
+}
 
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
@@ -69,6 +92,105 @@ test("tool manifest is a latest-release install catalog", () => {
   assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
   assert.equal(tool.version, undefined);
   assert.equal(tool.platforms["linux-amd64"].url, undefined);
+});
+
+test("install skips CLI download when installed binary matches latest state", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const binary = "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(path.join(binDir, "data-harness-cli"), binary, { mode: 0o755 });
+
+  const manifest = await installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+    log: false,
+    manifestOverride: reusableToolManifest(key),
+    state: {
+      tools: {
+        "data-harness-cli": {
+          version: "v9.9.9",
+          asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
+          sha256: sha256(binary),
+          assetSha256: "archive-sha"
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(manifest.installedTools["data-harness-cli"], {
+    version: "v9.9.9",
+    asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
+    sha256: sha256(binary),
+    assetSha256: "archive-sha"
+  });
+});
+
+test("install downloads CLI when installed binary sha does not match state", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, "data-harness-cli"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  await assert.rejects(
+    installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+      log: false,
+      manifestOverride: reusableToolManifest(key),
+      state: {
+        tools: {
+          "data-harness-cli": {
+            version: "v9.9.9",
+            asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
+            sha256: "not-the-binary-sha"
+          }
+        }
+      }
+    }),
+    /ECONNREFUSED|connect/
+  );
+});
+
+test("install downloads CLI when state is missing", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, "data-harness-cli"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+  await assert.rejects(
+    installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+      log: false,
+      manifestOverride: reusableToolManifest(key)
+    }),
+    /ECONNREFUSED|connect/
+  );
+});
+
+test("install force downloads CLI even when installed binary matches state", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const binary = "#!/bin/sh\nexit 0\n";
+  fs.writeFileSync(path.join(binDir, "data-harness-cli"), binary, { mode: 0o755 });
+
+  await assert.rejects(
+    installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+      force: true,
+      log: false,
+      manifestOverride: reusableToolManifest(key),
+      state: {
+        tools: {
+          "data-harness-cli": {
+            version: "v9.9.9",
+            asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
+            sha256: sha256(binary)
+          }
+        }
+      }
+    }),
+    /ECONNREFUSED|connect/
+  );
 });
 
 test("local config exports workspace CAS config dir", () => {

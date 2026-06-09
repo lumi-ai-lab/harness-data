@@ -4,7 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import { commandExists, run } from "./exec.js";
 import { platformKey } from "./platform.js";
-import { action, warn } from "./log.js";
+import { action, skip, warn } from "./log.js";
 
 export function readManifest(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -136,6 +136,35 @@ function fileSha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function executable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function reusableInstalledTool(workspace, tool, asset, options = {}) {
+  const current = tool.version ? optionsStateTool(options, tool.name) : null;
+  if (!current?.version || current.version !== tool.version) return null;
+  if (!current.sha256) return null;
+  const binary = path.join(workspace, "bin", tool.binary);
+  if (!executable(binary)) return null;
+  const actualSha = fileSha256(binary);
+  if (actualSha !== current.sha256) return null;
+  return {
+    version: current.version,
+    asset: current.asset || assetName(asset),
+    sha256: current.sha256,
+    ...(current.assetSha256 ? { assetSha256: current.assetSha256 } : {})
+  };
+}
+
+function optionsStateTool(options, name) {
+  return options?.state?.tools?.[name] || null;
+}
+
 export async function installToolsFromManifest(workspace, manifestPath, options = {}) {
   const manifest = options.manifestOverride || readManifest(manifestPath);
   const only = options.tools ? new Set(options.tools) : null;
@@ -150,6 +179,12 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     if (only && !only.has(tool.name)) continue;
     const asset = tool.platforms?.[key];
     if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
+    const reusable = !options.force ? reusableInstalledTool(workspace, tool, asset, options) : null;
+    if (reusable) {
+      if (options.log !== false) skip(`${tool.name} 已是最新 ${tool.version}`);
+      installedTools[tool.name] = reusable;
+      continue;
+    }
     const archive = path.join(cacheDir, assetName(asset));
     if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
     await downloadAsset(tool, asset, archive, options);
@@ -165,10 +200,12 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const binary = path.join(binDir, tool.binary);
     if (!fs.existsSync(binary)) throw new Error(`${tool.binary} was not extracted to bin/`);
     fs.chmodSync(binary, 0o755);
+    const binarySha = fileSha256(binary);
     installedTools[tool.name] = {
       version: tool.version || "",
       asset: assetName(asset),
-      sha256: sha || actualSha
+      sha256: binarySha,
+      assetSha256: sha || actualSha
     };
   }
   Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
