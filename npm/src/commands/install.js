@@ -221,7 +221,7 @@ export async function installCommand(options = {}) {
   ]);
 
   step(1, 8, "检查本机依赖");
-  await requireCommands(["git", "tar", "unzip"]);
+  await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
 
   step(2, 8, "安装 runtime bundle");
