@@ -205,16 +205,16 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	if state["prompt"] != prompt {
 		t.Fatalf("prompt = %#v", state["prompt"])
 	}
-	if state["mode"] != "free" {
+	if state["mode"] != "report" {
 		t.Fatalf("mode = %#v", state["mode"])
 	}
 	if state["started_at"] == "" {
 		t.Fatalf("missing started_at in %s", string(data))
 	}
-	if state["selected_playbook"] != nil {
+	if state["selected_playbook"] != "playbooks/cmr/business/r-business-analysis-report.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != nil {
+	if state["selected_template"] != "templates/cmr/business/r-business-analysis-report.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != false {

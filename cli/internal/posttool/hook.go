@@ -117,7 +117,11 @@ func InjectTemplate(root, sessionID string) (message, outcome, templateRel strin
 	if err := sessionstate.Save(root, sessionID, state); err != nil {
 		return "", "", templateRel, err
 	}
-	return string(stripMarkdownFrontmatter(template)), "template_injected", templateRel, nil
+	return string(stripMarkdownFrontmatter(template)) + finalOutputContract(), "template_injected", templateRel, nil
+}
+
+func finalOutputContract() string {
+	return "\n\nQDM_DELIVERY_MODE=chat\nQDM_FINAL_OUTPUT_CONTRACT:\n- Use the injected template to organize the final response in the current conversation.\n- Do not write the final result or intermediate analysis result to a file.\n- Only create an export file when the user explicitly asks to export, save, or generate a file.\n"
 }
 
 func buildOutput(message string) Output {

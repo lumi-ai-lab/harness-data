@@ -109,7 +109,8 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		refs = append(refs, harness.FileRef{Path: physical, Reason: reason})
 	}
 
-	hits := recallHits(index, question)
+	matches := RecallMatches(index, question, 0)
+	hits := recallHitsFromMatches(index, matches)
 	ordinarySpecs, conceptSpecs := classifyHits(hits)
 	ordinarySpecs = collapseEquivalentMetricSpecs(ordinarySpecs)
 	sortRuntimeDocsByPath(ordinarySpecs)
@@ -152,7 +153,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	case len(conceptSpecs) > 0:
 		if len(conceptSpecs) == 1 && isReportSpecPath(conceptSpecs[0].Path) {
 			spec := conceptSpecs[0]
-			if !isReportIntentQuestion(question) {
+			if !isReportIntentQuestion(question) && !hasExactRecallMatch(matches, spec.Path) {
 				addDefaultFreeFiles()
 				break
 			}
@@ -198,8 +199,11 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 }
 
 func recallHits(index wikis.RuntimeIndex, question string) []wikis.RuntimeDocument {
+	return recallHitsFromMatches(index, RecallMatches(index, question, 0))
+}
+
+func recallHitsFromMatches(index wikis.RuntimeIndex, matches []retrieval.Match) []wikis.RuntimeDocument {
 	byPath := index.DocsByPath
-	matches := RecallMatches(index, question, 0)
 	seen := map[string]bool{}
 	var docs []wikis.RuntimeDocument
 	for _, match := range matches {
@@ -214,6 +218,15 @@ func recallHits(index wikis.RuntimeIndex, question string) []wikis.RuntimeDocume
 		docs = append(docs, doc)
 	}
 	return docs
+}
+
+func hasExactRecallMatch(matches []retrieval.Match, targetPath string) bool {
+	for _, match := range matches {
+		if match.TargetPath == targetPath && match.Exact {
+			return true
+		}
+	}
+	return false
 }
 
 func RecallMatches(index wikis.RuntimeIndex, question string, top int) []retrieval.Match {
@@ -540,7 +553,7 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate, invent, or write report files unless the user asks. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."

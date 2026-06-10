@@ -289,7 +289,8 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 - 数值、同比、环比、排名、阈值必须来自 CLI 输出。
 - 不得估算、补造或用示例数值替代缺失数据。
-- 除非用户明确要求导出文件，否则不得写入报告文件。
+- Harness 的分析结果、查询结果、报告、摘要和诊断结论默认必须直接回复用户。
+- 除非用户明确要求导出、保存或生成文件，否则不得把最终结果或中间分析结果写入文件。
 - 必需取数完成后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 - template 注入前禁止总结、整理报告素材、生成中间分析、输出阶段性结论。
 - template 注入前禁止读取、打开、猜测或使用任何 `wikis/templates/` 文件。

@@ -30,6 +30,9 @@ func TestInjectTemplateUsesSelectedTemplateAndStripsFrontmatter(t *testing.T) {
 	if strings.Contains(message, "---") || !strings.Contains(message, "# 销售额模板") {
 		t.Fatalf("unexpected template body: %q", message)
 	}
+	if !strings.Contains(message, "QDM_DELIVERY_MODE=chat") || !strings.Contains(message, "Do not write the final result or intermediate analysis result to a file.") {
+		t.Fatalf("missing final output contract: %q", message)
+	}
 	again, outcome, _, err := InjectTemplate(root, sessionID)
 	if err != nil {
 		t.Fatal(err)

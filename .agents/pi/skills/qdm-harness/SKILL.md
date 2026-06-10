@@ -10,6 +10,8 @@ Read `README.md` before running QDM data commands.
 - Use `source config/qdm-cli-paths.env` before invoking QDM data CLIs from shell snippets.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values or replace missing data with examples.
-- Do not write report files unless the user explicitly asks for an exported file.
+- Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default.
+- Use appropriate Emoji in responses to make the output livelier and less rigid, while keeping the analysis professional.
+- Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file.
 - Do not read or use `wikis/templates/` unless `bin/data-harness-cli inject-template` has been requested by the harness flow and the hook injects the template.
 - If CMR or Indicators token is invalid, use the configured `cas-cli` credential flow; do not start QR login from an automated hook.

@@ -201,6 +201,25 @@ func TestBuildWithWikisIndexReportMode(t *testing.T) {
 	}
 }
 
+func TestBuildWithWikisIndexExactReportAliasUsesReportMode(t *testing.T) {
+	root := testContextWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "上个月门店经营情况效果")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeReport || plan.SelectedPlaybook != "playbooks/idx/business/r-business-analysis-report.md" || plan.SelectedTemplate != "templates/idx/business/r-business-analysis-report.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/spec/idx/business/r-business-analysis-report.md",
+		"wikis/playbooks/idx/business/r-business-analysis-report.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+}
+
 func TestBuildWithWikisIndexCMRStoreManagerMultiSingleDefaultsToCurrentValue(t *testing.T) {
 	root := testCMRStoreManagerWikiRoot(t)
 	for _, question := range []string{
