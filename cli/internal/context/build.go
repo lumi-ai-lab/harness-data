@@ -113,6 +113,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	hits := recallHitsFromMatches(index, matches)
 	ordinarySpecs, conceptSpecs := classifyHits(hits)
 	ordinarySpecs = collapseEquivalentMetricSpecs(ordinarySpecs)
+	conceptSpecs = includeSpecificReportConcepts(byPath, question, conceptSpecs)
 	sortRuntimeDocsByPath(ordinarySpecs)
 	sortRuntimeDocsByPath(conceptSpecs)
 
@@ -151,28 +152,16 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		plan.Reason = "multi_metric_non_direct"
 		addFreeSpecFiles(add, byPath, ordinarySpecs)
 	case len(conceptSpecs) > 0:
+		if selected, ok := selectReportConcept(resolver, byPath, index.TemplateSelection, question, matches, conceptSpecs); ok {
+			plan = selected.Plan
+			add(selected.Spec.Path, "matched report spec")
+			add(selected.Playbook.Path, "selected report playbook")
+			break
+		}
 		if len(conceptSpecs) == 1 && isReportSpecPath(conceptSpecs[0].Path) {
 			spec := conceptSpecs[0]
 			if !isReportIntentQuestion(question) && !hasExactRecallMatch(matches, spec.Path) {
 				addDefaultFreeFiles()
-				break
-			}
-			playbookPath := wikis.SamePath(spec.Path, "playbooks")
-			if runtimeDocExists(resolver, byPath, playbookPath) {
-				playbook := byPath[playbookPath]
-				selection := selectTemplate(index.TemplateSelection, question, []wikis.RuntimeDocument{spec}, playbookPath)
-				selectedTemplate := selectedTemplateFromDiagnostic(selection)
-				if selectedTemplate == "" && selection.Status == "none" && selection.Reason == "no_selection_policy" {
-					selectedTemplate = existingPlaybookTemplatePath(resolver, byPath, playbook)
-				}
-				plan = WikiPlan{
-					Mode:              sessionstate.ModeReport,
-					SelectedPlaybook:  playbookPath,
-					SelectedTemplate:  selectedTemplate,
-					TemplateSelection: selection,
-				}
-				add(spec.Path, "matched report spec")
-				add(playbookPath, "selected report playbook")
 				break
 			}
 			plan.Reason = "report_spec_missing_playbook"
@@ -229,6 +218,21 @@ func hasExactRecallMatch(matches []retrieval.Match, targetPath string) bool {
 	return false
 }
 
+func exactRecallMatchLen(matches []retrieval.Match, targetPath string) (bool, int) {
+	exact := false
+	maxLen := 0
+	for _, match := range matches {
+		if match.TargetPath != targetPath || !match.Exact {
+			continue
+		}
+		exact = true
+		if match.TermRuneLen > maxLen {
+			maxLen = match.TermRuneLen
+		}
+	}
+	return exact, maxLen
+}
+
 func RecallMatches(index wikis.RuntimeIndex, question string, top int) []retrieval.Match {
 	items := make([]retrieval.Item, 0, len(index.Recall))
 	for _, item := range index.Recall {
@@ -248,6 +252,30 @@ func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wiki
 		}
 	}
 	return ordinarySpecs, conceptSpecs
+}
+
+func includeSpecificReportConcepts(byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
+	const profitAnalysisSpec = "spec/indicators/business/r-profit-analysis-report.md"
+	if !isOrganizationProfitSalesReportSpec(profitAnalysisSpec, question) {
+		return specs
+	}
+	if hasRuntimeDoc(specs, profitAnalysisSpec) {
+		return specs
+	}
+	doc, ok := byPath[profitAnalysisSpec]
+	if !ok || doc.Kind != wikis.KindSpec || doc.SpecType != wikis.SpecTypeConcept {
+		return specs
+	}
+	return append(specs, doc)
+}
+
+func hasRuntimeDoc(docs []wikis.RuntimeDocument, docPath string) bool {
+	for _, doc := range docs {
+		if doc.Path == docPath {
+			return true
+		}
+	}
+	return false
 }
 
 func sortRuntimeDocsByPath(docs []wikis.RuntimeDocument) {
@@ -330,6 +358,118 @@ func isReportIntentQuestion(question string) bool {
 		"业务大盘",
 		"生成经营",
 	})
+}
+
+type selectedReportConcept struct {
+	Plan             WikiPlan
+	Spec             wikis.RuntimeDocument
+	Playbook         wikis.RuntimeDocument
+	OrgSpecific      bool
+	Exact            bool
+	ExactTermRuneLen int
+	TemplateScore    int
+	TemplatePriority int
+}
+
+func selectReportConcept(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, rules []wikis.TemplateSelectionRule, question string, matches []retrieval.Match, specs []wikis.RuntimeDocument) (selectedReportConcept, bool) {
+	reportIntent := isReportIntentQuestion(question)
+	var candidates []selectedReportConcept
+	for _, spec := range specs {
+		if !isReportSpecPath(spec.Path) {
+			continue
+		}
+		exact, exactLen := exactRecallMatchLen(matches, spec.Path)
+		orgSpecific := isOrganizationProfitSalesReportSpec(spec.Path, question)
+		if !reportIntent && !exact && !orgSpecific {
+			continue
+		}
+		playbookPath := wikis.SamePath(spec.Path, "playbooks")
+		if !runtimeDocExists(resolver, byPath, playbookPath) {
+			continue
+		}
+		playbook := byPath[playbookPath]
+		selection := selectTemplate(rules, question, []wikis.RuntimeDocument{spec}, playbookPath)
+		selectedTemplate := selectedTemplateFromDiagnostic(selection)
+		if selectedTemplate == "" && selection.Status == "none" && selection.Reason == "no_selection_policy" {
+			selectedTemplate = existingPlaybookTemplatePath(resolver, byPath, playbook)
+		}
+		templateScore, templatePriority := templateSelectionScore(selection)
+		candidates = append(candidates, selectedReportConcept{
+			Plan: WikiPlan{
+				Mode:              sessionstate.ModeReport,
+				SelectedPlaybook:  playbookPath,
+				SelectedTemplate:  selectedTemplate,
+				TemplateSelection: selection,
+			},
+			Spec:             spec,
+			Playbook:         playbook,
+			OrgSpecific:      orgSpecific,
+			Exact:            exact,
+			ExactTermRuneLen: exactLen,
+			TemplateScore:    templateScore,
+			TemplatePriority: templatePriority,
+		})
+	}
+	if len(candidates) == 0 {
+		return selectedReportConcept{}, false
+	}
+	if !reportIntent && !hasOrgSpecificReportCandidate(candidates) && reportSpecCount(specs) > 1 {
+		return selectedReportConcept{}, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.OrgSpecific != b.OrgSpecific {
+			return a.OrgSpecific
+		}
+		if a.Exact != b.Exact {
+			return a.Exact
+		}
+		if a.ExactTermRuneLen != b.ExactTermRuneLen {
+			return a.ExactTermRuneLen > b.ExactTermRuneLen
+		}
+		if a.TemplateScore != b.TemplateScore {
+			return a.TemplateScore > b.TemplateScore
+		}
+		if a.TemplatePriority != b.TemplatePriority {
+			return a.TemplatePriority > b.TemplatePriority
+		}
+		return a.Spec.Path < b.Spec.Path
+	})
+	return candidates[0], true
+}
+
+func hasOrgSpecificReportCandidate(candidates []selectedReportConcept) bool {
+	for _, candidate := range candidates {
+		if candidate.OrgSpecific {
+			return true
+		}
+	}
+	return false
+}
+
+func reportSpecCount(specs []wikis.RuntimeDocument) int {
+	count := 0
+	for _, spec := range specs {
+		if isReportSpecPath(spec.Path) {
+			count++
+		}
+	}
+	return count
+}
+
+func isOrganizationProfitSalesReportSpec(specPath, question string) bool {
+	if specPath != "spec/indicators/business/r-profit-analysis-report.md" {
+		return false
+	}
+	return hasAny(question, []string{"门店", "所有门店", "管理区域", "大区", "督导"}) &&
+		hasAny(question, []string{"盈利情况", "销售情况"})
+}
+
+func templateSelectionScore(selection TemplateSelectionDiagnostic) (int, int) {
+	if len(selection.Candidates) == 0 {
+		return 0, 0
+	}
+	return selection.Candidates[0].Score, selection.Candidates[0].Priority
 }
 
 func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) ([]sessionstate.PlaybookCandidate, bool) {

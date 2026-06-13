@@ -220,6 +220,74 @@ func TestBuildWithWikisIndexExactReportAliasUsesReportMode(t *testing.T) {
 	}
 }
 
+func TestBuildWithWikisIndexPrefersSpecificReportConcept(t *testing.T) {
+	root := testBusinessReportRoutingWikiRoot(t)
+	response, plan, err := BuildWithPlan(root, "查看所有门店昨天的销售情况, 列表返回")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeReport || plan.SelectedPlaybook != "playbooks/indicators/business/r-profit-analysis-report.md" || plan.SelectedTemplate != "templates/indicators/business/r-profit-analysis-report.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/spec/indicators/business/r-profit-analysis-report.md",
+		"wikis/playbooks/indicators/business/r-profit-analysis-report.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestBuildWithWikisIndexBusinessReportRoutingBoundaries(t *testing.T) {
+	root := testBusinessReportRoutingWikiRoot(t)
+	cases := []struct {
+		question string
+		playbook string
+		template string
+	}{
+		{
+			question: "所有门店盈利情况",
+			playbook: "playbooks/indicators/business/r-profit-analysis-report.md",
+			template: "templates/indicators/business/r-profit-analysis-report.md",
+		},
+		{
+			question: "大区销售情况",
+			playbook: "playbooks/indicators/business/r-profit-analysis-report.md",
+			template: "templates/indicators/business/r-profit-analysis-report.md",
+		},
+		{
+			question: "督导盈利情况",
+			playbook: "playbooks/indicators/business/r-profit-analysis-report.md",
+			template: "templates/indicators/business/r-profit-analysis-report.md",
+		},
+		{
+			question: "上个月的盈利战役的效果如何",
+			playbook: "playbooks/indicators/business/r-profit-analysis-report.md",
+			template: "templates/indicators/business/r-profit-analysis-report.md",
+		},
+		{
+			question: "生成经营分析报告",
+			playbook: "playbooks/cmr/business/r-business-analysis-report.md",
+			template: "templates/cmr/business/r-business-analysis-report.md",
+		},
+		{
+			question: "经营情况怎么样",
+			playbook: "playbooks/cmr/business/r-business-analysis-report.md",
+			template: "templates/cmr/business/r-business-analysis-report.md",
+		},
+	}
+	for _, tc := range cases {
+		_, plan, err := BuildWithPlan(root, tc.question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Mode != sessionstate.ModeReport || plan.SelectedPlaybook != tc.playbook || plan.SelectedTemplate != tc.template {
+			t.Fatalf("%q unexpected plan: %+v", tc.question, plan)
+		}
+	}
+}
+
 func TestBuildWithWikisIndexCMRStoreManagerMultiSingleDefaultsToCurrentValue(t *testing.T) {
 	root := testCMRStoreManagerWikiRoot(t)
 	for _, question := range []string{
@@ -562,6 +630,74 @@ intents:
 # `+item.label+`取数
 `)
 	}
+	if _, err := wikis.BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func testBusinessReportRoutingWikiRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeContextFile(t, root, "config/harness-config.yaml", `paths:
+  spec: wikis/spec
+  routing: wikis/routing
+  playbooks: wikis/playbooks
+  templates: wikis/templates
+`)
+	for _, rel := range []string{
+		"wikis/spec/index.md",
+		"wikis/spec/cmr/index.md",
+		"wikis/spec/cmr/business/index.md",
+		"wikis/spec/indicators/index.md",
+		"wikis/spec/indicators/business/index.md",
+		"wikis/playbooks/index.md",
+		"wikis/playbooks/cmr/index.md",
+		"wikis/playbooks/cmr/business/index.md",
+		"wikis/playbooks/indicators/index.md",
+		"wikis/playbooks/indicators/business/index.md",
+		"wikis/templates/index.md",
+		"wikis/templates/cmr/index.md",
+		"wikis/templates/cmr/business/index.md",
+		"wikis/templates/indicators/index.md",
+		"wikis/templates/indicators/business/index.md",
+	} {
+		writeContextFile(t, root, rel, "# "+filepath.Base(filepath.Dir(rel))+"\n")
+	}
+	writeContextFile(t, root, "wikis/spec/cmr/business/r-business-analysis-report.md", `---
+name: businessAnalysisReport
+label: 经营综合分析报告
+aliases:
+  - 经营分析报告
+  - 生成经营分析
+  - 经营情况
+  - 销售情况
+---
+# 经营综合分析报告
+`)
+	writeContextFile(t, root, "wikis/spec/indicators/business/r-profit-analysis-report.md", `---
+name: profit-analysis-report
+label: 盈利情况分析报告
+aliases:
+  - 盈利情况分析
+  - 盈利战
+  - 门店盈利情况
+  - 门店销售情况
+  - 所有门店盈利情况
+  - 所有门店销售情况
+  - 管理区域盈利情况
+  - 管理区域销售情况
+  - 大区盈利情况
+  - 大区销售情况
+  - 督导盈利情况
+  - 督导销售情况
+---
+# 盈利情况分析报告
+`)
+	writeContextFile(t, root, "wikis/playbooks/cmr/business/r-business-analysis-report.md", "# 经营综合分析报告取数手册\n")
+	writeContextFile(t, root, "wikis/playbooks/indicators/business/r-profit-analysis-report.md", "# 盈利情况分析报告取数手册\n")
+	writeContextFile(t, root, "wikis/templates/cmr/business/r-business-analysis-report.md", "# 经营综合分析报告模板\n")
+	writeContextFile(t, root, "wikis/templates/indicators/business/r-profit-analysis-report.md", "# 盈利情况分析报告模板\n")
 	if _, err := wikis.BuildIndex(root, false); err != nil {
 		t.Fatal(err)
 	}
