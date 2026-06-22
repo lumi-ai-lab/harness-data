@@ -305,12 +305,12 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: multi_single", "selectedPlaybooks:", "playbooks/cmr/business/s-sale-amt.md", "playbooks/cmr/business/s-per-cust-amt.md"} {
+	for _, want := range []string{"Harness mode: multi_single", "selectedPlaybooks:", "playbooks/indicators/s-sale-amt.md", "playbooks/indicators/s-per-cust-amt.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
 	}
-	for _, unwanted := range []string{"selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "- wikis/spec/cmr/business/s-sale-amt.md", "- wikis/spec/cmr/business/s-per-cust-amt.md"} {
+	for _, unwanted := range []string{"selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "- wikis/spec/indicators/s-sale-amt.md", "- wikis/spec/indicators/s-per-cust-amt.md"} {
 		if bytes.Contains([]byte(context), []byte(unwanted)) {
 			t.Fatalf("unexpected report/spec context: %s in %s", unwanted, context)
 		}

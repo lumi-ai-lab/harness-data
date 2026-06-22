@@ -258,7 +258,7 @@ function createDoctorWorkspace(agent) {
   }
 
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
-  fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "config.json"), "{}");
+  fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "credentials.enc"), "encrypted-test-credentials");
   for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
     fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }

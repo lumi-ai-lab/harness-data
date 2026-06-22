@@ -40,10 +40,15 @@ function configPathsValid(workspace) {
   return matches.length >= 3 && matches.every((entry) => fs.existsSync(entry));
 }
 
-function jsonFileValid(file) {
+function casCredentialsValid(dir) {
+  const encrypted = path.join(dir, "credentials.enc");
   try {
-    JSON.parse(fs.readFileSync(file, "utf8"));
-    return true;
+    if (fs.statSync(encrypted).size > 0) return true;
+  } catch {}
+
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
+    return Boolean(config?.cas?.username && config?.cas?.password);
   } catch {
     return false;
   }
@@ -65,7 +70,7 @@ export async function collectDoctor(workspace, options = {}) {
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
-  add("CAS credentials file", jsonFileValid(path.join(casConfigDir, "config.json")), casConfigDir);
+  add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
   add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
   add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));

@@ -13,7 +13,7 @@ import (
 	"harness-data/cli/internal/harness"
 )
 
-type casConfig struct {
+type legacyCASConfig struct {
 	CAS struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -57,8 +57,8 @@ func preflightAppAuth(root string, cfg harness.CLIConfig, app string) string {
 	if err != nil {
 		return fmt.Sprintf("%s token invalid; CAS config path could not be resolved: %v", app, err)
 	}
-	if !casCredentialsConfiguredAt(location.Path) {
-		return fmt.Sprintf("%s token invalid; CAS credentials are not configured at %s, so hook did not start QR login", app, location.Path)
+	if !casCredentialsConfiguredAt(location.Dir) {
+		return fmt.Sprintf("%s token invalid; CAS credentials are not configured in %s, so hook did not start QR login", app, location.Dir)
 	}
 	token, err := fetchCASToken(root, cfg.QDMCasCLI, app, location.Dir)
 	if err != nil {
@@ -180,11 +180,17 @@ func casCredentialsConfigured(root string) bool {
 }
 
 func casCredentialsConfiguredAt(path string) bool {
-	body, err := os.ReadFile(path)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		path = filepath.Dir(path)
+	}
+	if info, err := os.Stat(filepath.Join(path, "credentials.enc")); err == nil && !info.IsDir() && info.Size() > 0 {
+		return true
+	}
+	body, err := os.ReadFile(filepath.Join(path, "config.json"))
 	if err != nil {
 		return false
 	}
-	var cfg casConfig
+	var cfg legacyCASConfig
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return false
 	}
@@ -201,17 +207,19 @@ func casConfigPath(root string) (string, error) {
 
 func casConfigLocationForRoot(root string) (casConfigLocation, error) {
 	if dir := strings.TrimSpace(os.Getenv("QDM_CAS_CONFIG_DIR")); dir != "" {
-		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
+		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "credentials.enc")}, nil
 	}
 	if workspace := strings.TrimSpace(os.Getenv("LUMI_WORKSPACE_PATH")); workspace != "" {
 		dir := filepath.Join(workspace, ".qdm-auth", "cas")
-		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
+		return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "credentials.enc")}, nil
 	}
 	if root != "" {
 		dir := filepath.Join(root, ".qdm-auth", "cas")
-		path := filepath.Join(dir, "config.json")
-		if _, err := os.Stat(path); err == nil {
-			return casConfigLocation{Dir: dir, Path: path}, nil
+		for _, name := range []string{"credentials.enc", "config.json"} {
+			path := filepath.Join(dir, name)
+			if _, err := os.Stat(path); err == nil {
+				return casConfigLocation{Dir: dir, Path: path}, nil
+			}
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -219,5 +227,5 @@ func casConfigLocationForRoot(root string) (casConfigLocation, error) {
 		return casConfigLocation{}, err
 	}
 	dir := filepath.Join(home, ".cas-cli")
-	return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "config.json")}, nil
+	return casConfigLocation{Dir: dir, Path: filepath.Join(dir, "credentials.enc")}, nil
 }

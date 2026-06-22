@@ -36,16 +36,17 @@ export function writeLocalConfig(workspace, options = {}) {
 }
 
 export function validateCasConfigDir(dir) {
-  const file = path.join(dir, "config.json");
-  let config;
+  const encrypted = path.join(dir, "credentials.enc");
   try {
-    config = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
-    throw new Error(`CAS config is missing or invalid: ${file}`);
-  }
-  if (!config?.cas?.username || !config?.cas?.password) {
-    throw new Error(`CAS config must contain non-empty cas.username and cas.password: ${file}`);
-  }
+    if (fs.statSync(encrypted).size > 0) return;
+  } catch {}
+
+  const legacy = path.join(dir, "config.json");
+  try {
+    const config = JSON.parse(fs.readFileSync(legacy, "utf8"));
+    if (config?.cas?.username && config?.cas?.password) return;
+  } catch {}
+  throw new Error(`CAS credentials are missing or invalid in: ${dir}`);
 }
 
 export function linkAgents(workspace, agent) {

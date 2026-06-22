@@ -170,8 +170,9 @@ async function writeCasCredentials(runtimeDir, options = {}) {
   if (!username || !password) throw new Error("CAS username and password are required");
   const dir = casConfigDir(runtimeDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, "config.json"), `${JSON.stringify({ cas: { username, password } }, null, 2)}\n`, { mode: 0o600 });
-  ok("CAS 凭证已保存到 .qdm-auth/cas/config.json");
+  const env = { QDM_CAS_CONFIG_DIR: dir };
+  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], { cwd: runtimeDir, env });
+  ok("CAS 凭证已加密保存到 .qdm-auth/cas/credentials.enc");
   return dir;
 }
 
