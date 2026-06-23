@@ -3,7 +3,7 @@ import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { commandExists, run } from "./exec.js";
-import { platformKey } from "./platform.js";
+import { binaryName, platformKey } from "./platform.js";
 import { action, skip, warn } from "./log.js";
 
 export function readManifest(file) {
@@ -112,12 +112,16 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
-  if (!tool.private) {
+  if (!tool.private && !githubToken(options)) {
     await download(asset.url, file);
     return;
   }
   if (await downloadPrivateWithGh(asset, file)) return;
   if (await downloadPrivateWithToken(asset, file, options)) return;
+  if (!tool.private) {
+    await download(asset.url, file);
+    return;
+  }
   throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}`);
 }
 
@@ -149,7 +153,7 @@ function reusableInstalledTool(workspace, tool, asset, options = {}) {
   const current = tool.version ? optionsStateTool(options, tool.name) : null;
   if (!current?.version || current.version !== tool.version) return null;
   if (!current.sha256) return null;
-  const binary = path.join(workspace, "bin", tool.binary);
+  const binary = path.join(workspace, "bin", binaryName(tool.binary));
   if (!executable(binary)) return null;
   const actualSha = fileSha256(binary);
   if (actualSha !== current.sha256) return null;
@@ -193,11 +197,11 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
     if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
     if (archive.endsWith(".zip")) {
-      await run("unzip", ["-o", archive, "-d", binDir]);
+      await run("unzip", ["-o", path.relative(workspace, archive), "-d", path.relative(workspace, binDir)], { cwd: workspace, allowFailure: true });
     } else {
-      await run("tar", ["-xzf", archive, "-C", binDir]);
+      await run("tar", ["-xzf", path.relative(workspace, archive), "-C", path.relative(workspace, binDir)], { cwd: workspace, allowFailure: true });
     }
-    const binary = path.join(binDir, tool.binary);
+    const binary = path.join(binDir, binaryName(tool.binary));
     if (!fs.existsSync(binary)) throw new Error(`${tool.binary} was not extracted to bin/`);
     fs.chmodSync(binary, 0o755);
     const binarySha = fileSha256(binary);

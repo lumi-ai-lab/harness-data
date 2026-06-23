@@ -69,7 +69,8 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
-  await run("tar", ["-xzf", archive, "-C", extractDir]);
+  // 在 Git Bash 中 tar 无法处理 Windows 绝对路径（E:\...），使用相对路径执行
+  await run("tar", ["-xzf", path.relative(cacheDir, archive), "-C", path.relative(cacheDir, extractDir)], { cwd: cacheDir, allowFailure: true });
   for (const dir of ["agents", "bootstrap"]) {
     const source = path.join(extractDir, dir);
     if (!fs.existsSync(source)) throw new Error(`runtime bundle missing ${dir}/`);
@@ -165,8 +166,8 @@ function casConfigDir(runtimeDir) {
 }
 
 async function writeCasCredentials(runtimeDir, options = {}) {
-  const username = await ask("CAS 用户名：", options);
-  const password = await askSecret("CAS 密码：", options);
+  const username = options.casUsername || await ask("CAS 用户名：", options);
+  const password = options.casPassword || await askSecret("CAS 密码：", options);
   if (!username || !password) throw new Error("CAS username and password are required");
   const dir = casConfigDir(runtimeDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -261,6 +262,17 @@ export async function installCommand(options = {}) {
     localTools = await installLocalTools(runtimeDir, options);
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+  blank();
+
+  // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
+  writeState(runtimeDir, {
+    installMode: tokenMode ? "github-token" : "local-path",
+    runtimeTag: bundle.tag,
+    localTools,
+    tools: manifest.installedTools || {},
+    manifestSha256: manifestDigest(manifest),
+    packageVersion: packageVersion()
+  });
   blank();
 
   step(4, 8, "同步 Wikis 知识库");

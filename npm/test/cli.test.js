@@ -100,7 +100,7 @@ test("install skips CLI download when installed binary matches latest state", as
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const binary = "#!/bin/sh\nexit 0\n";
-  fs.writeFileSync(path.join(binDir, "data-harness-cli"), binary, { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), binary, { mode: 0o755 });
 
   const manifest = await installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
     log: false,
@@ -130,7 +130,7 @@ test("install downloads CLI when installed binary sha does not match state", asy
   const key = platformKey();
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, "data-harness-cli"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
   await assert.rejects(
     installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
@@ -155,7 +155,7 @@ test("install downloads CLI when state is missing", async () => {
   const key = platformKey();
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, "data-harness-cli"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
   await assert.rejects(
     installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
@@ -172,7 +172,7 @@ test("install force downloads CLI even when installed binary matches state", asy
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const binary = "#!/bin/sh\nexit 0\n";
-  fs.writeFileSync(path.join(binDir, "data-harness-cli"), binary, { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), binary, { mode: 0o755 });
 
   await assert.rejects(
     installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
@@ -288,7 +288,7 @@ test("skip wikis check passes skip checks to build-index", async () => {
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const logPath = path.join(workspace, "calls.log");
-  const cliPath = path.join(binDir, "data-harness-cli");
+  const cliPath = path.join(binDir, binaryName("data-harness-cli"));
   fs.writeFileSync(cliPath, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logPath}"\n`, { mode: 0o755 });
 
   await buildAndCheck(workspace, { skipWikisCheck: true, yes: true });
@@ -349,7 +349,7 @@ test("build index prints concise Chinese summary", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  const cliPath = path.join(binDir, "data-harness-cli");
+  const cliPath = path.join(binDir, binaryName("data-harness-cli"));
   fs.writeFileSync(cliPath, `#!/bin/sh\necho 'built .harness/index/wikis-index.json docs=264 recall=1592 runtime=.harness/index/wikis-runtime-index.json runtimeDocs=264 checksSkipped=true'\n`, { mode: 0o755 });
 
   const lines = [];

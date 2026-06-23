@@ -1,3 +1,7 @@
+// 在 Git Bash (Windows) 下，Node.js stdout 连接为 pipe 时默认缓冲输出。
+// setBlocking(true) 让每次写入即时刷新，避免下载进度等日志需要回车才显示。
+if (process.stdout._handle?.setBlocking) process.stdout._handle.setBlocking(true);
+
 export function header(title, version, rows = []) {
   console.log(`${title} ${version}`);
   console.log("");
