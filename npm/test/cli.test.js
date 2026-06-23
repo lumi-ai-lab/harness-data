@@ -13,7 +13,7 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck } from "../src/commands/install.js";
-import { updateWikis } from "../src/commands/update.js";
+import { isNonBlockingUpdateDoctorCheck, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js";
 
@@ -274,6 +274,13 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
     assert.ok(agentChecks.length > 0);
     assert.equal(agentChecks.every((check) => check.ok), true, agent);
   }
+});
+
+test("update doctor treats missing agent hooks as non-blocking only", async () => {
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook .openclaw" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), false);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
 });
 
 test("skip wikis check passes skip checks to build-index", async () => {

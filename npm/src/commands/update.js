@@ -13,6 +13,10 @@ import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./insta
 import { collectDoctor } from "./doctor.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 
+export function isNonBlockingUpdateDoctorCheck(check) {
+  return check.name === "Agent hook" || check.name.startsWith("Agent hook .");
+}
+
 async function npmLatest() {
   try {
     const response = await fetch("https://registry.npmjs.org/@lumi-ai-lab%2Fharness-data/latest", { signal: AbortSignal.timeout(5000) });
@@ -184,8 +188,8 @@ export async function updateCommand(options = {}) {
   step(6, 6, "安装校验");
   if (changed) {
     const doctor = await collectDoctor(runtimeDir, trackingOptions);
-    printDoctorSummary(doctor);
-    if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; update is incomplete");
+    printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });
+    if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");
     writeState(runtimeDir, {
       ...state,
       runtimeTag,

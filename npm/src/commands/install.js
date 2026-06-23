@@ -205,8 +205,10 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   return { ok: true, docs, recall, runtimeDocs };
 }
 
-export function printDoctorSummary(doctor) {
-  const failed = doctor.checks.filter((check) => !check.ok);
+export function printDoctorSummary(doctor, options = {}) {
+  const nonBlocking = options.nonBlocking || (() => false);
+  const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
+  const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
   if (!failed.length) {
     ok("runtime");
     ok("wikis/spec");
@@ -217,9 +219,11 @@ export function printDoctorSummary(doctor) {
     ok("CAS 凭证");
     ok("CMR Token");
     ok("Indicators Token");
-    ok("Agent Hook");
+    if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
+    for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
     return;
   }
+  for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
   for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
 }
 
