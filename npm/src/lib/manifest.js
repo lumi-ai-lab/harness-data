@@ -14,14 +14,107 @@ export function manifestDigest(manifest) {
   return crypto.createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
-export function download(url, file, headers = {}) {
+function formatBytes(value) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function shouldShowProgress(options = {}) {
+  if (!options.progressLabel) return false;
+  if (options.progressWriter) return true;
+  if (options.log === false) return false;
+  if (options.progress === true) return true;
+  return Boolean(process.stdout.isTTY) && !process.env.CI;
+}
+
+function downloadProgress(label, total, options = {}) {
+  if (!shouldShowProgress(options)) return { tick() {}, done() {}, fail() {} };
+  const writer = options.progressWriter || process.stdout;
+  let downloaded = 0;
+  let lastLength = 0;
+  let lastRenderAt = 0;
+  let ended = false;
+  const width = 24;
+  const render = (done = false) => {
+    const now = Date.now();
+    if (!done && now - lastRenderAt < 80) return;
+    lastRenderAt = now;
+    const percent = total ? Math.min(100, Math.floor((downloaded / total) * 100)) : 0;
+    const filled = total ? Math.min(width, Math.floor((percent / 100) * width)) : Math.floor((downloaded / 1024) % width);
+    const bar = `${"=".repeat(filled)}${" ".repeat(width - filled)}`;
+    const size = total ? `${formatBytes(downloaded)}/${formatBytes(total)}` : formatBytes(downloaded);
+    const prefix = done ? "下载完成" : "下载中";
+    const line = `${prefix} ${label} [${bar}] ${total ? `${percent}% ` : ""}${size}`;
+    writer.write(`\r${line}${" ".repeat(Math.max(0, lastLength - line.length))}`);
+    lastLength = line.length;
+    if (done) writer.write("\n");
+  };
+  render();
+  return {
+    tick(chunk) {
+      if (ended) return;
+      downloaded += chunk.length;
+      render();
+    },
+    done() {
+      if (ended) return;
+      ended = true;
+      if (total) downloaded = total;
+      render(true);
+    },
+    fail() {
+      if (ended) return;
+      ended = true;
+      writer.write("\n");
+    }
+  };
+}
+
+function ghDownloadStatus(label, options = {}) {
+  const writer = options.progressWriter || process.stdout;
+  const enabled = Boolean(options.progressWriter) || (options.log !== false && Boolean(process.stdout.isTTY) && !process.env.CI);
+  if (!enabled) return { done() {}, fail() {} };
+  const frames = ["-", "\\", "|", "/"];
+  let index = 0;
+  let lastLength = 0;
+  let ended = false;
+  const render = (prefix) => {
+    const line = `${prefix} ${label}`;
+    writer.write(`\r${line}${" ".repeat(Math.max(0, lastLength - line.length))}`);
+    lastLength = line.length;
+  };
+  render(`下载中 ${frames[index]}`);
+  const timer = setInterval(() => {
+    index = (index + 1) % frames.length;
+    render(`下载中 ${frames[index]}`);
+  }, 120);
+  return {
+    done() {
+      if (ended) return;
+      ended = true;
+      clearInterval(timer);
+      render("下载完成");
+      writer.write("\n");
+    },
+    fail() {
+      if (ended) return;
+      ended = true;
+      clearInterval(timer);
+      writer.write("\n");
+    }
+  };
+}
+
+export function download(url, file, headers = {}, options = {}) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, { headers }, (response) => {
       if ([301, 302, 307, 308].includes(response.statusCode) && response.headers.location) {
         const current = new URL(url);
         const next = new URL(response.headers.location, url);
         const nextHeaders = current.hostname === next.hostname ? headers : {};
-        download(response.headers.location, file, nextHeaders).then(resolve, reject);
+        response.resume();
+        download(response.headers.location, file, nextHeaders, options).then(resolve, reject);
         return;
       }
       if (response.statusCode !== 200) {
@@ -31,9 +124,25 @@ export function download(url, file, headers = {}) {
       }
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const out = fs.createWriteStream(file);
+      const total = Number(response.headers["content-length"]) || 0;
+      const progress = downloadProgress(options.progressLabel, total, options);
+      let settled = false;
+      const rejectOnce = (error) => {
+        if (settled) return;
+        settled = true;
+        progress.fail();
+        reject(error);
+      };
+      response.on("data", (chunk) => progress.tick(chunk));
+      response.on("error", rejectOnce);
       response.pipe(out);
-      out.on("finish", () => out.close(resolve));
-      out.on("error", reject);
+      out.on("finish", () => out.close(() => {
+        if (settled) return;
+        settled = true;
+        progress.done();
+        resolve();
+      }));
+      out.on("error", rejectOnce);
     });
     request.on("error", reject);
   });
@@ -60,19 +169,61 @@ async function ghAuthenticated() {
   return result.code === 0;
 }
 
-async function downloadPrivateWithGh(asset, file) {
+async function downloadPrivateWithTokenValue(asset, file, token, options = {}) {
+  const apiUrl = await githubAssetApiUrl(asset, token);
+  if (!apiUrl) return false;
+  await download(apiUrl, file, {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/octet-stream",
+    "User-Agent": "harness-data-installer"
+  }, {
+    progressLabel: assetName(asset),
+    log: options.log,
+    progress: options.progress,
+    progressWriter: options.progressWriter
+  });
+  return true;
+}
+
+async function downloadPrivateWithGh(asset, file, options = {}) {
   const parts = githubAssetParts(asset);
   if (!parts || !(await ghAuthenticated())) return false;
+  const failures = options.failures || [];
+  const tokenResult = await run("gh", ["auth", "token"], { allowFailure: true });
+  const token = tokenResult.code === 0 ? tokenResult.stdout.trim() : "";
+  if (token) {
+    try {
+      if (await downloadPrivateWithTokenValue(asset, file, token, options)) return true;
+    } catch (error) {
+      failures.push(error.message);
+      // If Node cannot reach GitHub directly, keep the older gh download fallback available.
+    }
+  }
   const dir = fs.mkdtempSync(path.join(path.dirname(file), "gh-download-"));
+  const status = ghDownloadStatus(assetName(asset), options);
   try {
-    const result = await run("gh", ["release", "download", parts.tag, "--repo", parts.repo, "--pattern", parts.name, "--dir", dir], { allowFailure: true });
-    if (result.code !== 0) return false;
+    const result = await run("gh", ["release", "download", parts.tag, "--repo", parts.repo, "--pattern", parts.name, "--dir", dir], {
+      allowFailure: true,
+      stdio: "pipe"
+    });
+    if (result.code !== 0) {
+      status.fail();
+      const detail = result.stderr.trim() || result.stdout.trim();
+      failures.push(`gh release download failed${detail ? `: ${detail}` : ""}`);
+      return false;
+    }
     const downloaded = path.join(dir, parts.name);
-    if (!fs.existsSync(downloaded)) return false;
+    if (!fs.existsSync(downloaded)) {
+      status.fail();
+      failures.push(`gh release download did not produce ${parts.name}`);
+      return false;
+    }
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.renameSync(downloaded, file);
+    status.done();
     return true;
   } finally {
+    status.fail();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -101,35 +252,43 @@ async function githubAssetApiUrl(asset, token) {
 async function downloadPrivateWithToken(asset, file, options = {}) {
   const token = githubToken(options);
   if (!token) return false;
-  const apiUrl = await githubAssetApiUrl(asset, token);
-  if (!apiUrl) return false;
-  await download(apiUrl, file, {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/octet-stream",
-    "User-Agent": "harness-data-installer"
-  });
-  return true;
+  return downloadPrivateWithTokenValue(asset, file, token, options);
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
   if (!tool.private && !githubToken(options)) {
-    await download(asset.url, file);
+    await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
   }
-  if (await downloadPrivateWithGh(asset, file)) return;
-  if (await downloadPrivateWithToken(asset, file, options)) return;
+
   if (!tool.private) {
-    await download(asset.url, file);
+    try {
+      if (await downloadPrivateWithGh(asset, file, options)) return;
+      if (await downloadPrivateWithToken(asset, file, options)) return;
+    } catch {
+      // Public assets must remain downloadable when an unrelated GitHub token is stale or invalid.
+    }
+    await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
   }
-  throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}`);
+
+  const failures = [];
+  const privateOptions = { ...options, failures };
+  if (await downloadPrivateWithGh(asset, file, privateOptions)) return;
+  try {
+    if (await downloadPrivateWithToken(asset, file, privateOptions)) return;
+  } catch (error) {
+    failures.push(error.message);
+  }
+  const detail = failures.filter(Boolean).join("; ");
+  throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}${detail ? ` (${detail})` : ""}`);
 }
 
 async function expectedSha256(tool, asset, options = {}) {
   if (asset.sha256) return asset.sha256;
   try {
     const tmp = path.join(fs.mkdtempSync(path.join(process.cwd(), ".bootstrap-cache-sha-")), "asset.sha256");
-    await downloadAsset(tool, { ...asset, url: `${asset.url}.sha256` }, tmp, options);
+    await downloadAsset(tool, { ...asset, url: `${asset.url}.sha256` }, tmp, { ...options, log: false, progress: false, progressWriter: null });
     return fs.readFileSync(tmp, "utf8").trim().split(/\s+/)[0];
   } catch {
     return "";
@@ -169,6 +328,25 @@ function optionsStateTool(options, name) {
   return options?.state?.tools?.[name] || null;
 }
 
+async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) {
+  const extractDir = fs.mkdtempSync(path.join(cacheDir, `${tool.name}-extract-`));
+  try {
+    if (archive.endsWith(".zip")) {
+      await run("unzip", ["-o", path.relative(workspace, archive), "-d", path.relative(workspace, extractDir)], { cwd: workspace });
+    } else {
+      await run("tar", ["-xzf", path.relative(workspace, archive), "-C", path.relative(workspace, extractDir)], { cwd: workspace });
+    }
+    const extracted = path.join(extractDir, binaryName(tool.binary));
+    if (!fs.existsSync(extracted)) throw new Error(`${tool.binary} was not extracted to archive root`);
+    fs.chmodSync(extracted, 0o755);
+    const binary = path.join(binDir, binaryName(tool.binary));
+    fs.renameSync(extracted, binary);
+    return binary;
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+  }
+}
+
 export async function installToolsFromManifest(workspace, manifestPath, options = {}) {
   const manifest = options.manifestOverride || readManifest(manifestPath);
   const only = options.tools ? new Set(options.tools) : null;
@@ -196,14 +374,7 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const actualSha = fileSha256(archive);
     if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
     if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
-    if (archive.endsWith(".zip")) {
-      await run("unzip", ["-o", path.relative(workspace, archive), "-d", path.relative(workspace, binDir)], { cwd: workspace, allowFailure: true });
-    } else {
-      await run("tar", ["-xzf", path.relative(workspace, archive), "-C", path.relative(workspace, binDir)], { cwd: workspace, allowFailure: true });
-    }
-    const binary = path.join(binDir, binaryName(tool.binary));
-    if (!fs.existsSync(binary)) throw new Error(`${tool.binary} was not extracted to bin/`);
-    fs.chmodSync(binary, 0o755);
+    const binary = await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool);
     const binarySha = fileSha256(binary);
     installedTools[tool.name] = {
       version: tool.version || "",

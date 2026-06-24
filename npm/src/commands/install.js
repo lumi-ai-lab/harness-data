@@ -37,6 +37,26 @@ async function prepareRuntimeDir(options) {
   return runtimeDir;
 }
 
+function replaceRuntimePath(runtimeDir, name, stagedRoot, backups) {
+  const target = path.join(runtimeDir, name);
+  const backup = fs.mkdtempSync(path.join(runtimeDir, `.install-backup-${name}-`));
+  fs.rmSync(backup, { recursive: true, force: true });
+  if (fs.existsSync(target)) fs.renameSync(target, backup);
+  backups.push({ name, target, backup });
+  fs.renameSync(path.join(stagedRoot, name), target);
+}
+
+function restoreRuntimeBackups(backups) {
+  for (const item of backups.slice().reverse()) {
+    fs.rmSync(item.target, { recursive: true, force: true });
+    if (fs.existsSync(item.backup)) fs.renameSync(item.backup, item.target);
+  }
+}
+
+function cleanupRuntimeBackups(backups) {
+  for (const item of backups) fs.rmSync(item.backup, { recursive: true, force: true });
+}
+
 export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
@@ -56,7 +76,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
   action(`下载 harness-data-runtime ${tag}`);
-  await downloadReleaseAsset(asset, archive, options);
+  await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
   if (shaAsset) {
     const shaFile = `${archive}.sha256`;
     await downloadReleaseAsset(shaAsset, shaFile, options);
@@ -69,21 +89,28 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
-  // 在 Git Bash 中 tar 无法处理 Windows 绝对路径（E:\...），使用相对路径执行
-  await run("tar", ["-xzf", path.relative(cacheDir, archive), "-C", path.relative(cacheDir, extractDir)], { cwd: cacheDir, allowFailure: true });
-  for (const dir of ["agents", "bootstrap"]) {
-    const source = path.join(extractDir, dir);
-    if (!fs.existsSync(source)) throw new Error(`runtime bundle missing ${dir}/`);
-    fs.rmSync(path.join(runtimeDir, dir), { recursive: true, force: true });
-    fs.cpSync(source, path.join(runtimeDir, dir), { recursive: true });
+  const stagedRoot = fs.mkdtempSync(path.join(runtimeDir, ".install-new-runtime-"));
+  const backups = [];
+  try {
+    // 在 Git Bash 中 tar 无法处理 Windows 绝对路径（E:\...），使用相对路径执行
+    await run("tar", ["-xzf", path.relative(cacheDir, archive), "-C", path.relative(cacheDir, extractDir)], { cwd: cacheDir });
+    for (const dir of ["agents", "bootstrap"]) if (!fs.existsSync(path.join(extractDir, dir))) throw new Error(`runtime bundle missing ${dir}/`);
+    const configSource = path.join(extractDir, "config");
+    if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
+
+    for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
+    fs.mkdirSync(path.join(stagedRoot, "config"), { recursive: true });
+    for (const file of fs.readdirSync(configSource)) fs.copyFileSync(path.join(configSource, file), path.join(stagedRoot, "config", file));
+
+    for (const name of ["agents", "bootstrap", "config"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
+    cleanupRuntimeBackups(backups);
+  } catch (error) {
+    restoreRuntimeBackups(backups);
+    throw error;
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+    fs.rmSync(stagedRoot, { recursive: true, force: true });
   }
-  const configSource = path.join(extractDir, "config");
-  if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
-  fs.mkdirSync(path.join(runtimeDir, "config"), { recursive: true });
-  for (const file of fs.readdirSync(configSource)) {
-    fs.copyFileSync(path.join(configSource, file), path.join(runtimeDir, "config", file));
-  }
-  fs.rmSync(extractDir, { recursive: true, force: true });
   ok(`runtime bundle ${tag}`);
   return { tag, skipped: false };
 }

@@ -48,5 +48,10 @@ export function findReleaseAsset(release, name) {
 
 export async function downloadReleaseAsset(asset, file, options = {}) {
   const headers = { ...githubHeaders(options), Accept: "application/octet-stream" };
-  await download(asset.url, file, headers);
+  await download(asset.url, file, headers, {
+    progressLabel: options.progressLabel,
+    log: options.log,
+    progress: options.progress,
+    progressWriter: options.progressWriter
+  });
 }
