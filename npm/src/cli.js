@@ -44,6 +44,8 @@ Commands:
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
-  --github-token TOKEN               GitHub token for private Release assets`);
+  --github-token TOKEN               GitHub token for private Release assets
+  --cas-username USERNAME            CAS username (skip interactive prompt)
+  --cas-password PASSWORD            CAS password (skip interactive prompt)`);
   if (unknown) process.exitCode = 1;
 }
