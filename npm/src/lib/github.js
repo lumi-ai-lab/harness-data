@@ -47,11 +47,25 @@ export function findReleaseAsset(release, name) {
 }
 
 export async function downloadReleaseAsset(asset, file, options = {}) {
-  const headers = { ...githubHeaders(options), Accept: "application/octet-stream" };
-  await download(asset.url, file, headers, {
+  const downloadOptions = {
     progressLabel: options.progressLabel,
     log: options.log,
     progress: options.progress,
     progressWriter: options.progressWriter
-  });
+  };
+  const publicUrl = asset.browser_download_url || asset.url;
+  const token = githubToken(options);
+
+  if (token) {
+    const headers = { ...githubHeaders(options), Accept: "application/octet-stream" };
+    try {
+      await download(asset.url, file, headers, downloadOptions);
+      return;
+    } catch (error) {
+      fs.rmSync(file, { force: true });
+      if (!asset.browser_download_url) throw error;
+    }
+  }
+
+  await download(publicUrl, file, { "User-Agent": userAgent }, downloadOptions);
 }

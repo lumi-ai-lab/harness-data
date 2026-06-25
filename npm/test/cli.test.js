@@ -14,6 +14,7 @@ import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
+import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck, installRuntimeBundle } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, updateWikis } from "../src/commands/update.js";
@@ -695,6 +696,77 @@ exit 0
   assert.equal(fs.existsSync(path.join(workspace, "agents", "new.txt")), false);
   assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), "{\"old\":true}\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old config\n");
+});
+
+test("release asset download uses browser URL without token", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const target = path.join(workspace, "asset.tgz");
+  const urls = [];
+  const originalGet = https.get;
+  try {
+    https.get = (url, options, callback) => {
+      urls.push(String(url));
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("runtime");
+      });
+      return request;
+    };
+
+    await downloadReleaseAsset({
+      url: "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/assets/1",
+      browser_download_url: "https://github.com/lumi-ai-lab/harness-data/releases/download/v1/asset.tgz"
+    }, target, { log: false });
+  } finally {
+    https.get = originalGet;
+  }
+
+  assert.deepEqual(urls, ["https://github.com/lumi-ai-lab/harness-data/releases/download/v1/asset.tgz"]);
+  assert.equal(fs.readFileSync(target, "utf8"), "runtime");
+});
+
+test("release asset download falls back to browser URL after token API failure", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const target = path.join(workspace, "asset.tgz");
+  const urls = [];
+  const originalGet = https.get;
+  try {
+    https.get = (url, options, callback) => {
+      urls.push(String(url));
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.headers = {};
+        if (String(url).includes("api.github.com")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("not found");
+          return;
+        }
+        response.statusCode = 200;
+        callback(response);
+        response.end("runtime");
+      });
+      return request;
+    };
+
+    await downloadReleaseAsset({
+      url: "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/assets/1",
+      browser_download_url: "https://github.com/lumi-ai-lab/harness-data/releases/download/v1/asset.tgz"
+    }, target, { githubToken: "bad-token", log: false });
+  } finally {
+    https.get = originalGet;
+  }
+
+  assert.deepEqual(urls, [
+    "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/assets/1",
+    "https://github.com/lumi-ai-lab/harness-data/releases/download/v1/asset.tgz"
+  ]);
+  assert.equal(fs.readFileSync(target, "utf8"), "runtime");
 });
 
 test("download renders terminal progress when requested", async () => {
