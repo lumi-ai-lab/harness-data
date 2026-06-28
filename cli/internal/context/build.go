@@ -122,7 +122,15 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		add("spec/index.md", "default free spec index")
 		add("playbooks/index.md", "default free playbook index")
 	}
+	selectedReport, hasSelectedReport := selectReportConcept(resolver, byPath, index.TemplateSelection, question, matches, conceptSpecs)
+	addSelectedReport := func(selected selectedReportConcept) {
+		plan = selected.Plan
+		add(selected.Spec.Path, "matched report spec")
+		add(selected.Playbook.Path, "selected report playbook")
+	}
 	switch {
+	case hasSelectedReport && shouldPrioritizeReportConcept(question, selectedReport):
+		addSelectedReport(selectedReport)
 	case len(ordinarySpecs) == 1:
 		spec := ordinarySpecs[0]
 		if wikis.IsReferenceSpecPath(spec.Path) {
@@ -152,10 +160,8 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		plan.Reason = "multi_metric_non_direct"
 		addFreeSpecFiles(add, byPath, ordinarySpecs)
 	case len(conceptSpecs) > 0:
-		if selected, ok := selectReportConcept(resolver, byPath, index.TemplateSelection, question, matches, conceptSpecs); ok {
-			plan = selected.Plan
-			add(selected.Spec.Path, "matched report spec")
-			add(selected.Playbook.Path, "selected report playbook")
+		if hasSelectedReport {
+			addSelectedReport(selectedReport)
 			break
 		}
 		if len(conceptSpecs) == 1 && isReportSpecPath(conceptSpecs[0].Path) {
@@ -185,6 +191,15 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		Constraints:  constraints,
 	}
 	return response, plan
+}
+
+func shouldPrioritizeReportConcept(question string, selected selectedReportConcept) bool {
+	if selected.Exact || selected.OrgSpecific {
+		return true
+	}
+	return isReportIntentQuestion(question) &&
+		selected.Plan.TemplateSelection.Status == "selected" &&
+		selected.Plan.TemplateSelection.Reason == "covers_all_specs"
 }
 
 func recallHits(index wikis.RuntimeIndex, question string) []wikis.RuntimeDocument {

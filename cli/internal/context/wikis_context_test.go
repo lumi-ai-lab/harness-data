@@ -288,6 +288,36 @@ func TestBuildWithWikisIndexBusinessReportRoutingBoundaries(t *testing.T) {
 	}
 }
 
+func TestBuildWithWikisIndexExactReportAliasBeatsToolPathFuzzyMetrics(t *testing.T) {
+	root := testBusinessReportRoutingWikiRoot(t)
+	question := "复盘一下上个月的盈利战役, 注意, 我们需要一份HTML报告, 你可以命名用 /Users/pengmd/tmp/test-data/_cherry_md_html_test/bin/md2html这个工具, 他会帮我们将Markdown转成Html"
+	response, plan, err := BuildWithPlan(root, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeReport || plan.SelectedPlaybook != "playbooks/indicators/business/r-profit-analysis-report.md" || plan.SelectedTemplate != "templates/indicators/business/r-profit-analysis-report.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{
+		"wikis/spec/indicators/business/r-profit-analysis-report.md",
+		"wikis/playbooks/indicators/business/r-profit-analysis-report.md",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
+	}
+	for _, unwanted := range []string{
+		"wikis/spec/indicators/s-water-rent.md",
+		"wikis/spec/cmr/financial/s-ebitda-company-profit.md",
+		"wikis/spec/indicators/s-close-rate.md",
+		"wikis/spec/indicators/s-per-cust-amt.md",
+	} {
+		if hasString(got, unwanted) {
+			t.Fatalf("unexpected fuzzy metric context %s in %#v", unwanted, got)
+		}
+	}
+}
+
 func TestBuildWithWikisIndexCMRStoreManagerMultiSingleDefaultsToCurrentValue(t *testing.T) {
 	root := testCMRStoreManagerWikiRoot(t)
 	for _, question := range []string{
@@ -649,16 +679,19 @@ func testBusinessReportRoutingWikiRoot(t *testing.T) string {
 		"wikis/spec/index.md",
 		"wikis/spec/cmr/index.md",
 		"wikis/spec/cmr/business/index.md",
+		"wikis/spec/cmr/financial/index.md",
 		"wikis/spec/indicators/index.md",
 		"wikis/spec/indicators/business/index.md",
 		"wikis/playbooks/index.md",
 		"wikis/playbooks/cmr/index.md",
 		"wikis/playbooks/cmr/business/index.md",
+		"wikis/playbooks/cmr/financial/index.md",
 		"wikis/playbooks/indicators/index.md",
 		"wikis/playbooks/indicators/business/index.md",
 		"wikis/templates/index.md",
 		"wikis/templates/cmr/index.md",
 		"wikis/templates/cmr/business/index.md",
+		"wikis/templates/cmr/financial/index.md",
 		"wikis/templates/indicators/index.md",
 		"wikis/templates/indicators/business/index.md",
 	} {
@@ -694,6 +727,45 @@ aliases:
 ---
 # 盈利情况分析报告
 `)
+	for _, item := range []struct {
+		specPath     string
+		playbookPath string
+		name         string
+		label        string
+	}{
+		{
+			specPath:     "wikis/spec/indicators/s-water-rent.md",
+			playbookPath: "wikis/playbooks/indicators/s-water-rent.md",
+			name:         "waterRent",
+			label:        "水电房租",
+		},
+		{
+			specPath:     "wikis/spec/cmr/financial/s-ebitda-company-profit.md",
+			playbookPath: "wikis/playbooks/cmr/financial/s-ebitda-company-profit.md",
+			name:         "EBITDA",
+			label:        "息税折旧摊销前利润",
+		},
+		{
+			specPath:     "wikis/spec/indicators/s-close-rate.md",
+			playbookPath: "wikis/playbooks/indicators/s-close-rate.md",
+			name:         "closeRate",
+			label:        "闭店率",
+		},
+		{
+			specPath:     "wikis/spec/indicators/s-per-cust-amt.md",
+			playbookPath: "wikis/playbooks/indicators/s-per-cust-amt.md",
+			name:         "perCustAmt",
+			label:        "客单价",
+		},
+	} {
+		writeContextFile(t, root, item.specPath, `---
+name: `+item.name+`
+label: `+item.label+`
+---
+# `+item.label+`
+`)
+		writeContextFile(t, root, item.playbookPath, "# "+item.label+"取数手册\n")
+	}
 	writeContextFile(t, root, "wikis/playbooks/cmr/business/r-business-analysis-report.md", "# 经营综合分析报告取数手册\n")
 	writeContextFile(t, root, "wikis/playbooks/indicators/business/r-profit-analysis-report.md", "# 盈利情况分析报告取数手册\n")
 	writeContextFile(t, root, "wikis/templates/cmr/business/r-business-analysis-report.md", "# 经营综合分析报告模板\n")
