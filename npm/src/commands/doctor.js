@@ -61,9 +61,11 @@ export async function collectDoctor(workspace, options = {}) {
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
-  add("wikis/spec", fs.existsSync(path.join(workspace, "wikis", "spec")));
-  add("wikis/playbooks", fs.existsSync(path.join(workspace, "wikis", "playbooks")));
-  add("wikis/templates", fs.existsSync(path.join(workspace, "wikis", "templates")));
+  add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
+  add("wikis/metrics", fs.existsSync(path.join(workspace, "wikis", "metrics")));
+  add("wikis/reports", fs.existsSync(path.join(workspace, "wikis", "reports")));
+  add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
+  add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
   }

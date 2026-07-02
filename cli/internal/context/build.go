@@ -82,10 +82,28 @@ func pathsConfigFromIndex(paths map[string]string) (harness.PathsConfig, bool) {
 		return harness.PathsConfig{}, false
 	}
 	cfg := harness.PathsConfig{
+		Knowledge: strings.TrimSpace(paths["knowledge"]),
 		Spec:      strings.TrimSpace(paths["spec"]),
 		Routing:   strings.TrimSpace(paths["routing"]),
 		Playbooks: strings.TrimSpace(paths["playbooks"]),
 		Templates: strings.TrimSpace(paths["templates"]),
+	}
+	if cfg.Knowledge != "" && (cfg.Spec == "" || cfg.Playbooks == "" || cfg.Templates == "") {
+		derived := harness.PathsConfig{
+			Knowledge: cfg.Knowledge,
+			Spec:      cfg.Knowledge + "/spec",
+			Playbooks: cfg.Knowledge + "/playbooks",
+			Templates: cfg.Knowledge + "/templates",
+		}
+		if cfg.Spec == "" {
+			cfg.Spec = derived.Spec
+		}
+		if cfg.Playbooks == "" {
+			cfg.Playbooks = derived.Playbooks
+		}
+		if cfg.Templates == "" {
+			cfg.Templates = derived.Templates
+		}
 	}
 	return cfg, cfg.Spec != "" && cfg.Playbooks != "" && cfg.Templates != ""
 }
@@ -119,8 +137,11 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 
 	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
 	addDefaultFreeFiles := func() {
-		add("spec/index.md", "default free spec index")
-		add("playbooks/index.md", "default free playbook index")
+		add("index.md", "default knowledge index")
+		add("metrics/index.md", "default metrics index")
+		add("reports/index.md", "default reports index")
+		add("dims/index.md", "default dims index")
+		add("rules/index.md", "default rules index")
 	}
 	selectedReport, hasSelectedReport := selectReportConcept(resolver, byPath, index.TemplateSelection, question, matches, conceptSpecs)
 	addSelectedReport := func(selected selectedReportConcept) {
@@ -270,18 +291,20 @@ func classifyHits(hits []wikis.RuntimeDocument) ([]wikis.RuntimeDocument, []wiki
 }
 
 func includeSpecificReportConcepts(byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
-	const profitAnalysisSpec = "spec/indicators/business/r-profit-analysis-report.md"
-	if !isOrganizationProfitSalesReportSpec(profitAnalysisSpec, question) {
-		return specs
+	for _, profitAnalysisSpec := range profitAnalysisSpecPaths() {
+		if !isOrganizationProfitSalesReportSpec(profitAnalysisSpec, question) {
+			continue
+		}
+		if hasRuntimeDoc(specs, profitAnalysisSpec) {
+			return specs
+		}
+		doc, ok := byPath[profitAnalysisSpec]
+		if !ok || doc.Kind != wikis.KindSpec || doc.SpecType != wikis.SpecTypeConcept {
+			continue
+		}
+		return append(specs, doc)
 	}
-	if hasRuntimeDoc(specs, profitAnalysisSpec) {
-		return specs
-	}
-	doc, ok := byPath[profitAnalysisSpec]
-	if !ok || doc.Kind != wikis.KindSpec || doc.SpecType != wikis.SpecTypeConcept {
-		return specs
-	}
-	return append(specs, doc)
+	return specs
 }
 
 func hasRuntimeDoc(docs []wikis.RuntimeDocument, docPath string) bool {
@@ -300,7 +323,7 @@ func sortRuntimeDocsByPath(docs []wikis.RuntimeDocument) {
 func collapseEquivalentMetricSpecs(specs []wikis.RuntimeDocument) []wikis.RuntimeDocument {
 	byKey := map[string]wikis.RuntimeDocument{}
 	for _, spec := range specs {
-		key := path.Base(spec.Path)
+		key := metricIdentityKey(spec.Path)
 		if existing, ok := byKey[key]; ok && preferMetricSpec(existing, spec) {
 			continue
 		}
@@ -312,6 +335,13 @@ func collapseEquivalentMetricSpecs(specs []wikis.RuntimeDocument) []wikis.Runtim
 	}
 	sortRuntimeDocsByPath(out)
 	return out
+}
+
+func metricIdentityKey(logical string) string {
+	if strings.HasPrefix(logical, "metrics/") {
+		return path.Dir(logical)
+	}
+	return path.Base(logical)
 }
 
 func preferMetricSpec(current, candidate wikis.RuntimeDocument) bool {
@@ -359,6 +389,9 @@ func runtimeDocExists(resolver harness.PathResolver, byPath map[string]wikis.Run
 }
 
 func isReportSpecPath(logical string) bool {
+	if strings.HasPrefix(logical, "reports/") {
+		return path.Base(logical) == "spec.md"
+	}
 	return strings.HasPrefix(logical, "spec/") && strings.HasPrefix(path.Base(logical), "r-")
 }
 
@@ -473,11 +506,27 @@ func reportSpecCount(specs []wikis.RuntimeDocument) int {
 }
 
 func isOrganizationProfitSalesReportSpec(specPath, question string) bool {
-	if specPath != "spec/indicators/business/r-profit-analysis-report.md" {
+	if !isProfitAnalysisSpecPath(specPath) {
 		return false
 	}
 	return hasAny(question, []string{"门店", "所有门店", "管理区域", "大区", "督导"}) &&
 		hasAny(question, []string{"盈利情况", "销售情况"})
+}
+
+func isProfitAnalysisSpecPath(specPath string) bool {
+	for _, candidate := range profitAnalysisSpecPaths() {
+		if specPath == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func profitAnalysisSpecPaths() []string {
+	return []string{
+		"reports/盈利情况分析报告/spec.md",
+		"spec/indicators/business/r-profit-analysis-report.md",
+	}
 }
 
 func templateSelectionScore(selection TemplateSelectionDiagnostic) (int, int) {
@@ -711,17 +760,17 @@ func instructionForPlan(plan WikiPlan) string {
 	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
-		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use templates/."
+		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."
 	case sessionstate.ModeMulti:
-		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use templates/, and do not turn this into a report-style analysis."
+		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use template files, and do not turn this into a report-style analysis."
 	case sessionstate.ModeReport:
-		templateInstruction := "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template. Do not read, open, guess, or use templates/ before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body."
+		templateInstruction := "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template. Do not read, open, guess, or use template files before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body."
 		if plan.SelectedTemplate == "" {
-			templateInstruction = "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use templates/."
+			templateInstruction = "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use template files."
 		}
 		return common + " Harness mode: report. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". Read the matched report spec and selected report playbook in contextFiles. Use the report playbook for data collection and JSON handling, and use the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. " + templateInstruction
 	default:
-		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use templates/. You may reference specs/playbooks, but must not apply any template."
+		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use template files. You may reference specs/playbooks, but must not apply any template."
 	}
 }
 

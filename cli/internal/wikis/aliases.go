@@ -181,7 +181,7 @@ func ExportAliases(root string, targets []string) (AliasesFile, error) {
 				Domain:  firstPathPart(doc.Domain),
 				Group:   restPathParts(doc.Domain),
 				FileKey: fileKey,
-				Paths:   AliasesPaths{Template: resolver.ResolveRel("templates/" + fileKey)},
+				Paths:   AliasesPaths{Template: aliasTemplatePath(resolver, doc.Path, fileKey)},
 				Notes:   "",
 			}
 			itemsByKey[fileKey] = item
@@ -901,11 +901,28 @@ func isAliasTarget(doc Document) bool {
 }
 
 func aliasFileKey(logical string) string {
+	if isStructuredPath(logical) {
+		base := path.Base(logical)
+		if base == "spec.md" || base == "playbook.md" || base == "template.md" {
+			return path.Dir(logical)
+		}
+	}
 	_, rest, ok := strings.Cut(logical, "/")
 	if !ok {
 		return logical
 	}
 	return rest
+}
+
+func aliasTemplatePath(resolver harness.PathResolver, logical, fileKey string) string {
+	if isStructuredPath(logical) {
+		template := path.Join(fileKey, "template.md")
+		if fileExists(resolver.Resolve(template)) {
+			return resolver.ResolveRel(template)
+		}
+		return ""
+	}
+	return resolver.ResolveRel("templates/" + fileKey)
 }
 
 func aliasTargetSet(targets []string) map[string]bool {
@@ -1086,6 +1103,20 @@ func checkAliasPath(root string, item AliasesItem, rel, field string, add func(s
 		return
 	}
 	if item.FileKey != "" {
+		logical := aliasLogicalPath(rel)
+		if isStructuredPath(logical) {
+			want := path.Join(item.FileKey, field+".md")
+			if field == "playbook" {
+				want = path.Join(item.FileKey, "playbook.md")
+			}
+			if field == "template" {
+				want = path.Join(item.FileKey, "template.md")
+			}
+			if logical != want {
+				add("warning", "path_file_key_mismatch", item.ID, "paths."+field, rel, "path does not match file_key")
+			}
+			return
+		}
 		wantSuffix := field + "/" + item.FileKey
 		if field == "playbook" {
 			wantSuffix = "playbooks/" + item.FileKey

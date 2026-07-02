@@ -16,7 +16,7 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, installRuntimeBundle } from "../src/commands/install.js";
+import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js";
@@ -86,6 +86,14 @@ test("private qdm cli tools point at their own repositories", () => {
   assert.equal(byName.get("qdm-cmr-cli").private, true);
   assert.equal(byName.get("qdm-indicators-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+});
+
+test("local wikis source requires root index", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-wikis-"));
+  for (const dir of ["metrics", "reports", "dims", "rules"]) fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  assert.throws(() => validateLocalWikisSource(workspace), /missing index\.md/);
+  fs.writeFileSync(path.join(workspace, "index.md"), "# Wikis\n");
+  assert.doesNotThrow(() => validateLocalWikisSource(workspace));
 });
 
 test("tool manifest is a latest-release install catalog", () => {
@@ -951,9 +959,10 @@ function createDoctorWorkspace(agent) {
     "agents/openclaw",
     "agents/hermes",
     "bootstrap",
-    "wikis/spec",
-    "wikis/playbooks",
-    "wikis/templates",
+    "wikis/metrics",
+    "wikis/reports",
+    "wikis/dims",
+    "wikis/rules",
     "bin",
     ".qdm-auth/cas",
   ]) {
@@ -961,6 +970,7 @@ function createDoctorWorkspace(agent) {
   }
 
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
   fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "credentials.enc"), "encrypted-test-credentials");
   for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
     fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });

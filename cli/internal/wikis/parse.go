@@ -40,26 +40,20 @@ func LoadCorpusWithOptions(root string, opts LoadCorpusOptions) (Corpus, []Check
 	if err != nil {
 		return Corpus{}, nil, err
 	}
-	specPaths, err := collectLogicalMarkdown(resolver, "spec")
-	if err != nil {
-		return Corpus{}, nil, err
-	}
-	playbookPaths, err := collectLogicalMarkdown(resolver, "playbooks")
-	if err != nil {
-		return Corpus{}, nil, err
-	}
-	templatePaths, err := collectLogicalMarkdown(resolver, "templates")
+	paths, err := collectCorpusMarkdown(resolver)
 	if err != nil {
 		return Corpus{}, nil, err
 	}
 	specSet := map[string]bool{}
-	for _, p := range specPaths {
-		specSet[p] = true
+	for _, p := range paths {
+		if isSpecDocPath(p) {
+			specSet[p] = true
+		}
 	}
 
 	var docs []Document
 	var errs []CheckError
-	for _, logical := range append(append(specPaths, playbookPaths...), templatePaths...) {
+	for _, logical := range paths {
 		doc, parseErrs, err := ParseDocument(resolver, logical, specSet)
 		if err != nil {
 			return Corpus{}, nil, err
@@ -111,24 +105,19 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		IsIndex:        path.Base(logical) == "index.md",
 		HasFrontmatter: fm.Present,
 	}
-	if strings.HasPrefix(logical, "spec/") && !doc.IsIndex {
-		base := path.Base(logical)
-		if strings.HasPrefix(base, "c-") || strings.HasPrefix(base, "r-") {
-			doc.SpecType = SpecTypeConcept
-		} else {
-			doc.SpecType = SpecTypeMetric
-		}
+	if doc.Kind == KindSpec && !doc.IsIndex {
+		doc.SpecType = inferSpecType(logical)
 	}
-	if strings.HasPrefix(logical, "playbooks/") && !doc.IsIndex {
+	if doc.Kind == KindPlaybook && !doc.IsIndex {
 		specPath := SamePath(logical, "spec")
 		templatePath := SamePath(logical, "templates")
 		doc.Playbook.SpecPath = specPath
 		doc.Playbook.TemplatePath = templatePath
-		if specSet[specPath] && strings.HasPrefix(path.Base(logical), "s-") {
+		if specSet[specPath] && inferSpecType(specPath) == SpecTypeMetric {
 			doc.Playbook.IsSingle = true
 		}
 	}
-	if strings.HasPrefix(logical, "templates/") && !doc.IsIndex {
+	if doc.Kind == KindTemplate && !doc.IsIndex {
 		doc.Template.PlaybookPath = SamePath(logical, "playbooks")
 		doc.Template.IsReport = true
 	}
@@ -147,6 +136,32 @@ func ParseDocument(resolver harness.PathResolver, logical string, specSet map[st
 		errs = append(errs, CheckError{Path: logical, Code: "multiple_h1", Message: "multiple H1 titles"})
 	}
 	return doc, errs, nil
+}
+
+func collectCorpusMarkdown(resolver harness.PathResolver) ([]string, error) {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(logical string) {
+		if seen[logical] {
+			return
+		}
+		seen[logical] = true
+		paths = append(paths, logical)
+	}
+	if fileExists(resolver.Resolve("index.md")) {
+		add("index.md")
+	}
+	for _, prefix := range []string{"spec", "playbooks", "templates", "metrics", "reports", "dims", "rules"} {
+		found, err := collectLogicalMarkdown(resolver, prefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, logical := range found {
+			add(logical)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func collectLogicalMarkdown(resolver harness.PathResolver, prefix string) ([]string, error) {
@@ -176,6 +191,16 @@ func collectLogicalMarkdown(resolver harness.PathResolver, prefix string) ([]str
 func inferKind(logical string) Kind {
 	isIndex := path.Base(logical) == "index.md"
 	switch {
+	case logical == "index.md":
+		return KindSpecIndex
+	case isStructuredSpecPath(logical) && isIndex:
+		return KindSpecIndex
+	case isStructuredSpecPath(logical):
+		return KindSpec
+	case isStructuredPlaybookPath(logical):
+		return KindPlaybook
+	case isStructuredTemplatePath(logical):
+		return KindTemplate
 	case strings.HasPrefix(logical, "spec/") && isIndex:
 		return KindSpecIndex
 	case strings.HasPrefix(logical, "spec/"):
@@ -192,6 +217,19 @@ func inferKind(logical string) Kind {
 }
 
 func inferDomain(logical string) string {
+	if logical == "index.md" {
+		return ""
+	}
+	if isStructuredPath(logical) {
+		parts := strings.Split(logical, "/")
+		if len(parts) == 2 && parts[1] == "index.md" {
+			return ""
+		}
+		if len(parts) >= 2 {
+			return parts[1]
+		}
+		return ""
+	}
 	parts := strings.SplitN(logical, "/", 2)
 	if len(parts) != 2 {
 		return ""
@@ -212,11 +250,65 @@ func inferDomain(logical string) string {
 }
 
 func SamePath(logical, targetRoot string) string {
+	if isStructuredPath(logical) {
+		dir := path.Dir(logical)
+		switch targetRoot {
+		case "spec":
+			return path.Join(dir, "spec.md")
+		case "playbooks":
+			return path.Join(dir, "playbook.md")
+		case "templates":
+			return path.Join(dir, "template.md")
+		default:
+			return logical
+		}
+	}
 	parts := strings.SplitN(logical, "/", 2)
 	if len(parts) != 2 {
 		return logical
 	}
 	return targetRoot + "/" + parts[1]
+}
+
+func isSpecDocPath(logical string) bool {
+	return inferKind(logical) == KindSpec && path.Base(logical) != "index.md"
+}
+
+func inferSpecType(logical string) SpecType {
+	if strings.HasPrefix(logical, "metrics/") {
+		return SpecTypeMetric
+	}
+	if strings.HasPrefix(logical, "reports/") || strings.HasPrefix(logical, "dims/") || strings.HasPrefix(logical, "rules/") {
+		return SpecTypeConcept
+	}
+	base := path.Base(logical)
+	if strings.HasPrefix(base, "c-") || strings.HasPrefix(base, "r-") {
+		return SpecTypeConcept
+	}
+	return SpecTypeMetric
+}
+
+func isStructuredPath(logical string) bool {
+	return strings.HasPrefix(logical, "metrics/") ||
+		strings.HasPrefix(logical, "reports/") ||
+		strings.HasPrefix(logical, "dims/") ||
+		strings.HasPrefix(logical, "rules/")
+}
+
+func isStructuredSpecPath(logical string) bool {
+	base := path.Base(logical)
+	if base == "spec.md" {
+		return isStructuredPath(logical)
+	}
+	return base == "index.md" && isStructuredPath(logical)
+}
+
+func isStructuredPlaybookPath(logical string) bool {
+	return isStructuredPath(logical) && path.Base(logical) == "playbook.md"
+}
+
+func isStructuredTemplatePath(logical string) bool {
+	return isStructuredPath(logical) && path.Base(logical) == "template.md"
 }
 
 func parseH1(data []byte) (string, int) {

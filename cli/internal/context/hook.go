@@ -170,10 +170,14 @@ func buildTimeContext(prompt string, resolver harness.PathResolver) timeContext 
 	if timezone == "" {
 		timezone = "Asia/Shanghai"
 	}
+	timePolicy := "spec/common/time-policy.md"
+	if info, err := os.Stat(resolver.Resolve("rules/QDM 时间口径/spec.md")); err == nil && !info.IsDir() {
+		timePolicy = "rules/QDM 时间口径/spec.md"
+	}
 	return timeContext{
 		CurrentDate: current.Format("2006-01-02"),
 		Timezone:    timezone,
-		TimePolicy:  fmt.Sprintf("Use %s to infer --date, --week, or --month. Do not use date ranges.", resolver.ResolveRel("spec/common/time-policy.md")),
+		TimePolicy:  fmt.Sprintf("Use %s to infer --date, --week, or --month. Do not use date ranges.", resolver.ResolveRel(timePolicy)),
 		Prompt:      prompt,
 	}
 }

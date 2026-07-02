@@ -20,10 +20,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 		if got[path] {
 			return
 		}
-		if got["wikis/playbooks/"+path] {
-			return
-		}
-		if got["wikis/spec/"+path] {
+		if got["wikis/metrics/"+path] {
 			return
 		}
 		t.Fatalf("missing %s in %#v", path, response.ContextFiles)
@@ -32,9 +29,13 @@ func TestMemberRepurchaseContext(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
-	checkIndicatorContext(got, "indicators/s-repurchase-member-trans-times.md")
+	checkIndicatorContext(got, "会员复购次数/playbook.md")
 	for _, ref := range response.ContextFiles {
-		if !strings.HasPrefix(ref.Path, "wikis/spec/") && !strings.HasPrefix(ref.Path, "wikis/playbooks/") {
+		if !strings.HasPrefix(ref.Path, "wikis/metrics/") &&
+			!strings.HasPrefix(ref.Path, "wikis/reports/") &&
+			!strings.HasPrefix(ref.Path, "wikis/dims/") &&
+			!strings.HasPrefix(ref.Path, "wikis/rules/") &&
+			ref.Path != "wikis/index.md" {
 			t.Fatalf("unexpected context path %s", ref.Path)
 		}
 	}
@@ -46,7 +47,7 @@ func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ref := range response.ContextFiles {
-		if ref.Path == "wikis/spec/cmr/member/s-member-repurchase-no-difference-rate.md" {
+		if ref.Path == "wikis/metrics/会员复购次数/spec.md" {
 			t.Fatalf("unexpected member spec: %#v", response.ContextFiles)
 		}
 	}
@@ -65,6 +66,33 @@ func TestMemberCategoryUnsupported(t *testing.T) {
 	t.Fatalf("expected index context for category unsupported rule path: %#v", response.ContextFiles)
 }
 
+func TestNoRecallUsesStructuredDefaultIndexes(t *testing.T) {
+	response, err := dhcontext.Build(currentRootWithIndex(t), "zzzzzzqqqqqqnohit987654321")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, ref := range response.ContextFiles {
+		got[ref.Path] = true
+	}
+	for _, want := range []string{
+		"wikis/index.md",
+		"wikis/metrics/index.md",
+		"wikis/reports/index.md",
+		"wikis/dims/index.md",
+		"wikis/rules/index.md",
+	} {
+		if !got[want] {
+			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
+		}
+	}
+	for _, unwanted := range []string{"wikis/spec/index.md", "wikis/playbooks/index.md", "spec/index.md", "playbooks/index.md"} {
+		if got[unwanted] {
+			t.Fatalf("unexpected legacy default %s in %#v", unwanted, response.ContextFiles)
+		}
+	}
+}
+
 func TestMultiDomainContextRecall(t *testing.T) {
 	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店净利润最近为什么下降？")
 	if err != nil {
@@ -75,12 +103,12 @@ func TestMultiDomainContextRecall(t *testing.T) {
 		got[ref.Path] = true
 	}
 	for _, want := range []string{
-		"wikis/spec/indicators/s-repurchase-member-trans-times.md",
-		"wikis/spec/cmr/store-manager/s-net-profit.md",
-		"wikis/playbooks/cmr/store-manager/s-net-profit.md",
+		"wikis/metrics/会员复购次数/spec.md",
+		"wikis/metrics/门店净利润/spec.md",
+		"wikis/metrics/门店净利润/playbook.md",
 	} {
 		if !got[want] {
-			if want == "wikis/spec/indicators/s-repurchase-member-trans-times.md" && got["wikis/playbooks/indicators/s-repurchase-member-trans-times.md"] {
+			if want == "wikis/metrics/会员复购次数/spec.md" && got["wikis/metrics/会员复购次数/playbook.md"] {
 				continue
 			}
 			t.Fatalf("missing %s in %#v", want, response.ContextFiles)
@@ -102,10 +130,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/spec/indicators/s-repurchase-member-trans-times.md"} {
-		if want == "wikis/spec/indicators/s-repurchase-member-trans-times.md" && bytes.Contains(data, []byte("wikis/playbooks/indicators/s-repurchase-member-trans-times.md")) {
-			continue
-		}
+	for _, want := range []string{"hookSpecificOutput", "UserPromptSubmit", "wikis/metrics/会员复购次数/playbook.md"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
@@ -211,10 +236,10 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	if state["started_at"] == "" {
 		t.Fatalf("missing started_at in %s", string(data))
 	}
-	if state["selected_playbook"] != "playbooks/cmr/business/r-business-analysis-report.md" {
+	if state["selected_playbook"] != "reports/经营综合分析报告/playbook.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "templates/cmr/business/r-business-analysis-report.md" {
+	if state["selected_template"] != "reports/经营综合分析报告/template.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
 	}
 	if state["template_injected"] != false {
@@ -251,10 +276,10 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	for _, want := range []string{
 		"Harness mode: free",
 		"Do not run bin/data-harness-cli inject-template",
-		"wikis/spec/cmr/business/index.md",
-		"wikis/spec/cmr/business/r-business-analysis-report.md",
-		"wikis/spec/cmr/member/index.md",
-		"wikis/spec/cmr/member/r-member-analysis-report.md",
+		"wikis/reports/经营综合分析报告/index.md",
+		"wikis/reports/经营综合分析报告/spec.md",
+		"wikis/reports/用户分析报告/index.md",
+		"wikis/reports/用户分析报告/spec.md",
 	} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
@@ -305,12 +330,12 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 		t.Fatal("expected hook output")
 	}
 	context := output.HookSpecificOutput.AdditionalContext
-	for _, want := range []string{"Harness mode: multi_single", "selectedPlaybooks:", "playbooks/indicators/s-sale-amt.md", "playbooks/indicators/s-per-cust-amt.md"} {
+	for _, want := range []string{"Harness mode: multi_single", "selectedPlaybooks:", "metrics/销售额/playbook.md", "metrics/客单价/playbook.md"} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
 		}
 	}
-	for _, unwanted := range []string{"selectedPlaybook: playbooks/cmr/business/default-overview.md", "templates/cmr/business/default-overview.md", "- wikis/spec/indicators/s-sale-amt.md", "- wikis/spec/indicators/s-per-cust-amt.md"} {
+	for _, unwanted := range []string{"selectedPlaybook: reports/经营综合分析报告/playbook.md", "reports/经营综合分析报告/template.md", "- wikis/metrics/销售额/spec.md", "- wikis/metrics/客单价/spec.md"} {
 		if bytes.Contains([]byte(context), []byte(unwanted)) {
 			t.Fatalf("unexpected report/spec context: %s in %s", unwanted, context)
 		}

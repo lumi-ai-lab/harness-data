@@ -55,8 +55,8 @@ func ValidateDocuments(root string, docs []harness.Document) []string {
 			errs = append(errs, fmt.Sprintf("%s: playbook_index must not declare template", doc.Path))
 		}
 		if doc.Template != "" {
-			if !strings.HasPrefix(doc.Template, "templates/") {
-				errs = append(errs, fmt.Sprintf("%s: template must use logical path under templates/: %s", doc.Path, doc.Template))
+			if !isTemplateLogicalPath(doc.Template) {
+				errs = append(errs, fmt.Sprintf("%s: template must use templates/... or reports/.../template.md: %s", doc.Path, doc.Template))
 			}
 			if !exists(resolver, doc.Template) {
 				errs = append(errs, fmt.Sprintf("%s: missing template reference %s", doc.Path, doc.Template))
@@ -78,4 +78,9 @@ func hasTag(tags []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func isTemplateLogicalPath(logical string) bool {
+	return strings.HasPrefix(logical, "templates/") ||
+		(strings.HasPrefix(logical, "reports/") && strings.HasSuffix(logical, "/template.md"))
 }

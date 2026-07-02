@@ -53,6 +53,37 @@ aliases: ["销售额", "销售金额"]
 	}
 }
 
+func TestParseDocumentStructuredIndexDomains(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/metrics/index.md", "# Metrics\n")
+	writeFile(t, root, "wikis/metrics/销售额/index.md", "# 销售额\n")
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootIndex, errs, err := ParseDocument(resolver, "metrics/index.md", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected parse errors: %+v", errs)
+	}
+	if rootIndex.Domain != "" {
+		t.Fatalf("expected top-level structured index to have empty domain, got %+v", rootIndex)
+	}
+	objectIndex, errs, err := ParseDocument(resolver, "metrics/销售额/index.md", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected parse errors: %+v", errs)
+	}
+	if objectIndex.Domain != "销售额" {
+		t.Fatalf("expected object index domain to be object name, got %+v", objectIndex)
+	}
+}
+
 func TestParseDocumentParsesSinglePlaybookIntents(t *testing.T) {
 	root := testWikiRoot(t)
 	writeFile(t, root, "wikis/playbooks/idx/business-manager/s-sale-amt.md", `---
@@ -167,9 +198,9 @@ label: 时间规则
 `)
 	writeFile(t, root, "wikis/spec/dim-area/manage-area.md", `---
 name: dim_area_manage_area
-label: 管理区域编码映射
+label: 管理区域编码
 ---
-# 管理区域编码映射
+# 管理区域编码
 `)
 	writeFile(t, root, "wikis/spec/idx/business-manager/s-sale-amt.md", `---
 name: sale_amt

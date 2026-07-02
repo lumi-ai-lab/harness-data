@@ -24,6 +24,7 @@ type PathResolver struct {
 }
 
 type PathsConfig struct {
+	Knowledge string
 	Spec      string
 	Routing   string
 	Playbooks string
@@ -58,6 +59,9 @@ func isRoot(dir string) bool {
 		return true
 	}
 	if exists(filepath.Join(dir, "cli", "cmd", "data-harness-cli", "main.go")) {
+		return true
+	}
+	if exists(filepath.Join(dir, "metrics")) && exists(filepath.Join(dir, "reports")) && exists(filepath.Join(dir, "dims")) && exists(filepath.Join(dir, "rules")) {
 		return true
 	}
 	for _, name := range []string{"spec", "routing", "playbooks"} {
@@ -116,6 +120,8 @@ func LoadConfig(root string) (Config, error) {
 		switch section {
 		case "paths":
 			switch key {
+			case "knowledge":
+				cfg.Paths = pathsFromKnowledge(value)
 			case "spec":
 				cfg.Paths.Spec = value
 			case "routing":
@@ -212,6 +218,12 @@ func (r PathResolver) ResolveRel(rel string) string {
 	if rel == "." || rel == "" {
 		return "."
 	}
+	if rel == "index.md" && r.Paths.Knowledge != "" {
+		knowledge := cleanRelPath(r.Paths.Knowledge)
+		if knowledge != "." && knowledge != "" {
+			return knowledge + "/index.md"
+		}
+	}
 	if isConfiguredPhysicalRel(rel, r.Paths) {
 		return rel
 	}
@@ -235,7 +247,10 @@ func (r PathResolver) KnowledgePath(name string) string {
 
 func (r PathResolver) LogicalRel(rel string) string {
 	rel = filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel))))
-	for _, prefix := range []string{"spec", "routing", "playbooks", "templates"} {
+	if r.Paths.Knowledge != "" && rel == pathJoinClean(r.Paths.Knowledge, "index.md") {
+		return "index.md"
+	}
+	for _, prefix := range logicalPrefixes() {
 		base := pathForPrefix(r.Paths, prefix)
 		if base == "." || base == "" {
 			continue
@@ -255,14 +270,15 @@ func IsKnowledgeLogicalRel(rel string) bool {
 }
 
 func isKnowledgeLogicalRel(rel string) bool {
-	return rel == "spec" ||
-		rel == "routing" ||
-		rel == "playbooks" ||
-		rel == "templates" ||
-		strings.HasPrefix(rel, "spec/") ||
-		strings.HasPrefix(rel, "routing/") ||
-		strings.HasPrefix(rel, "playbooks/") ||
-		strings.HasPrefix(rel, "templates/")
+	if rel == "index.md" {
+		return true
+	}
+	for _, prefix := range logicalPrefixes() {
+		if rel == prefix || strings.HasPrefix(rel, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanPathValue(value string) string {
@@ -286,7 +302,10 @@ func defaultConfig() Config {
 
 func defaultConfigForRoot(root string) Config {
 	cfg := defaultConfig()
-	if exists(filepath.Join(root, "wikis", "spec")) || exists(filepath.Join(root, "wikis", "playbooks")) {
+	if exists(filepath.Join(root, "wikis", "spec")) ||
+		exists(filepath.Join(root, "wikis", "playbooks")) ||
+		exists(filepath.Join(root, "wikis", "metrics")) ||
+		exists(filepath.Join(root, "wikis", "reports")) {
 		cfg.Paths = pathsFromKnowledge("wikis")
 	}
 	return cfg
@@ -295,9 +314,10 @@ func defaultConfigForRoot(root string) Config {
 func pathsFromKnowledge(knowledge string) PathsConfig {
 	knowledge = filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(knowledge))))
 	if knowledge == "" || knowledge == "." {
-		return PathsConfig{Spec: "spec", Playbooks: "playbooks", Templates: "templates"}
+		return PathsConfig{Knowledge: ".", Spec: "spec", Playbooks: "playbooks", Templates: "templates"}
 	}
 	return PathsConfig{
+		Knowledge: knowledge,
 		Spec:      knowledge + "/spec",
 		Playbooks: knowledge + "/playbooks",
 		Templates: knowledge + "/templates",
@@ -305,6 +325,9 @@ func pathsFromKnowledge(knowledge string) PathsConfig {
 }
 
 func validatePathsConfig(source string, cfg PathsConfig) error {
+	if cfg.Knowledge != "" && invalidRelPath(cfg.Knowledge) {
+		return fmt.Errorf("%s: paths.knowledge must be a repository-relative path", source)
+	}
 	for name, rel := range map[string]string{
 		"spec":      cfg.Spec,
 		"playbooks": cfg.Playbooks,
@@ -313,18 +336,18 @@ func validatePathsConfig(source string, cfg PathsConfig) error {
 		if rel == "" {
 			return fmt.Errorf("%s: paths.%s must not be empty", source, name)
 		}
-		if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "/../") {
+		if invalidRelPath(rel) {
 			return fmt.Errorf("%s: paths.%s must be a repository-relative path", source, name)
 		}
 	}
-	if cfg.Routing != "" && (filepath.IsAbs(cfg.Routing) || cfg.Routing == ".." || strings.HasPrefix(cfg.Routing, "../") || strings.Contains(cfg.Routing, "/../")) {
+	if cfg.Routing != "" && invalidRelPath(cfg.Routing) {
 		return fmt.Errorf("%s: paths.routing must be a repository-relative path", source)
 	}
 	return nil
 }
 
 func splitLogicalRel(rel string) (string, string, bool) {
-	for _, prefix := range []string{"spec", "routing", "playbooks", "templates"} {
+	for _, prefix := range logicalPrefixes() {
 		if rel == prefix {
 			return prefix, "", true
 		}
@@ -345,13 +368,18 @@ func pathForPrefix(cfg PathsConfig, prefix string) string {
 		return cleanRelPath(cfg.Playbooks)
 	case "templates":
 		return cleanRelPath(cfg.Templates)
+	case "metrics", "reports", "dims", "rules":
+		if strings.TrimSpace(cfg.Knowledge) == "" {
+			return ""
+		}
+		return pathJoinClean(cfg.Knowledge, prefix)
 	default:
 		return ""
 	}
 }
 
 func isConfiguredPhysicalRel(rel string, cfg PathsConfig) bool {
-	for _, prefix := range []string{"spec", "routing", "playbooks", "templates"} {
+	for _, prefix := range logicalPrefixes() {
 		base := pathForPrefix(cfg, prefix)
 		if base != "." && base != "" && (rel == base || strings.HasPrefix(rel, base+"/")) {
 			return true
@@ -362,4 +390,21 @@ func isConfiguredPhysicalRel(rel string, cfg PathsConfig) bool {
 
 func cleanRelPath(rel string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel))))
+}
+
+func invalidRelPath(rel string) bool {
+	rel = cleanRelPath(rel)
+	return filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "/../")
+}
+
+func logicalPrefixes() []string {
+	return []string{"spec", "routing", "playbooks", "templates", "metrics", "reports", "dims", "rules"}
+}
+
+func pathJoinClean(base, elem string) string {
+	base = cleanRelPath(base)
+	if base == "" || base == "." {
+		return cleanRelPath(elem)
+	}
+	return cleanRelPath(base + "/" + elem)
 }

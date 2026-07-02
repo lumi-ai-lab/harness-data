@@ -11,7 +11,10 @@ import (
 	"harness-data/cli/internal/harness"
 )
 
-const TemplateSelectionLogicalPath = "templates/selection.yaml"
+const (
+	TemplateSelectionLogicalPath       = "reports/selection.yaml"
+	LegacyTemplateSelectionLogicalPath = "templates/selection.yaml"
+)
 
 type TemplateDoctorResult struct {
 	Status            string                  `json:"status"`
@@ -33,9 +36,17 @@ func LoadTemplateSelectionPolicy(root string) (TemplateSelectionPolicy, string, 
 	data, err := os.ReadFile(selectionPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return TemplateSelectionPolicy{Version: 1}, selectionPath, nil
+			selectionPath = resolver.Resolve(LegacyTemplateSelectionLogicalPath)
+			data, err = os.ReadFile(selectionPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return TemplateSelectionPolicy{Version: 1}, resolver.Resolve(TemplateSelectionLogicalPath), nil
+				}
+				return TemplateSelectionPolicy{}, selectionPath, err
+			}
+		} else {
+			return TemplateSelectionPolicy{}, selectionPath, err
 		}
-		return TemplateSelectionPolicy{}, selectionPath, err
 	}
 	policy, err := ParseTemplateSelectionYAML(data)
 	if err != nil {
@@ -192,13 +203,13 @@ func ValidateTemplateSelectionPolicy(root string, policy TemplateSelectionPolicy
 			errs = append(errs, prefix+": duplicate id "+rule.ID)
 		}
 		ids[rule.ID] = true
-		if rule.Playbook == "" || !strings.HasPrefix(rule.Playbook, "playbooks/") {
-			errs = append(errs, prefix+": playbook must use logical path under playbooks/")
+		if rule.Playbook == "" || inferKind(rule.Playbook) != KindPlaybook {
+			errs = append(errs, prefix+": playbook must reference a playbook logical path")
 		} else if !fileExists(resolver.Resolve(rule.Playbook)) {
 			errs = append(errs, prefix+": missing playbook "+rule.Playbook)
 		}
-		if rule.Template == "" || !strings.HasPrefix(rule.Template, "templates/") {
-			errs = append(errs, prefix+": template must use logical path under templates/")
+		if rule.Template == "" || !isAllowedTemplateSelectionPath(rule.Template) {
+			errs = append(errs, prefix+": template must use templates/... or reports/.../template.md")
 		} else if !fileExists(resolver.Resolve(rule.Template)) {
 			errs = append(errs, prefix+": missing template "+rule.Template)
 		}
@@ -206,8 +217,8 @@ func ValidateTemplateSelectionPolicy(root string, policy TemplateSelectionPolicy
 			errs = append(errs, prefix+": type must be report, composite, or single")
 		}
 		for _, cover := range rule.Covers {
-			if !strings.HasPrefix(cover, "spec/") {
-				errs = append(errs, prefix+": cover must use logical path under spec/: "+cover)
+			if !isSpecDocPath(cover) {
+				errs = append(errs, prefix+": cover must reference a spec logical path: "+cover)
 			} else if !fileExists(resolver.Resolve(cover)) {
 				errs = append(errs, prefix+": missing cover "+cover)
 			}
@@ -270,7 +281,10 @@ func SuggestTemplateSelection(root string, policy TemplateSelectionPolicy) ([]Te
 			continue
 		}
 		base := pathBase(doc.Path)
-		if !strings.HasPrefix(base, "r-") && !strings.HasPrefix(base, "c-") {
+		if !isAllowedTemplateSelectionPath(doc.Path) {
+			continue
+		}
+		if strings.HasPrefix(doc.Path, "templates/") && !strings.HasPrefix(base, "r-") && !strings.HasPrefix(base, "c-") {
 			continue
 		}
 		playbook := SamePath(doc.Path, "playbooks")
@@ -345,7 +359,16 @@ func pathBase(logical string) string {
 
 func stableTemplateSelectionID(templatePath string) string {
 	id := strings.TrimSuffix(strings.TrimPrefix(templatePath, "templates/"), ".md")
+	id = strings.TrimPrefix(id, "reports/")
 	id = strings.ReplaceAll(id, "/", "_")
 	id = strings.ReplaceAll(id, "-", "_")
 	return id
+}
+
+func isReportTemplatePath(logical string) bool {
+	return strings.HasPrefix(logical, "reports/") && pathBase(logical) == "template.md"
+}
+
+func isAllowedTemplateSelectionPath(logical string) bool {
+	return strings.HasPrefix(logical, "templates/") || isReportTemplatePath(logical)
 }

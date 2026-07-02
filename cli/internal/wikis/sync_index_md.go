@@ -75,7 +75,7 @@ func SyncIndexMD(root string, checkOnly bool) (SyncIndexMDResult, error) {
 func indexDirs(docs []Document) []string {
 	dirs := map[string]bool{}
 	for _, doc := range docs {
-		if !(strings.HasPrefix(doc.Path, "spec/") || strings.HasPrefix(doc.Path, "playbooks/")) {
+		if !isSyncIndexDocPath(doc.Path) {
 			continue
 		}
 		dir := path.Dir(doc.Path)
@@ -90,12 +90,36 @@ func indexDirs(docs []Document) []string {
 	}
 	out := make([]string, 0, len(dirs))
 	for dir := range dirs {
-		if dir == "spec" || dir == "playbooks" || strings.HasPrefix(dir, "spec/") || strings.HasPrefix(dir, "playbooks/") {
+		if isSyncIndexDir(dir) {
 			out = append(out, dir)
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+func isSyncIndexDocPath(logical string) bool {
+	return strings.HasPrefix(logical, "spec/") ||
+		strings.HasPrefix(logical, "playbooks/") ||
+		isStructuredPath(logical)
+}
+
+func isSyncIndexDir(dir string) bool {
+	for _, root := range []string{"spec", "playbooks", "metrics", "reports", "dims", "rules"} {
+		if dir == root || strings.HasPrefix(dir, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func isStructuredIndexDir(dir string) bool {
+	for _, root := range []string{"metrics", "reports", "dims", "rules"} {
+		if dir == root || strings.HasPrefix(dir, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func syncIndexContent(logical string, current []byte, block string, exists bool) []byte {
@@ -126,19 +150,46 @@ func defaultIndexTitle(logical string) string {
 	dir := path.Dir(logical)
 	root, domain, _ := strings.Cut(dir, "/")
 	if domain == "" || domain == "." {
-		if root == "spec" {
+		switch root {
+		case "spec":
 			return "Spec Index"
+		case "playbooks":
+			return "Playbooks Index"
+		case "metrics":
+			return "Metrics Index"
+		case "reports":
+			return "Reports Index"
+		case "dims":
+			return "Dims Index"
+		case "rules":
+			return "Rules Index"
+		default:
+			return "Index"
 		}
-		return "Playbooks Index"
 	}
-	if root == "spec" {
+	switch root {
+	case "spec":
 		return domain + " Spec Index"
+	case "playbooks":
+		return domain + " Playbook Index"
+	case "metrics":
+		return domain + " Metrics Index"
+	case "reports":
+		return domain + " Reports Index"
+	case "dims":
+		return domain + " Dims Index"
+	case "rules":
+		return domain + " Rules Index"
+	default:
+		return domain + " Index"
 	}
-	return domain + " Playbook Index"
 }
 
 func renderIndexBlock(c Corpus, dir string) string {
 	var b strings.Builder
+	if isStructuredIndexDir(dir) {
+		return renderStructuredIndexBlock(c, dir)
+	}
 	kind := "spec"
 	if strings.HasPrefix(dir, "playbooks") {
 		kind = "playbooks"
@@ -149,6 +200,38 @@ func renderIndexBlock(c Corpus, dir string) string {
 	} else {
 		renderPlaybookIndex(&b, c, dir)
 	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderStructuredIndexBlock(c Corpus, dir string) string {
+	var b strings.Builder
+	specs, playbooks, templates := structuredDocsInDir(c.Docs, dir)
+	children := childDirs(c.Docs, dir)
+	fmt.Fprintf(&b, "## 自动索引\n\n来源：`%s`\n\n", dir)
+	fmt.Fprintln(&b, "### 能力地图")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "| 能力 | 代表条目 | 数量 |")
+	fmt.Fprintln(&b, "| --- | --- | --- |")
+	writeCapabilityRow(&b, "规格说明", representativeDocNames(specs), len(specs))
+	writeCapabilityRow(&b, "取数手册", representativeDocNames(playbooks), len(playbooks))
+	writeCapabilityRow(&b, "报告模板", representativeDocNames(templates), len(templates))
+	writeCapabilityRow(&b, "下级目录", representativeDirs(children), len(children))
+	fmt.Fprintln(&b)
+
+	fmt.Fprintln(&b, "### 文档清单")
+	fmt.Fprintln(&b)
+	if len(specs) == 0 && len(playbooks) == 0 && len(templates) == 0 {
+		fmt.Fprintln(&b, "暂无。")
+		fmt.Fprintln(&b)
+	} else {
+		fmt.Fprintln(&b, "| 类型 | 文档 | 标题 |")
+		fmt.Fprintln(&b, "| --- | --- | --- |")
+		for _, doc := range append(append(specs, playbooks...), templates...) {
+			fmt.Fprintf(&b, "| %s | `%s` | %s |\n", structuredDocType(doc), path.Base(doc.Path), tableCell(firstNonEmpty(doc.Label, doc.Title, "-")))
+		}
+		fmt.Fprintln(&b)
+	}
+	renderChildren(&b, children)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -289,6 +372,43 @@ func playbookDocsInDir(docs []Document, dir string) ([]Document, []Document) {
 	sortDocs(singles)
 	sortDocs(reports)
 	return singles, reports
+}
+
+func structuredDocsInDir(docs []Document, dir string) ([]Document, []Document, []Document) {
+	var specs, playbooks, templates []Document
+	for _, doc := range docs {
+		if doc.IsIndex || path.Dir(doc.Path) != dir {
+			continue
+		}
+		switch doc.Kind {
+		case KindSpec:
+			specs = append(specs, doc)
+		case KindPlaybook:
+			playbooks = append(playbooks, doc)
+		case KindTemplate:
+			templates = append(templates, doc)
+		}
+	}
+	sortDocs(specs)
+	sortDocs(playbooks)
+	sortDocs(templates)
+	return specs, playbooks, templates
+}
+
+func structuredDocType(doc Document) string {
+	switch doc.Kind {
+	case KindSpec:
+		if doc.SpecType == SpecTypeMetric {
+			return "指标规格"
+		}
+		return "规格说明"
+	case KindPlaybook:
+		return "取数手册"
+	case KindTemplate:
+		return "报告模板"
+	default:
+		return string(doc.Kind)
+	}
 }
 
 func childDirs(docs []Document, dir string) []string {

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -130,25 +131,7 @@ func run() error {
 	case "stage":
 		return runStage(os.Args[2:])
 	case "show":
-		fs := flag.NewFlagSet("show", flag.ExitOnError)
-		jsonOut := fs.Bool("json", false, "print json")
-		_ = fs.Parse(os.Args[2:])
-		args := normalizeArgs(fs.Args(), jsonOut)
-		if len(args) != 1 {
-			return fmt.Errorf("show requires id or path")
-		}
-		indexes, err := idx.Build(root)
-		if err != nil {
-			return err
-		}
-		doc, ok := idx.FindByIDOrPath(indexes, args[0])
-		if !ok {
-			return fmt.Errorf("not found: %s", args[0])
-		}
-		if *jsonOut {
-			return printJSON(doc)
-		}
-		fmt.Printf("%s\t%s\t%s\n", doc.ID, doc.Kind, doc.Path)
+		return runShow(root, os.Args[2:])
 	default:
 		return fmt.Errorf("unknown command: %s", os.Args[1])
 	}
@@ -170,6 +153,152 @@ func printUsage() {
 
 func usageText() string {
 	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show>"
+}
+
+type showDocument struct {
+	ID      string
+	Kind    string
+	Path    string
+	Payload any
+}
+
+func runShow(root string, args []string) error {
+	fs := flag.NewFlagSet("show", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print json")
+	_ = fs.Parse(args)
+	remaining := normalizeArgs(fs.Args(), jsonOut)
+	if len(remaining) != 1 {
+		return fmt.Errorf("show requires id or path")
+	}
+	doc, ok, err := findShowDocument(root, remaining[0])
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("not found: %s", remaining[0])
+	}
+	if *jsonOut {
+		return printJSON(doc.Payload)
+	}
+	fmt.Printf("%s\t%s\t%s\n", doc.ID, doc.Kind, doc.Path)
+	return nil
+}
+
+func findShowDocument(root, key string) (showDocument, bool, error) {
+	if doc, ok, err := findShowInWikisIndex(root, key); err != nil {
+		return showDocument{}, false, err
+	} else if ok {
+		return doc, true, nil
+	}
+	if doc, ok, err := findShowInCorpus(root, key); err != nil {
+		return showDocument{}, false, err
+	} else if ok {
+		return doc, true, nil
+	}
+	if doc, ok, err := findShowInLegacyIndex(root, key); err != nil {
+		return showDocument{}, false, err
+	} else if ok {
+		return doc, true, nil
+	}
+	return showDocument{}, false, nil
+}
+
+func findShowInWikisIndex(root, key string) (showDocument, bool, error) {
+	index, err := wikis.LoadIndex(root)
+	if err == nil {
+		for _, doc := range index.Docs {
+			if showKeyMatches(doc.ID, doc.Path, key) {
+				return showDocument{ID: doc.ID, Kind: string(doc.Kind), Path: doc.Path, Payload: doc}, true, nil
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return showDocument{}, false, err
+	}
+	runtime, err := wikis.LoadRuntimeIndex(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return showDocument{}, false, nil
+		}
+		return showDocument{}, false, err
+	}
+	for _, doc := range runtime.DocsByPath {
+		id := strings.TrimSuffix(doc.Path, ".md")
+		if showKeyMatches(id, doc.Path, key) {
+			return showDocument{ID: id, Kind: string(doc.Kind), Path: doc.Path, Payload: doc}, true, nil
+		}
+	}
+	return showDocument{}, false, nil
+}
+
+func findShowInCorpus(root, key string) (showDocument, bool, error) {
+	corpus, _, err := wikis.LoadCorpus(root)
+	if err != nil {
+		return showDocument{}, false, err
+	}
+	for _, doc := range corpus.Docs {
+		if showKeyMatches(doc.ID, doc.Path, key) {
+			return showDocument{ID: doc.ID, Kind: string(doc.Kind), Path: doc.Path, Payload: doc}, true, nil
+		}
+	}
+	return showDocument{}, false, nil
+}
+
+func findShowInLegacyIndex(root, key string) (showDocument, bool, error) {
+	indexes, err := idx.Build(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return showDocument{}, false, nil
+		}
+		return showDocument{}, false, err
+	}
+	doc, ok := idx.FindByIDOrPath(indexes, key)
+	if !ok {
+		for _, candidate := range showKeyCandidates(key) {
+			if doc, ok = idx.FindByIDOrPath(indexes, candidate); ok {
+				break
+			}
+		}
+	}
+	if !ok {
+		return showDocument{}, false, nil
+	}
+	return showDocument{ID: doc.ID, Kind: doc.Kind, Path: doc.Path, Payload: doc}, true, nil
+}
+
+func showKeyMatches(id, logicalPath, key string) bool {
+	for _, candidate := range showKeyCandidates(key) {
+		if candidate == id || candidate == logicalPath {
+			return true
+		}
+	}
+	return false
+}
+
+func showKeyCandidates(key string) []string {
+	cleaned := strings.TrimSpace(filepath.ToSlash(filepath.Clean(filepath.FromSlash(key))))
+	if cleaned == "." || cleaned == "" {
+		return nil
+	}
+	candidates := []string{cleaned}
+	for _, prefix := range []string{"./", "wikis/"} {
+		if strings.HasPrefix(cleaned, prefix) {
+			candidates = append(candidates, strings.TrimPrefix(cleaned, prefix))
+		}
+	}
+	return uniqueStrings(candidates)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func runStage(args []string) error {

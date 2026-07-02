@@ -31,7 +31,7 @@ export function writeLocalConfig(workspace, options = {}) {
   }
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
   const casConfigDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
-  fs.writeFileSync(harness, `paths:\n  spec: wikis/spec\n  playbooks: wikis/playbooks\n  templates: wikis/templates\n\ncli:\n  qdm_cmr_cli: ${bin("qdm-cmr-cli")}\n  qdm_indicators_cli: ${bin("qdm-indicators-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n`);
+  fs.writeFileSync(harness, `paths:\n  knowledge: wikis\n\ncli:\n  qdm_cmr_cli: ${bin("qdm-cmr-cli")}\n  qdm_indicators_cli: ${bin("qdm-indicators-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n`);
   fs.writeFileSync(env, `export QDM_CMR_CLI="${bin("qdm-cmr-cli")}"\nexport QDM_INDICATORS_CLI="${bin("qdm-indicators-cli")}"\nexport QDM_CAS_CLI="${bin("cas-cli")}"\nexport QDM_CAS_CONFIG_DIR="${casConfigDir}"\n`);
 }
 

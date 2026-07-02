@@ -54,22 +54,19 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 	if err != nil {
 		return BuildIndexResult{}, err
 	}
+	paths := indexPaths(root, cfg)
 	idx := Index{
 		Meta: IndexMeta{
 			Version:       1,
 			GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 			Root:          root,
 			ChecksSkipped: skipChecks,
-			Paths: map[string]string{
-				"spec":      cfg.Spec,
-				"playbooks": cfg.Playbooks,
-				"templates": cfg.Templates,
-			},
+			Paths:         paths,
 		},
 		Docs:   corpus.Docs,
 		Recall: buildRecall(corpus.Docs),
 	}
-	if cfg.Routing != "" {
+	if !hasStructuredLayout(root, cfg) && cfg.Routing != "" {
 		idx.Meta.Paths["routing"] = cfg.Routing
 	}
 	runtime := buildRuntimeIndex(idx)
@@ -89,6 +86,53 @@ func BuildIndex(root string, skipChecks bool) (BuildIndexResult, error) {
 		RuntimeDocCount:    len(runtime.DocsByPath),
 		RuntimeRecallCount: len(runtime.Recall),
 	}, nil
+}
+
+func indexPaths(root string, cfg harness.PathsConfig) map[string]string {
+	if hasStructuredLayout(root, cfg) {
+		knowledge := cfg.Knowledge
+		if knowledge == "" {
+			knowledge = "."
+		}
+		return map[string]string{
+			"knowledge": knowledge,
+			"metrics":   joinKnowledgePath(knowledge, "metrics"),
+			"reports":   joinKnowledgePath(knowledge, "reports"),
+			"dims":      joinKnowledgePath(knowledge, "dims"),
+			"rules":     joinKnowledgePath(knowledge, "rules"),
+		}
+	}
+	paths := map[string]string{
+		"spec":      cfg.Spec,
+		"playbooks": cfg.Playbooks,
+		"templates": cfg.Templates,
+	}
+	if cfg.Routing != "" {
+		paths["routing"] = cfg.Routing
+	}
+	return paths
+}
+
+func hasStructuredLayout(root string, cfg harness.PathsConfig) bool {
+	resolver, err := harness.NewPathResolverWithPaths(root, cfg)
+	if err != nil {
+		return false
+	}
+	for _, logical := range []string{"metrics", "reports", "dims", "rules"} {
+		info, err := os.Stat(resolver.Resolve(logical))
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+func joinKnowledgePath(knowledge, name string) string {
+	knowledge = strings.TrimSpace(knowledge)
+	if knowledge == "" || knowledge == "." {
+		return name
+	}
+	return strings.TrimRight(knowledge, "/") + "/" + name
 }
 
 func LoadIndex(root string) (Index, error) {

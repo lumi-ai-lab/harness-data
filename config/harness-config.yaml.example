@@ -1,9 +1,7 @@
 # Harness repository configuration.
 
 paths:
-  spec: wikis/spec
-  playbooks: wikis/playbooks
-  templates: wikis/templates
+  knowledge: wikis
 
 cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli

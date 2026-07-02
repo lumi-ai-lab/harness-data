@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -98,7 +99,7 @@ func InjectTemplate(root, sessionID string) (message, outcome, templateRel strin
 		if err := sessionstate.Save(root, sessionID, state); err != nil {
 			return "", "", "", err
 		}
-		return "QDM_FREE_ANALYSIS current session is free mode. Do not run inject-template; continue free analysis and do not read templates/.", "free_mode_no_template", "", nil
+		return "QDM_FREE_ANALYSIS current session is free mode. Do not run inject-template; continue free analysis and do not read template files.", "free_mode_no_template", "", nil
 	}
 	templateRel, validationMessage := selectedTemplatePath(root, state)
 	if validationMessage != "" {
@@ -145,7 +146,7 @@ func shouldRequireTemplateInjection(state sessionstate.File) bool {
 
 func templateInjectionRequiredMessage(state sessionstate.File) string {
 	var b strings.Builder
-	b.WriteString("QDM_TEMPLATE_REQUIRED: data collection command was recorded for a template-backed Harness plan. Do not answer, summarize, calculate a final report, or read templates/ yet. Run `bin/data-harness-cli inject-template` now. After the PostToolUse hook injects the selected template, use that injected template to produce the final answer.")
+	b.WriteString("QDM_TEMPLATE_REQUIRED: data collection command was recorded for a template-backed Harness plan. Do not answer, summarize, calculate a final report, or read template files yet. Run `bin/data-harness-cli inject-template` now. After the PostToolUse hook injects the selected template, use that injected template to produce the final answer.")
 	if state.SelectedPlaybook != "" {
 		b.WriteString(" selectedPlaybook=")
 		b.WriteString(state.SelectedPlaybook)
@@ -241,8 +242,8 @@ func selectedTemplatePath(root string, state sessionstate.File) (string, string)
 	if state.SelectedTemplate == "" {
 		return "", "QDM_INJECT_TEMPLATE no selectedTemplate in session state. Do not guess a template; continue without template injection."
 	}
-	if !strings.HasPrefix(state.SelectedTemplate, "templates/") {
-		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE template must use logical path under templates/: " + state.SelectedTemplate + "."
+	if !isAllowedTemplatePath(state.SelectedTemplate) {
+		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE template must be templates/... or reports/.../template.md: " + state.SelectedTemplate + "."
 	}
 	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
@@ -253,6 +254,11 @@ func selectedTemplatePath(root string, state sessionstate.File) (string, string)
 		return state.SelectedTemplate, "QDM_INJECT_TEMPLATE missing " + state.SelectedTemplate + "."
 	}
 	return state.SelectedTemplate, ""
+}
+
+func isAllowedTemplatePath(logical string) bool {
+	return strings.HasPrefix(logical, "templates/") ||
+		(strings.HasPrefix(logical, "reports/") && path.Base(logical) == "template.md")
 }
 
 func stripMarkdownFrontmatter(data []byte) []byte {

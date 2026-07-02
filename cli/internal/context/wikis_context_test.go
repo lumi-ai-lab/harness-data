@@ -462,9 +462,9 @@ func TestBuildWithWikisIndexReferenceSpecDoesNotSelectPlaybook(t *testing.T) {
 	}
 	writeContextFile(t, root, "wikis/spec/dim-area/manage-area.md", `---
 name: dim_area_manage_area
-label: 管理区域编码映射
+label: 管理区域编码
 ---
-# 管理区域编码映射
+# 管理区域编码
 `)
 	writeContextFile(t, root, "wikis/playbooks/dim-area/manage-area.md", "# manage-area\n")
 	writeContextFile(t, root, "wikis/templates/dim-area/manage-area.md", "# manage-area 模板\n")
@@ -478,7 +478,7 @@ label: 管理区域编码映射
 		t.Fatal(err)
 	}
 
-	response, plan, err := BuildWithPlan(root, "管理区域编码映射")
+	response, plan, err := BuildWithPlan(root, "管理区域编码")
 	if err != nil {
 		t.Fatal(err)
 	}

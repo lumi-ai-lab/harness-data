@@ -180,13 +180,13 @@ function runHarnessContext(projectRoot: string, prompt: string, ctx?: PiExtensio
 
 function addPiPathGuidance(context: string): string {
   if (!context) return "";
-  const selectedReadPath = context.match(/^- (wikis\/playbooks\/[^\s]+) \(selected playbook\)$/m)?.[1];
+  const selectedReadPath = context.match(/^- (wikis\/.+?\/playbook\.md) \(selected playbook\)$/m)?.[1];
   return [
     "# Pi Path Guidance",
     "",
     "- `selectedPlaybook` and `selectedTemplate` are Harness logical IDs, not direct filesystem paths.",
     "- Read only the paths listed under `contextFiles`; those are already resolved through `config/harness-config.yaml` and usually start with `wikis/`.",
-    "- If you need the selected playbook body, read the matching `wikis/playbooks/...` entry from `contextFiles`, not `playbooks/...`.",
+    "- If you need the selected playbook body, read the matching `wikis/.../playbook.md` entry from `contextFiles`; examples include `wikis/metrics/.../playbook.md` and `wikis/reports/.../playbook.md`.",
     selectedReadPath ? `- Selected playbook read path: \`${selectedReadPath}\`.` : "",
     "",
     context,

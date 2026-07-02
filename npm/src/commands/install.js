@@ -179,13 +179,18 @@ async function installWikis(runtimeDir, options = {}) {
 
   const auto = path.join(runtimeDir, "harness-data-wikis");
   const source = fs.existsSync(auto) ? auto : path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
-  for (const dir of ["spec", "playbooks", "templates"]) {
-    if (!fs.existsSync(path.join(source, dir))) throw new Error(`harness-data-wikis missing ${dir}/: ${source}`);
-  }
+  validateLocalWikisSource(source);
   fs.rmSync(target, { recursive: true, force: true });
   fs.cpSync(source, target, { recursive: true });
   ok(`harness-data-wikis 本地路径 ${source}`);
   return { mode: "local-path", source, path: target };
+}
+
+export function validateLocalWikisSource(source) {
+  if (!fs.existsSync(path.join(source, "index.md"))) throw new Error(`harness-data-wikis missing index.md: ${source}`);
+  for (const dir of ["metrics", "reports", "dims", "rules"]) {
+    if (!fs.existsSync(path.join(source, dir))) throw new Error(`harness-data-wikis missing ${dir}/: ${source}`);
+  }
 }
 
 function casConfigDir(runtimeDir) {
@@ -239,9 +244,10 @@ export function printDoctorSummary(doctor, options = {}) {
   const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
   if (!failed.length) {
     ok("runtime");
-    ok("wikis/spec");
-    ok("wikis/playbooks");
-    ok("wikis/templates");
+    ok("wikis/metrics");
+    ok("wikis/reports");
+    ok("wikis/dims");
+    ok("wikis/rules");
     ok("4 个 CLI");
     ok("本地配置");
     ok("CAS 凭证");

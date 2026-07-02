@@ -376,7 +376,7 @@ func checkCovers(c Corpus, opts CheckOptions) []CheckError {
 			continue
 		}
 		for _, cover := range doc.Covers {
-			if !strings.HasPrefix(cover, "spec/") || !strings.HasSuffix(cover, ".md") {
+			if !isSpecDocPath(cover) || !strings.HasSuffix(cover, ".md") {
 				if add(CheckError{Path: doc.Path, Code: "invalid_cover_path", Message: "cover must reference a spec logical path", Value: cover}) {
 					return errs
 				}
@@ -422,6 +422,9 @@ func checkLinks(c Corpus, opts CheckOptions) []CheckError {
 }
 
 func IsReferenceSpecPath(logical string) bool {
+	if strings.HasPrefix(logical, "dims/") || strings.HasPrefix(logical, "rules/") {
+		return path.Base(logical) == "spec.md"
+	}
 	if !strings.HasPrefix(logical, "spec/") {
 		return false
 	}

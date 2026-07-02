@@ -36,7 +36,7 @@ Hermes-Agent 使用 `.hermes` 加载项目上下文、skill 和 hook：
 
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
-`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/spec`、`wikis/playbooks` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
+`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
 ## 常用命令
 
@@ -191,9 +191,10 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - `config/harness-config.yaml.example`：Harness 统一配置模板；本地运行前复制为 `config/harness-config.yaml` 并填入本机 QDM CLI 绝对路径。
 - `config/qdm-cli-paths.env.example`：QDM CLI 环境变量模板；本地运行前复制为 `config/qdm-cli-paths.env`。
 - `wikis/`：业务知识库根目录，可作为 git submodule 管理。
-- `wikis/playbooks/`：分析流程与必要证据来源。
-- `wikis/spec/`：报告指标归属和业务知识权威说明。
-- `wikis/templates/`：inject-template 成功后二阶段注入的报告骨架与输出约束。
+- `wikis/metrics/`：指标对象目录，每个对象聚合 `spec.md` 和 `playbook.md`。
+- `wikis/reports/`：报告对象目录，每个对象聚合 `spec.md`、`playbook.md` 和 `template.md`；`selection.yaml` 维护报告模板选择。
+- `wikis/dims/`：维度编码与映射规则。
+- `wikis/rules/`：通用取数、时间口径和 CLI 使用规则。
 - `tests/`：Python 集成测试。
 
 ### 本地配置
@@ -215,9 +216,7 @@ source config/qdm-cli-paths.env
 
 ```yaml
 paths:
-  spec: wikis/spec
-  playbooks: wikis/playbooks
-  templates: wikis/templates
+  knowledge: wikis
 
 cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
@@ -225,7 +224,7 @@ cli:
   qdm_cas_cli: /absolute/path/to/cas-cli
 ```
 
-未配置时默认兼容根目录 `spec/`、`playbooks/`、`templates/` 结构。Wiki 检查和索引内部统一使用 `spec/...`、`playbooks/...`、`templates/...` 逻辑路径；context 输出使用可直接读取的物理相对路径。
+未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
 ## Context 输出
 
@@ -278,12 +277,12 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 召回原则
 
-- 运行时从 `.harness/index/wikis-runtime-index.json` 的 recall term 召回 `spec`，并按同路径规则选择单指标 playbook。
+- 运行时从 `.harness/index/wikis-runtime-index.json` 的 recall term 召回 spec 文档，并按同目录 sibling 规则选择单指标 playbook。
 - 召回先做中文轻量 normalize：去空白、去常见标点、全角 ASCII 转半角，仅保留中文、数字、字母。
 - 精确包含命中最高优先级；非精确命中使用中文 bigram/trigram 覆盖率打分。
 - 1 字、2 字 term 只允许精确包含；3 字 term 需要完整 bigram 覆盖；4 字及以上 term 需要至少 2 个 bigram 且覆盖率不低于 0.5。
 - 同一 `targetPath` 只保留最高分 term，并继续抑制已命中长 term 内包含的短 term。
-- 最终 plan 只选择 `spec`、`playbook`、`templates` 逻辑路径；template 正文仍只在 `inject-template` 阶段注入。
+- 最终 plan 只选择 spec、playbook、template 逻辑路径；template 正文仍只在 `inject-template` 阶段注入。
 
 ## 运行约束
 
@@ -293,7 +292,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 - 除非用户明确要求导出、保存或生成文件，否则不得把最终结果或中间分析结果写入文件。
 - 必需取数完成后，下一步必须立即执行 `bin/data-harness-cli inject-template`。
 - template 注入前禁止总结、整理报告素材、生成中间分析、输出阶段性结论。
-- template 注入前禁止读取、打开、猜测或使用任何 `wikis/templates/` 文件。
+- template 注入前禁止读取、打开、猜测或使用任何 `template.md` 文件。
 - inject-template 成功后只由 `posttool` 注入 selected playbook 绑定的 template 正文。
 
 ## 诊断

@@ -82,6 +82,58 @@ func TestSyncIndexMDPreservesManualContentAndReportsOutdated(t *testing.T) {
 	}
 }
 
+func TestSyncIndexMDSupportsStructuredLayout(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/metrics/销售额/spec.md", `---
+name: sale_amt
+label: 销售额
+---
+# 销售额
+`)
+	writeFile(t, root, "wikis/metrics/销售额/playbook.md", "# 销售额取数\n")
+	writeFile(t, root, "wikis/reports/经营综合分析报告/spec.md", "# 经营综合分析报告\n")
+	writeFile(t, root, "wikis/reports/经营综合分析报告/playbook.md", "# 经营综合分析报告取数\n")
+	writeFile(t, root, "wikis/reports/经营综合分析报告/template.md", "# 经营综合分析报告模板\n")
+	writeFile(t, root, "wikis/dims/门店/spec.md", "# 门店维度\n")
+	writeFile(t, root, "wikis/rules/qdm-cmr-cli/spec.md", "# QDM CMR CLI\n")
+
+	result, err := SyncIndexMD(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"metrics/index.md",
+		"metrics/销售额/index.md",
+		"reports/index.md",
+		"reports/经营综合分析报告/index.md",
+		"dims/index.md",
+		"dims/门店/index.md",
+		"rules/index.md",
+		"rules/qdm-cmr-cli/index.md",
+	} {
+		if !hasString(result.Created, want) {
+			t.Fatalf("expected %s to be created: %+v", want, result)
+		}
+	}
+	if result.Scanned != len(result.Created) {
+		t.Fatalf("expected all scanned structured indexes to be created: %+v", result)
+	}
+	content := readFile(t, root, "wikis/metrics/销售额/index.md")
+	for _, want := range []string{"## 自动索引", "### 文档清单", "`spec.md`", "`playbook.md`"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("structured index missing %q:\n%s", want, content)
+		}
+	}
+	check, err := SyncIndexMD(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(check.Outdated) != 0 {
+		t.Fatalf("expected structured indexes to be current: %+v", check)
+	}
+}
+
 func readFile(t *testing.T, root, rel string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
