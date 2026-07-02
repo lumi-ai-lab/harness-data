@@ -706,6 +706,76 @@ exit 0
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old config\n");
 });
 
+test("runtime bundle update preserves local config while refreshing examples", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const archive = "runtime archive\n";
+  fs.mkdirSync(fakeBin, { recursive: true });
+  for (const [file, content] of [
+    ["agents/old.txt", "old agents\n"],
+    ["bootstrap/cli-manifest.json", "{\"old\":true}\n"],
+    ["config/harness-config.yaml", "old harness config\n"],
+    ["config/qdm-cli-paths.env", "old cli paths\n"],
+    ["config/qdm-cli-paths.env.example", "old example\n"],
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
+    fs.writeFileSync(path.join(workspace, file), content);
+  }
+  fs.writeFileSync(path.join(fakeBin, "tar"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
+printf 'new agents\\n' > "$dir/agents/new.txt"
+printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
+printf 'new harness example\\n' > "$dir/config/harness-config.yaml.example"
+printf 'new cli paths example\\n' > "$dir/config/qdm-cli-paths.env.example"
+printf 'should not replace local cli paths\\n' > "$dir/config/qdm-cli-paths.env"
+exit 0
+`, { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        if (String(url).endsWith("/releases/latest")) {
+          response.end(JSON.stringify({
+            tag_name: "v-runtime",
+            assets: [{ name: "harness-data-runtime-v-runtime.tar.gz", url: "https://example.invalid/runtime.tar.gz" }]
+          }));
+          return;
+        }
+        response.end(archive);
+      });
+      return request;
+    };
+
+    await installRuntimeBundle(workspace, { force: true, githubToken: "token", log: false });
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+
+  assert.equal(fs.existsSync(path.join(workspace, "agents", "old.txt")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "agents", "new.txt"), "utf8"), "new agents\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), "{\"new\":true}\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8"), "old harness config\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old cli paths\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml.example"), "utf8"), "new harness example\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env.example"), "utf8"), "new cli paths example\n");
+});
+
 test("release asset download uses browser URL without token", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const target = path.join(workspace, "asset.tgz");
@@ -989,10 +1059,12 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
   }
 });
 
-test("update doctor treats missing agent hooks as non-blocking only", async () => {
+test("update doctor treats missing agent hooks and auth as non-blocking only", async () => {
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook .openclaw" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), false);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CAS credentials file" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Indicators token" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
 });
 

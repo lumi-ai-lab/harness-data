@@ -11,10 +11,15 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { protocolFromUrl, runGitWithProtocol } from "../lib/git-auth.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
+import { writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
-  return check.name === "Agent hook" || check.name.startsWith("Agent hook .");
+  return check.name === "Agent hook" ||
+    check.name.startsWith("Agent hook .") ||
+    check.name === "CAS credentials file" ||
+    check.name === "CMR token" ||
+    check.name === "Indicators token";
 }
 
 async function npmLatest() {
@@ -187,6 +192,8 @@ export async function updateCommand(options = {}) {
 
   step(6, 6, "安装校验");
   if (changed) {
+    writeLocalConfig(runtimeDir, { overwrite: true });
+    ok("本地配置已刷新");
     const doctor = await collectDoctor(runtimeDir, trackingOptions);
     printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });
     if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");

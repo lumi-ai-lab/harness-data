@@ -57,6 +57,21 @@ function cleanupRuntimeBackups(backups) {
   for (const item of backups) fs.rmSync(item.backup, { recursive: true, force: true });
 }
 
+function mergeRuntimeConfig(runtimeDir, sourceDir) {
+  const targetDir = path.join(runtimeDir, "config");
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const file of fs.readdirSync(sourceDir)) {
+    const source = path.join(sourceDir, file);
+    const target = path.join(targetDir, file);
+    const stat = fs.statSync(source);
+    if (stat.isDirectory()) {
+      if (!fs.existsSync(target)) fs.cpSync(source, target, { recursive: true });
+      continue;
+    }
+    if (file.endsWith(".example") || !fs.existsSync(target)) fs.copyFileSync(source, target);
+  }
+}
+
 export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
@@ -102,7 +117,8 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     fs.mkdirSync(path.join(stagedRoot, "config"), { recursive: true });
     for (const file of fs.readdirSync(configSource)) fs.copyFileSync(path.join(configSource, file), path.join(stagedRoot, "config", file));
 
-    for (const name of ["agents", "bootstrap", "config"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
+    for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
+    mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
     cleanupRuntimeBackups(backups);
   } catch (error) {
     restoreRuntimeBackups(backups);
