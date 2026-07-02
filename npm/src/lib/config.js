@@ -21,6 +21,10 @@ export const agentLinks = {
 };
 export const agentChoiceText = agentChoices.join(", ");
 
+export function hasAnyAgentHook(workspace) {
+  return concreteAgentNames.some((name) => fs.existsSync(path.join(workspace, `.${name}`)));
+}
+
 export function writeLocalConfig(workspace, options = {}) {
   const configDir = path.join(workspace, "config");
   fs.mkdirSync(configDir, { recursive: true });

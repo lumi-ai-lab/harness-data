@@ -344,7 +344,8 @@ export async function installCommand(options = {}) {
   blank();
 
   step(8, 8, "配置 Agent Hook");
-  const linkedAgents = linkAgents(runtimeDir, await chooseAgent(options));
+  const selectedAgent = await chooseAgent(options);
+  const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
@@ -363,6 +364,7 @@ export async function installCommand(options = {}) {
     tools: manifest.installedTools || {},
     manifestSha256: manifestDigest(manifest),
     packageVersion: packageVersion(),
+    agent: selectedAgent,
     lastCheckAt: new Date().toISOString()
   });
   console.log(`安装完成：${runtimeDir}`);

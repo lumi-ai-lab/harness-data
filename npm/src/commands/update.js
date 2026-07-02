@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { confirm } from "../lib/prompt.js";
+import { chooseAgent, confirm } from "../lib/prompt.js";
 import { findWorkspaceDir, readUserState, writeState } from "../lib/paths.js";
 import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -11,7 +11,7 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { protocolFromUrl, runGitWithProtocol } from "../lib/git-auth.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { writeLocalConfig } from "../lib/config.js";
+import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
@@ -52,7 +52,7 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
     return null;
   }
   action(`发现更新：${tool.name} ${current.version || "unknown"} -> ${tag}`);
-  if (!(await confirm(`是否更新 ${tool.name}？`, { defaultNo: true }))) {
+  if (!(await confirm(`是否更新 ${tool.name}？`))) {
     skip(tool.name);
     options.skippedUpdates?.push(`${tool.name} ${tag}`);
     return null;
@@ -92,7 +92,7 @@ export async function updateWikis(runtimeDir, options, state) {
     return null;
   }
   action(`发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
-  if (!(await confirm("是否更新 harness-data-wikis？", { defaultNo: true }))) {
+  if (!(await confirm("是否更新 harness-data-wikis？"))) {
     skip("harness-data-wikis");
     options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
     return null;
@@ -101,6 +101,20 @@ export async function updateWikis(runtimeDir, options, state) {
   const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
   ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
   return { commit };
+}
+
+export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
+  if (hasAnyAgentHook(runtimeDir)) {
+    ok("Agent Hook 已配置");
+    return null;
+  }
+  action("未检测到 Agent Hook，重新配置");
+  const agent = await chooseAgent(options);
+  const linkedAgents = linkAgents(runtimeDir, agent);
+  for (const [source, target] of linkedAgents) {
+    if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
+  }
+  return { agent, linkedAgents };
 }
 
 export async function checkUpdates(workspace, options = {}) {
@@ -131,7 +145,7 @@ export async function updateCommand(options = {}) {
   const skipped = [];
   const trackingOptions = { ...options, skippedUpdates: skipped };
 
-  step(1, 6, "检查 installer");
+  step(1, 7, "检查 installer");
   const latestInstaller = await npmLatest();
   if (latestInstaller && latestInstaller !== packageVersion()) {
     warn(`installer 有新版本 ${packageVersion()} -> ${latestInstaller}`);
@@ -141,11 +155,11 @@ export async function updateCommand(options = {}) {
   }
   blank();
 
-  step(2, 6, "检查 runtime bundle");
+  step(2, 7, "检查 runtime bundle");
   const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
   if (state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) {
     action(`发现更新：runtime bundle ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
-    if (await confirm("是否更新 runtime bundle？", { defaultNo: true })) {
+    if (await confirm("是否更新 runtime bundle？")) {
       const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true });
       runtimeTag = bundle.tag || runtimeRelease.tag_name;
       changed = true;
@@ -159,7 +173,7 @@ export async function updateCommand(options = {}) {
   }
   blank();
 
-  step(3, 6, "检查 CLI 工具");
+  step(3, 7, "检查 CLI 工具");
   for (const tool of manifest.tools || []) {
     if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
       skip(`${tool.name} 为本地路径模式，请手动检查`);
@@ -174,7 +188,7 @@ export async function updateCommand(options = {}) {
   }
   blank();
 
-  step(4, 6, "检查 Wikis 知识库");
+  step(4, 7, "检查 Wikis 知识库");
   const wikis = await updateWikis(runtimeDir, trackingOptions, state);
   if (wikis) {
     changed = true;
@@ -182,7 +196,11 @@ export async function updateCommand(options = {}) {
   }
   blank();
 
-  step(5, 6, "构建 Wikis 索引");
+  step(5, 7, "检查 Agent Hook");
+  const restoredAgent = await restoreAgentHooksIfMissing(runtimeDir, trackingOptions);
+  blank();
+
+  step(6, 7, "构建 Wikis 索引");
   if (changed) {
     await buildAndCheck(runtimeDir, trackingOptions);
   } else {
@@ -190,7 +208,7 @@ export async function updateCommand(options = {}) {
   }
   blank();
 
-  step(6, 6, "安装校验");
+  step(7, 7, "安装校验");
   if (changed) {
     writeLocalConfig(runtimeDir, { overwrite: true });
     ok("本地配置已刷新");
@@ -202,6 +220,7 @@ export async function updateCommand(options = {}) {
       runtimeTag,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
+      ...(restoredAgent ? { agent: restoredAgent.agent } : {}),
       lastCheckAt: new Date().toISOString()
     });
     blank();
@@ -211,6 +230,24 @@ export async function updateCommand(options = {}) {
       console.log("已更新：");
       for (const item of applied) console.log(`- ${item}`);
     }
+    if (skipped.length) {
+      console.log("");
+      console.log("已跳过：");
+      for (const item of skipped) console.log(`- ${item}`);
+    }
+    if (restoredAgent) {
+      console.log("");
+      console.log("已恢复：");
+      console.log(`- Agent Hook ${restoredAgent.agent}`);
+    }
+  } else if (restoredAgent) {
+    ok("Agent Hook 已恢复");
+    writeState(runtimeDir, { ...state, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
+    blank();
+    console.log(`配置已恢复：${runtimeDir}`);
+    console.log("");
+    console.log("已恢复：");
+    console.log(`- Agent Hook ${restoredAgent.agent}`);
     if (skipped.length) {
       console.log("");
       console.log("已跳过：");

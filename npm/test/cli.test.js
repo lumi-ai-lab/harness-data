@@ -17,13 +17,25 @@ import { download, installToolsFromManifest, readManifest } from "../src/lib/man
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
-import { isNonBlockingUpdateDoctorCheck, updateWikis } from "../src/commands/update.js";
+import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
-import { agentChoices, linkAgents, writeLocalConfig } from "../src/lib/config.js";
+import { agentChoices, hasAnyAgentHook, linkAgents, writeLocalConfig } from "../src/lib/config.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+
+function runConfirm(input, optionsSource = "{}") {
+  const result = spawnSync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `import { confirm } from "./src/lib/prompt.js";
+const result = await confirm("Q?", ${optionsSource});
+console.log(result ? "true" : "false");`
+  ], { cwd: root, input, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -51,6 +63,23 @@ test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+});
+
+test("confirm defaults to yes on empty input", () => {
+  assert.equal(runConfirm("\n"), "true");
+});
+
+test("confirm defaultNo returns false on empty input", () => {
+  assert.equal(runConfirm("\n", "{ defaultNo: true }"), "false");
+});
+
+test("confirm rejects n and no input", () => {
+  assert.equal(runConfirm("n\n"), "false");
+  assert.equal(runConfirm("no\n"), "false");
+});
+
+test("confirm yes option returns true", () => {
+  assert.equal(runConfirm("", "{ yes: true }"), "true");
 });
 
 test("loads package version", () => {
@@ -1018,6 +1047,43 @@ test("links selected agent templates", () => {
   ]);
   assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+});
+
+function createAgentWorkspace() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+    fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
+  }
+  return workspace;
+}
+
+test("detects whether any agent hook exists", () => {
+  const workspace = createAgentWorkspace();
+
+  assert.equal(hasAnyAgentHook(workspace), false);
+
+  linkAgents(workspace, "codex");
+
+  assert.equal(hasAnyAgentHook(workspace), true);
+});
+
+test("update restore recreates agent hooks only when all are missing", async () => {
+  const missingWorkspace = createAgentWorkspace();
+
+  const restored = await restoreAgentHooksIfMissing(missingWorkspace, { agent: "codex" });
+
+  assert.deepEqual(restored, { agent: "codex", linkedAgents: [["agents/codex", ".codex"]] });
+  assert.equal(fs.realpathSync(path.join(missingWorkspace, ".codex")), fs.realpathSync(path.join(missingWorkspace, "agents", "codex")));
+
+  const existingWorkspace = createAgentWorkspace();
+  linkAgents(existingWorkspace, "codex");
+  const before = fs.realpathSync(path.join(existingWorkspace, ".codex"));
+
+  const skipped = await restoreAgentHooksIfMissing(existingWorkspace, { agent: "not-real" });
+
+  assert.equal(skipped, null);
+  assert.equal(fs.realpathSync(path.join(existingWorkspace, ".codex")), before);
+  assert.equal(fs.existsSync(path.join(existingWorkspace, ".claude")), false);
 });
 
 function createDoctorWorkspace(agent) {
