@@ -24,6 +24,10 @@ on:
         description: qdm-indicators-cli version without v; leave empty to keep current manifest version
         required: false
         type: string
+      sql_cli_version:
+        description: qdm-sql-cli version without v; leave empty to use latest release
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -49,9 +53,10 @@ jobs:
           CAS_CLI_VERSION: ${{ inputs.cas_cli_version }}
           CMR_CLI_VERSION: ${{ inputs.cmr_cli_version }}
           INDICATORS_CLI_VERSION: ${{ inputs.indicators_cli_version }}
+          SQL_CLI_VERSION: ${{ inputs.sql_cli_version }}
         run: |
           set -euo pipefail
-          for value in "$VERSION" "$CAS_CLI_VERSION" "$CMR_CLI_VERSION" "$INDICATORS_CLI_VERSION"; do
+          for value in "$VERSION" "$CAS_CLI_VERSION" "$CMR_CLI_VERSION" "$INDICATORS_CLI_VERSION" "$SQL_CLI_VERSION"; do
             if [[ -n "$value" && ! "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
               echo "invalid version: $value" >&2
               exit 1
@@ -108,11 +113,22 @@ jobs:
       - name: Verify external CLI assets
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          CAS_CLI_VERSION: ${{ inputs.cas_cli_version }}
+          CMR_CLI_VERSION: ${{ inputs.cmr_cli_version }}
+          INDICATORS_CLI_VERSION: ${{ inputs.indicators_cli_version }}
+          SQL_CLI_VERSION: ${{ inputs.sql_cli_version }}
         run: |
           set -euo pipefail
           node <<'NODE' > /tmp/external-assets.tsv
           const fs = require("fs");
+          const childProcess = require("child_process");
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
+          const versionInputs = {
+            "cas-cli": process.env.CAS_CLI_VERSION,
+            "qdm-cmr-cli": process.env.CMR_CLI_VERSION,
+            "qdm-indicators-cli": process.env.INDICATORS_CLI_VERSION,
+            "qdm-sql-cli": process.env.SQL_CLI_VERSION
+          };
           function archiveSuffix(asset, platform) {
             if (asset.archive) return asset.archive;
             if (asset.url?.endsWith(".tar.gz")) return "tar.gz";
@@ -121,7 +137,7 @@ jobs:
           }
           for (const tool of manifest.tools || []) {
             if (tool.name === "data-harness-cli") continue;
-            const release = require("child_process").execFileSync("gh", ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"], { encoding: "utf8" }).trim();
+            const release = versionInputs[tool.name] ? `v${versionInputs[tool.name]}` : childProcess.execFileSync("gh", ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"], { encoding: "utf8" }).trim();
             for (const [platform, asset] of Object.entries(tool.platforms || {})) {
               const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
               console.log(`${tool.repo}\t${release}\t${name}`);

@@ -25,12 +25,18 @@ type casConfigLocation struct {
 	Path string
 }
 
+type authApp struct {
+	Name   string
+	CASApp string
+	CLI    string
+}
+
 func preflightAuth(root string, plan WikiPlan) []string {
 	cfg, err := harness.LoadConfig(root)
 	if err != nil {
 		return []string{"auth preflight skipped: " + err.Error()}
 	}
-	apps := []string{"cmr", "indicators"}
+	apps := authApps(cfg.CLI)
 	notes := make([]string, 0, len(apps))
 	for _, app := range apps {
 		note := preflightAppAuth(root, cfg.CLI, app)
@@ -41,51 +47,47 @@ func preflightAuth(root string, plan WikiPlan) []string {
 	return notes
 }
 
-func preflightAppAuth(root string, cfg harness.CLIConfig, app string) string {
-	targetCLI := targetCLIForApp(cfg, app)
-	if targetCLI == "" {
-		return app + " token preflight skipped: target CLI path is not configured"
+func authApps(cfg harness.CLIConfig) []authApp {
+	return []authApp{
+		{Name: "cmr", CASApp: "cmr", CLI: cfg.QDMCmrCLI},
+		{Name: "indicators", CASApp: "indicators", CLI: cfg.QDMIndicatorsCLI},
+		{Name: "sql", CASApp: "rtp", CLI: cfg.QDMSQLCLI},
 	}
-	ok, err := checkTargetToken(root, targetCLI)
+}
+
+func preflightAppAuth(root string, cfg harness.CLIConfig, app authApp) string {
+	if app.CLI == "" {
+		return app.Name + " token preflight skipped: target CLI path is not configured"
+	}
+	ok, err := checkTargetToken(root, app.CLI)
 	if err == nil && ok {
-		return app + " token valid"
+		return app.Name + " token valid"
 	}
 	if cfg.QDMCasCLI == "" {
-		return app + " token invalid and qdm_cas_cli is not configured"
+		return app.Name + " token invalid and qdm_cas_cli is not configured"
 	}
 	location, err := casConfigLocationForRoot(root)
 	if err != nil {
-		return fmt.Sprintf("%s token invalid; CAS config path could not be resolved: %v", app, err)
+		return fmt.Sprintf("%s token invalid; CAS config path could not be resolved: %v", app.Name, err)
 	}
 	if !casCredentialsConfiguredAt(location.Dir) {
-		return fmt.Sprintf("%s token invalid; CAS credentials are not configured in %s, so hook did not start QR login", app, location.Dir)
+		return fmt.Sprintf("%s token invalid; CAS credentials are not configured in %s, so hook did not start QR login", app.Name, location.Dir)
 	}
-	token, err := fetchCASToken(root, cfg.QDMCasCLI, app, location.Dir)
+	token, err := fetchCASToken(root, cfg.QDMCasCLI, app.CASApp, location.Dir)
 	if err != nil {
-		return fmt.Sprintf("%s token refresh failed: %v", app, err)
+		return fmt.Sprintf("%s token refresh failed: %v", app.Name, err)
 	}
-	if err := setTargetToken(root, targetCLI, token); err != nil {
-		return fmt.Sprintf("%s token refresh fetched token but set-token failed: %v", app, err)
+	if err := setTargetToken(root, app.CLI, token); err != nil {
+		return fmt.Sprintf("%s token refresh fetched token but set-token failed: %v", app.Name, err)
 	}
-	ok, err = checkTargetToken(root, targetCLI)
+	ok, err = checkTargetToken(root, app.CLI)
 	if err != nil {
-		return fmt.Sprintf("%s token refreshed; check-token failed after refresh: %v", app, err)
+		return fmt.Sprintf("%s token refreshed; check-token failed after refresh: %v", app.Name, err)
 	}
 	if !ok {
-		return app + " token refresh completed but target CLI still reports invalid token"
+		return app.Name + " token refresh completed but target CLI still reports invalid token"
 	}
-	return app + " token refreshed through CAS credentials"
-}
-
-func targetCLIForApp(cfg harness.CLIConfig, app string) string {
-	switch app {
-	case "cmr":
-		return cfg.QDMCmrCLI
-	case "indicators":
-		return cfg.QDMIndicatorsCLI
-	default:
-		return ""
-	}
+	return app.Name + " token refreshed through CAS credentials"
 }
 
 func checkTargetToken(root, cli string) (bool, error) {

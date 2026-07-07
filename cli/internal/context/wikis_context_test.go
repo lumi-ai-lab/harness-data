@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,6 +159,60 @@ func TestBuildWithWikisIndexMultiSingleModeDefaultsWithoutValueIntent(t *testing
 	}
 	if !strings.Contains(response.Instruction, "default to current-value collection") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
+	}
+}
+
+func TestBuildWithWikisIndexSQLPassthroughSkipsMetricRecall(t *testing.T) {
+	root, _ := testStructuredMetricWikiRoot(t, 1)
+	for _, question := range []string{
+		"执行SQL: show tables",
+		"select sum(metric_01) from ads_sale_amt where dt = '2026-07-05'",
+	} {
+		response, plan, err := BuildWithPlan(root, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Mode != sessionstate.ModeFree || plan.Reason != "free_sql_passthrough" || plan.SelectedPlaybook != "" || len(plan.SelectedPlaybooks) != 0 {
+			t.Fatalf("%q unexpected plan: %+v", question, plan)
+		}
+		got := contextPaths(response)
+		want := []string{
+			"wikis/rules/qdm-sql-cli/spec.md",
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%q context paths:\n%s", question, strings.Join(got, "\n"))
+		}
+		if !strings.Contains(response.Instruction, "Harness mode: free") {
+			t.Fatalf("%q unexpected instruction: %s", question, response.Instruction)
+		}
+	}
+}
+
+func TestBuildWithWikisIndexMultiSingleCandidateLimitUsesFreeMode(t *testing.T) {
+	root, labels := testStructuredMetricWikiRoot(t, multiSingleCandidateLimit+1)
+	response, plan, err := BuildWithPlan(root, strings.Join(labels, "、"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeFree || plan.Reason != "multi_single_candidate_limit_exceeded" || len(plan.SelectedPlaybooks) != 0 {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	for _, want := range []string{
+		"wikis/index.md",
+		"wikis/metrics/index.md",
+		"wikis/reports/index.md",
+		"wikis/dims/index.md",
+		"wikis/rules/index.md",
+	} {
+		if !hasString(got, want) {
+			t.Fatalf("missing %s in %#v", want, got)
+		}
+	}
+	for _, path := range got {
+		if strings.Contains(path, "/playbook.md") || strings.Contains(path, "/spec.md") {
+			t.Fatalf("unexpected detailed metric context %s in %#v", path, got)
+		}
 	}
 }
 
@@ -774,6 +829,52 @@ label: `+item.label+`
 		t.Fatal(err)
 	}
 	return root
+}
+
+func testStructuredMetricWikiRoot(t *testing.T, metricCount int) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	writeContextFile(t, root, "config/harness-config.yaml", `paths:
+  knowledge: wikis
+`)
+	for _, rel := range []string{
+		"wikis/index.md",
+		"wikis/metrics/index.md",
+		"wikis/reports/index.md",
+		"wikis/dims/index.md",
+		"wikis/rules/index.md",
+		"wikis/rules/qdm-sql-cli/index.md",
+	} {
+		writeContextFile(t, root, rel, "# "+filepath.Base(filepath.Dir(rel))+"\n")
+	}
+	writeContextFile(t, root, "wikis/rules/qdm-sql-cli/spec.md", `---
+name: qdm_sql_cli
+label: qdm-sql-cli
+---
+# qdm-sql-cli
+`)
+	labels := make([]string, 0, metricCount)
+	for i := 1; i <= metricCount; i++ {
+		label := fmt.Sprintf("指标%02d", i)
+		code := fmt.Sprintf("metric_%02d", i)
+		labels = append(labels, label)
+		writeContextFile(t, root, "wikis/metrics/"+label+"/index.md", "# "+label+"\n")
+		writeContextFile(t, root, "wikis/metrics/"+label+"/spec.md", `---
+name: `+code+`
+label: `+label+`
+---
+# `+label+`
+`)
+		writeContextFile(t, root, "wikis/metrics/"+label+"/playbook.md", `---
+name: playbook_`+code+`
+---
+# `+label+`取数
+`)
+	}
+	if _, err := wikis.BuildIndex(root, true); err != nil {
+		t.Fatal(err)
+	}
+	return root, labels
 }
 
 func writeContextFile(t *testing.T, root, rel, content string) {

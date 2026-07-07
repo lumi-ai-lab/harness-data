@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { writeLocalConfig, linkAgents } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, linkAgents } from "../lib/config.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -156,7 +156,7 @@ async function installLocalTools(runtimeDir, options = {}) {
   const binDir = path.join(runtimeDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const installed = {};
-  for (const name of ["cas-cli", "qdm-indicators-cli", "qdm-cmr-cli"]) {
+  for (const name of localPathToolNames) {
     const source = await promptExecutable(runtimeDir, name, options);
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
@@ -225,7 +225,7 @@ async function writeCasCredentials(runtimeDir, options = {}) {
   return dir;
 }
 
-async function configureTokens(runtimeDir, casDir) {
+export async function configureTokens(runtimeDir, casDir) {
   const env = { QDM_CAS_CONFIG_DIR: casDir };
   const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
   const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
@@ -234,8 +234,12 @@ async function configureTokens(runtimeDir, casDir) {
   const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
   await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env });
   ok("Indicators Token 已配置");
+  const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
+  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env });
+  ok("SQL Token 已配置");
   await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
   await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
+  await run(bin("qdm-sql-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
 }
 
 export async function buildAndCheck(runtimeDir, options = {}) {
@@ -264,11 +268,12 @@ export function printDoctorSummary(doctor, options = {}) {
     ok("wikis/reports");
     ok("wikis/dims");
     ok("wikis/rules");
-    ok("4 个 CLI");
+    ok("5 个 CLI");
     ok("本地配置");
     ok("CAS 凭证");
     ok("CMR Token");
     ok("Indicators Token");
+    ok("SQL Token");
     if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
     for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
     return;

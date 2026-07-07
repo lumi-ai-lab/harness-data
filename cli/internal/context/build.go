@@ -3,6 +3,7 @@ package context
 import (
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -12,12 +13,16 @@ import (
 	"harness-data/cli/internal/wikis"
 )
 
+const multiSingleCandidateLimit = 20
+
+var selectFromSQLPattern = regexp.MustCompile(`(?is)\bselect\b.+\bfrom\b`)
+
 var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"when CMR or Indicators CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr or \"$QDM_CAS_CLI\" token --app indicators, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
+	"when CMR, Indicators, or SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr, \"$QDM_CAS_CLI\" token --app indicators, or \"$QDM_CAS_CLI\" token --app rtp for SQL, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -127,6 +132,19 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		refs = append(refs, harness.FileRef{Path: physical, Reason: reason})
 	}
 
+	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
+	if isSQLPassthroughQuestion(question) {
+		plan.Reason = "free_sql_passthrough"
+		add("rules/qdm-sql-cli/spec.md", "free SQL passthrough rule")
+		response := harness.ContextResponse{
+			Question:     question,
+			ContextFiles: refs,
+			Instruction:  instructionForPlan(plan),
+			Constraints:  constraints,
+		}
+		return response, plan
+	}
+
 	matches := RecallMatches(index, question, 0)
 	hits := recallHitsFromMatches(index, matches)
 	ordinarySpecs, conceptSpecs := classifyHits(hits)
@@ -135,7 +153,6 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	sortRuntimeDocsByPath(ordinarySpecs)
 	sortRuntimeDocsByPath(conceptSpecs)
 
-	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
 	addDefaultFreeFiles := func() {
 		add("index.md", "default knowledge index")
 		add("metrics/index.md", "default metrics index")
@@ -168,7 +185,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		plan.Reason = "single_spec_missing_playbook"
 		addFreeSpecFiles(add, byPath, []wikis.RuntimeDocument{spec})
 	case len(ordinarySpecs) > 1:
-		if candidates, ok := multiSingleCandidates(resolver, byPath, question, ordinarySpecs); ok {
+		if candidates, reason, ok := multiSingleCandidates(resolver, byPath, question, ordinarySpecs); ok {
 			plan = WikiPlan{
 				Mode:              sessionstate.ModeMulti,
 				SelectedPlaybooks: candidates,
@@ -176,6 +193,10 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 			for _, candidate := range candidates {
 				add(candidate.Path, "selected playbook")
 			}
+			break
+		} else if reason == "multi_single_candidate_limit_exceeded" {
+			plan.Reason = reason
+			addDefaultFreeFiles()
 			break
 		}
 		plan.Reason = "multi_metric_non_direct"
@@ -212,6 +233,14 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		Constraints:  constraints,
 	}
 	return response, plan
+}
+
+func isSQLPassthroughQuestion(question string) bool {
+	compact := strings.ToLower(strings.Join(strings.Fields(question), ""))
+	if strings.Contains(compact, "执行sql") {
+		return true
+	}
+	return selectFromSQLPattern.MatchString(question)
 }
 
 func shouldPrioritizeReportConcept(question string, selected selectedReportConcept) bool {
@@ -536,20 +565,20 @@ func templateSelectionScore(selection TemplateSelectionDiagnostic) (int, int) {
 	return selection.Candidates[0].Score, selection.Candidates[0].Priority
 }
 
-func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) ([]sessionstate.PlaybookCandidate, bool) {
+func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wikis.RuntimeDocument, question string, specs []wikis.RuntimeDocument) ([]sessionstate.PlaybookCandidate, string, bool) {
 	if len(specs) < 2 || isNonDirectMultiSingleQuestion(question) {
-		return nil, false
+		return nil, "", false
 	}
 	var candidates []sessionstate.PlaybookCandidate
 	var playbooks []wikis.RuntimeDocument
 	seen := map[string]bool{}
 	for _, spec := range specs {
 		if wikis.IsReferenceSpecPath(spec.Path) {
-			return nil, false
+			return nil, "", false
 		}
 		playbookPath := wikis.SamePath(spec.Path, "playbooks")
 		if !runtimeDocExists(resolver, byPath, playbookPath) {
-			return nil, false
+			return nil, "", false
 		}
 		doc, ok := byPath[playbookPath]
 		if !ok || seen[doc.Path] {
@@ -560,12 +589,15 @@ func multiSingleCandidates(resolver harness.PathResolver, byPath map[string]wiki
 		candidates = append(candidates, candidate)
 		playbooks = append(playbooks, doc)
 		seen[doc.Path] = true
+		if len(candidates) > multiSingleCandidateLimit {
+			return nil, "multi_single_candidate_limit_exceeded", false
+		}
 	}
 	if !playbooksSupportQuestionIntents(question, playbooks) {
-		return nil, false
+		return nil, "", false
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Path < candidates[j].Path })
-	return candidates, len(candidates) >= 2
+	return candidates, "", len(candidates) >= 2
 }
 
 func isNonDirectMultiSingleQuestion(question string) bool {
@@ -757,7 +789,7 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR or Indicators token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, and do not start QR login."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR, Indicators, or SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."

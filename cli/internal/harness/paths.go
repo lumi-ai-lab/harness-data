@@ -34,6 +34,7 @@ type PathsConfig struct {
 type CLIConfig struct {
 	QDMCmrCLI        string
 	QDMIndicatorsCLI string
+	QDMSQLCLI        string
 	QDMCasCLI        string
 }
 
@@ -139,6 +140,8 @@ func LoadConfig(root string) (Config, error) {
 				cfg.CLI.QDMCmrCLI = value
 			case "qdm_indicators_cli":
 				cfg.CLI.QDMIndicatorsCLI = value
+			case "qdm_sql_cli":
+				cfg.CLI.QDMSQLCLI = value
 			case "qdm_cas_cli":
 				cfg.CLI.QDMCasCLI = value
 			default:

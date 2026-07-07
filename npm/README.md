@@ -24,7 +24,7 @@ or:
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
 ```
 
-Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-indicators-cli`, `qdm-cmr-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively.
+Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-indicators-cli`, `qdm-cmr-cli`, `qdm-sql-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively.
 
 Update an existing runtime interactively:
 
@@ -38,6 +38,6 @@ Diagnose a runtime:
 npx @lumi-ai-lab/harness-data doctor
 ```
 
-The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks.
+The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks. SQL CLI tokens are fetched through `cas-cli token --app rtp`.
 
 `--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.
