@@ -19,7 +19,8 @@ export function isNonBlockingUpdateDoctorCheck(check) {
     check.name.startsWith("Agent hook .") ||
     check.name === "CAS credentials file" ||
     check.name === "CMR token" ||
-    check.name === "Indicators token";
+    check.name === "Indicators token" ||
+    check.name === "SQL token";
 }
 
 async function npmLatest() {

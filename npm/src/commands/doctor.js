@@ -3,7 +3,7 @@ import path from "node:path";
 import { run } from "../lib/exec.js";
 import { findWorkspaceDir } from "../lib/paths.js";
 import { binaryName } from "../lib/platform.js";
-import { concreteAgentNames } from "../lib/config.js";
+import { concreteAgentNames, qdmCliBinaries } from "../lib/config.js";
 
 function existsExecutable(file) {
   try {
@@ -36,8 +36,9 @@ function configPathsValid(workspace) {
   const file = path.join(workspace, "config", "qdm-cli-paths.env");
   if (!fs.existsSync(file)) return false;
   const content = fs.readFileSync(file, "utf8");
-  const matches = [...content.matchAll(/="([^"]+)"/g)].map((match) => match[1]);
-  return matches.length >= 3 && matches.every((entry) => fs.existsSync(entry));
+  const required = ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
+  const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
+  return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
 }
 
 function casCredentialsValid(dir) {
@@ -66,7 +67,7 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/reports", fs.existsSync(path.join(workspace, "wikis", "reports")));
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
-  for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
+  for (const binary of qdmCliBinaries) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
@@ -75,6 +76,7 @@ export async function collectDoctor(workspace, options = {}) {
   add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
   add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
   add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
+  add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {

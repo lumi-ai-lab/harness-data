@@ -46,6 +46,15 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function cliMissingMessage(cli: string): string {
+  return `missing ${cli}; run \`go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli\` or reinstall harness-data`;
+}
+
+function spawnFailureMessage(result: ReturnType<typeof spawnSync>): string {
+  const errorMessage = result.error instanceof Error ? result.error.message : "";
+  return (result.stderr || result.stdout || errorMessage || "unknown error").trim();
+}
+
 function findProjectRoot(startDir: string): string {
   let current = resolve(startDir);
   while (true) {
@@ -145,6 +154,10 @@ function detectPosttoolFormat(cli: string): "agent-hook" | "claude-hook" {
 function runHarnessContext(projectRoot: string, prompt: string, ctx?: PiExtensionContext): string {
   if (!prompt) return "";
   const cli = join(projectRoot, "bin", "data-harness-cli");
+  if (!existsSync(cli)) {
+    ctx?.ui?.notify?.(`QDM Harness context failed: ${cliMissingMessage(cli)}`, "warning");
+    return "";
+  }
   const format = detectContextFormat(cli);
   const result =
     format === "agent-hook"
@@ -159,7 +172,7 @@ function runHarnessContext(projectRoot: string, prompt: string, ctx?: PiExtensio
         });
 
   if (result.status !== 0) {
-    const message = (result.stderr || result.stdout || "unknown error").trim();
+    const message = spawnFailureMessage(result);
     ctx?.ui?.notify?.(`QDM Harness context failed: ${message}`, "warning");
     return "";
   }
@@ -225,6 +238,10 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
     tool_input: { command },
   });
   const cli = join(projectRoot, "bin", "data-harness-cli");
+  if (!existsSync(cli)) {
+    ctx?.ui?.notify?.(`QDM Harness posttool failed: ${cliMissingMessage(cli)}`, "warning");
+    return;
+  }
   if (posttoolFormat === "agent-hook") {
     const resolvedFormat = detectPosttoolFormat(cli);
     posttoolFormat = resolvedFormat;

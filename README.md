@@ -48,7 +48,7 @@ npx @lumi-ai-lab/harness-data install
 
 安装器访问 GitHub 私有仓库时默认使用 `--git-protocol auto`：先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，如果本机没有可用 GitHub SSH key 或无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
 
-`qdm-cmr-cli`、`qdm-indicators-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-cmr-cli`、`pengmide/qdm-indicators-cli`、`pengmide/qdm-cas-cli`。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
+`qdm-cmr-cli`、`qdm-indicators-cli`、`qdm-sql-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-cmr-cli`、`pengmide/qdm-indicators-cli`、`pengmide/qdm-sql-cli`、`pengmide/qdm-cas-cli`。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
 
 强制使用 SSH：
 
@@ -90,7 +90,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 4 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 5 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators/SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`。
 
 更新工作目录：
 
@@ -157,7 +157,7 @@ gh workflow run release.yml \
   -f wikis_ref=master
 ```
 
-`version` 不带 `v`；workflow 会自动生成 `v0.0.2` tag。`cas_cli_version`、`cmr_cli_version`、`indicators_cli_version` 留空时沿用 `bootstrap/cli-manifest.json` 当前版本；需要升级外部 CLI 时传不带 `v` 的版本号。
+`version` 不带 `v`；workflow 会自动生成 `v0.0.2` tag。`cas_cli_version`、`cmr_cli_version`、`indicators_cli_version`、`sql_cli_version` 留空时使用对应工具的最新 GitHub Release；需要固定外部 CLI 时传不带 `v` 的版本号。
 
 总编排会按顺序更新 npm 版本、CLI manifest 和 `wikis` submodule 指针，执行 `npm test` / `npm pack --dry-run` / `go test ./...`，提交 release commit，创建 tag，发布 `data-harness-cli` GitHub Release assets，发布 GHCR 镜像，确认 Release assets 可访问后再发布 npm 包。
 
@@ -183,7 +183,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 ## 目录结构
 
 - `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`。
-- `bootstrap/cli-manifest.json`：npm 安装器下载 4 个 CLI 的版本、平台包 URL 和 sha256 配置。
+- `bootstrap/cli-manifest.json`：npm 安装器下载 5 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。
@@ -221,6 +221,7 @@ paths:
 cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
   qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
+  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
 ```
 

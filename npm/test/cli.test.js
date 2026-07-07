@@ -16,10 +16,10 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, configureTokens, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
-import { agentChoices, hasAnyAgentHook, linkAgents, writeLocalConfig } from "../src/lib/config.js";
+import { agentChoices, hasAnyAgentHook, linkAgents, localPathToolNames, qdmCliBinaries, writeLocalConfig } from "../src/lib/config.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -111,10 +111,17 @@ test("private qdm cli tools point at their own repositories", () => {
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
   assert.equal(byName.get("qdm-cmr-cli").repo, "pengmide/qdm-cmr-cli");
   assert.equal(byName.get("qdm-indicators-cli").repo, "pengmide/qdm-indicators-cli");
+  assert.equal(byName.get("qdm-sql-cli").repo, "pengmide/qdm-sql-cli");
   assert.equal(byName.get("cas-cli").repo, "pengmide/qdm-cas-cli");
   assert.equal(byName.get("qdm-cmr-cli").private, true);
   assert.equal(byName.get("qdm-indicators-cli").private, true);
+  assert.equal(byName.get("qdm-sql-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+});
+
+test("qdm cli binary lists include sql cli", () => {
+  assert.deepEqual(qdmCliBinaries, ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"]);
+  assert.deepEqual(localPathToolNames, ["cas-cli", "qdm-indicators-cli", "qdm-cmr-cli", "qdm-sql-cli"]);
 });
 
 test("local wikis source requires root index", () => {
@@ -1009,8 +1016,48 @@ test("local config exports workspace CAS config dir", () => {
   writeLocalConfig(workspace, { overwrite: true });
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
   const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  assert.match(env, /export QDM_SQL_CLI=".*qdm-sql-cli"/);
+  assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
+});
+
+test("configure tokens fetches sql token from CAS rtp app", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  const casDir = path.join(workspace, ".qdm-auth", "cas");
+  const casLog = path.join(workspace, "cas.log");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(casDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
+printf '%s\\n' "$*" >> "${casLog}"
+case "$*" in
+  "token --app cmr") echo cmr-token ;;
+  "token --app indicators") echo indicators-token ;;
+  "token --app rtp") echo sql-token ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o755 });
+  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"]) {
+    const tokenFile = path.join(workspace, `${name}.token`);
+    fs.writeFileSync(path.join(binDir, binaryName(name)), `#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
+  printf '%s\\n' "$3" > "${tokenFile}"
+  exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
+  test -s "${tokenFile}"
+  exit $?
+fi
+exit 2
+`, { mode: 0o755 });
+  }
+
+  await configureTokens(workspace, casDir);
+
+  assert.equal(fs.readFileSync(casLog, "utf8"), "token --app cmr\ntoken --app indicators\ntoken --app rtp\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
 });
 
 test("agent choices include OpenClaw, Hermes, both, and all", () => {
@@ -1108,7 +1155,7 @@ function createDoctorWorkspace(agent) {
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
   fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
   fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "credentials.enc"), "encrypted-test-credentials");
-  for (const binary of ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "cas-cli"]) {
+  for (const binary of qdmCliBinaries) {
     fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
   writeLocalConfig(workspace, { overwrite: true });
@@ -1131,6 +1178,7 @@ test("update doctor treats missing agent hooks and auth as non-blocking only", a
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CAS credentials file" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Indicators token" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "SQL token" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
 });
 
