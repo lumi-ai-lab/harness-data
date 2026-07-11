@@ -1,17 +1,21 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+
+import { runAsyncCommand } from "./async-cli.mjs";
+import { appendHarnessContext, ContextCache, latestUserMessage } from "./context-cache.mjs";
 
 type JsonObject = Record<string, unknown>;
 
 interface PiExtensionContext {
+  cwd?: string;
   sessionManager?: {
     getSessionId?: () => string;
     getSessionFile?: () => string | undefined;
   };
   ui?: {
     notify?: (message: string, type?: "info" | "warning" | "error") => void;
+    setStatus?: (key: string, text: string | undefined) => void;
   };
 }
 
@@ -28,19 +32,27 @@ interface PiToolCallEvent {
   input?: JsonObject;
 }
 
-type ContextFormat = "agent-hook" | "json";
-
-interface CliContextPayload {
-  question?: string;
-  contextFiles?: Array<{ path?: unknown }>;
-  instruction?: string;
-  constraints?: unknown;
-}
-
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const extractContextScript = join(extensionDir, "extract-additional-context.mjs");
-let contextFormat: ContextFormat | null = null;
-let posttoolFormat: "agent-hook" | "claude-hook" = "agent-hook";
+const CONTEXT_STATUS_KEY = "qdm-harness";
+const CONTEXT_STATUS_DELAY_MS = 120;
+const DEFAULT_CONTEXT_TIMEOUT_MS = 5_000;
+const MIN_CONTEXT_TIMEOUT_MS = 1_000;
+const MAX_CONTEXT_TIMEOUT_MS = 30_000;
+const CONTEXT_CACHE_LIMIT = 64;
+
+const STATIC_SYSTEM_GUIDANCE = [
+  "QDM Harness context is attached to the active user turn before each model request.",
+  "Treat its contextFiles, instructions, and constraints as required.",
+].join(" ");
+
+const HARNESS_FAILURE_CONTEXT = [
+  "# QDM Harness Unavailable",
+  "",
+  "The QDM Harness context could not be prepared for this turn.",
+  "Do not run QDM data CLIs, estimate values, or produce data-backed conclusions.",
+  "Explain that Harness context loading failed.",
+].join("\n");
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,11 +60,6 @@ function isObject(value: unknown): value is JsonObject {
 
 function cliMissingMessage(cli: string): string {
   return `missing ${cli}; run \`go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli\` or reinstall harness-data`;
-}
-
-function spawnFailureMessage(result: ReturnType<typeof spawnSync>): string {
-  const errorMessage = result.error instanceof Error ? result.error.message : "";
-  return (result.stderr || result.stdout || errorMessage || "unknown error").trim();
 }
 
 function findProjectRoot(startDir: string): string {
@@ -76,119 +83,43 @@ function sessionId(ctx?: PiExtensionContext): string {
   );
 }
 
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => (isObject(part) && typeof part.text === "string" ? part.text : ""))
-    .filter(Boolean)
-    .join("\n");
+function contextTimeoutMs(): number {
+  const configured = process.env.QDM_PI_CONTEXT_TIMEOUT_MS?.trim();
+  if (!configured) return DEFAULT_CONTEXT_TIMEOUT_MS;
+  const parsed = Number(configured);
+  if (!Number.isFinite(parsed)) return DEFAULT_CONTEXT_TIMEOUT_MS;
+  return Math.min(MAX_CONTEXT_TIMEOUT_MS, Math.max(MIN_CONTEXT_TIMEOUT_MS, Math.floor(parsed)));
 }
 
-function latestUserPrompt(event: unknown): string {
-  if (typeof event === "string") return event.trim();
-  if (!isObject(event)) return "";
-  for (const key of ["prompt", "input", "text", "message"]) {
-    const value = event[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  const messages = Array.isArray(event.messages) ? event.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!isObject(message) || message.role !== "user") continue;
-    const text = contentText(message.content).trim();
-    if (text) return text;
-  }
-  return "";
+function concise(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400);
 }
 
-function buildContextFromCliJson(payload: CliContextPayload): string {
-  const files = Array.isArray(payload.contextFiles)
-    ? payload.contextFiles
-        .map((entry) => {
-          const pathValue = entry?.path;
-          return typeof pathValue === "string" && pathValue.trim() ? `- ${pathValue.trim()}` : "";
-        })
-        .filter(Boolean)
-    : [];
-  const constraints = Array.isArray(payload.constraints)
-    ? payload.constraints
-        .map((constraint) => (typeof constraint === "string" ? `- ${constraint}` : ""))
-        .filter(Boolean)
-    : [];
+function commandFailureMessage(result: JsonObject, timeoutMs: number): string {
+  if (result.timedOut === true) return `timed out after ${timeoutMs} ms`;
+  if (result.aborted === true) return "aborted";
+  if (result.truncated === true) return "output exceeded the 2 MiB safety limit";
 
-  return [
-    "# Data Harness Context",
-    "",
-    files.length ? "必须先读取以下 contextFiles：" : "",
-    ...files,
-    payload.instruction ? "" : "",
-    payload.instruction ?? "",
-    constraints.length ? "- constraints:" : "",
-    ...constraints,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const error = result.error instanceof Error ? result.error.message : "";
+  const detail = concise(result.stderr) || concise(result.stdout) || concise(error);
+  const code = typeof result.code === "number" ? result.code : null;
+  if (code !== null) return detail ? `exit ${code}: ${detail}` : `exit ${code}`;
+  return detail || "unknown error";
 }
 
-function detectContextFormat(cli: string): ContextFormat {
-  if (contextFormat) return contextFormat;
-
-  const probe = spawnSync(cli, ["context", "--help"], { encoding: "utf8" });
-  const output = `${probe.stderr ?? ""}${probe.stdout ?? ""}`;
-  if (/agent-hook/.test(output)) {
-    contextFormat = "agent-hook";
-    return contextFormat;
-  }
-  contextFormat = "json";
-  return contextFormat;
+function notifyContextFailure(ctx: PiExtensionContext | undefined, message: string): string {
+  ctx?.ui?.notify?.(`QDM Harness context failed: ${message}`, "warning");
+  return HARNESS_FAILURE_CONTEXT;
 }
 
-function detectPosttoolFormat(cli: string): "agent-hook" | "claude-hook" {
-  const probe = spawnSync(cli, ["posttool", "--help"], { encoding: "utf8" });
-  const output = `${probe.stderr ?? ""}${probe.stdout ?? ""}`;
-  if (/agent-hook/.test(output)) return "agent-hook";
-  return "claude-hook";
-}
-
-function runHarnessContext(projectRoot: string, prompt: string, ctx?: PiExtensionContext): string {
-  if (!prompt) return "";
-  const cli = join(projectRoot, "bin", "data-harness-cli");
-  if (!existsSync(cli)) {
-    ctx?.ui?.notify?.(`QDM Harness context failed: ${cliMissingMessage(cli)}`, "warning");
-    return "";
-  }
-  const format = detectContextFormat(cli);
-  const result =
-    format === "agent-hook"
-      ? spawnSync(cli, ["context", "--format", "agent-hook"], {
-          cwd: projectRoot,
-          input: JSON.stringify({ session_id: sessionId(ctx), prompt }),
-          encoding: "utf8",
-        })
-      : spawnSync(cli, ["context", "--json", "--question", prompt], {
-          cwd: projectRoot,
-          encoding: "utf8",
-        });
-
-  if (result.status !== 0) {
-    const message = spawnFailureMessage(result);
-    ctx?.ui?.notify?.(`QDM Harness context failed: ${message}`, "warning");
-    return "";
-  }
-  try {
-    const payload = JSON.parse(result.stdout) as unknown;
-    if (format === "json") {
-      const parsed = payload as CliContextPayload;
-      return buildContextFromCliJson(parsed);
-    }
-    const hookPayload = payload as JsonObject;
-    const hookOutput = isObject(hookPayload.hookSpecificOutput) ? hookPayload.hookSpecificOutput : null;
-    const context = isObject(hookOutput) ? hookOutput.additionalContext : undefined;
-    return typeof context === "string" ? addPiPathGuidance(context.trim()) : "";
-  } catch {
-    return "";
-  }
+function extractAdditionalContext(output: string): string {
+  const payload = JSON.parse(output) as unknown;
+  if (!isObject(payload) || !isObject(payload.hookSpecificOutput)) return "";
+  const context = payload.hookSpecificOutput.additionalContext;
+  return typeof context === "string" ? context.trim() : "";
 }
 
 function addPiPathGuidance(context: string): string {
@@ -203,19 +134,55 @@ function addPiPathGuidance(context: string): string {
     selectedReadPath ? `- Selected playbook read path: \`${selectedReadPath}\`.` : "",
     "",
     context,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-function qdmContextMessage(text: string): JsonObject {
-  return {
-    role: "user",
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-  };
+async function runHarnessContext(
+  projectRoot: string,
+  prompt: string,
+  ctx?: PiExtensionContext,
+): Promise<string> {
+  if (!prompt) return "";
+
+  const cli = join(projectRoot, "bin", "data-harness-cli");
+  if (!existsSync(cli)) return notifyContextFailure(ctx, cliMissingMessage(cli));
+
+  const timeoutMs = contextTimeoutMs();
+  let statusVisible = false;
+  const statusTimer = setTimeout(() => {
+    statusVisible = true;
+    ctx?.ui?.setStatus?.(CONTEXT_STATUS_KEY, "QDM Harness: loading context…");
+  }, CONTEXT_STATUS_DELAY_MS);
+  statusTimer.unref?.();
+
+  try {
+    const result = (await runAsyncCommand(cli, ["context", "--format", "agent-hook"], {
+      cwd: projectRoot,
+      input: JSON.stringify({ session_id: sessionId(ctx), prompt }),
+      timeoutMs,
+    })) as JsonObject;
+
+    if (result.error || result.timedOut || result.aborted || result.truncated || result.code !== 0) {
+      return notifyContextFailure(ctx, commandFailureMessage(result, timeoutMs));
+    }
+
+    try {
+      const context = extractAdditionalContext(String(result.stdout ?? ""));
+      if (!context) return notifyContextFailure(ctx, "agent-hook returned no additionalContext");
+      return addPiPathGuidance(context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "invalid JSON";
+      return notifyContextFailure(ctx, `invalid agent-hook output: ${concise(message)}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return notifyContextFailure(ctx, concise(message) || "unknown error");
+  } finally {
+    clearTimeout(statusTimer);
+    if (statusVisible) ctx?.ui?.setStatus?.(CONTEXT_STATUS_KEY, undefined);
+  }
 }
 
 function shellQuote(value: string): string {
@@ -242,10 +209,6 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
     ctx?.ui?.notify?.(`QDM Harness posttool failed: ${cliMissingMessage(cli)}`, "warning");
     return;
   }
-  if (posttoolFormat === "agent-hook") {
-    const resolvedFormat = detectPosttoolFormat(cli);
-    posttoolFormat = resolvedFormat;
-  }
   toolCall.input.command = [
     "{",
     command,
@@ -258,7 +221,7 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
     shellQuote(payload),
     "|",
     shellQuote(cli),
-    `posttool --format ${posttoolFormat}`,
+    "posttool --format agent-hook",
     "| node",
     shellQuote(extractContextScript),
     ";",
@@ -270,34 +233,44 @@ export default function qdmHarnessExtension(pi: {
   on?: (event: string, handler: (event: unknown, ctx?: PiExtensionContext) => unknown) => void;
   cwd?: string;
 }): void {
-  const projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
-  let injectedPromptThisTurn = "";
+  const contextCache = new ContextCache(CONTEXT_CACHE_LIMIT);
+  let projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
 
-  pi.on?.("input", () => {
-    injectedPromptThisTurn = "";
-    return { action: "continue" };
+  const resetSessionState = (ctx?: PiExtensionContext): void => {
+    contextCache.clear();
+    ctx?.ui?.setStatus?.(CONTEXT_STATUS_KEY, undefined);
+  };
+
+  pi.on?.("session_start", (_event, ctx) => {
+    projectRoot = findProjectRoot(ctx?.cwd ?? pi.cwd ?? process.cwd());
+    resetSessionState(ctx);
+    return undefined;
   });
 
-  pi.on?.("before_agent_start", (event, ctx) => {
-    const prompt = latestUserPrompt(event);
-    const context = runHarnessContext(projectRoot, prompt, ctx);
-    if (!context) return undefined;
-    injectedPromptThisTurn = prompt;
+  pi.on?.("session_shutdown", (_event, ctx) => {
+    resetSessionState(ctx);
+    return undefined;
+  });
+
+  pi.on?.("before_agent_start", (event) => {
     const current = (event as PiBeforeAgentStartEvent).systemPrompt ?? "";
     return {
-      systemPrompt: [current, context].filter(Boolean).join("\n\n"),
+      systemPrompt: [current, STATIC_SYSTEM_GUIDANCE].filter(Boolean).join("\n\n"),
     };
   });
 
-  pi.on?.("context", (event, ctx) => {
+  pi.on?.("context", async (event, ctx) => {
     const messages = (event as PiContextEvent).messages;
     if (!Array.isArray(messages)) return undefined;
-    const prompt = latestUserPrompt(event);
-    if (!prompt || injectedPromptThisTurn === prompt) return { messages };
-    const context = runHarnessContext(projectRoot, prompt, ctx);
+
+    const userMessage = latestUserMessage(messages);
+    if (!userMessage) return { messages };
+
+    const context = await contextCache.getOrCreate(userMessage.key, () =>
+      runHarnessContext(projectRoot, userMessage.prompt, ctx),
+    );
     if (!context) return { messages };
-    injectedPromptThisTurn = prompt;
-    return { messages: [...messages, qdmContextMessage(context)] };
+    return { messages: appendHarnessContext(messages, userMessage.index, context) };
   });
 
   pi.on?.("tool_call", (event, ctx) => {
