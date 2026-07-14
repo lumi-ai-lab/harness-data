@@ -19,7 +19,9 @@ import { toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck, configureTokens, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
+import { authCommand } from "../src/commands/auth.js";
 import { agentChoices, hasAnyAgentHook, linkAgents, localPathToolNames, qdmCliBinaries, writeLocalConfig } from "../src/lib/config.js";
+import { run } from "../src/lib/exec.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -62,7 +64,8 @@ function reusableToolManifest(key) {
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+  assert.match(result.stdout, /harness-data <install\|update\|auth\|doctor\|version>/);
+  assert.match(result.stdout, /auth     Configure CAS credentials and refresh access tokens/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -80,6 +83,17 @@ test("confirm rejects n and no input", () => {
 
 test("confirm yes option returns true", () => {
   assert.equal(runConfirm("", "{ yes: true }"), "true");
+});
+
+test("command failures redact sensitive arguments", async () => {
+  await assert.rejects(
+    run(process.execPath, ["-e", "process.exit(1)", "secret-value"], { sensitiveArgs: [2] }),
+    (error) => {
+      assert.match(error.message, /\*\*\*\*\*\*/);
+      assert.doesNotMatch(error.message, /secret-value/);
+      return true;
+    }
+  );
 });
 
 test("loads package version", () => {
@@ -1058,6 +1072,50 @@ exit 2
 
   assert.equal(fs.readFileSync(casLog, "utf8"), "token --app cmr\ntoken --app indicators\ntoken --app rtp\n");
   assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
+});
+
+test("auth recreates deleted CAS auth directory and refreshes all tokens", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  const casLog = path.join(workspace, "cas.log");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
+printf '%s\\n' "$*" >> "${casLog}"
+if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
+  mkdir -p "$QDM_CAS_CONFIG_DIR"
+  printf 'encrypted\\n' > "$QDM_CAS_CONFIG_DIR/credentials.enc"
+  exit 0
+fi
+case "$*" in
+  "token --app cmr") echo cmr-token ;;
+  "token --app indicators") echo indicators-token ;;
+  "token --app rtp") echo sql-token ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o755 });
+  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"]) {
+    const tokenFile = path.join(workspace, `${name}.token`);
+    fs.writeFileSync(path.join(binDir, binaryName(name)), `#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
+  printf '%s\\n' "$3" > "${tokenFile}"
+  exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
+  test -s "${tokenFile}"
+  exit $?
+fi
+exit 2
+`, { mode: 0o755 });
+  }
+
+  const result = await authCommand({ dir: workspace, casUsername: "new-user", casPassword: "new-password" });
+
+  assert.equal(result.casDir, path.join(workspace, ".qdm-auth", "cas"));
+  assert.equal(fs.readFileSync(path.join(result.casDir, "credentials.enc"), "utf8"), "encrypted\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "qdm-cmr-cli.token"), "utf8"), "cmr-token\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "qdm-indicators-cli.token"), "utf8"), "indicators-token\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
+  assert.match(fs.readFileSync(casLog, "utf8"), /config set-credentials --username new-user --password new-password/);
 });
 
 test("agent choices include OpenClaw, Hermes, both, and all", () => {

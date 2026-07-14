@@ -20,7 +20,9 @@ export function run(command, args = [], options = {}) {
         return;
       }
       const detail = stderr.trim() || stdout.trim();
-      reject(new Error(`${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`));
+      const sensitiveArgs = new Set(options.sensitiveArgs || []);
+      const displayArgs = args.map((arg, index) => sensitiveArgs.has(index) ? "******" : arg);
+      reject(new Error(`${command} ${displayArgs.join(" ")} failed${detail ? `: ${detail}` : ""}`));
     });
   });
 }

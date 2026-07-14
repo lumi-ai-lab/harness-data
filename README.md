@@ -98,6 +98,14 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 npx @lumi-ai-lab/harness-data update --dir ~/harness-data
 ```
 
+CAS 账号或密码发生变化，或者本地 `.qdm-auth` 被删除后，重新配置认证：
+
+```bash
+npx @lumi-ai-lab/harness-data auth --dir ~/harness-data
+```
+
+该命令会自动重建 `.qdm-auth/cas`、加密保存新的 CAS 凭证，并重新签发和校验 CMR、Indicators、SQL Token；不会更新 runtime、CLI、Wikis 或 Agent Hook。
+
 仅检查可用更新：
 
 ```bash

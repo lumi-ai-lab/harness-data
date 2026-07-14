@@ -32,6 +32,14 @@ Update an existing runtime interactively:
 npx @lumi-ai-lab/harness-data update
 ```
 
+Reconfigure CAS credentials after an account/password change or after `.qdm-auth` was deleted:
+
+```bash
+npx @lumi-ai-lab/harness-data auth --dir /path/to/runtime
+```
+
+The command recreates `.qdm-auth/cas`, stores the new encrypted CAS credentials, refreshes the CMR, Indicators, and SQL tokens, and validates all three tokens.
+
 Diagnose a runtime:
 
 ```bash

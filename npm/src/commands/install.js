@@ -213,14 +213,18 @@ function casConfigDir(runtimeDir) {
   return path.join(runtimeDir, ".qdm-auth", "cas");
 }
 
-async function writeCasCredentials(runtimeDir, options = {}) {
+export async function writeCasCredentials(runtimeDir, options = {}) {
   const username = options.casUsername || await ask("CAS 用户名：", options);
   const password = options.casPassword || await askSecret("CAS 密码：", options);
   if (!username || !password) throw new Error("CAS username and password are required");
   const dir = casConfigDir(runtimeDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const env = { QDM_CAS_CONFIG_DIR: dir };
-  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], { cwd: runtimeDir, env });
+  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], {
+    cwd: runtimeDir,
+    env,
+    sensitiveArgs: [5]
+  });
   ok("CAS 凭证已加密保存到 .qdm-auth/cas/credentials.enc");
   return dir;
 }
@@ -229,13 +233,13 @@ export async function configureTokens(runtimeDir, casDir) {
   const env = { QDM_CAS_CONFIG_DIR: casDir };
   const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
   const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env });
+  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
   ok("CMR Token 已配置");
   const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env });
+  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
   ok("Indicators Token 已配置");
   const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env });
+  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
   ok("SQL Token 已配置");
   await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
   await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
