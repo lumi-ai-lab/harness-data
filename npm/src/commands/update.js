@@ -87,18 +87,36 @@ export async function updateWikis(runtimeDir, options, state) {
   }
   await updateWikisGit(wikisDir, ["fetch", "origin"], options);
   const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
-  const remote = (await run("git", ["-C", wikisDir, "rev-parse", "origin/HEAD"], { ...options, allowFailure: true })).stdout.trim();
+  const remoteRef = (await run("git", ["-C", wikisDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { ...options, allowFailure: true })).stdout.trim();
+  const remote = remoteRef
+    ? (await run("git", ["-C", wikisDir, "rev-parse", remoteRef], { ...options, allowFailure: true })).stdout.trim()
+    : "";
   if (!remote || local === remote) {
     ok(`harness-data-wikis 已是最新 ${shortSha(local)}`);
     return null;
   }
   action(`发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
-  if (!(await confirm("是否更新 harness-data-wikis？"))) {
+  if (!(await confirm("是否更新 harness-data-wikis？", options))) {
     skip("harness-data-wikis");
     options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
     return null;
   }
-  await updateWikisGit(wikisDir, ["pull", "--ff-only"], options);
+  const defaultBranch = remoteRef.replace(/^origin\//, "");
+  const currentBranch = (await run("git", ["-C", wikisDir, "branch", "--show-current"], { ...options, allowFailure: true })).stdout.trim();
+  if (currentBranch !== defaultBranch) {
+    const trackedChanges = (await run("git", ["-C", wikisDir, "status", "--porcelain", "--untracked-files=no"], options)).stdout.trim();
+    if (trackedChanges) {
+      throw new Error(`harness-data-wikis 当前在 ${currentBranch || "detached HEAD"}，且存在未提交修改；请先处理修改，再切换到 ${defaultBranch}`);
+    }
+    action(`切换 Wikis 到默认分支 ${defaultBranch}`);
+    const localDefault = await run("git", ["-C", wikisDir, "show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`], { ...options, allowFailure: true });
+    if (localDefault.code === 0) {
+      await run("git", ["-C", wikisDir, "checkout", defaultBranch], options);
+    } else {
+      await run("git", ["-C", wikisDir, "checkout", "-b", defaultBranch, "--track", remoteRef], options);
+    }
+  }
+  await run("git", ["-C", wikisDir, "merge", "--ff-only", remoteRef], options);
   const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
   ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
   return { commit };

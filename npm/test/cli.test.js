@@ -1284,7 +1284,10 @@ case "$1 $2 $3" in
   "rev-parse HEAD ")
     echo "0123456789abcdef"
     ;;
-  "rev-parse origin/HEAD ")
+  "symbolic-ref --short refs/remotes/origin/HEAD")
+    echo "origin/master"
+    ;;
+  "rev-parse origin/master ")
     echo "0123456789abcdef"
     ;;
   *)
@@ -1300,6 +1303,50 @@ esac
   }, { installMode: "github-token" });
 
   assert.equal(fs.readFileSync(authLog, "utf8").trim(), "x-access-token:secret-token");
+});
+
+test("update wikis switches a feature branch to the remote default branch", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const wikisDir = path.join(workspace, "wikis");
+  const callsLog = path.join(workspace, "calls.log");
+  fs.mkdirSync(path.join(wikisDir, ".git"), { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "git"), `#!/bin/sh
+printf '%s\\n' "$*" >> "${callsLog}"
+if [ "$1" = "-C" ]; then
+  shift
+  shift
+fi
+case "$1 $2 $3" in
+  "remote get-url origin") echo "https://github.com/lumi-ai-lab/harness-data-wikis.git" ;;
+  "fetch origin ") ;;
+  "rev-parse HEAD ")
+    count=$(grep -c 'rev-parse HEAD' "${callsLog}")
+    if [ "$count" -eq 1 ]; then echo "old-feature"; else echo "new-master"; fi
+    ;;
+  "symbolic-ref --short refs/remotes/origin/HEAD") echo "origin/master" ;;
+  "rev-parse origin/master ") echo "new-master" ;;
+  "branch --show-current ") echo "feature/test" ;;
+  "status --porcelain --untracked-files=no") ;;
+  "show-ref --verify --quiet") exit 0 ;;
+  "checkout master ") ;;
+  "merge --ff-only origin/master") ;;
+  *) echo "unexpected git args: $*" >&2; exit 3 ;;
+esac
+`, { mode: 0o755 });
+
+  const result = await updateWikis(workspace, {
+    githubToken: "secret-token",
+    yes: true,
+    env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
+  }, { installMode: "github-token" });
+
+  assert.deepEqual(result, { commit: "new-master" });
+  const calls = fs.readFileSync(callsLog, "utf8");
+  assert.match(calls, /checkout master/);
+  assert.match(calls, /merge --ff-only origin\/master/);
+  assert.doesNotMatch(calls, /pull --ff-only/);
 });
 
 test("build index prints concise Chinese summary", async () => {
