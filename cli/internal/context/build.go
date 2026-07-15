@@ -163,6 +163,7 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	selectedReport, hasSelectedReport := selectReportConcept(resolver, byPath, index.TemplateSelection, question, matches, conceptSpecs)
 	addSelectedReport := func(selected selectedReportConcept) {
 		plan = selected.Plan
+		addNearestIndex(add, byPath, selected.Spec.Path, "report index")
 		add(selected.Spec.Path, "matched report spec")
 		add(selected.Playbook.Path, "selected report playbook")
 	}
@@ -800,7 +801,7 @@ func instructionForPlan(plan WikiPlan) string {
 		if plan.SelectedTemplate == "" {
 			templateInstruction = "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use template files."
 		}
-		return common + " Harness mode: report. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". Read the matched report spec and selected report playbook in contextFiles. Use the report playbook for data collection and JSON handling, and use the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. " + templateInstruction
+		return common + " Harness mode: report. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". Read the report index when present, the matched report spec, and the selected report playbook in contextFiles. Use the report index as the Agent knowledge directory, the report playbook for data collection and JSON handling, and the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. " + templateInstruction
 	default:
 		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use template files. You may reference specs/playbooks, but must not apply any template."
 	}
