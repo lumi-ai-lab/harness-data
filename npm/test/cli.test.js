@@ -16,7 +16,7 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, configureTokens, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, configureCasAuthentication, configureTokens, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { authCommand } from "../src/commands/auth.js";
@@ -1072,6 +1072,71 @@ exit 2
 
   assert.equal(fs.readFileSync(casLog, "utf8"), "token --app cmr\ntoken --app indicators\ntoken --app rtp\n");
   assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
+});
+
+test("CAS authentication retries with cached username and hides HTML errors", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
+  mkdir -p "$QDM_CAS_CONFIG_DIR"
+  printf '%s' "$6" > "$QDM_CAS_CONFIG_DIR/credentials.enc"
+  exit 0
+fi
+if [ "$1" = "token" ] && [ "$2" = "--app" ] && [ "$3" = "cmr" ]; then
+  if [ "$(cat "$QDM_CAS_CONFIG_DIR/credentials.enc")" = "correct-password" ]; then
+    echo cmr-token
+    exit 0
+  fi
+  printf '<!DOCTYPE html><html><body>login failed</body></html>\n' >&2
+  exit 1
+fi
+exit 2
+`, { mode: 0o755 });
+
+  const usernames = ["alice", ""];
+  const passwords = ["wrong-password", "correct-password"];
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const casDir = await configureCasAuthentication(workspace, {
+      askUsername: async () => usernames.shift(),
+      askPassword: async () => passwords.shift()
+    });
+    assert.equal(fs.readFileSync(path.join(casDir, "credentials.enc"), "utf8"), "correct-password");
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(usernames.length, 0);
+  assert.match(warnings.join("\n"), /CAS 账号或密码验证不通过，请重新输入/);
+  assert.doesNotMatch(warnings.join("\n"), /DOCTYPE|<html/i);
+});
+
+test("failed CAS authentication preserves existing credentials and returns a clean error", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const binDir = path.join(workspace, "bin");
+  const casDir = path.join(workspace, ".qdm-auth", "cas");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(casDir, { recursive: true });
+  fs.writeFileSync(path.join(casDir, "credentials.enc"), "existing-credentials");
+  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
+if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
+  mkdir -p "$QDM_CAS_CONFIG_DIR"
+  printf 'invalid-credentials' > "$QDM_CAS_CONFIG_DIR/credentials.enc"
+  exit 0
+fi
+printf '<html><body>Unauthorized</body></html>\n' >&2
+exit 1
+`, { mode: 0o755 });
+
+  await assert.rejects(
+    configureCasAuthentication(workspace, { casUsername: "alice", casPassword: "wrong-password" }),
+    (error) => error.message === "CAS 账号或密码验证不通过" && !/<html/i.test(error.message)
+  );
+  assert.equal(fs.readFileSync(path.join(casDir, "credentials.enc"), "utf8"), "existing-credentials");
+  assert.equal(fs.readdirSync(workspace).some((name) => name.startsWith(".cas-auth-")), false);
 });
 
 test("auth recreates deleted CAS auth directory and refreshes all tokens", { skip: process.platform === "win32" }, async () => {

@@ -4,7 +4,7 @@ import { findWorkspaceDir } from "../lib/paths.js";
 import { packageVersion } from "../lib/package.js";
 import { binaryName } from "../lib/platform.js";
 import { blank, header, ok, step } from "../lib/log.js";
-import { configureTokens, writeCasCredentials } from "./install.js";
+import { configureCasAuthentication, configureTokens } from "./install.js";
 
 const requiredBinaries = ["cas-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"];
 
@@ -22,7 +22,7 @@ export async function authCommand(options = {}) {
   header("Harness Data 认证配置", packageVersion(), [`运行目录：${runtimeDir}`]);
 
   step(1, 2, "配置 CAS 凭证");
-  const casDir = await writeCasCredentials(runtimeDir, options);
+  const casDir = await configureCasAuthentication(runtimeDir, options);
   blank();
 
   step(2, 2, "刷新并校验访问 Token");

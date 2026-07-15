@@ -220,7 +220,7 @@ export async function writeCasCredentials(runtimeDir, options = {}) {
   const username = options.casUsername || await ask("CAS 用户名：", options);
   const password = options.casPassword || await askSecret("CAS 密码：", options);
   if (!username || !password) throw new Error("CAS username and password are required");
-  const dir = casConfigDir(runtimeDir);
+  const dir = options.casConfigDir || casConfigDir(runtimeDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const env = { QDM_CAS_CONFIG_DIR: dir };
   await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], {
@@ -228,8 +228,78 @@ export async function writeCasCredentials(runtimeDir, options = {}) {
     env,
     sensitiveArgs: [5]
   });
-  ok("CAS 凭证已加密保存到 .qdm-auth/cas/credentials.enc");
+  ok("CAS 凭证已加密保存");
   return dir;
+}
+
+function isCasAuthenticationFailure(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid credentials?|bad credentials?|认证.{0,8}(失败|不通过)|账号.{0,8}密码|<!doctype html|<html[\s>]/i.test(message);
+}
+
+function sanitizedCasError(error) {
+  if (isCasAuthenticationFailure(error)) return new Error("CAS 账号或密码验证不通过");
+  const message = String(error?.message || error || "CAS 认证失败");
+  if (/<(!doctype|html)[\s>]/i.test(message)) return new Error("CAS 服务返回了异常页面，请稍后重试");
+  return error instanceof Error ? error : new Error(message);
+}
+
+async function validateCasCredentials(runtimeDir, casDir) {
+  const env = { QDM_CAS_CONFIG_DIR: casDir };
+  const command = path.join(runtimeDir, "bin", binaryName("cas-cli"));
+  await run(command, ["token", "--app", "cmr"], { cwd: runtimeDir, env });
+}
+
+function activateCasCredentials(stagedDir, targetDir) {
+  const backupDir = `${targetDir}.backup-${process.pid}-${Date.now()}`;
+  fs.mkdirSync(path.dirname(targetDir), { recursive: true, mode: 0o700 });
+  try {
+    if (fs.existsSync(targetDir)) fs.renameSync(targetDir, backupDir);
+    fs.renameSync(stagedDir, targetDir);
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  } catch (error) {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    if (fs.existsSync(backupDir)) fs.renameSync(backupDir, targetDir);
+    throw error;
+  }
+}
+
+export async function configureCasAuthentication(runtimeDir, options = {}) {
+  const targetDir = casConfigDir(runtimeDir);
+  const promptUsername = options.askUsername || ask;
+  const promptPassword = options.askPassword || askSecret;
+  const suppliedCredentials = Boolean(options.casUsername || options.casPassword || options.yes);
+  const maxAttempts = suppliedCredentials ? 1 : Number(options.casMaxAttempts || 3);
+  let previousUsername = String(options.casUsername || "").trim();
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const usernameAnswer = options.casUsername || await promptUsername(previousUsername ? `CAS 用户名 [${previousUsername}]：` : "CAS 用户名：", options);
+    const username = String(usernameAnswer || previousUsername).trim();
+    const password = options.casPassword || await promptPassword("CAS 密码：", options);
+    previousUsername = username;
+    if (!username || !password) {
+      warn("CAS 用户名和密码不能为空");
+      if (attempt < maxAttempts) continue;
+      throw new Error("CAS username and password are required");
+    }
+
+    const stagedDir = fs.mkdtempSync(path.join(runtimeDir, ".cas-auth-"));
+    try {
+      await writeCasCredentials(runtimeDir, { ...options, casUsername: username, casPassword: password, casConfigDir: stagedDir });
+      action("正在验证 CAS 账号……");
+      await validateCasCredentials(runtimeDir, stagedDir);
+      activateCasCredentials(stagedDir, targetDir);
+      ok("CAS 认证成功");
+      return targetDir;
+    } catch (error) {
+      fs.rmSync(stagedDir, { recursive: true, force: true });
+      const cleanError = sanitizedCasError(error);
+      if (!isCasAuthenticationFailure(error) || attempt >= maxAttempts) throw cleanError;
+      warn(`${cleanError.message}，请重新输入`);
+    }
+  }
+
+  throw new Error("CAS 认证失败");
 }
 
 export async function configureTokens(runtimeDir, casDir) {
@@ -347,7 +417,7 @@ export async function installCommand(options = {}) {
   blank();
 
   step(6, 8, "配置 CAS 认证");
-  const casDir = await writeCasCredentials(runtimeDir, options);
+  const casDir = await configureCasAuthentication(runtimeDir, options);
   await configureTokens(runtimeDir, casDir);
   blank();
 
