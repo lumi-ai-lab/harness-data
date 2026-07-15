@@ -238,6 +238,7 @@ func TestBuildWithWikisIndexReportMode(t *testing.T) {
 	}
 	got := contextPaths(response)
 	want := []string{
+		"wikis/spec/idx/business/index.md",
 		"wikis/spec/idx/business/r-business-analysis-report.md",
 		"wikis/playbooks/idx/business/r-business-analysis-report.md",
 	}
@@ -267,6 +268,7 @@ func TestBuildWithWikisIndexExactReportAliasUsesReportMode(t *testing.T) {
 	}
 	got := contextPaths(response)
 	want := []string{
+		"wikis/spec/idx/business/index.md",
 		"wikis/spec/idx/business/r-business-analysis-report.md",
 		"wikis/playbooks/idx/business/r-business-analysis-report.md",
 	}
@@ -286,6 +288,7 @@ func TestBuildWithWikisIndexPrefersSpecificReportConcept(t *testing.T) {
 	}
 	got := contextPaths(response)
 	want := []string{
+		"wikis/spec/indicators/business/index.md",
 		"wikis/spec/indicators/business/r-profit-analysis-report.md",
 		"wikis/playbooks/indicators/business/r-profit-analysis-report.md",
 	}
@@ -355,6 +358,7 @@ func TestBuildWithWikisIndexExactReportAliasBeatsToolPathFuzzyMetrics(t *testing
 	}
 	got := contextPaths(response)
 	want := []string{
+		"wikis/spec/indicators/business/index.md",
 		"wikis/spec/indicators/business/r-profit-analysis-report.md",
 		"wikis/playbooks/indicators/business/r-profit-analysis-report.md",
 	}
