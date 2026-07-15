@@ -5,6 +5,7 @@ import { localPathToolNames, writeLocalConfig, linkAgents } from "../lib/config.
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
+import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
@@ -172,7 +173,8 @@ async function installWikis(runtimeDir, options = {}) {
   const target = path.join(runtimeDir, "wikis");
   if (githubToken(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
-      await runGitWithProtocol("https", ["-C", target, "pull", "--ff-only"], options);
+      warn("已有 Wikis 仓库将以远程版本强制同步，本地修改不会保留");
+      await forceSyncWikis(target, options);
     } else {
       fs.rmSync(target, { recursive: true, force: true });
       await runGitWithProtocol("https", ["clone", gitUrls.https.wikis, target], options);
@@ -183,7 +185,8 @@ async function installWikis(runtimeDir, options = {}) {
   }
   if (await hasGithubAuth(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
-      await run("git", ["-C", target, "pull", "--ff-only"]);
+      warn("已有 Wikis 仓库将以远程版本强制同步，本地修改不会保留");
+      await forceSyncWikis(target, options);
     } else {
       fs.rmSync(target, { recursive: true, force: true });
       await run("gh", ["repo", "clone", wikisRepo, target]);

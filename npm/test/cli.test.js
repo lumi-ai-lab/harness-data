@@ -1290,6 +1290,7 @@ case "$1 $2 $3" in
   "rev-parse origin/master ")
     echo "0123456789abcdef"
     ;;
+  "status --porcelain ") ;;
   *)
     echo "unexpected git args: $*" >&2
     exit 3
@@ -1327,11 +1328,11 @@ case "$1 $2 $3" in
     ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo "origin/master" ;;
   "rev-parse origin/master ") echo "new-master" ;;
-  "branch --show-current ") echo "feature/test" ;;
-  "status --porcelain --untracked-files=no") ;;
-  "show-ref --verify --quiet") exit 0 ;;
-  "checkout master ") ;;
-  "merge --ff-only origin/master") ;;
+  "status --porcelain ") echo " M metrics/example.md" ;;
+  "reset --hard HEAD") ;;
+  "clean -fd ") ;;
+  "checkout -B master") ;;
+  "reset --hard origin/master") ;;
   *) echo "unexpected git args: $*" >&2; exit 3 ;;
 esac
 `, { mode: 0o755 });
@@ -1344,9 +1345,54 @@ esac
 
   assert.deepEqual(result, { commit: "new-master" });
   const calls = fs.readFileSync(callsLog, "utf8");
-  assert.match(calls, /checkout master/);
-  assert.match(calls, /merge --ff-only origin\/master/);
+  assert.match(calls, /checkout -B master origin\/master/);
+  assert.match(calls, /reset --hard origin\/master/);
+  assert.match(calls, /clean -fd/);
   assert.doesNotMatch(calls, /pull --ff-only/);
+});
+
+test("update wikis discards local commits, tracked changes, and untracked files", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const remote = path.join(workspace, "remote.git");
+  const seed = path.join(workspace, "seed");
+  const wikisDir = path.join(workspace, "wikis");
+  const git = (args, cwd = workspace) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+
+  git(["init", "--bare", remote]);
+  git(["clone", remote, seed]);
+  git(["config", "user.email", "test@example.com"], seed);
+  git(["config", "user.name", "Test"], seed);
+  fs.writeFileSync(path.join(seed, "index.md"), "remote-v1\n");
+  git(["add", "index.md"], seed);
+  git(["commit", "-m", "initial"], seed);
+  git(["push", "origin", "HEAD:master"], seed);
+  git(["symbolic-ref", "HEAD", "refs/heads/master"], remote);
+  git(["clone", remote, wikisDir]);
+  git(["config", "user.email", "test@example.com"], wikisDir);
+  git(["config", "user.name", "Test"], wikisDir);
+
+  fs.writeFileSync(path.join(wikisDir, "index.md"), "local-commit\n");
+  git(["add", "index.md"], wikisDir);
+  git(["commit", "-m", "local"], wikisDir);
+  fs.writeFileSync(path.join(wikisDir, "index.md"), "local-dirty\n");
+  fs.writeFileSync(path.join(wikisDir, "local-only.md"), "remove me\n");
+
+  fs.writeFileSync(path.join(seed, "index.md"), "remote-v2\n");
+  git(["add", "index.md"], seed);
+  git(["commit", "-m", "remote update"], seed);
+  git(["push", "origin", "master"], seed);
+
+  const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
+
+  assert.equal(fs.readFileSync(path.join(wikisDir, "index.md"), "utf8"), "remote-v2\n");
+  assert.equal(fs.existsSync(path.join(wikisDir, "local-only.md")), false);
+  assert.equal(git(["status", "--porcelain"], wikisDir), "");
+  assert.equal(git(["rev-parse", "HEAD"], wikisDir), git(["rev-parse", "origin/master"], wikisDir));
+  assert.deepEqual(result, { commit: git(["rev-parse", "HEAD"], wikisDir) });
 });
 
 test("build index prints concise Chinese summary", async () => {

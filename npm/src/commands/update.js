@@ -8,7 +8,7 @@ import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
-import { protocolFromUrl, runGitWithProtocol } from "../lib/git-auth.js";
+import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
 import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
@@ -68,13 +68,6 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   return result;
 }
 
-async function updateWikisGit(wikisDir, args, options) {
-  const remote = (await run("git", ["-C", wikisDir, "remote", "get-url", "origin"], { ...options, allowFailure: true })).stdout.trim();
-  const protocol = protocolFromUrl(remote);
-  if (!protocol) return run("git", ["-C", wikisDir, ...args], options);
-  return runGitWithProtocol(protocol, ["-C", wikisDir, ...args], options);
-}
-
 export async function updateWikis(runtimeDir, options, state) {
   const wikisDir = path.join(runtimeDir, "wikis");
   if (!githubToken(options) && state.installMode !== "github-token") {
@@ -85,39 +78,26 @@ export async function updateWikis(runtimeDir, options, state) {
     skip("harness-data-wikis 不是 git checkout");
     return null;
   }
-  await updateWikisGit(wikisDir, ["fetch", "origin"], options);
+  await runWikisGit(wikisDir, ["fetch", "origin"], options);
   const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
-  const remoteRef = (await run("git", ["-C", wikisDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { ...options, allowFailure: true })).stdout.trim();
-  const remote = remoteRef
-    ? (await run("git", ["-C", wikisDir, "rev-parse", remoteRef], { ...options, allowFailure: true })).stdout.trim()
-    : "";
-  if (!remote || local === remote) {
+  const remoteRef = await remoteDefaultRef(wikisDir, options);
+  const remote = (await run("git", ["-C", wikisDir, "rev-parse", remoteRef], options)).stdout.trim();
+  const dirty = (await run("git", ["-C", wikisDir, "status", "--porcelain"], options)).stdout.trim();
+  if (local === remote && !dirty) {
     ok(`harness-data-wikis 已是最新 ${shortSha(local)}`);
     return null;
   }
-  action(`发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
+  if (dirty) warn("Wikis 存在本地修改，更新时将以远程版本强制覆盖");
+  action(local === remote
+    ? `发现 Wikis 本地修改：harness-data-wikis ${shortSha(local)}`
+    : `发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
   if (!(await confirm("是否更新 harness-data-wikis？", options))) {
     skip("harness-data-wikis");
     options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
     return null;
   }
-  const defaultBranch = remoteRef.replace(/^origin\//, "");
-  const currentBranch = (await run("git", ["-C", wikisDir, "branch", "--show-current"], { ...options, allowFailure: true })).stdout.trim();
-  if (currentBranch !== defaultBranch) {
-    const trackedChanges = (await run("git", ["-C", wikisDir, "status", "--porcelain", "--untracked-files=no"], options)).stdout.trim();
-    if (trackedChanges) {
-      throw new Error(`harness-data-wikis 当前在 ${currentBranch || "detached HEAD"}，且存在未提交修改；请先处理修改，再切换到 ${defaultBranch}`);
-    }
-    action(`切换 Wikis 到默认分支 ${defaultBranch}`);
-    const localDefault = await run("git", ["-C", wikisDir, "show-ref", "--verify", "--quiet", `refs/heads/${defaultBranch}`], { ...options, allowFailure: true });
-    if (localDefault.code === 0) {
-      await run("git", ["-C", wikisDir, "checkout", defaultBranch], options);
-    } else {
-      await run("git", ["-C", wikisDir, "checkout", "-b", defaultBranch, "--track", remoteRef], options);
-    }
-  }
-  await run("git", ["-C", wikisDir, "merge", "--ff-only", remoteRef], options);
-  const commit = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
+  action(`强制同步 Wikis 到 ${remoteRef}`);
+  const { commit } = await forceSyncWikis(wikisDir, options, { fetched: true });
   ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
   return { commit };
 }
