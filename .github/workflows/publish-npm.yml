@@ -53,7 +53,7 @@ jobs:
         run: npm install
 
       - name: Test
-        run: npm test
+        run: npm test -- --test-concurrency=1
 
       - name: Pack dry run
         run: npm pack --dry-run
