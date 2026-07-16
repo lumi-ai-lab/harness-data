@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
+import readline from "node:readline";
 import { commandExists, run } from "./exec.js";
 import { binaryName, platformKey } from "./platform.js";
 import { action, skip, warn } from "./log.js";
@@ -28,27 +29,29 @@ function shouldShowProgress(options = {}) {
   return Boolean(process.stdout.isTTY) && !process.env.CI;
 }
 
+function redrawStatusLine(writer, line = "") {
+  readline.clearLine(writer, 0);
+  readline.cursorTo(writer, 0);
+  if (line) writer.write(line);
+}
+
 function downloadProgress(label, total, options = {}) {
   if (!shouldShowProgress(options)) return { tick() {}, done() {}, fail() {} };
   const writer = options.progressWriter || process.stdout;
   let downloaded = 0;
-  let lastLength = 0;
   let lastRenderAt = 0;
   let ended = false;
-  const width = 24;
-  const render = (done = false) => {
+  const barWidth = 16;
+  const render = () => {
     const now = Date.now();
-    if (!done && now - lastRenderAt < 80) return;
+    if (now - lastRenderAt < 80) return;
     lastRenderAt = now;
     const percent = total ? Math.min(100, Math.floor((downloaded / total) * 100)) : 0;
-    const filled = total ? Math.min(width, Math.floor((percent / 100) * width)) : Math.floor((downloaded / 1024) % width);
-    const bar = `${"=".repeat(filled)}${" ".repeat(width - filled)}`;
-    const size = total ? `${formatBytes(downloaded)}/${formatBytes(total)}` : formatBytes(downloaded);
-    const prefix = done ? "下载完成" : "下载中";
-    const line = `${prefix} ${label} [${bar}] ${total ? `${percent}% ` : ""}${size}`;
-    writer.write(`\r${line}${" ".repeat(Math.max(0, lastLength - line.length))}`);
-    lastLength = line.length;
-    if (done) writer.write("\n");
+    const filled = total
+      ? Math.min(barWidth, Math.floor((percent / 100) * barWidth))
+      : Math.floor((downloaded / 1024) % barWidth);
+    const bar = `${"=".repeat(filled)}${" ".repeat(barWidth - filled)}`;
+    redrawStatusLine(writer, `下载中 [${bar}]${total ? ` ${percent}%` : ""}`);
   };
   render();
   return {
@@ -61,12 +64,14 @@ function downloadProgress(label, total, options = {}) {
       if (ended) return;
       ended = true;
       if (total) downloaded = total;
-      render(true);
+      const size = total ? `${formatBytes(downloaded)}/${formatBytes(total)}` : formatBytes(downloaded);
+      redrawStatusLine(writer, `下载完成 ${label} ${total ? "100% " : ""}${size}`);
+      writer.write("\n");
     },
     fail() {
       if (ended) return;
       ended = true;
-      writer.write("\n");
+      redrawStatusLine(writer);
     }
   };
 }
@@ -77,31 +82,26 @@ function ghDownloadStatus(label, options = {}) {
   if (!enabled) return { done() {}, fail() {} };
   const frames = ["-", "\\", "|", "/"];
   let index = 0;
-  let lastLength = 0;
   let ended = false;
-  const render = (prefix) => {
-    const line = `${prefix} ${label}`;
-    writer.write(`\r${line}${" ".repeat(Math.max(0, lastLength - line.length))}`);
-    lastLength = line.length;
-  };
-  render(`下载中 ${frames[index]}`);
+  const render = () => redrawStatusLine(writer, `下载中 ${frames[index]}`);
+  render();
   const timer = setInterval(() => {
     index = (index + 1) % frames.length;
-    render(`下载中 ${frames[index]}`);
+    render();
   }, 120);
   return {
     done() {
       if (ended) return;
       ended = true;
       clearInterval(timer);
-      render("下载完成");
+      redrawStatusLine(writer, `下载完成 ${label}`);
       writer.write("\n");
     },
     fail() {
       if (ended) return;
       ended = true;
       clearInterval(timer);
-      writer.write("\n");
+      redrawStatusLine(writer);
     }
   };
 }

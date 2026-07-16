@@ -43,6 +43,12 @@ function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+function terminalTextWidth(value) {
+  return [...value].reduce((width, character) => (
+    width + (/^[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe6f\uff00-\uff60\uffe0-\uffe6]$/u.test(character) ? 2 : 1)
+  ), 0);
+}
+
 function reusableToolManifest(key) {
   return {
     schemaVersion: 2,
@@ -559,8 +565,9 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
 
     assert.equal(manifest.installedTools["qdm-cmr-cli"].version, "v0.0.1");
     assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("qdm-cmr-cli")), "utf8"), binary);
-    assert.match(writes.join(""), new RegExp(`下载中 [-\\\\|/] ${assetFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(writes.join(""), /下载中 [-\\|/]/);
     assert.match(writes.join(""), new RegExp(`下载完成 ${assetFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.doesNotMatch(writes.join(""), /\u001b\[1A/);
   } finally {
     process.env.PATH = originalPath;
     https.get = originalGet;
@@ -926,9 +933,103 @@ test("download renders terminal progress when requested", async () => {
   }
 
   assert.equal(fs.readFileSync(target, "utf8"), chunks.join(""));
-  assert.match(writes.join(""), /下载中 asset\.bin \[/);
+  assert.match(writes.join(""), /下载中 \[/);
   assert.match(writes.join(""), /100% 10 B\/10 B/);
   assert.match(writes.join(""), /下载完成 asset\.bin/);
+  assert.doesNotMatch(writes.join(""), /\r/);
+  assert.match(writes.join(""), /\u001b\[1G/);
+  assert.doesNotMatch(writes.join(""), /\u001b\[1A/);
+});
+
+test("download progress uses a short live line in narrow terminals", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const target = path.join(workspace, "asset.bin");
+  const writes = [];
+  const columns = 72;
+  const originalGet = https.get;
+  try {
+    https.get = (url, options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = { "content-length": String(2.6 * 1024 * 1024) };
+        callback(response);
+        response.end(Buffer.alloc(2.6 * 1024 * 1024));
+      });
+      return request;
+    };
+
+    await download("https://example.invalid/asset.bin", target, {}, {
+      progressLabel: "cas-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
+      progressWriter: {
+        columns,
+        write: (chunk) => writes.push(String(chunk))
+      }
+    });
+  } finally {
+    https.get = originalGet;
+  }
+
+  const output = writes.join("");
+  const liveLines = output
+    .split("\u001b[1G")
+    .map((line) => line.replace(/\u001b\[[0-9;]*[A-Za-z]/g, ""))
+    .filter((line) => line.startsWith("下载中"));
+  assert.ok(liveLines.length >= 1);
+  assert.ok(liveLines.every((line) => terminalTextWidth(line) < columns));
+  assert.match(output, /下载完成 cas-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 2\.6 MB\/2\.6 MB\n$/);
+  assert.doesNotMatch(output, /\r/);
+  assert.match(output, /\u001b\[1G/);
+  assert.doesNotMatch(output, /\u001b\[1A/);
+});
+
+test("download progress live line remains short after terminal resize", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const target = path.join(workspace, "asset.bin");
+  const writes = [];
+  const writer = {
+    columns: 100,
+    write: (chunk) => writes.push(String(chunk))
+  };
+  const originalGet = https.get;
+  try {
+    https.get = (url, options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = { "content-length": "10" };
+        callback(response);
+        response.write("12345");
+        setTimeout(() => {
+          writer.columns = 32;
+          response.end("67890");
+        }, 100);
+      });
+      return request;
+    };
+
+    await download("https://example.invalid/asset.bin", target, {}, {
+      progressLabel: "cas-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
+      progressWriter: writer
+    });
+  } finally {
+    https.get = originalGet;
+  }
+
+  const output = writes.join("");
+  const liveLines = output
+    .split("\u001b[1G")
+    .map((line) => line.replace(/\u001b\[[0-9;]*[A-Za-z]/g, ""))
+    .filter((line) => line.startsWith("下载中"));
+
+  assert.ok(liveLines.length >= 2);
+  assert.ok(liveLines.every((line) => terminalTextWidth(line) < writer.columns));
+  assert.match(output, /下载完成 cas-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 10 B\/10 B\n$/);
+  assert.doesNotMatch(output, /\r/);
+  assert.match(output, /\u001b\[1G/);
+  assert.doesNotMatch(output, /\u001b\[1A/);
 });
 
 test("download resumes redirect responses", async () => {
