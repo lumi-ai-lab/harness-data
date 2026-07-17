@@ -1,0 +1,66 @@
+name: Wikis Compatibility
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .gitmodules
+      - wikis
+      - cli/**
+      - config/**
+      - bootstrap/**
+      - .agents/**
+  push:
+    branches:
+      - master
+    paths:
+      - .gitmodules
+      - wikis
+      - cli/**
+      - config/**
+      - bootstrap/**
+      - .agents/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wikis-compatibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test pinned Wikis snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with pinned Wikis submodule
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          submodules: recursive
+
+      - name: Verify pinned submodule commit
+        run: |
+          set -euo pipefail
+          expected="$(git ls-tree HEAD wikis | awk '{print $3}')"
+          actual="$(git -C wikis rev-parse HEAD)"
+          test -n "$expected"
+          test "$actual" = "$expected"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - name: Build Wikis indexes
+        working-directory: cli
+        run: |
+          go run ./cmd/data-harness-cli wikis build-index --skip-checks
+          test -s ../.harness/index/wikis-index.json
+          test -s ../.harness/index/wikis-runtime-index.json
+
+      - name: Test Go CLI
+        working-directory: cli
+        run: go test ./...

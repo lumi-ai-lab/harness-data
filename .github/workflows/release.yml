@@ -1,33 +1,20 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version without v, for example 0.0.2
+      tag:
+        description: Existing release tag, for example v0.0.27
         required: true
         type: string
-      wikis_ref:
-        description: wikis ref to pin, for example master, a tag, or a commit SHA
+      publish_npm:
+        description: Publish npm package; disable when retrying after npm already succeeded
         required: false
-        default: master
-        type: string
-      cas_cli_version:
-        description: cas-cli version without v; leave empty to keep current manifest version
-        required: false
-        type: string
-      cmr_cli_version:
-        description: qdm-cmr-cli version without v; leave empty to keep current manifest version
-        required: false
-        type: string
-      indicators_cli_version:
-        description: qdm-indicators-cli version without v; leave empty to keep current manifest version
-        required: false
-        type: string
-      sql_cli_version:
-        description: qdm-sql-cli version without v; leave empty to use latest release
-        required: false
-        type: string
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -35,100 +22,98 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Prepare release commit
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-latest
     outputs:
       version_tag: ${{ steps.vars.outputs.version_tag }}
+      version: ${{ steps.vars.outputs.version }}
 
     steps:
-      - name: Validate inputs
+      - name: Resolve release tag
         id: vars
         env:
-          VERSION: ${{ inputs.version }}
-          CAS_CLI_VERSION: ${{ inputs.cas_cli_version }}
-          CMR_CLI_VERSION: ${{ inputs.cmr_cli_version }}
-          INDICATORS_CLI_VERSION: ${{ inputs.indicators_cli_version }}
-          SQL_CLI_VERSION: ${{ inputs.sql_cli_version }}
+          VERSION_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          for value in "$VERSION" "$CAS_CLI_VERSION" "$CMR_CLI_VERSION" "$INDICATORS_CLI_VERSION" "$SQL_CLI_VERSION"; do
-            if [[ -n "$value" && ! "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-              echo "invalid version: $value" >&2
-              exit 1
-            fi
-          done
-          echo "version_tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: master
-          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-          submodules: false
-          fetch-depth: 0
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Pin wikis submodule
-        env:
-          WIKIS_REF: ${{ inputs.wikis_ref }}
-          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "::error::RELEASE_GH_TOKEN is required to read the private harness-data-wikis repository"
+          if [[ ! "${VERSION_TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::release tag must match vMAJOR.MINOR.PATCH: ${VERSION_TAG}"
             exit 1
           fi
-          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config submodule.wikis.url https://github.com/lumi-ai-lab/harness-data-wikis.git
-          git submodule sync wikis
-          git submodule update --init wikis
-          git -C wikis fetch origin "$WIKIS_REF"
-          git -C wikis checkout FETCH_HEAD
+          echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION_TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Update npm version
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.version_tag }}
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Validate immutable release metadata
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
         run: |
           set -euo pipefail
-          node <<'NODE'
-          const fs = require("fs");
+          tag_commit="$(git rev-list -n 1 "${VERSION_TAG}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            echo "::error::checkout does not match ${VERSION_TAG}: ${head_commit} != ${tag_commit}"
+            exit 1
+          fi
 
-          const version = process.env.VERSION;
+          package_version="$(node -p 'JSON.parse(require("fs").readFileSync("npm/package.json", "utf8")).version')"
+          if [[ "${package_version}" != "${VERSION}" ]]; then
+            echo "::error::npm/package.json version ${package_version} does not match tag ${VERSION_TAG}"
+            exit 1
+          fi
 
-          const pkgPath = "npm/package.json";
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-          pkg.version = version;
-          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-          NODE
+          test -n "$(git ls-tree HEAD wikis | awk '{print $3}')"
+          test "$(git -C wikis rev-parse HEAD)" = "$(git ls-tree HEAD wikis | awk '{print $3}')"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test npm installer
+        working-directory: npm
+        run: |
+          npm install
+          npm test -- --test-concurrency=1
+          npm pack --dry-run
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - name: Build Wikis index from pinned submodule
+        working-directory: cli
+        run: |
+          go run ./cmd/data-harness-cli wikis build-index --skip-checks
+          test -s ../.harness/index/wikis-index.json
+          test -s ../.harness/index/wikis-runtime-index.json
+
+      - name: Test Go CLI
+        working-directory: cli
+        run: go test ./...
 
       - name: Verify external CLI assets
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-          CAS_CLI_VERSION: ${{ inputs.cas_cli_version }}
-          CMR_CLI_VERSION: ${{ inputs.cmr_cli_version }}
-          INDICATORS_CLI_VERSION: ${{ inputs.indicators_cli_version }}
-          SQL_CLI_VERSION: ${{ inputs.sql_cli_version }}
         run: |
           set -euo pipefail
           node <<'NODE' > /tmp/external-assets.tsv
           const fs = require("fs");
           const childProcess = require("child_process");
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
-          const versionInputs = {
-            "cas-cli": process.env.CAS_CLI_VERSION,
-            "qdm-cmr-cli": process.env.CMR_CLI_VERSION,
-            "qdm-indicators-cli": process.env.INDICATORS_CLI_VERSION,
-            "qdm-sql-cli": process.env.SQL_CLI_VERSION
-          };
           function archiveSuffix(asset, platform) {
             if (asset.archive) return asset.archive;
             if (asset.url?.endsWith(".tar.gz")) return "tar.gz";
@@ -137,7 +122,11 @@ jobs:
           }
           for (const tool of manifest.tools || []) {
             if (tool.name === "data-harness-cli") continue;
-            const release = versionInputs[tool.name] ? `v${versionInputs[tool.name]}` : childProcess.execFileSync("gh", ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"], { encoding: "utf8" }).trim();
+            const release = childProcess.execFileSync(
+              "gh",
+              ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"],
+              { encoding: "utf8" }
+            ).trim();
             for (const [platform, asset] of Object.entries(tool.platforms || {})) {
               const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
               console.log(`${tool.repo}\t${release}\t${name}`);
@@ -151,82 +140,28 @@ jobs:
               --jq '.assets[].name' | grep -Fx "$asset" >/dev/null
           done < /tmp/external-assets.tsv
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Test npm installer
-        working-directory: npm
-        run: |
-          npm install
-          npm test
-          npm pack --dry-run
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: cli/go.mod
-
-      - name: Build wikis index
-        working-directory: cli
-        run: |
-          go run ./cmd/data-harness-cli wikis build-index --skip-checks
-          test -s ../.harness/index/wikis-index.json
-          test -s ../.harness/index/wikis-runtime-index.json
-
-      - name: Test Go CLI
-        working-directory: cli
-        run: go test ./...
-
-      - name: Commit release metadata
-        env:
-          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
-        run: |
-          set -euo pipefail
-          git add npm/package.json bootstrap/cli-manifest.json wikis
-          if git diff --cached --quiet; then
-            echo "No release metadata changes to commit"
-          else
-            git commit -m "chore(release): ${VERSION_TAG}" -m "发布 ${VERSION_TAG}，更新 npm 版本、CLI manifest 和 wikis submodule 指针。"
-            git push origin HEAD:master
-          fi
-
-      - name: Create and push tag
-        env:
-          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
-        run: |
-          set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
-            echo "tag already exists, replacing: ${VERSION_TAG}"
-            git push origin ":refs/tags/${VERSION_TAG}"
-          fi
-          git tag -d "$VERSION_TAG" >/dev/null 2>&1 || true
-          git tag -a "$VERSION_TAG" -m "$VERSION_TAG"
-          git push origin "$VERSION_TAG"
-
   cli-release:
     name: Publish CLI release assets
-    needs: prepare
+    needs: validate
     uses: ./.github/workflows/publish-cli-release.yml
     with:
       publish: true
-      version_tag: ${{ needs.prepare.outputs.version_tag }}
-      ref: ${{ needs.prepare.outputs.version_tag }}
+      version_tag: ${{ needs.validate.outputs.version_tag }}
+      ref: ${{ needs.validate.outputs.version_tag }}
 
   cli-container:
     name: Publish CLI container
-    needs: prepare
+    needs: validate
     uses: ./.github/workflows/publish-cli-container.yml
     with:
       publish: true
-      version_tag: ${{ needs.prepare.outputs.version_tag }}
-      ref: ${{ needs.prepare.outputs.version_tag }}
+      version_tag: ${{ needs.validate.outputs.version_tag }}
+      ref: ${{ needs.validate.outputs.version_tag }}
 
   verify-release-assets:
     name: Verify release assets
     needs:
-      - prepare
+      - validate
       - cli-release
     runs-on: ubuntu-latest
 
@@ -234,11 +169,11 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.version_tag }}
+          ref: ${{ needs.validate.outputs.version_tag }}
 
       - name: Verify data-harness-cli assets
         env:
-          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
         run: |
           set -euo pipefail
           node <<'NODE' > /tmp/data-harness-assets.txt
@@ -261,34 +196,36 @@ jobs:
           NODE
           while IFS= read -r url; do
             echo "checking $url"
-            curl -fsIL "$url" >/dev/null
+            curl -fsIL --retry 5 --retry-delay 3 "$url" >/dev/null
           done < /tmp/data-harness-assets.txt
 
       - name: Verify runtime bundle assets
         env:
-          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
         run: |
           set -euo pipefail
           base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/harness-data-runtime-${VERSION_TAG}.tar.gz"
-          curl -fsIL "$base" >/dev/null
-          curl -fsIL "${base}.sha256" >/dev/null
+          curl -fsIL --retry 5 --retry-delay 3 "$base" >/dev/null
+          curl -fsIL --retry 5 --retry-delay 3 "${base}.sha256" >/dev/null
 
   npm:
     name: Publish npm installer
     needs:
-      - prepare
+      - validate
+      - cli-container
       - verify-release-assets
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_npm }}
     uses: ./.github/workflows/publish-npm.yml
     with:
       publish: true
-      ref: ${{ needs.prepare.outputs.version_tag }}
+      ref: ${{ needs.validate.outputs.version_tag }}
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   smoke:
-    name: npm smoke
+    name: Verify npm release
     needs:
-      - prepare
+      - validate
       - npm
     runs-on: ubuntu-latest
 
@@ -298,16 +235,22 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Smoke test published package
+      - name: Verify published package
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           for i in {1..20}; do
-            if npx -y "@lumi-ai-lab/harness-data@${VERSION}" version; then
-              exit 0
+            if npm view "@lumi-ai-lab/harness-data@${VERSION}" version \
+                --registry=https://registry.npmjs.org/ --prefer-online | grep -Fx "${VERSION}" >/dev/null; then
+              break
+            fi
+            if [[ "$i" == "20" ]]; then
+              echo "published npm package did not become available in time" >&2
+              exit 1
             fi
             sleep 15
           done
-          echo "published npm package did not become available in time" >&2
-          exit 1
+          npm access get status @lumi-ai-lab/harness-data --registry=https://registry.npmjs.org/ | grep -E ': public$' >/dev/null
+          npm dist-tag ls @lumi-ai-lab/harness-data --registry=https://registry.npmjs.org/ | grep -Fx "latest: ${VERSION}" >/dev/null
+          npm_config_registry=https://registry.npmjs.org/ npx -y "@lumi-ai-lab/harness-data@${VERSION}" version

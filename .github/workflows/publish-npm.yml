@@ -15,18 +15,6 @@ on:
     secrets:
       NPM_TOKEN:
         required: true
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the npm package
-        required: false
-        default: true
-        type: boolean
-      ref:
-        description: Git ref to checkout
-        required: false
-        default: master
-        type: string
 
 jobs:
   publish:

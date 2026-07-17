@@ -157,22 +157,44 @@ GitHub Releases 同时提供可直接下载的 CLI 二进制包：
 
 ## 发布流程
 
-推荐使用 GitHub Actions 里的 `Release` workflow 做总编排发布：
+正式发布由不可变的 SemVer Tag 驱动。发布前先在普通提交中更新
+`npm/package.json` 的版本，以及需要随版本固定的 CLI manifest 和 `wikis`
+submodule 指针；确认 CI 通过后创建并推送同版本 Tag：
 
 ```bash
-gh workflow run release.yml \
-  -f version=0.0.2 \
-  -f wikis_ref=master
+git tag -a v0.0.27 -m "v0.0.27"
+git push origin v0.0.27
 ```
 
-`version` 不带 `v`；workflow 会自动生成 `v0.0.2` tag。`cas_cli_version`、`cmr_cli_version`、`indicators_cli_version`、`sql_cli_version` 留空时使用对应工具的最新 GitHub Release；需要固定外部 CLI 时传不带 `v` 的版本号。
+GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`，且
+`v0.0.27` 必须对应 `npm/package.json` 中的 `0.0.27`。workflow 只读取 Tag
+指向的内容，不会修改提交、移动 Tag 或自动替换已存在的 Tag。
 
-总编排会按顺序更新 npm 版本、CLI manifest 和 `wikis` submodule 指针，执行 `npm test` / `npm pack --dry-run` / `go test ./...`，提交 release commit，创建 tag，发布 `data-harness-cli` GitHub Release assets，发布 GHCR 镜像，确认 Release assets 可访问后再发布 npm 包。
+总编排会 checkout Tag 中固定的 `wikis` submodule，执行 `npm test`、
+`npm pack --dry-run`、Wikis 索引构建和 `go test ./...`，随后发布
+`data-harness-cli` GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
+才发布 npm 包，最后检查 npm public 状态、`latest` dist-tag 和实际 `npx` 执行结果。
+
+发布失败后可以通过 Actions 页面重新运行失败的 job。需要针对已经存在的 Tag
+重新执行完整编排时，可手动运行 `Release` workflow 并填写 Tag；如果 npm 已成功发布，
+应关闭 `publish_npm`，因为 npm 的同版本内容不可覆盖。
 
 需要配置 GitHub Actions secrets：
 
 - `NPM_TOKEN`：发布 `@lumi-ai-lab/harness-data` 到 npm registry。
-- `RELEASE_GH_TOKEN`：可选；当默认 `GITHUB_TOKEN` 无法读取私有 `harness-data-wikis` submodule 或跨仓库资源时使用。
+- `RELEASE_GH_TOKEN`：用于读取私有 `harness-data-wikis` submodule 和跨仓库 Release assets；当默认 `GITHUB_TOKEN` 没有这些权限时必须配置。
+
+### Wikis submodule 与发布
+
+`wikis` submodule 指针用于固定开发和 CI 的兼容性测试快照。runtime bundle 不包含
+Wikis 内容；安装器会单独 clone 或更新 `harness-data-wikis`，并在安装端重新构建
+Wikis 索引。因此，指标、报告、维度、规则或模板等普通知识内容更新不要求重新发布
+本项目。
+
+当 Wikis 目录结构、frontmatter/schema、索引格式或 Agent/CLI 运行时契约发生变化时，
+应先更新本项目实现和 submodule 指针，通过兼容性测试后再创建新的本项目 Tag。
+主仓库中涉及 `wikis` 指针、CLI、配置、bootstrap 或 Agent Runtime 的 PR 会自动运行
+`Wikis Compatibility` workflow；该检查只验证精确 submodule 快照，不发布任何产物。
 
 验证与调试：
 
