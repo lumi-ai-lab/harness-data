@@ -124,8 +124,13 @@ function readLumiContract(workspace) {
       throw new Error("Harness authorization artifacts are not fixed");
     }
     if (!String(helper.version || "").trim()) throw new Error("Harness helper version is not fixed");
-    const helperBinarySha256 = String(helper.platforms?.[platformKey()]?.binarySha256 || "");
+    const key = platformKey();
+    const helperBinarySha256 = String(helper.platforms?.[key]?.binarySha256 || "");
     if (!/^[a-f0-9]{64}$/.test(helperBinarySha256)) throw new Error("Harness helper binary sha256 is not fixed");
+    const facadeBinarySha256 = String(facade.platforms?.[key]?.binarySha256 || "");
+    if (!/^[a-f0-9]{64}$/.test(facadeBinarySha256)) throw new Error("Facade binary sha256 is not fixed for the current platform");
+    const realBinarySha256 = String(real.platforms?.[key]?.binarySha256 || "");
+    if (!/^[a-f0-9]{64}$/.test(realBinarySha256)) throw new Error("real Indicators CLI binary sha256 is not fixed for the current platform");
     if (facade.version !== releaseSet.facadeVersion || real.version !== releaseSet.realIndicatorsVersion) {
       throw new Error("Indicators artifact versions do not match release-set");
     }
@@ -140,10 +145,12 @@ function readLumiContract(workspace) {
     return {
       authzConfigPath: authzConfigPathFor(manifest, lumiRequiredProfile),
       facadeDestination,
+      facadeBinarySha256,
       helperDestination,
       helperBinarySha256,
       helperVersion: helper.version,
       realDestination,
+      realBinarySha256,
       catalogDestination: catalog.destination,
       approvedWikis,
       manifestSha256: fileSha256(manifestPath),
@@ -158,16 +165,17 @@ function versionWithoutPrefix(value) {
   return String(value || "").replace(/^v/, "");
 }
 
-function authzConfigMatchesState(file, state, expectedRealDestination, expectedCatalogDestination) {
+function authzConfigMatchesState(file, state, expectedRealDestination, expectedCatalogDestination, expectedRealBinarySha256 = "") {
   try {
     const config = JSON.parse(fs.readFileSync(file, "utf8"));
     const releaseSet = state.releaseSet || {};
+    const realSha = expectedRealBinarySha256 || releaseSet.realIndicatorsSha256;
     return config?.mode === lumiRequiredProfile &&
       config.version === releaseSet.authzSchemaVersion &&
       config.piVersion === releaseSet.piVersion &&
       path.resolve(config.realIndicatorsCli?.path || "") === path.resolve(expectedRealDestination || "") &&
       versionWithoutPrefix(config.realIndicatorsCli?.version) === versionWithoutPrefix(releaseSet.realIndicatorsVersion) &&
-      config.realIndicatorsCli?.artifactSha256 === releaseSet.realIndicatorsSha256 &&
+      config.realIndicatorsCli?.artifactSha256 === realSha &&
       path.resolve(config.approvedIndicatorCatalog?.path || "") === path.resolve(expectedCatalogDestination || "") &&
       config.approvedIndicatorCatalog?.sha256 === releaseSet.catalogSha256;
   } catch {
@@ -342,14 +350,14 @@ export async function collectDoctor(workspace, options = {}) {
     add("public Indicators Facade", Boolean(
       installedToolValid(state, "qdm-indicators-facade", publicFacade) &&
       facadeTool?.version === state.releaseSet?.facadeVersion &&
-      facadeTool?.sha256 === state.releaseSet?.facadeSha256
+      facadeTool?.sha256 === (lumiContract?.facadeBinarySha256 || state.releaseSet?.facadeSha256)
     ), publicFacade);
     const realTool = state.tools?.["qdm-indicators-cli-real"];
     const realDestination = lumiContract?.realDestination || realTool?.destination || "";
     add("private real Indicators CLI", Boolean(
       installedToolValid(state, "qdm-indicators-cli-real", realDestination) &&
       realTool?.version === state.releaseSet?.realIndicatorsVersion &&
-      realTool?.sha256 === state.releaseSet?.realIndicatorsSha256
+      realTool?.sha256 === (lumiContract?.realBinarySha256 || state.releaseSet?.realIndicatorsSha256)
     ), realDestination);
     add("private real Indicators CLI outside PATH", Boolean(
       realDestination && !pathDirectories(options).includes(path.resolve(path.dirname(realDestination)))
@@ -374,7 +382,7 @@ export async function collectDoctor(workspace, options = {}) {
       (!lumiContract?.authzConfigPath || path.resolve(authzPath) === path.resolve(lumiContract.authzConfigPath))
     ), authzPath);
     const pendingRuntimeMount = Boolean(options.buildTime && path.isAbsolute(authzPath) && !fs.existsSync(authzPath));
-    add("authz config", pendingRuntimeMount || authzConfigMatchesState(authzPath, state, realDestination, catalogDestination),
+    add("authz config", pendingRuntimeMount || authzConfigMatchesState(authzPath, state, realDestination, catalogDestination, lumiContract?.realBinarySha256),
       pendingRuntimeMount ? "runtime mount pending" : authzPath);
     if (options.buildTime) {
       add("authorization readiness", true, "runtime mounts, control state, context directory, and credentials pending");

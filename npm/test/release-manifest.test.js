@@ -96,11 +96,19 @@ test("release manifest materializer binds archives, binaries, catalog, and the f
   ]) {
     writeReleaseAsset(dist, `data-harness-cli-${version}-${platform}.${archive}`, `helper:${platform}`);
   }
-  const facade = writeReleaseAsset(
-    dist,
-    `qdm-indicators-facade-${version}-linux-amd64.tar.gz`,
-    "facade:linux-amd64"
-  );
+  const facadeAssets = {};
+  for (const [platform, archive] of [
+    ["darwin-arm64", "tar.gz"],
+    ["darwin-amd64", "tar.gz"],
+    ["linux-amd64", "tar.gz"],
+    ["windows-amd64", "zip"]
+  ]) {
+    facadeAssets[platform] = writeReleaseAsset(
+      dist,
+      `qdm-indicators-facade-${version}-${platform}.${archive}`,
+      `facade:${platform}`
+    );
+  }
 
   const manifest = materializeReleaseManifest({
     manifest: path.join(repository, "bootstrap", "cli-manifest.json"),
@@ -122,12 +130,17 @@ test("release manifest materializer binds archives, binaries, catalog, and the f
   assert.equal(helper.version, version);
   assert.match(helper.platforms["linux-amd64"].url, new RegExp(`${version}/data-harness-cli-${version}-linux-amd64\\.tar\\.gz$`));
   assert.equal(helper.platforms["linux-amd64"].binarySha256, sha256("helper:linux-amd64"));
-  assert.equal(facadeTool.platforms["linux-amd64"].sha256, facade.archiveSha256);
-  assert.equal(releaseSet.facadeSha256, facade.binarySha256);
+  for (const [platform, asset] of Object.entries(facadeAssets)) {
+    assert.equal(facadeTool.platforms[platform].sha256, asset.archiveSha256);
+    assert.equal(facadeTool.platforms[platform].binarySha256, asset.binarySha256);
+  }
+  assert.equal(releaseSet.facadeSha256, facadeAssets["linux-amd64"].binarySha256);
   assert.equal(real.version, realIndicatorsRelease.version);
-  assert.equal(real.platforms["linux-amd64"].url, realIndicatorsRelease.url);
-  assert.equal(real.platforms["linux-amd64"].sha256, realIndicatorsRelease.archiveSha256);
-  assert.equal(releaseSet.realIndicatorsSha256, realIndicatorsRelease.binarySha256);
+  assert.equal(real.platforms["linux-amd64"].url, realIndicatorsRelease.platforms["linux-amd64"].url);
+  assert.equal(real.platforms["linux-amd64"].sha256, realIndicatorsRelease.platforms["linux-amd64"].sha256);
+  assert.equal(real.platforms["darwin-arm64"].url, realIndicatorsRelease.platforms["darwin-arm64"].url);
+  assert.equal(real.platforms["windows-amd64"].archive, "zip");
+  assert.equal(releaseSet.realIndicatorsSha256, realIndicatorsRelease.platforms["linux-amd64"].binarySha256);
   assert.equal(releaseSet.catalogSha256, sha256(fs.readFileSync(catalog)));
   assert.equal(releaseSet.sha256, lumiReleaseSetDigest(releaseSet));
   assert.deepEqual(fs.readFileSync(catalogOutput), fs.readFileSync(catalog));

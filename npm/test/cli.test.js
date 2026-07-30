@@ -188,7 +188,9 @@ function lumiManifestFixture(workspace, contents = {}) {
         destination: "bin/qdm-indicators-cli",
         tracking: "fixed",
         version: releaseSet.facadeVersion,
-        platforms: {}
+        platforms: {
+          [platformKey()]: { binarySha256: sha256(facadeBinary) }
+        }
       },
       {
         name: "qdm-indicators-cli-real",
@@ -196,7 +198,9 @@ function lumiManifestFixture(workspace, contents = {}) {
         destination: realDestination,
         tracking: "fixed",
         version: releaseSet.realIndicatorsVersion,
-        platforms: {}
+        platforms: {
+          [platformKey()]: { binarySha256: sha256(realBinary) }
+        }
       }
     ]
   };

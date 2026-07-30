@@ -210,13 +210,35 @@ jobs:
           private_dir="/tmp/harness-private-assets-${GITHUB_RUN_ID}"
           extract_dir="/tmp/harness-private-extract-${GITHUB_RUN_ID}"
           mkdir -p "${private_dir}" "${extract_dir}"
-          gh release download v0.0.4 \
-            --repo pengmide/qdm-indicators-cli \
-            --pattern qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz \
-            --dir "${private_dir}"
-          echo "c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1  ${private_dir}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" | sha256sum -c -
+          declare -A real_archive_sha=(
+            [darwin-amd64]="beb93f03413d2563cc2b5a4349ecf3b0fe382fbc33ed8c999dfddf4d686a29a8"
+            [darwin-arm64]="82a864570ed78df05c749a8c598498b0cdb3fe37a4051ed86dd88b4042eba823"
+            [linux-amd64]="c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1"
+            [windows-amd64]="7d5d822d381ae3d09723fc67dfdfe32c6c08c201cbd63fe119a1527a55934cb4"
+          )
+          declare -A real_binary_sha=(
+            [darwin-amd64]="390a193653915e0e7ac9d31d72a3ab2966f495a9127247ab565ec185b38452d9"
+            [darwin-arm64]="253bf6e8bbd9ceb802248d48b9985b67a1a9e6ec611209fa08440da84e7f440d"
+            [linux-amd64]="45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f"
+            [windows-amd64]="9d745d0eaee4f63032e38b216fab525f1e5f3e320d25bde694f3c9dfc3147661"
+          )
+          declare -A real_archive_ext=(
+            [darwin-amd64]="tar.gz"
+            [darwin-arm64]="tar.gz"
+            [linux-amd64]="tar.gz"
+            [windows-amd64]="zip"
+          )
+          for platform in darwin-amd64 darwin-arm64 linux-amd64 windows-amd64; do
+            ext="${real_archive_ext[${platform}]}"
+            asset="qdm-indicators-cli-v0.0.4-${platform}.${ext}"
+            gh release download v0.0.4 \
+              --repo pengmide/qdm-indicators-cli \
+              --pattern "${asset}" \
+              --dir "${private_dir}"
+            echo "${real_archive_sha[${platform}]}  ${private_dir}/${asset}" | sha256sum -c -
+          done
           tar -xzf "${private_dir}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" -C "${extract_dir}"
-          echo "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f  ${extract_dir}/qdm-indicators-cli" | sha256sum -c -
+          echo "${real_binary_sha[linux-amd64]}  ${extract_dir}/qdm-indicators-cli" | sha256sum -c -
           real_cli="${extract_dir}/qdm-indicators-cli"
           "${real_cli}" --help > /tmp/qdm-indicators-root-help.txt 2>&1
           "${real_cli}" analysis execute --help > /tmp/qdm-indicators-analysis-help.txt 2>&1
@@ -258,7 +280,10 @@ jobs:
             --catalog-output runtime/bootstrap/approved-indicators-v1.json \
             --approved-wikis-source bootstrap/approved-lumi-wikis \
             --approved-wikis-manifest bootstrap/approved-lumi-wikis-manifest.json \
-            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz"
+            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-amd64.tar.gz" \
+            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-arm64.tar.gz" \
+            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" \
+            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-windows-amd64.zip"
           ln -s agents/claude runtime/.claude
           ln -s agents/codex runtime/.codex
           ln -s agents/pi runtime/.pi
@@ -277,7 +302,10 @@ jobs:
           mkdir -p "${smoke_assets}"
           cp dist/data-harness-cli-${VERSION_TAG}-linux-amd64.tar.gz "${smoke_assets}/"
           cp dist/qdm-indicators-facade-${VERSION_TAG}-linux-amd64.tar.gz "${smoke_assets}/"
+          cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-amd64.tar.gz" "${smoke_assets}/"
+          cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-arm64.tar.gz" "${smoke_assets}/"
           cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" "${smoke_assets}/"
+          cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-windows-amd64.zip" "${smoke_assets}/"
           sudo env "HOME=${smoke_root}/home" "PATH=${PATH}" \
             node npm/bin/harness-data.js install \
               --dir "${smoke_root}/runtime" \

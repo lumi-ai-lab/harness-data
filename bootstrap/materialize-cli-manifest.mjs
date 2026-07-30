@@ -10,10 +10,35 @@ import { verifyApprovedWikisSource } from "../npm/src/lib/approved-wikis.js";
 
 export const realIndicatorsRelease = Object.freeze({
   version: "v0.0.4",
-  url: "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz",
-  archiveSha256: "c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1",
-  binarySha256: "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f"
+  platforms: {
+    "darwin-amd64": {
+      archive: "tar.gz",
+      url: "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-darwin-amd64.tar.gz",
+      sha256: "beb93f03413d2563cc2b5a4349ecf3b0fe382fbc33ed8c999dfddf4d686a29a8",
+      binarySha256: "390a193653915e0e7ac9d31d72a3ab2966f495a9127247ab565ec185b38452d9"
+    },
+    "darwin-arm64": {
+      archive: "tar.gz",
+      url: "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-darwin-arm64.tar.gz",
+      sha256: "82a864570ed78df05c749a8c598498b0cdb3fe37a4051ed86dd88b4042eba823",
+      binarySha256: "253bf6e8bbd9ceb802248d48b9985b67a1a9e6ec611209fa08440da84e7f440d"
+    },
+    "linux-amd64": {
+      archive: "tar.gz",
+      url: "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz",
+      sha256: "c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1",
+      binarySha256: "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f"
+    },
+    "windows-amd64": {
+      archive: "zip",
+      url: "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-windows-amd64.zip",
+      sha256: "7d5d822d381ae3d09723fc67dfdfe32c6c08c201cbd63fe119a1527a55934cb4",
+      binarySha256: "9d745d0eaee4f63032e38b216fab525f1e5f3e320d25bde694f3c9dfc3147661"
+    }
+  }
 });
+
+const REAL_INDICATORS_LINUX_AMD64 = realIndicatorsRelease.platforms["linux-amd64"];
 
 function sha256(data) {
   return crypto.createHash("sha256").update(data).digest("hex");
@@ -200,18 +225,26 @@ export function materializeReleaseManifest(options) {
   real.version = realIndicatorsRelease.version;
   real.requireAssetSha256 = true;
   real.requireBinarySha256 = true;
-  real.platforms = {
-    "linux-amd64": {
-      archive: "tar.gz",
-      url: realIndicatorsRelease.url,
-      sha256: realIndicatorsRelease.archiveSha256,
-      binarySha256: realIndicatorsRelease.binarySha256
-    }
-  };
+  real.platforms = {};
+  for (const [platform, meta] of Object.entries(realIndicatorsRelease.platforms)) {
+    real.platforms[platform] = { ...meta };
+  }
   if (options.realCliArchive) {
-    const actual = sha256(fs.readFileSync(path.resolve(options.realCliArchive)));
-    if (actual !== realIndicatorsRelease.archiveSha256) {
-      throw new Error("real Indicators CLI v0.0.4 archive checksum does not match the frozen contract");
+    const archives = Array.isArray(options.realCliArchive) ? options.realCliArchive : [options.realCliArchive];
+    for (const archive of archives) {
+      const resolved = path.resolve(archive);
+      const basename = path.basename(resolved);
+      const matched = Object.entries(realIndicatorsRelease.platforms).find(
+        ([, meta]) => meta.url.endsWith(`/${basename}`)
+      );
+      if (!matched) {
+        throw new Error(`real Indicators CLI archive does not match any frozen platform: ${basename}`);
+      }
+      const [platform, meta] = matched;
+      const actual = sha256(fs.readFileSync(resolved));
+      if (actual !== meta.sha256) {
+        throw new Error(`real Indicators CLI v0.0.4 archive checksum does not match the frozen contract for ${platform}: ${basename}`);
+      }
     }
   }
 
@@ -229,7 +262,7 @@ export function materializeReleaseManifest(options) {
   releaseSet.facadeVersion = version;
   releaseSet.facadeSha256 = facadeBinarySha256;
   releaseSet.realIndicatorsVersion = realIndicatorsRelease.version;
-  releaseSet.realIndicatorsSha256 = realIndicatorsRelease.binarySha256;
+  releaseSet.realIndicatorsSha256 = REAL_INDICATORS_LINUX_AMD64.binarySha256;
   releaseSet.catalogSha256 = catalogSha256;
   releaseSet.sha256 = releaseSetDigest(releaseSet);
 
@@ -250,6 +283,8 @@ export function materializeReleaseManifest(options) {
   return manifest;
 }
 
+const repeatableArgs = new Set(["realCliArchive"]);
+
 function parseArgs(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -258,7 +293,11 @@ function parseArgs(argv) {
     const key = argument.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
-    options[key] = value;
+    if (repeatableArgs.has(key)) {
+      (options[key] ||= []).push(value);
+    } else {
+      options[key] = value;
+    }
   }
   for (const key of ["manifest", "output", "version", "dist", "catalog", "catalogValidator", "approvedWikisSource", "approvedWikisManifest"]) {
     if (!options[key]) throw new Error(`--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} is required`);

@@ -456,6 +456,15 @@ export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet)
   if (real.version !== releaseSet.realIndicatorsVersion) {
     throw new Error(`real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
   }
+  const lumiPlatformKey = platformKey();
+  const facadeBinarySha256 = String(facade.platforms?.[lumiPlatformKey]?.binarySha256 || "");
+  if (!/^[a-f0-9]{64}$/.test(facadeBinarySha256)) {
+    throw new Error(`Facade binary sha256 is not fixed for ${lumiPlatformKey}`);
+  }
+  const realBinarySha256 = String(real.platforms?.[lumiPlatformKey]?.binarySha256 || "");
+  if (!/^[a-f0-9]{64}$/.test(realBinarySha256)) {
+    throw new Error(`real Indicators CLI binary sha256 is not fixed for ${lumiPlatformKey}`);
+  }
   const publicFacade = path.join(runtimeDir, "bin", binaryName("qdm-indicators-cli"));
   const publicHelper = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
   if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(publicHelper)) {
@@ -479,18 +488,36 @@ export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manife
   if (real.version !== releaseSet.realIndicatorsVersion) {
     throw new Error(`installed real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
   }
-  if (real.sha256 !== releaseSet.realIndicatorsSha256) {
-    throw new Error("installed real Indicators CLI sha256 does not match release-set");
-  }
-  if (facade.sha256 !== releaseSet.facadeSha256) {
-    throw new Error("installed Facade sha256 does not match release-set");
-  }
   if (manifest) {
-    const expected = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
+    const key = platformKey();
+    const facadeTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
+    const realTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
+    const helperTool = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
     const helper = installedTools?.["data-harness-cli"];
-    const binarySha256 = expected?.platforms?.[platformKey()]?.binarySha256;
-    if (!helper || helper.version !== expected?.version || helper.sha256 !== binarySha256) {
+    const facadeBinarySha256 = facadeTool?.platforms?.[key]?.binarySha256;
+    const realBinarySha256 = realTool?.platforms?.[key]?.binarySha256;
+    const helperBinarySha256 = helperTool?.platforms?.[key]?.binarySha256;
+    if (!/^[a-f0-9]{64}$/.test(String(facadeBinarySha256 || ""))) {
+      throw new Error(`manifest is missing Facade binary sha256 for ${key}`);
+    }
+    if (!/^[a-f0-9]{64}$/.test(String(realBinarySha256 || ""))) {
+      throw new Error(`manifest is missing real Indicators CLI binary sha256 for ${key}`);
+    }
+    if (facade.sha256 !== facadeBinarySha256) {
+      throw new Error(`installed Facade sha256 does not match manifest for ${key}`);
+    }
+    if (real.sha256 !== realBinarySha256) {
+      throw new Error(`installed real Indicators CLI sha256 does not match manifest for ${key}`);
+    }
+    if (!helper || helper.version !== helperTool?.version || helper.sha256 !== helperBinarySha256) {
       throw new Error("installed Harness helper does not match its fixed manifest contract");
+    }
+  } else {
+    if (real.sha256 !== releaseSet.realIndicatorsSha256) {
+      throw new Error("installed real Indicators CLI sha256 does not match release-set");
+    }
+    if (facade.sha256 !== releaseSet.facadeSha256) {
+      throw new Error("installed Facade sha256 does not match release-set");
     }
   }
 }
