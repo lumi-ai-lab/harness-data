@@ -51,7 +51,14 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	authNotes := preflightAuth(root, plan)
+	authorizedRuntime := isLumiMVPRequiredRuntime(root)
+	if authorizedRuntime {
+		response = applyLumiMVPConstraints(response)
+	}
+	var authNotes []string
+	if !authorizedRuntime {
+		authNotes = preflightAuth(root, plan)
+	}
 	additionalContext, err := buildWikiAdditionalContext(tc, response, plan, authNotes)
 	if err != nil {
 		return false, Output{}, err

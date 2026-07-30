@@ -1,10 +1,12 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, linkAgents } from "../lib/config.js";
+import { localPathToolNamesForProfile, writeLocalConfig, linkAgents } from "../lib/config.js";
+import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
-import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
+import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
+import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -13,16 +15,26 @@ import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
+import {
+  authzConfigPathFor,
+  installerStateSchemaVersion,
+  lumiApprovedWikisArtifact,
+  lumiCatalogArtifact,
+  localUnrestrictedProfile,
+  lumiReleaseSet,
+  lumiRequiredProfile,
+  normalizeProfile,
+  profileFromState,
+  selectManifestProfile,
+  validateProfileAgent
+} from "../lib/profile.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
 
 function readInstallState(runtimeDir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(runtimeDir, ".harness", "installer-state.json"), "utf8"));
-  } catch {
-    return readUserState();
-  }
+  const local = readInstallerState(runtimeDir);
+  return Object.keys(local).length ? local : readUserState();
 }
 
 async function requireCommands(commands) {
@@ -78,30 +90,49 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
       fs.existsSync(path.join(runtimeDir, "config")) &&
       fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json"))) {
     skip("runtime bundle 已存在");
-    return { tag: "", skipped: true };
+    return { tag: String(options.runtimeTag || ""), skipped: true };
   }
-
-  const release = await latestRelease(runtimeRepo, options);
-  const tag = release.tag_name;
-  const assetName = `harness-data-runtime-${tag}.tar.gz`;
-  const asset = findReleaseAsset(release, assetName);
-  const shaAsset = findReleaseAsset(release, `${assetName}.sha256`);
-  if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${assetName}`);
 
   const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
   fs.mkdirSync(cacheDir, { recursive: true });
-  const archive = path.join(cacheDir, assetName);
-  action(`下载 harness-data-runtime ${tag}`);
-  await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
-  if (shaAsset) {
-    const shaFile = `${archive}.sha256`;
-    await downloadReleaseAsset(shaAsset, shaFile, options);
+  let tag = "";
+  let archive = "";
+  if (options.runtimeBundle) {
+    tag = String(options.runtimeTag || "").trim();
+    if (!tag) throw new Error("a local runtime bundle requires --runtime-tag");
+    const source = path.resolve(options.runtimeBundle);
+    const info = fs.lstatSync(source);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`local runtime bundle is not a regular file: ${source}`);
+    archive = path.join(cacheDir, path.basename(source));
+    if (path.resolve(source) !== path.resolve(archive)) fs.copyFileSync(source, archive);
+    const shaFile = `${source}.sha256`;
+    if (!fs.existsSync(shaFile)) throw new Error(`local runtime bundle checksum is missing: ${shaFile}`);
     const expected = fs.readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
-    const crypto = await import("node:crypto");
     const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
-    if (expected && actual !== expected) throw new Error("runtime bundle sha256 mismatch");
+    if (!/^[a-f0-9]{64}$/.test(expected) || actual !== expected) throw new Error("local runtime bundle sha256 mismatch");
+    action(`使用本地 harness-data-runtime ${tag}`);
   } else {
-    warn("runtime bundle 未提供 sha256，已继续安装");
+    const release = await latestRelease(runtimeRepo, options);
+    tag = release.tag_name;
+    const assetName = `harness-data-runtime-${tag}.tar.gz`;
+    const asset = findReleaseAsset(release, assetName);
+    const shaAsset = findReleaseAsset(release, `${assetName}.sha256`);
+    if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${assetName}`);
+    archive = path.join(cacheDir, assetName);
+    action(`下载 harness-data-runtime ${tag}`);
+    await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
+    if (shaAsset) {
+      const shaFile = `${archive}.sha256`;
+      await downloadReleaseAsset(shaAsset, shaFile, options);
+      const expected = fs.readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
+      const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
+      if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error("runtime bundle sha256 is invalid");
+      if (actual !== expected) throw new Error("runtime bundle sha256 mismatch");
+    } else if (options.profile === lumiRequiredProfile || options.requireChecksum === true) {
+      throw new Error("lumi-mvp-required runtime bundle checksum is missing");
+    } else {
+      warn("runtime bundle 未提供 sha256，已继续安装");
+    }
   }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
@@ -153,11 +184,11 @@ async function promptExecutable(runtimeDir, name, options = {}) {
   return file;
 }
 
-async function installLocalTools(runtimeDir, options = {}) {
+async function installLocalTools(runtimeDir, profile, options = {}) {
   const binDir = path.join(runtimeDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const installed = {};
-  for (const name of localPathToolNames) {
+  for (const name of localPathToolNamesForProfile(profile)) {
     const source = await promptExecutable(runtimeDir, name, options);
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
@@ -169,8 +200,30 @@ async function installLocalTools(runtimeDir, options = {}) {
   return installed;
 }
 
-async function installWikis(runtimeDir, options = {}) {
+async function installWikis(runtimeDir, profile, manifest, options = {}) {
   const target = path.join(runtimeDir, "wikis");
+  if (profile === lumiRequiredProfile) {
+    if (!options.wikisSource) {
+      throw new Error("lumi-mvp-required installation requires explicit --wikis-source for business-approved content");
+    }
+    const approved = lumiApprovedWikisArtifact(manifest);
+    const approvalManifest = path.resolve(runtimeDir, approved.manifest);
+    const expectedManifest = path.join(path.resolve(runtimeDir), "bootstrap", "approved-lumi-wikis-manifest.json");
+    if (approvalManifest !== expectedManifest) throw new Error("approved Wikis manifest escapes the runtime bundle");
+    const verified = verifyApprovedWikisSource(options.wikisSource, approvalManifest, approved.manifestSha256);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.cpSync(verified.source, target, { recursive: true });
+    ok(`已安装业务批准的 Lumi Wikis 内容 ${approved.manifestSha256.slice(0, 12)}`);
+    return { mode: "approved-release-content", source: verified.source, path: target };
+  }
+  if (options.wikisSource) {
+    const source = path.resolve(options.wikisSource);
+    validateLocalWikisSource(source);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.cpSync(source, target, { recursive: true });
+    ok(`harness-data-wikis 构建输入 ${source}`);
+    return { mode: "release-build-input", source, path: target };
+  }
   if (githubToken(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
       warn("已有 Wikis 仓库将以远程版本强制同步，本地修改不会保留");
@@ -324,8 +377,25 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   action("执行：data-harness-cli wikis build-index --skip-checks");
   const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
   if (result.code !== 0) {
+    if (options.requiredIndexes) {
+      throw new Error("wikis index build failed for lumi-mvp-required");
+    }
     warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
     return { ok: false };
+  }
+  const requiredIndexes = [
+    path.join(runtimeDir, ".harness", "index", "wikis-index.json"),
+    path.join(runtimeDir, ".harness", "index", "wikis-runtime-index.json")
+  ];
+  const missingIndexes = requiredIndexes.filter((file) => {
+    try {
+      return !fs.statSync(file).isFile() || fs.statSync(file).size === 0;
+    } catch {
+      return true;
+    }
+  });
+  if (options.requiredIndexes && missingIndexes.length) {
+    throw new Error(`wikis index build did not produce required Lumi indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
   }
   const output = `${result.stdout}\n${result.stderr}`;
   const docs = output.match(/\bdocs=(\d+)/)?.[1];
@@ -340,6 +410,15 @@ export function printDoctorSummary(doctor, options = {}) {
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
   const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
   if (!failed.length) {
+    if (doctor.profile === lumiRequiredProfile) {
+      ok("lumi-mvp-required profile 与 installer-state v3");
+      ok("2 个 Agent 可见 CLI（data-harness-cli 与 Indicators Facade）");
+      ok("固定真实 Indicators CLI 与 release-set");
+      ok("Lumi 配置（未暴露 CMR/SQL/CAS）");
+      ok("Pi Agent Hook");
+      for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
+      return;
+    }
     ok("runtime");
     ok("wikis/metrics");
     ok("wikis/reports");
@@ -359,11 +438,170 @@ export function printDoctorSummary(doctor, options = {}) {
   for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
 }
 
+export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
+  const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
+  const facade = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
+  const real = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
+  if (!helper || !facade || !real) throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
+  if (helper.tracking !== "fixed" || facade.tracking !== "fixed" || real.tracking !== "fixed") {
+    throw new Error("lumi-mvp-required authorization artifacts must use fixed tracking");
+  }
+  const helperBinarySha256 = helper.platforms?.[platformKey()]?.binarySha256;
+  if (!String(helper.version || "").trim() || !/^[a-f0-9]{64}$/.test(String(helperBinarySha256 || ""))) {
+    throw new Error("Harness helper version and binary sha256 must be fixed");
+  }
+  if (facade.version !== releaseSet.facadeVersion) {
+    throw new Error(`Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
+  }
+  if (real.version !== releaseSet.realIndicatorsVersion) {
+    throw new Error(`real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
+  }
+  const lumiPlatformKey = platformKey();
+  const facadeBinarySha256 = String(facade.platforms?.[lumiPlatformKey]?.binarySha256 || "");
+  if (!/^[a-f0-9]{64}$/.test(facadeBinarySha256)) {
+    throw new Error(`Facade binary sha256 is not fixed for ${lumiPlatformKey}`);
+  }
+  const realBinarySha256 = String(real.platforms?.[lumiPlatformKey]?.binarySha256 || "");
+  if (!/^[a-f0-9]{64}$/.test(realBinarySha256)) {
+    throw new Error(`real Indicators CLI binary sha256 is not fixed for ${lumiPlatformKey}`);
+  }
+  const publicFacade = path.join(runtimeDir, "bin", binaryName("qdm-indicators-cli"));
+  const publicHelper = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
+  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(publicHelper)) {
+    throw new Error(`Harness helper destination must be ${publicHelper}`);
+  }
+  if (path.resolve(toolDestination(runtimeDir, facade)) !== path.resolve(publicFacade)) {
+    throw new Error(`Facade destination must be ${publicFacade}`);
+  }
+  if (!path.isAbsolute(String(real.destination || ""))) {
+    throw new Error("real Indicators CLI destination must be an absolute private path");
+  }
+}
+
+export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
+  const facade = installedTools?.["qdm-indicators-facade"];
+  const real = installedTools?.["qdm-indicators-cli-real"];
+  if (!facade || !real) throw new Error("lumi-mvp-required installation is missing fixed Indicators artifacts");
+  if (facade.version !== releaseSet.facadeVersion) {
+    throw new Error(`installed Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
+  }
+  if (real.version !== releaseSet.realIndicatorsVersion) {
+    throw new Error(`installed real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
+  }
+  if (manifest) {
+    const key = platformKey();
+    const facadeTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
+    const realTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
+    const helperTool = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
+    const helper = installedTools?.["data-harness-cli"];
+    const facadeBinarySha256 = facadeTool?.platforms?.[key]?.binarySha256;
+    const realBinarySha256 = realTool?.platforms?.[key]?.binarySha256;
+    const helperBinarySha256 = helperTool?.platforms?.[key]?.binarySha256;
+    if (!/^[a-f0-9]{64}$/.test(String(facadeBinarySha256 || ""))) {
+      throw new Error(`manifest is missing Facade binary sha256 for ${key}`);
+    }
+    if (!/^[a-f0-9]{64}$/.test(String(realBinarySha256 || ""))) {
+      throw new Error(`manifest is missing real Indicators CLI binary sha256 for ${key}`);
+    }
+    if (facade.sha256 !== facadeBinarySha256) {
+      throw new Error(`installed Facade sha256 does not match manifest for ${key}`);
+    }
+    if (real.sha256 !== realBinarySha256) {
+      throw new Error(`installed real Indicators CLI sha256 does not match manifest for ${key}`);
+    }
+    if (!helper || helper.version !== helperTool?.version || helper.sha256 !== helperBinarySha256) {
+      throw new Error("installed Harness helper does not match its fixed manifest contract");
+    }
+  } else {
+    if (real.sha256 !== releaseSet.realIndicatorsSha256) {
+      throw new Error("installed real Indicators CLI sha256 does not match release-set");
+    }
+    if (facade.sha256 !== releaseSet.facadeSha256) {
+      throw new Error("installed Facade sha256 does not match release-set");
+    }
+  }
+}
+
+function fileSha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+export function installLumiCatalog(runtimeDir, manifest) {
+  const catalog = lumiCatalogArtifact(manifest);
+  const source = path.resolve(runtimeDir, catalog.source);
+  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-indicators-v1.json");
+  if (source !== expectedSource) throw new Error("approved indicator catalog source escapes the runtime bundle");
+  let sourceInfo;
+  try {
+    sourceInfo = fs.lstatSync(source);
+  } catch {
+    throw new Error(`business-approved indicator catalog is missing from the runtime bundle: ${source}`);
+  }
+  if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || sourceInfo.size <= 0 || sourceInfo.size > 4 * 1024 * 1024) {
+    throw new Error("business-approved indicator catalog is not a safe regular file");
+  }
+  if (fileSha256(source) !== catalog.sha256) {
+    throw new Error("business-approved indicator catalog sha256 does not match release-set");
+  }
+  const destination = catalog.destination;
+  if (fs.existsSync(destination)) {
+    const destinationInfo = fs.lstatSync(destination);
+    if (!destinationInfo.isFile() || destinationInfo.isSymbolicLink() || fileSha256(destination) !== catalog.sha256) {
+      throw new Error(`approved indicator catalog destination already contains a different artifact: ${destination}`);
+    }
+    fs.chmodSync(destination, 0o644);
+    return destination;
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
+  const staged = `${destination}.install-${process.pid}`;
+  try {
+    fs.copyFileSync(source, staged, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(staged, 0o644);
+    fs.renameSync(staged, destination);
+  } finally {
+    fs.rmSync(staged, { force: true });
+  }
+  return destination;
+}
+
 export async function installCommand(options = {}) {
+  const explicitProfile = String(options.profile || "").trim();
+  if (!explicitProfile && (options.yes || !process.stdin.isTTY)) {
+    throw new Error("non-interactive installation requires explicit --profile local-unrestricted or lumi-mvp-required");
+  }
+  const profile = normalizeProfile(options.profile);
+  if (profile === lumiRequiredProfile && String(options.profile || "") !== lumiRequiredProfile) {
+    throw new Error("Lumi installation must explicitly pass --profile lumi-mvp-required");
+  }
+  if (profile === lumiRequiredProfile && !options.agent) {
+    throw new Error("lumi-mvp-required profile requires explicit --agent pi");
+  }
+  const selectedAgent = profile === lumiRequiredProfile
+    ? String(options.agent).trim().toLowerCase()
+    : await chooseAgent(options);
+  validateProfileAgent(profile, selectedAgent);
+  if (profile === lumiRequiredProfile && !options.wikisSource) {
+    throw new Error("lumi-mvp-required installation requires explicit --wikis-source for business-approved content");
+  }
+  const requestedRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
+  const existingState = readInstallerState(requestedRuntimeDir);
+  if (Object.keys(existingState).length > 0) {
+    const existingProfile = profileFromState(existingState);
+    if (!existingProfile) {
+      throw new Error("existing installer profile is ambiguous; rebuild the runtime in a fresh directory");
+    }
+    if (existingProfile !== profile) {
+      throw new Error(`cannot change installer profile from ${existingProfile} to ${profile}; rebuild the runtime in a fresh directory`);
+    }
+    if (profile === lumiRequiredProfile) {
+      throw new Error("lumi-mvp-required runtimes are immutable; rebuild the image in a fresh directory");
+    }
+  }
   const key = platformKey();
   header("Harness Data 安装器", packageVersion(), [
-    `安装目录：${resolveWorkspaceDir(options.dir || process.cwd())}`,
-    `平台：${key}`
+    `安装目录：${requestedRuntimeDir}`,
+    `平台：${key}`,
+    `Profile：${profile}`
   ]);
 
   step(1, 8, "检查本机依赖");
@@ -372,61 +610,85 @@ export async function installCommand(options = {}) {
 
   step(2, 8, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
-  const bundle = await installRuntimeBundle(runtimeDir, options);
+  const bundle = await installRuntimeBundle(runtimeDir, { ...options, profile });
   blank();
 
   step(3, 8, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
-  const installState = readInstallState(runtimeDir);
+  const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
+  const sourceManifest = readManifest(manifestPath);
+  const selectedManifest = selectManifestProfile(sourceManifest, profile);
+  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest) : null;
+  const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
+  if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
 
   let manifest;
   let localTools = {};
-  if (tokenMode) {
-    manifest = readManifest(manifestPath);
-    const latestManifest = await resolveLatestManifest(manifest, key, options);
+  if (profile === lumiRequiredProfile) {
+    if (!tokenMode) throw new Error("lumi-mvp-required profile requires authenticated access to fixed release artifacts");
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
+      ...options,
+      state: installState,
+      manifestOverride: selectedManifest
+    });
+    verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
+    installLumiCatalog(runtimeDir, sourceManifest);
+  } else if (tokenMode) {
+    const latestManifest = await resolveLatestManifest(selectedManifest, key, options);
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
   } else {
-    manifest = readManifest(manifestPath);
-    const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
+    const latestManifest = await resolveLatestManifest(selectedManifest, key, { ...options, tools: ["data-harness-cli"] });
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-    localTools = await installLocalTools(runtimeDir, options);
+    localTools = await installLocalTools(runtimeDir, profile, options);
   }
-  ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+  ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已按 ${profile} profile 安装`);
   blank();
+  const installedManifestSha256 = profile === lumiRequiredProfile
+    ? fileSha256(manifestPath)
+    : manifestDigest(manifest);
 
   // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
   writeState(runtimeDir, {
+    schemaVersion: installerStateSchemaVersion,
+    profile,
+    agent: selectedAgent,
     installMode: tokenMode ? "github-token" : "local-path",
     runtimeTag: bundle.tag,
     localTools,
     tools: manifest.installedTools || {},
-    manifestSha256: manifestDigest(manifest),
-    packageVersion: packageVersion()
+    manifestSha256: installedManifestSha256,
+    packageVersion: packageVersion(),
+    releaseSet,
+    authzConfigPath
   });
   blank();
 
   step(4, 8, "同步 Wikis 知识库");
-  await installWikis(runtimeDir, options);
+  await installWikis(runtimeDir, profile, sourceManifest, options);
   blank();
 
   step(5, 8, "生成本地配置");
-  writeLocalConfig(runtimeDir, { overwrite: true });
+  writeLocalConfig(runtimeDir, { overwrite: true, profile });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
   blank();
 
   step(6, 8, "配置 CAS 认证");
-  const casDir = await configureCasAuthentication(runtimeDir, options);
-  await configureTokens(runtimeDir, casDir);
+  let casDir = "";
+  if (profile === localUnrestrictedProfile) {
+    casDir = await configureCasAuthentication(runtimeDir, options);
+    await configureTokens(runtimeDir, casDir);
+  } else {
+    skip("lumi-mvp-required 由部署系统提供 Indicators 凭证，安装器不配置 CAS/token");
+  }
   blank();
 
   step(7, 8, "构建 Wikis 索引");
-  await buildAndCheck(runtimeDir, options);
+  await buildAndCheck(runtimeDir, { ...options, requiredIndexes: profile === lumiRequiredProfile });
   blank();
 
   step(8, 8, "配置 Agent Hook");
-  const selectedAgent = await chooseAgent(options);
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
@@ -434,19 +696,23 @@ export async function installCommand(options = {}) {
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir });
+  const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir, buildTime: profile === lumiRequiredProfile });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();
 
   writeState(runtimeDir, {
+    schemaVersion: installerStateSchemaVersion,
+    profile,
     installMode: tokenMode ? "github-token" : "local-path",
     runtimeTag: bundle.tag,
     localTools,
     tools: manifest.installedTools || {},
-    manifestSha256: manifestDigest(manifest),
+    manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
     agent: selectedAgent,
+    releaseSet,
+    authzConfigPath,
     lastCheckAt: new Date().toISOString()
   });
   console.log(`安装完成：${runtimeDir}`);

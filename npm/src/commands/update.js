@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chooseAgent, confirm } from "../lib/prompt.js";
-import { findWorkspaceDir, readUserState, writeState } from "../lib/paths.js";
+import { findWorkspaceDir, readInstallerState, readUserState, writeState } from "../lib/paths.js";
 import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
@@ -13,6 +13,13 @@ import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./insta
 import { collectDoctor } from "./doctor.js";
 import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
+import {
+  installerStateSchemaVersion,
+  localUnrestrictedProfile,
+  lumiRequiredProfile,
+  profileFromState,
+  selectManifestProfile
+} from "../lib/profile.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -129,14 +136,19 @@ export async function checkUpdates(workspace, options = {}) {
 export async function updateCommand(options = {}) {
   const runtimeDir = findWorkspaceDir(options.dir);
   if (!fs.existsSync(runtimeDir)) throw new Error(`runtime directory does not exist: ${runtimeDir}`);
+  const state = readInstallerState(runtimeDir);
+  const profile = profileFromState(state);
+  if (!profile) throw new Error("installer profile is missing; rebuild the runtime instead of updating in place");
+  if (profile === lumiRequiredProfile) {
+    throw new Error("harness-data update is disabled for immutable lumi-mvp-required runtimes; deploy a new image release-set");
+  }
   const key = platformKey();
   header("Harness Data 更新器", packageVersion(), [
     `运行目录：${runtimeDir}`,
     `平台：${key}`
   ]);
-  const state = readUserState();
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
-  const manifest = readManifest(manifestPath);
+  const manifest = selectManifestProfile(readManifest(manifestPath), localUnrestrictedProfile);
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
   const nextTools = { ...(state.tools || {}) };
@@ -159,7 +171,7 @@ export async function updateCommand(options = {}) {
   if (state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) {
     action(`发现更新：runtime bundle ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
     if (await confirm("是否更新 runtime bundle？")) {
-      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true });
+      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true, profile });
       runtimeTag = bundle.tag || runtimeRelease.tag_name;
       changed = true;
       applied.push(`runtime bundle ${runtimeTag}`);
@@ -209,13 +221,15 @@ export async function updateCommand(options = {}) {
 
   step(7, 7, "安装校验");
   if (changed) {
-    writeLocalConfig(runtimeDir, { overwrite: true });
+    writeLocalConfig(runtimeDir, { overwrite: true, profile });
     ok("本地配置已刷新");
     const doctor = await collectDoctor(runtimeDir, trackingOptions);
     printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });
     if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");
     writeState(runtimeDir, {
       ...state,
+      schemaVersion: installerStateSchemaVersion,
+      profile,
       runtimeTag,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
@@ -241,7 +255,13 @@ export async function updateCommand(options = {}) {
     }
   } else if (restoredAgent) {
     ok("Agent Hook 已恢复");
-    writeState(runtimeDir, { ...state, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, {
+      ...state,
+      schemaVersion: installerStateSchemaVersion,
+      profile,
+      agent: restoredAgent.agent,
+      lastCheckAt: new Date().toISOString()
+    });
     blank();
     console.log(`配置已恢复：${runtimeDir}`);
     console.log("");
@@ -254,7 +274,12 @@ export async function updateCommand(options = {}) {
     }
   } else {
     skip("没有组件更新");
-    writeState(runtimeDir, { ...state, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, {
+      ...state,
+      schemaVersion: installerStateSchemaVersion,
+      profile,
+      lastCheckAt: new Date().toISOString()
+    });
     blank();
     console.log(skipped.length ? "没有应用任何更新。" : "没有发现需要更新的内容。");
     if (skipped.length) {

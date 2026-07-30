@@ -82,6 +82,26 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Validate business-approved Lumi release inputs
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import { validateApprovedIndicatorCatalog } from "./bootstrap/materialize-cli-manifest.mjs";
+          import { verifyApprovedWikisSource } from "./npm/src/lib/approved-wikis.js";
+
+          const catalogPath = "bootstrap/approved-indicators-v1.json";
+          const wikisSource = "bootstrap/approved-lumi-wikis";
+          const wikisManifest = "bootstrap/approved-lumi-wikis-manifest.json";
+          if (!fs.existsSync(catalogPath) || !fs.existsSync(wikisSource) || !fs.existsSync(wikisManifest)) {
+            throw new Error("business-approved catalog and Wikis allowlist artifacts are required before release");
+          }
+          validateApprovedIndicatorCatalog(fs.readFileSync(catalogPath), catalogPath);
+          const manifestSha256 = crypto.createHash("sha256").update(fs.readFileSync(wikisManifest)).digest("hex");
+          verifyApprovedWikisSource(wikisSource, wikisManifest, manifestSha256);
+          NODE
+
       - name: Test npm installer
         working-directory: npm
         run: |
@@ -93,6 +113,14 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: cli/go.mod
+
+      - name: Validate approved indicator catalog with the Harness contract
+        run: |
+          set -euo pipefail
+          catalog_sha256="$(sha256sum bootstrap/approved-indicators-v1.json | awk '{print $1}')"
+          go run ./cli/cmd/data-harness-cli authz-validate-catalog \
+            --path "${PWD}/bootstrap/approved-indicators-v1.json" \
+            --sha256 "${catalog_sha256}"
 
       - name: Build Wikis index from pinned submodule
         working-directory: cli
@@ -121,12 +149,15 @@ jobs:
             return platform.startsWith("windows-") ? "zip" : "tar.gz";
           }
           for (const tool of manifest.tools || []) {
-            if (tool.name === "data-harness-cli") continue;
-            const release = childProcess.execFileSync(
-              "gh",
-              ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"],
-              { encoding: "utf8" }
-            ).trim();
+            if (tool.repo === "lumi-ai-lab/harness-data") continue;
+            const release = tool.tracking === "fixed"
+              ? String(tool.version || "").trim()
+              : childProcess.execFileSync(
+                  "gh",
+                  ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"],
+                  { encoding: "utf8" }
+                ).trim();
+            if (!release) throw new Error(`manifest fixed tool ${tool.name} has no version`);
             for (const [platform, asset] of Object.entries(tool.platforms || {})) {
               const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
               console.log(`${tool.repo}\t${release}\t${name}`);
@@ -148,10 +179,14 @@ jobs:
       publish: true
       version_tag: ${{ needs.validate.outputs.version_tag }}
       ref: ${{ needs.validate.outputs.version_tag }}
+    secrets:
+      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
 
   cli-container:
     name: Publish CLI container
-    needs: validate
+    needs:
+      - validate
+      - cli-release
     uses: ./.github/workflows/publish-cli-container.yml
     with:
       publish: true
@@ -171,7 +206,7 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.version_tag }}
 
-      - name: Verify data-harness-cli assets
+      - name: Verify Harness-owned CLI assets
         env:
           VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
         run: |
@@ -179,19 +214,23 @@ jobs:
           node <<'NODE' > /tmp/data-harness-assets.txt
           const fs = require("fs");
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
-          const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-          if (!tool) throw new Error("manifest missing data-harness-cli");
+          const tools = manifest.tools.filter((item) => item.repo === "lumi-ai-lab/harness-data");
+          if (!tools.some((item) => item.name === "data-harness-cli")) throw new Error("manifest missing data-harness-cli");
+          if (!tools.some((item) => item.name === "qdm-indicators-facade")) throw new Error("manifest missing qdm-indicators-facade");
           function archiveSuffix(asset, platform) {
             if (asset.archive) return asset.archive;
             if (asset.url?.endsWith(".tar.gz")) return "tar.gz";
             if (asset.url?.endsWith(".zip")) return "zip";
             return platform.startsWith("windows-") ? "zip" : "tar.gz";
           }
-          for (const [platform, asset] of Object.entries(tool.platforms || {})) {
-            const name = `${tool.binary}-${process.env.VERSION_TAG}-${platform}.${archiveSuffix(asset, platform)}`;
-            const url = `https://github.com/${tool.repo}/releases/download/${process.env.VERSION_TAG}/${name}`;
-            console.log(url);
-            console.log(`${url}.sha256`);
+          for (const tool of tools) {
+            for (const [platform, asset] of Object.entries(tool.platforms || {})) {
+              const name = `${tool.binary}-${process.env.VERSION_TAG}-${platform}.${archiveSuffix(asset, platform)}`;
+              const url = `https://github.com/${tool.repo}/releases/download/${process.env.VERSION_TAG}/${name}`;
+              console.log(url);
+              console.log(`${url}.sha256`);
+              console.log(`${url}.binary.sha256`);
+            }
           }
           NODE
           while IFS= read -r url; do

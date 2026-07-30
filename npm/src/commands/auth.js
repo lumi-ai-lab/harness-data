@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { findWorkspaceDir } from "../lib/paths.js";
+import { findWorkspaceDir, readInstallerState } from "../lib/paths.js";
 import { packageVersion } from "../lib/package.js";
 import { binaryName } from "../lib/platform.js";
 import { blank, header, ok, step } from "../lib/log.js";
 import { configureCasAuthentication, configureTokens } from "./install.js";
+import { lumiRequiredProfile, profileFromState } from "../lib/profile.js";
 
 const requiredBinaries = ["cas-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"];
 
@@ -18,6 +19,11 @@ function validateAuthRuntime(runtimeDir) {
 
 export async function authCommand(options = {}) {
   const runtimeDir = findWorkspaceDir(options.dir);
+  const profile = profileFromState(readInstallerState(runtimeDir));
+  if (!profile) throw new Error("installer profile is missing; rebuild the runtime instead of configuring auth in place");
+  if (profile === lumiRequiredProfile) {
+    throw new Error("harness-data auth is disabled for lumi-mvp-required runtimes; credentials are deployment-owned");
+  }
   validateAuthRuntime(runtimeDir);
   header("Harness Data 认证配置", packageVersion(), [`运行目录：${runtimeDir}`]);
 

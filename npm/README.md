@@ -46,6 +46,22 @@ Diagnose a runtime:
 npx @lumi-ai-lab/harness-data doctor
 ```
 
+The immutable Lumi profile must be selected explicitly and accepts only Wikis
+content that exactly matches the business-approved file allowlist shipped in
+the materialized runtime bundle:
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --profile lumi-mvp-required \
+  --agent pi \
+  --wikis-source /path/to/approved-lumi-wikis
+```
+
+This profile never falls back to cloning the mutable/full Wikis repository.
+At image build time `doctor` reports runtime-only mounts and credentials as
+pending; at runtime it invokes `data-harness-cli authz-readiness` and fails if
+the complete authorization deployment is not ready.
+
 The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks. SQL CLI tokens are fetched through `cas-cli token --app rtp`.
 
 `--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.
