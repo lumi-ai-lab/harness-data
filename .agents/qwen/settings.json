@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" context --format agent-hook",
+            "statusMessage": "Loading QDM Harness context"
+          },
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$root/bin/data-harness-cli\" authz-hook --agent qwen || exit 2",
+            "statusMessage": "Binding requester authorization"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^run_shell_command$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$root/bin/data-harness-cli\" authz-hook --agent qwen || exit 2",
+            "statusMessage": "Authorizing shell command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^run_shell_command$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" posttool --format agent-hook",
+            "statusMessage": "Updating QDM Harness state"
+          }
+        ]
+      }
+    ]
+  }
+}

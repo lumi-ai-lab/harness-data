@@ -67,9 +67,14 @@ func run() error {
 	}
 	root, err := harness.FindRoot(rootStart())
 	if err != nil {
+		if os.Args[1] == "authz-hook" {
+			return authzHookError(fmt.Errorf("cannot find harness root: %w", err))
+		}
 		return fmt.Errorf("cannot find harness root: %w", err)
 	}
 	switch os.Args[1] {
+	case "authz-hook":
+		return runAuthzHook(root, os.Args[2:], os.Stdin, os.Stdout)
 	case "wikis":
 		return runWikis(root, os.Args[2:])
 	case "context":
@@ -160,7 +165,7 @@ func printUsage() {
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show|authz-bind|authz-readiness|authz-validate-catalog>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show|authz-bind|authz-hook|authz-readiness|authz-validate-catalog>"
 }
 
 type showDocument struct {

@@ -7,6 +7,23 @@
             "type": "command",
             "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" context --format codex-hook",
             "statusMessage": "Loading QDM Harness context"
+          },
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$root/bin/data-harness-cli\" authz-hook --agent codex || exit 2",
+            "statusMessage": "Binding requester authorization"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$root/bin/data-harness-cli\" authz-hook --agent codex || exit 2",
+            "statusMessage": "Authorizing Bash command"
           }
         ]
       }

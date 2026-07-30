@@ -261,6 +261,7 @@ jobs:
           cp -R /tmp/harness-release-dist/. dist/
           cp -R .agents/claude runtime/agents/claude
           cp -R .agents/codex runtime/agents/codex
+          cp -R .agents/qwen runtime/agents/qwen
           cp -R .agents/pi runtime/agents/pi
           cp -R .agents/openclaw runtime/agents/openclaw
           cp -R .agents/hermes runtime/agents/hermes
@@ -286,6 +287,7 @@ jobs:
             --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-windows-amd64.zip"
           ln -s agents/claude runtime/.claude
           ln -s agents/codex runtime/.codex
+          ln -s agents/qwen runtime/.qwen
           ln -s agents/pi runtime/.pi
           ln -s agents/openclaw runtime/.openclaw
           ln -s agents/hermes runtime/.hermes
@@ -306,17 +308,19 @@ jobs:
           cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-arm64.tar.gz" "${smoke_assets}/"
           cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" "${smoke_assets}/"
           cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-windows-amd64.zip" "${smoke_assets}/"
-          sudo env "HOME=${smoke_root}/home" "PATH=${PATH}" \
-            node npm/bin/harness-data.js install \
-              --dir "${smoke_root}/runtime" \
-              --profile lumi-mvp-required \
-              --agent pi \
-              --yes \
-              --github-token local-release-smoke \
-              --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
-              --runtime-tag "${VERSION_TAG}" \
-              --asset-dir "${smoke_assets}" \
-              --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
+          for agent in pi claude codex qwen; do
+            sudo env "HOME=${smoke_root}/home-${agent}" "PATH=${PATH}" \
+              node npm/bin/harness-data.js install \
+                --dir "${smoke_root}/runtime-${agent}" \
+                --profile lumi-mvp-required \
+                --agent "${agent}" \
+                --yes \
+                --github-token local-release-smoke \
+                --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
+                --runtime-tag "${VERSION_TAG}" \
+                --asset-dir "${smoke_assets}" \
+                --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
+          done
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2

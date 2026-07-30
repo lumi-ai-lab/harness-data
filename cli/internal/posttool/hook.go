@@ -60,7 +60,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return false, Output{}, nil
 	}
-	if payload.ToolName != "Bash" || strings.TrimSpace(payload.ToolInput.Command) == "" {
+	if !isShellTool(payload.ToolName) || strings.TrimSpace(payload.ToolInput.Command) == "" {
 		return false, Output{}, nil
 	}
 	sessionID := payload.SessionID
@@ -81,6 +81,10 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	updated, _ := sessionstate.Load(root, sessionID)
 	recordTemplateDiagnostic(root, sessionID, updated, getReportState(updated, "template"), outcome, templateRel)
 	return true, buildOutput(message), nil
+}
+
+func isShellTool(toolName string) bool {
+	return toolName == "Bash" || toolName == "run_shell_command"
 }
 
 func InjectTemplate(root, sessionID string) (message, outcome, templateRel string, err error) {

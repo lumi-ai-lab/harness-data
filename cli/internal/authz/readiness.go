@@ -26,6 +26,7 @@ const (
 	maxInstallerStateBytes   int64 = 1 << 20
 	maxCLIManifestBytes      int64 = 1 << 20
 	maxHarnessConfigBytes    int64 = 1 << 20
+	maxAgentConfigBytes      int64 = 1 << 20
 )
 
 var envExportPattern = regexp.MustCompile(`^export[\t ]+([A-Z0-9_]+)="([^"\r\n]*)"[\t ]*$`)
@@ -84,6 +85,27 @@ type indicatorsCredentialConfig struct {
 	TimeoutSeconds int    `json:"timeoutSeconds"`
 }
 
+type agentHookConfig struct {
+	Hooks map[string][]agentHookGroup `json:"hooks"`
+}
+
+type agentHookGroup struct {
+	Matcher string             `json:"matcher,omitempty"`
+	Hooks   []agentCommandHook `json:"hooks"`
+}
+
+type agentCommandHook struct {
+	Type          string `json:"type"`
+	Command       string `json:"command"`
+	StatusMessage string `json:"statusMessage,omitempty"`
+}
+
+type piAgentSettings struct {
+	EnableSkillCommands bool     `json:"enableSkillCommands"`
+	Extensions          []string `json:"extensions"`
+	Skills              []string `json:"skills"`
+}
+
 // CheckReadiness verifies the complete runtime authorization deployment. Its
 // report deliberately omits all paths, digests, identities, and credentials.
 func CheckReadiness(configPath string, options ReadinessOptions) (ReadinessReport, error) {
@@ -135,6 +157,9 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 	}
 	state, err := readAndValidateInstallerState(paths.installerState, paths.cliManifest, paths.runtimeRoot, paths.publicFacade, configPath, config, security)
 	if err != nil {
+		return report, err
+	}
+	if err := verifySelectedAgentDeployment(paths.runtimeRoot, state.Agent, security); err != nil {
 		return report, err
 	}
 	if err := verifyFacadeAndRuntimeConfig(paths, state, security); err != nil {
@@ -458,7 +483,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 	if err := decodeInstallerStateJSON(data, &state); err != nil {
 		return invalid("installer state is invalid", err)
 	}
-	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || state.Agent != "pi" {
+	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || !authorizedAgent(state.Agent) {
 		return invalid("installer state profile is inconsistent", nil)
 	}
 	updatedAt, updatedErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)
@@ -517,6 +542,125 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 		return invalid("installed Harness helper state is inconsistent", nil)
 	}
 	return state, nil
+}
+
+func authorizedAgent(agent string) bool {
+	if runtime.GOOS == "windows" {
+		return agent == "pi"
+	}
+	switch agent {
+	case "pi", "claude", "codex", "qwen":
+		return true
+	default:
+		return false
+	}
+}
+
+func verifySelectedAgentDeployment(runtimeRoot, agent string, security FileSecurityOptions) error {
+	source := filepath.Join(runtimeRoot, "agents", agent)
+	target := filepath.Join(runtimeRoot, "."+agent)
+	if err := VerifySecureDirectory(filepath.Join(runtimeRoot, "agents"), security); err != nil {
+		return authzError(CodeConfigInvalid, "Agent template root ownership or permissions are invalid", err)
+	}
+	if err := VerifySecureDirectory(source, security); err != nil {
+		return authzError(CodeConfigInvalid, "selected Agent template ownership or permissions are invalid", err)
+	}
+	targetInfo, err := os.Lstat(target)
+	if err != nil || targetInfo.Mode()&os.ModeSymlink == 0 {
+		return authzError(CodeConfigInvalid, "selected Agent deployment link is missing or invalid", err)
+	}
+	resolvedSource, sourceErr := filepath.EvalSymlinks(source)
+	resolvedTarget, targetErr := filepath.EvalSymlinks(target)
+	if sourceErr != nil || targetErr != nil || filepath.Clean(resolvedSource) != filepath.Clean(resolvedTarget) {
+		return authzError(
+			CodeConfigInvalid,
+			"selected Agent deployment link does not resolve to its template",
+			firstNonNil(sourceErr, targetErr),
+		)
+	}
+	requiredFiles := map[string][]string{
+		"pi":     {"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")},
+		"claude": {"settings.json"},
+		"codex":  {"hooks.json", "config.toml"},
+		"qwen":   {"settings.json"},
+	}[agent]
+	if len(requiredFiles) == 0 {
+		return authzError(CodeConfigInvalid, "selected Agent deployment is unsupported", nil)
+	}
+	for _, relative := range requiredFiles {
+		path := filepath.Join(source, relative)
+		if err := VerifySecureRegularFile(path, security); err != nil {
+			return authzError(CodeConfigInvalid, "selected Agent deployment is incomplete or insecure", err)
+		}
+	}
+	if err := validateSelectedAgentConfig(source, agent); err != nil {
+		return authzError(CodeConfigInvalid, "selected Agent authorization Hook config is invalid", err)
+	}
+	return nil
+}
+
+func validateSelectedAgentConfig(source, agent string) error {
+	if agent == "pi" {
+		data, _, err := readRegularFile(filepath.Join(source, "settings.json"), maxAgentConfigBytes)
+		if err != nil {
+			return err
+		}
+		var settings piAgentSettings
+		if err := decodeStrictJSON(data, &settings); err != nil {
+			return err
+		}
+		if !settings.EnableSkillCommands ||
+			len(settings.Extensions) != 1 || settings.Extensions[0] != ".pi/extensions/qdm-harness/index.ts" ||
+			len(settings.Skills) != 1 || settings.Skills[0] != ".pi/skills" {
+			return fmt.Errorf("Pi extension settings do not match the authorization contract")
+		}
+		return nil
+	}
+
+	configName := "settings.json"
+	if agent == "codex" {
+		configName = "hooks.json"
+		features, _, err := readRegularFile(filepath.Join(source, "config.toml"), maxAgentConfigBytes)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(features)) != "[features]\nhooks = true" {
+			return fmt.Errorf("Codex Hooks feature is not enabled")
+		}
+	}
+	data, _, err := readRegularFile(filepath.Join(source, configName), maxAgentConfigBytes)
+	if err != nil {
+		return err
+	}
+	var config agentHookConfig
+	if err := decodeStrictJSON(data, &config); err != nil {
+		return err
+	}
+	expectedMatcher := "Bash"
+	if agent == "qwen" {
+		expectedMatcher = "^run_shell_command$"
+	}
+	if !hasAuthorizationHook(config.Hooks["UserPromptSubmit"], "", agent) ||
+		!hasAuthorizationHook(config.Hooks["PreToolUse"], expectedMatcher, agent) {
+		return fmt.Errorf("required authorization Hook event or matcher is missing")
+	}
+	return nil
+}
+
+func hasAuthorizationHook(groups []agentHookGroup, matcher, agent string) bool {
+	for _, group := range groups {
+		if group.Matcher != matcher {
+			continue
+		}
+		for _, hook := range group.Hooks {
+			if hook.Type == "command" &&
+				strings.Contains(hook.Command, "authz-hook --agent "+agent) &&
+				strings.Contains(hook.Command, "exit 2") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validInstallerTool(tool installerTool) bool {

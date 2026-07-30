@@ -5,6 +5,11 @@ export const installerStateSchemaVersion = 3;
 export const localUnrestrictedProfile = "local-unrestricted";
 export const lumiRequiredProfile = "lumi-mvp-required";
 export const installProfiles = [localUnrestrictedProfile, lumiRequiredProfile];
+export const lumiAuthorizedAgents = ["pi", "claude", "codex", "qwen"];
+
+export function lumiAgentSupportedOnPlatform(agent, platform = process.platform) {
+  return platform !== "win32" || agent === "pi";
+}
 
 export function normalizeProfile(value, options = {}) {
   const fallback = options.defaultLocal === false ? "" : localUnrestrictedProfile;
@@ -54,7 +59,7 @@ export function profileFromState(state, options = {}) {
       if (state.releaseSet != null || String(state.authzConfigPath || "") !== "") return "";
       return profile;
     }
-    if (state.agent !== "pi" || state.installMode !== "github-token" || !state.runtimeTag ||
+    if (!lumiAuthorizedAgents.includes(state.agent) || state.installMode !== "github-token" || !state.runtimeTag ||
         Object.keys(state.localTools).length !== 0 || !plainRecord(state.releaseSet) ||
         !path.isAbsolute(String(state.authzConfigPath || ""))) {
       return "";
@@ -79,6 +84,14 @@ export function manifestProfile(manifest, profile) {
   const entry = manifest.profiles?.[profile];
   if (!entry || !Array.isArray(entry.tools) || entry.tools.length === 0) {
     throw new Error(`manifest profile ${profile} must declare a non-empty tools list`);
+  }
+  if (profile === lumiRequiredProfile) {
+    const agents = Array.isArray(entry.agents) ? entry.agents : [];
+    if (agents.length !== lumiAuthorizedAgents.length ||
+        new Set(agents).size !== agents.length ||
+        !lumiAuthorizedAgents.every((agent) => agents.includes(agent))) {
+      throw new Error(`manifest profile ${profile} must declare authorized agents: ${lumiAuthorizedAgents.join(", ")}`);
+    }
   }
   return entry;
 }
@@ -198,9 +211,12 @@ export function lumiApprovedWikisArtifact(manifest) {
   return { ...approved };
 }
 
-export function validateProfileAgent(profile, agent) {
-  if (profile === lumiRequiredProfile && agent !== "pi") {
-    throw new Error("lumi-mvp-required profile requires --agent pi");
+export function validateProfileAgent(profile, agent, options = {}) {
+  if (profile === lumiRequiredProfile && !lumiAuthorizedAgents.includes(agent)) {
+    throw new Error(`lumi-mvp-required profile requires --agent ${lumiAuthorizedAgents.join(", ")}`);
+  }
+  if (profile === lumiRequiredProfile && !lumiAgentSupportedOnPlatform(agent, options.platform)) {
+    throw new Error("lumi-mvp-required on Windows currently supports only --agent pi");
   }
 }
 

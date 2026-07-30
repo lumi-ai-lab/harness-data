@@ -53,9 +53,17 @@ the materialized runtime bundle:
 ```bash
 npx @lumi-ai-lab/harness-data install \
   --profile lumi-mvp-required \
-  --agent pi \
+  --agent codex \
   --wikis-source /path/to/approved-lumi-wikis
 ```
+
+The authorized profile accepts exactly one of `pi`, `claude`, `codex`, or
+`qwen`. Claude Code, Codex, and Qwen Code use `UserPromptSubmit` plus
+`PreToolUse` to refresh the requester binding and rewrite each shell tool input;
+Pi keeps its native extension and per-tool-call `spawnHook` path. The Agent hook
+session ID must exactly equal the raw ACP session ID published by Lumi.
+Because the non-Pi command rewrite currently requires POSIX shell semantics,
+Windows `lumi-mvp-required` installations are restricted to `--agent pi`.
 
 This profile never falls back to cloning the mutable/full Wikis repository.
 At image build time `doctor` reports runtime-only mounts and credentials as
@@ -64,4 +72,4 @@ the complete authorization deployment is not ready.
 
 The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks. SQL CLI tokens are fetched through `cas-cli token --app rtp`.
 
-`--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.
+`--agent` supports `claude`, `codex`, `qwen`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Qwen + Pi + OpenClaw + Hermes.

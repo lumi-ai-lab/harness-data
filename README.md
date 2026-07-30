@@ -14,10 +14,24 @@ Claude Code 的 `PostToolUse` hook 调用：
 "$CLAUDE_PROJECT_DIR/bin/data-harness-cli" posttool --format claude-hook
 ```
 
+在 `lumi-mvp-required` profile 中，Claude Code 还会：
+
+- 在 `UserPromptSubmit` 调用 `authz-hook --agent claude`，注入当前提问人的脱敏权限摘要。
+- 在每次 `PreToolUse(Bash)` 调用同一 Hook，重新读取当前 Lumi envelope，并通过 `updatedInput` 给该次 Bash 命令绑定 Facade 和授权引用。
+- 授权读取、session ID 校验或绑定失败时阻断消息或 Bash 调用。
+
 Codex 使用 `.codex/hooks.json` 配置同等事件：
 
 - `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
+- `UserPromptSubmit` 同时调用 `bin/data-harness-cli authz-hook --agent codex`
+- `PreToolUse` 仅匹配 `Bash`，调用授权 Hook 重写本次 Bash `updatedInput`
 - `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
+
+Qwen Code 使用 `.qwen/settings.json`：
+
+- `UserPromptSubmit` 调用 `context --format agent-hook` 和 `authz-hook --agent qwen`
+- `PreToolUse` 仅匹配 `run_shell_command`，重新绑定当前请求并重写工具输入
+- `PostToolUse` 记录 Harness 取数和模板状态
 
 Pi 使用 `.pi/settings.json` 加载项目扩展：
 
@@ -34,7 +48,9 @@ Hermes-Agent 使用 `.hermes` 加载项目上下文、skill 和 hook：
 - 优先使用 Hermes Python plugin 的 `pre_llm_call` / `post_tool_call`
 - `agent-hooks/qdm-pre-llm-call.sh` 和 `agent-hooks/qdm-post-tool-call.sh` 作为 shell hook fallback，同样复用 `agent-hook` 格式
 
-本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+本仓库的 `.agents/claude`、`.agents/codex`、`.agents/qwen`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.qwen`、`.pi`、`.openclaw`、`.hermes` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+
+Lumi 授权模式支持单独选择 `pi`、`claude`、`codex` 或 `qwen`。当前 Claude Code、Codex 和 Qwen Code 的授权命令重写依赖 POSIX shell，因此 Windows 上的 `lumi-mvp-required` 暂只允许 `pi`；其他三个 Agent 需要在真实 Windows runtime 完成 Hook shell 合同后再开放。Claude Code、Codex 和 Qwen Code 的 Hook `session_id` 必须由对应 Lumi/ACP adapter 保证与原始 `session/prompt.params.sessionId` 字节完全一致；Harness 不扫描 requester-context 目录，也不选择最新文件来猜测映射。OpenClaw 和 Hermes 仍可用于 `local-unrestricted`，但当前不属于 Lumi 授权 Agent allowlist。
 
 `context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
@@ -88,9 +104,9 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
   --cas-config-dir /secure/path/to/cas
 ```
 
-`--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
+`--agent` 支持 `claude`、`codex`、`qwen`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Qwen + Pi + OpenClaw + Hermes。`lumi-mvp-required` 只允许显式选择 `pi`、`claude`、`codex` 或 `qwen` 中的一个；Windows 上暂只允许 `pi`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 5 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators/SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 5 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators/SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.qwen` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`。
 
 更新工作目录：
 
@@ -212,7 +228,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 目录结构
 
-- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`。
+- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.qwen`、`.pi`、`.openclaw` 或 `.hermes`。
 - `bootstrap/cli-manifest.json`：npm 安装器下载 5 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。

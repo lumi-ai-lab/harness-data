@@ -26,6 +26,7 @@ type authzFixture struct {
 	now                time.Time
 	ownerUID           uint32
 	sessionID          string
+	installerAgent     string
 	envelope           Envelope
 }
 
@@ -38,6 +39,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	}
 	for _, directory := range []string{
 		filepath.Join(root, ".harness"),
+		filepath.Join(root, "agents"),
 		filepath.Join(root, "bin"),
 		filepath.Join(root, "bootstrap"),
 		filepath.Join(root, "config"),
@@ -79,6 +81,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		now:                time.Date(2026, 7, 30, 4, 0, 0, 0, time.UTC),
 		ownerUID:           ownerUID,
 		sessionID:          "acp-session-原始值",
+		installerAgent:     "pi",
 	}
 
 	writeTestFile(t, fixture.realCLIPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
@@ -179,6 +182,7 @@ func (fixture *authzFixture) writeEnvelope(t *testing.T, envelope Envelope) stri
 
 func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 	t.Helper()
+	fixture.writeAgentDeployment(t)
 	manifestData, err := os.ReadFile(fixture.cliManifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +208,7 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 		UpdatedAt:      fixture.now.Add(-time.Minute).Format(time.RFC3339Nano),
 		SchemaVersion:  3,
 		Profile:        ModeLumiMVPRequired,
-		Agent:          "pi",
+		Agent:          fixture.installerAgent,
 		InstallMode:    "github-token",
 		RuntimeTag:     "v1.0.0",
 		LocalTools:     map[string]json.RawMessage{},
@@ -229,6 +233,64 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 		LastCheckAt:     fixture.now.Format(time.RFC3339Nano),
 	}
 	writeTestJSON(t, fixture.installerStatePath, state, 0o600)
+}
+
+func (fixture *authzFixture) writeAgentDeployment(t *testing.T) {
+	t.Helper()
+	for _, agent := range []string{"pi", "claude", "codex", "qwen", "openclaw"} {
+		if err := os.RemoveAll(filepath.Join(fixture.root, "."+agent)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := filepath.Join(fixture.root, "agents", fixture.installerAgent)
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requiredFiles := map[string][]string{
+		"pi":       {"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")},
+		"claude":   {"settings.json"},
+		"codex":    {"hooks.json", "config.toml"},
+		"qwen":     {"settings.json"},
+		"openclaw": {"config.json"},
+	}[fixture.installerAgent]
+	for _, relative := range requiredFiles {
+		writeTestFile(t, filepath.Join(source, relative), []byte("{}\n"), 0o600)
+	}
+	switch fixture.installerAgent {
+	case "pi":
+		writeTestJSON(t, filepath.Join(source, "settings.json"), piAgentSettings{
+			EnableSkillCommands: true,
+			Extensions:          []string{".pi/extensions/qdm-harness/index.ts"},
+			Skills:              []string{".pi/skills"},
+		}, 0o600)
+	case "claude", "codex", "qwen":
+		matcher := "Bash"
+		if fixture.installerAgent == "qwen" {
+			matcher = "^run_shell_command$"
+		}
+		config := agentHookConfig{Hooks: map[string][]agentHookGroup{
+			"UserPromptSubmit": {{
+				Hooks: []agentCommandHook{{
+					Type: "command", Command: "data-harness-cli authz-hook --agent " + fixture.installerAgent + " || exit 2",
+				}},
+			}},
+			"PreToolUse": {{
+				Matcher: matcher,
+				Hooks: []agentCommandHook{{
+					Type: "command", Command: "data-harness-cli authz-hook --agent " + fixture.installerAgent + " || exit 2",
+				}},
+			}},
+		}}
+		configName := "settings.json"
+		if fixture.installerAgent == "codex" {
+			configName = "hooks.json"
+			writeTestFile(t, filepath.Join(source, "config.toml"), []byte("[features]\nhooks = true\n"), 0o600)
+		}
+		writeTestJSON(t, filepath.Join(source, configName), config, 0o600)
+	}
+	if err := os.Symlink(filepath.Join("agents", fixture.installerAgent), filepath.Join(fixture.root, "."+fixture.installerAgent)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeTestJSON(t *testing.T, path string, value any, mode os.FileMode) {

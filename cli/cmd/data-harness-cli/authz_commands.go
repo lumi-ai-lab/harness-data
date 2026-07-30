@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"harness-data/cli/internal/agentauthz"
 	"harness-data/cli/internal/authz"
 )
 
@@ -78,6 +79,34 @@ func runAuthzValidateCatalog(args []string, output io.Writer) error {
 		return writeAuthzError(output, nil, err)
 	}
 	return writeCommandJSON(output, authzCatalogValidation{Valid: true})
+}
+
+func runAuthzHook(root string, args []string, input io.Reader, output io.Writer) error {
+	flags := flag.NewFlagSet("authz-hook", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	agent := flags.String("agent", "", "agent hook contract: claude, codex, or qwen")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *agent == "" {
+		return authzHookError(errors.New("authz-hook arguments are invalid"))
+	}
+	raw, err := io.ReadAll(io.LimitReader(input, (2<<20)+1))
+	if err != nil {
+		return authzHookError(err)
+	}
+	handled, result, err := agentauthz.Run(root, *agent, raw)
+	if err != nil {
+		return authzHookError(err)
+	}
+	if !handled {
+		return nil
+	}
+	if err := writeCommandJSON(output, result); err != nil {
+		return authzHookError(err)
+	}
+	return nil
+}
+
+func authzHookError(err error) error {
+	return exitCodeError{Code: 2, Err: err}
 }
 
 func writeAuthzError(output io.Writer, ready *bool, err error) error {

@@ -3,11 +3,12 @@ import path from "node:path";
 import { binaryName } from "./platform.js";
 import { localUnrestrictedProfile, lumiRequiredProfile, normalizeProfile } from "./profile.js";
 
-export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
-export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
+export const agentChoices = ["claude", "codex", "qwen", "pi", "openclaw", "hermes", "both", "all"];
+export const concreteAgentNames = ["claude", "codex", "qwen", "pi", "openclaw", "hermes"];
 export const agentLinks = {
   claude: [["agents/claude", ".claude"]],
   codex: [["agents/codex", ".codex"]],
+  qwen: [["agents/qwen", ".qwen"]],
   pi: [["agents/pi", ".pi"]],
   openclaw: [["agents/openclaw", ".openclaw"]],
   hermes: [["agents/hermes", ".hermes"]],
@@ -15,6 +16,7 @@ export const agentLinks = {
   all: [
     ["agents/claude", ".claude"],
     ["agents/codex", ".codex"],
+    ["agents/qwen", ".qwen"],
     ["agents/pi", ".pi"],
     ["agents/openclaw", ".openclaw"],
     ["agents/hermes", ".hermes"],

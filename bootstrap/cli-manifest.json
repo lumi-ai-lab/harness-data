@@ -12,7 +12,12 @@
       ]
     },
     "lumi-mvp-required": {
-      "agent": "pi",
+      "agents": [
+        "pi",
+        "claude",
+        "codex",
+        "qwen"
+      ],
       "authzConfigPath": "/etc/harness-data/authz.json",
       "approvedIndicatorCatalog": {
         "source": "bootstrap/approved-indicators-v1.json",

@@ -415,7 +415,7 @@ export function printDoctorSummary(doctor, options = {}) {
       ok("2 个 Agent 可见 CLI（data-harness-cli 与 Indicators Facade）");
       ok("固定真实 Indicators CLI 与 release-set");
       ok("Lumi 配置（未暴露 CMR/SQL/CAS）");
-      ok("Pi Agent Hook");
+      ok("所选 Agent Hook");
       for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
       return;
     }
@@ -574,12 +574,12 @@ export async function installCommand(options = {}) {
     throw new Error("Lumi installation must explicitly pass --profile lumi-mvp-required");
   }
   if (profile === lumiRequiredProfile && !options.agent) {
-    throw new Error("lumi-mvp-required profile requires explicit --agent pi");
+    throw new Error("lumi-mvp-required profile requires an explicit authorized --agent");
   }
   const selectedAgent = profile === lumiRequiredProfile
     ? String(options.agent).trim().toLowerCase()
     : await chooseAgent(options);
-  validateProfileAgent(profile, selectedAgent);
+  validateProfileAgent(profile, selectedAgent, options);
   if (profile === lumiRequiredProfile && !options.wikisSource) {
     throw new Error("lumi-mvp-required installation requires explicit --wikis-source for business-approved content");
   }

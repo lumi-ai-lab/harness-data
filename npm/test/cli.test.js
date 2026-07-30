@@ -45,6 +45,7 @@ import { run } from "../src/lib/exec.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
+  lumiAgentSupportedOnPlatform,
   lumiReleaseSet,
   lumiReleaseSetDigest,
   lumiRequiredProfile,
@@ -154,7 +155,7 @@ function lumiManifestFixture(workspace, contents = {}) {
     profiles: {
       [localUnrestrictedProfile]: { tools: ["data-harness-cli"] },
       [lumiRequiredProfile]: {
-        agent: "pi",
+        agents: ["pi", "claude", "codex", "qwen"],
         authzConfigPath: "/etc/harness-data/authz.json",
         approvedIndicatorCatalog: {
           source: "bootstrap/approved-indicators-v1.json",
@@ -319,7 +320,7 @@ test("qdm cli binary lists include sql cli", () => {
   assert.deepEqual(localPathToolNames, ["cas-cli", "qdm-indicators-cli", "qdm-cmr-cli", "qdm-sql-cli"]);
 });
 
-test("profiles default locally and require explicit Pi for Lumi", async () => {
+test("profiles default locally and require an explicit authorized Agent for Lumi", async () => {
   assert.equal(normalizeProfile(), localUnrestrictedProfile);
   assert.equal(normalizeProfile(lumiRequiredProfile), lumiRequiredProfile);
   assert.throws(() => normalizeProfile("unknown"), /profile must be/);
@@ -335,10 +336,27 @@ test("profiles default locally and require explicit Pi for Lumi", async () => {
   assert.equal(profileFromState({}), "");
   assert.deepEqual(qdmCliBinariesForProfile(lumiRequiredProfile), ["data-harness-cli", "qdm-indicators-cli"]);
   assert.deepEqual(localPathToolNamesForProfile(lumiRequiredProfile), []);
-  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "pi"));
-  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "codex"), /requires --agent pi/);
-  await assert.rejects(installCommand({ profile: lumiRequiredProfile }), /requires explicit --agent pi/);
-  await assert.rejects(installCommand({ profile: lumiRequiredProfile, agent: "codex" }), /requires --agent pi/);
+  for (const agent of ["pi", "claude", "codex", "qwen"]) {
+    assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, agent));
+    assert.equal(profileFromState(lumiInstallerStateFixture({ agent })), lumiRequiredProfile);
+  }
+  assert.equal(lumiAgentSupportedOnPlatform("pi", "win32"), true);
+  assert.equal(lumiAgentSupportedOnPlatform("claude", "win32"), false);
+  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "pi", { platform: "win32" }));
+  assert.throws(
+    () => validateProfileAgent(lumiRequiredProfile, "codex", { platform: "win32" }),
+    /Windows currently supports only --agent pi/
+  );
+  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "openclaw"), /requires --agent/);
+  await assert.rejects(installCommand({ profile: lumiRequiredProfile }), /requires an explicit authorized --agent/);
+  await assert.rejects(
+    installCommand({ profile: lumiRequiredProfile, agent: "openclaw" }),
+    /requires --agent/
+  );
+  await assert.rejects(
+    installCommand({ profile: lumiRequiredProfile, agent: "codex" }),
+    /requires explicit --wikis-source/
+  );
   await assert.rejects(installCommand({ profile: lumiRequiredProfile, agent: "pi" }), /requires explicit --wikis-source/);
   await assert.rejects(installCommand({ yes: true }), /requires explicit --profile/);
 });
@@ -1765,13 +1783,31 @@ test("auth and update reject a workspace with no unambiguous installer profile",
   }
 });
 
-test("agent choices include OpenClaw, Hermes, both, and all", () => {
-  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
+test("agent choices include Qwen, OpenClaw, Hermes, both, and all", () => {
+  assert.deepEqual(agentChoices, ["claude", "codex", "qwen", "pi", "openclaw", "hermes", "both", "all"]);
+});
+
+test("Claude, Codex, and Qwen templates install request and shell authorization hooks", () => {
+  const claude = JSON.parse(fs.readFileSync(path.join(root, "..", ".agents", "claude", "settings.json"), "utf8"));
+  const codex = JSON.parse(fs.readFileSync(path.join(root, "..", ".agents", "codex", "hooks.json"), "utf8"));
+  const qwen = JSON.parse(fs.readFileSync(path.join(root, "..", ".agents", "qwen", "settings.json"), "utf8"));
+
+  for (const [agent, config, toolName] of [
+    ["claude", claude, "Bash"],
+    ["codex", codex, "Bash"],
+    ["qwen", qwen, "^run_shell_command$"]
+  ]) {
+    const promptCommands = config.hooks.UserPromptSubmit[0].hooks.map((hook) => hook.command);
+    assert.ok(promptCommands.some((command) => command.includes(`authz-hook --agent ${agent}`)), agent);
+    const preTool = config.hooks.PreToolUse[0];
+    assert.equal(preTool.matcher, toolName, agent);
+    assert.ok(preTool.hooks.some((hook) => hook.command.includes(`authz-hook --agent ${agent}`)), agent);
+  }
 });
 
 test("links selected agent templates", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+  for (const name of ["claude", "codex", "qwen", "pi", "openclaw", "hermes"]) {
     fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
   }
 
@@ -1783,6 +1819,10 @@ test("links selected agent templates", () => {
   assert.deepEqual(hermes, [["agents/hermes", ".hermes"]]);
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
 
+  const qwen = linkAgents(workspace, "qwen");
+  assert.deepEqual(qwen, [["agents/qwen", ".qwen"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".qwen")), fs.realpathSync(path.join(workspace, "agents", "qwen")));
+
   const both = linkAgents(workspace, "both");
   assert.deepEqual(both, [["agents/claude", ".claude"], ["agents/codex", ".codex"]]);
   assert.equal(fs.realpathSync(path.join(workspace, ".claude")), fs.realpathSync(path.join(workspace, "agents", "claude")));
@@ -1793,6 +1833,7 @@ test("links selected agent templates", () => {
   assert.deepEqual(all, [
     ["agents/claude", ".claude"],
     ["agents/codex", ".codex"],
+    ["agents/qwen", ".qwen"],
     ["agents/pi", ".pi"],
     ["agents/openclaw", ".openclaw"],
     ["agents/hermes", ".hermes"],
@@ -1803,7 +1844,7 @@ test("links selected agent templates", () => {
 
 function createAgentWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+  for (const name of ["claude", "codex", "qwen", "pi", "openclaw", "hermes"]) {
     fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
   }
   return workspace;
@@ -1843,6 +1884,7 @@ function createDoctorWorkspace(agent) {
   for (const dir of [
     "agents/claude",
     "agents/codex",
+    "agents/qwen",
     "agents/pi",
     "agents/openclaw",
     "agents/hermes",
@@ -1878,7 +1920,7 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
   }
 });
 
-test("Lumi doctor validates release-set, Facade, private CLI, config, and Pi-only hooks", async () => {
+test("Lumi doctor validates release-set, Facade, private CLI, config, and selected authorized Agent hook", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const authzPath = path.join(workspace, "etc", "authz.json");
   const readinessLog = path.join(workspace, "readiness.log");
@@ -1895,6 +1937,9 @@ exit 0
   fixture.manifest.profiles[lumiRequiredProfile].authzConfigPath = authzPath;
   for (const dir of [
     "agents/pi",
+    "agents/claude",
+    "agents/codex",
+    "agents/qwen",
     "bootstrap",
     "wikis/metrics",
     "wikis/reports",
@@ -1954,6 +1999,42 @@ exit 0
   assert.equal(buildReport.checks.find((check) => check.name === "authz config").detail, "runtime mount pending");
   assert.equal(buildReport.checks.some((check) => check.name === "CAS credentials file"), false);
   assert.equal(buildReport.checks.some((check) => check.name.endsWith("token")), false);
+
+  const baseState = readInstallerState(workspace);
+  for (const agent of ["pi", "claude", "codex", "qwen"]) {
+    for (const name of ["pi", "claude", "codex", "qwen"]) {
+      fs.rmSync(path.join(workspace, `.${name}`), { recursive: true, force: true });
+    }
+    linkAgents(workspace, agent);
+    writeInstallerStateFile(workspace, { ...baseState, agent });
+    const agentReport = await collectDoctor(workspace, {
+      buildTime: true,
+      env: { PATH: "/usr/bin:/bin" },
+      platform: "linux"
+    });
+    assert.equal(agentReport.checks.every((check) => check.ok), true,
+      `${agent}: ${agentReport.checks.filter((check) => !check.ok).map((check) => check.name).join(", ")}`);
+  }
+  for (const name of ["pi", "claude", "codex", "qwen"]) {
+    fs.rmSync(path.join(workspace, `.${name}`), { recursive: true, force: true });
+  }
+  linkAgents(workspace, "pi");
+  writeInstallerStateFile(workspace, baseState);
+
+  const windowsReport = await collectDoctor(workspace, {
+    buildTime: true,
+    env: { PATH: "/usr/bin:/bin" },
+    platform: "win32"
+  });
+  assert.equal(windowsReport.checks.find((check) => check.name === "authorized Agent platform").ok, true);
+  writeInstallerStateFile(workspace, { ...baseState, agent: "codex" });
+  const unsupportedWindowsReport = await collectDoctor(workspace, {
+    buildTime: true,
+    env: { PATH: "/usr/bin:/bin" },
+    platform: "win32"
+  });
+  assert.equal(unsupportedWindowsReport.checks.find((check) => check.name === "authorized Agent platform").ok, false);
+  writeInstallerStateFile(workspace, baseState);
 
   fs.rmSync(path.join(workspace, ".harness", "index", "wikis-runtime-index.json"));
   const missingIndexReport = await collectDoctor(workspace, { buildTime: true, env: { PATH: "/usr/bin:/bin" } });

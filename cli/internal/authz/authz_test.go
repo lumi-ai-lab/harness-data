@@ -302,6 +302,55 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		t.Fatalf("readiness = %#v, %v", report, err)
 	}
 
+	t.Run("authorized agents", func(t *testing.T) {
+		for _, agent := range []string{"pi", "claude", "codex", "qwen"} {
+			t.Run(agent, func(t *testing.T) {
+				fixture := newAuthzFixture(t)
+				fixture.installerAgent = agent
+				fixture.writeInstallerState(t)
+				report, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+				if err != nil || !report.Ready {
+					t.Fatalf("readiness = %#v, %v", report, err)
+				}
+			})
+		}
+		fixture := newAuthzFixture(t)
+		fixture.installerAgent = "openclaw"
+		fixture.writeInstallerState(t)
+		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
+	t.Run("selected Agent deployment", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, "agents", "pi", "settings.json")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("agents", "claude"), filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		writeTestFile(t, filepath.Join(fixture.root, "agents", "pi", "settings.json"), []byte("{}\n"), 0o600)
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
+
 	t.Run("facade digest", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
 		writeTestFile(t, fixture.facadePath, []byte("tampered"), 0o700)
@@ -488,6 +537,21 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 			t.Fatalf("readiness with process environment = %#v, %v", report, err)
 		}
 	})
+}
+
+func TestShippedAuthorizedAgentConfigsMatchReadinessContract(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []string{"pi", "claude", "codex", "qwen"} {
+		t.Run(agent, func(t *testing.T) {
+			source := filepath.Join(repositoryRoot, ".agents", agent)
+			if err := validateSelectedAgentConfig(source, agent); err != nil {
+				t.Fatalf("shipped %s config is invalid: %v", agent, err)
+			}
+		})
+	}
 }
 
 func TestParentDirectorySymlinkIsRejected(t *testing.T) {

@@ -16,6 +16,7 @@ import {
   lumiReleaseSet,
   lumiReleaseSetDigest,
   lumiRequiredProfile,
+  lumiAgentSupportedOnPlatform,
   profileFromState,
   sameLumiReleaseSet,
   selectManifestProfile
@@ -297,7 +298,8 @@ export async function collectDoctor(workspace, options = {}) {
   const lumiContract = effectiveProfile === lumiRequiredProfile ? readLumiContract(workspace) : null;
   if (effectiveProfile === lumiRequiredProfile) {
     add("installer state v3", state.schemaVersion === installerStateSchemaVersion);
-    add("Pi-only profile", state.agent === "pi");
+    add("authorized Agent profile", ["pi", "claude", "codex", "qwen"].includes(state.agent), state.agent);
+    add("authorized Agent platform", lumiAgentSupportedOnPlatform(state.agent, options.platform), options.platform || process.platform);
     add("manifest release-set", !lumiContract.error, lumiContract.error || lumiContract.releaseSet.version);
     add("manifest sha256", Boolean(!lumiContract.error && state.manifestSha256 === lumiContract.manifestSha256));
     add("release-set", releaseSetStateValid(state, lumiContract.error ? null : lumiContract.releaseSet));
@@ -392,8 +394,8 @@ export async function collectDoctor(workspace, options = {}) {
         : { ok: false, detail: "Harness helper integrity failed" };
       add("authorization readiness", readiness.ok, readiness.detail);
     }
-    add("Agent hook .pi", agentOk(workspace, "pi"), "agents/pi");
-    for (const name of concreteAgentNames.filter((name) => name !== "pi")) {
+    add(`Agent hook .${state.agent}`, agentOk(workspace, state.agent), `agents/${state.agent}`);
+    for (const name of concreteAgentNames.filter((name) => name !== state.agent)) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));
     }
   } else {
