@@ -4,9 +4,9 @@ import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
 import { localPathToolNamesForProfile, writeLocalConfig, linkAgents } from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
-import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
+import { ask, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -16,12 +16,9 @@ import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, lat
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import {
-  authzConfigPathFor,
   installerStateSchemaVersion,
   lumiApprovedWikisArtifact,
-  lumiCatalogArtifact,
   localUnrestrictedProfile,
-  lumiReleaseSet,
   lumiRequiredProfile,
   normalizeProfile,
   profileFromState,
@@ -173,10 +170,19 @@ function executable(file) {
 }
 
 async function promptExecutable(runtimeDir, name, options = {}) {
-  const auto = path.join(runtimeDir, "bin", binaryName(name));
-  if (executable(auto)) {
-    ok(`自动识别 ${name}: ${auto}`);
-    return auto;
+  const explicit = name === "qdm-metric-cli" ? options.metricCliPath : "";
+  const candidates = [
+    explicit,
+    path.join(runtimeDir, "bin", binaryName(name)),
+    path.join(runtimeDir, binaryName(name)),
+    path.join(process.cwd(), binaryName(name))
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const file = path.resolve(candidate);
+    if (executable(file)) {
+      ok(`自动识别 ${name}: ${file}`);
+      return file;
+    }
   }
   const value = await ask(`请输入 ${name} 的绝对路径：`, options);
   const file = path.resolve(value);
@@ -265,113 +271,6 @@ export function validateLocalWikisSource(source) {
   }
 }
 
-function casConfigDir(runtimeDir) {
-  return path.join(runtimeDir, ".qdm-auth", "cas");
-}
-
-export async function writeCasCredentials(runtimeDir, options = {}) {
-  const username = options.casUsername || await ask("CAS 用户名：", options);
-  const password = options.casPassword || await askSecret("CAS 密码：", options);
-  if (!username || !password) throw new Error("CAS username and password are required");
-  const dir = options.casConfigDir || casConfigDir(runtimeDir);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const env = { QDM_CAS_CONFIG_DIR: dir };
-  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], {
-    cwd: runtimeDir,
-    env,
-    sensitiveArgs: [5]
-  });
-  ok("CAS 凭证已加密保存");
-  return dir;
-}
-
-function isCasAuthenticationFailure(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid credentials?|bad credentials?|认证.{0,8}(失败|不通过)|账号.{0,8}密码|<!doctype html|<html[\s>]/i.test(message);
-}
-
-function sanitizedCasError(error) {
-  if (isCasAuthenticationFailure(error)) return new Error("CAS 账号或密码验证不通过");
-  const message = String(error?.message || error || "CAS 认证失败");
-  if (/<(!doctype|html)[\s>]/i.test(message)) return new Error("CAS 服务返回了异常页面，请稍后重试");
-  return error instanceof Error ? error : new Error(message);
-}
-
-async function validateCasCredentials(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const command = path.join(runtimeDir, "bin", binaryName("cas-cli"));
-  await run(command, ["token", "--app", "cmr"], { cwd: runtimeDir, env });
-}
-
-function activateCasCredentials(stagedDir, targetDir) {
-  const backupDir = `${targetDir}.backup-${process.pid}-${Date.now()}`;
-  fs.mkdirSync(path.dirname(targetDir), { recursive: true, mode: 0o700 });
-  try {
-    if (fs.existsSync(targetDir)) fs.renameSync(targetDir, backupDir);
-    fs.renameSync(stagedDir, targetDir);
-    fs.rmSync(backupDir, { recursive: true, force: true });
-  } catch (error) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    if (fs.existsSync(backupDir)) fs.renameSync(backupDir, targetDir);
-    throw error;
-  }
-}
-
-export async function configureCasAuthentication(runtimeDir, options = {}) {
-  const targetDir = casConfigDir(runtimeDir);
-  const promptUsername = options.askUsername || ask;
-  const promptPassword = options.askPassword || askSecret;
-  const suppliedCredentials = Boolean(options.casUsername || options.casPassword || options.yes);
-  const maxAttempts = suppliedCredentials ? 1 : Number(options.casMaxAttempts || 3);
-  let previousUsername = String(options.casUsername || "").trim();
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const usernameAnswer = options.casUsername || await promptUsername(previousUsername ? `CAS 用户名 [${previousUsername}]：` : "CAS 用户名：", options);
-    const username = String(usernameAnswer || previousUsername).trim();
-    const password = options.casPassword || await promptPassword("CAS 密码：", options);
-    previousUsername = username;
-    if (!username || !password) {
-      warn("CAS 用户名和密码不能为空");
-      if (attempt < maxAttempts) continue;
-      throw new Error("CAS username and password are required");
-    }
-
-    const stagedDir = fs.mkdtempSync(path.join(runtimeDir, ".cas-auth-"));
-    try {
-      await writeCasCredentials(runtimeDir, { ...options, casUsername: username, casPassword: password, casConfigDir: stagedDir });
-      action("正在验证 CAS 账号……");
-      await validateCasCredentials(runtimeDir, stagedDir);
-      activateCasCredentials(stagedDir, targetDir);
-      ok("CAS 认证成功");
-      return targetDir;
-    } catch (error) {
-      fs.rmSync(stagedDir, { recursive: true, force: true });
-      const cleanError = sanitizedCasError(error);
-      if (!isCasAuthenticationFailure(error) || attempt >= maxAttempts) throw cleanError;
-      warn(`${cleanError.message}，请重新输入`);
-    }
-  }
-
-  throw new Error("CAS 认证失败");
-}
-
-export async function configureTokens(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
-  const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("CMR Token 已配置");
-  const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("Indicators Token 已配置");
-  const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("SQL Token 已配置");
-  await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  await run(bin("qdm-sql-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-}
-
 export async function buildAndCheck(runtimeDir, options = {}) {
   const cli = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
   action("执行：data-harness-cli wikis build-index --skip-checks");
@@ -412,9 +311,9 @@ export function printDoctorSummary(doctor, options = {}) {
   if (!failed.length) {
     if (doctor.profile === lumiRequiredProfile) {
       ok("lumi-mvp-required profile 与 installer-state v3");
-      ok("2 个 Agent 可见 CLI（data-harness-cli 与 Indicators Facade）");
-      ok("固定真实 Indicators CLI 与 release-set");
-      ok("Lumi 配置（未暴露 CMR/SQL/CAS）");
+      ok("2 个运行时 CLI（data-harness-cli 与 qdm-metric-cli）");
+      ok("唯一数据入口 qdm-metric-cli");
+      ok("无 CAS/token 与其他数据 CLI");
       ok("所选 Agent Hook");
       for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
       return;
@@ -424,144 +323,14 @@ export function printDoctorSummary(doctor, options = {}) {
     ok("wikis/reports");
     ok("wikis/dims");
     ok("wikis/rules");
-    ok("5 个 CLI");
+    ok("2 个 CLI");
     ok("本地配置");
-    ok("CAS 凭证");
-    ok("CMR Token");
-    ok("Indicators Token");
-    ok("SQL Token");
     if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
     for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
     return;
   }
   for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
   for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
-}
-
-export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
-  const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
-  const facade = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
-  const real = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
-  if (!helper || !facade || !real) throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
-  if (helper.tracking !== "fixed" || facade.tracking !== "fixed" || real.tracking !== "fixed") {
-    throw new Error("lumi-mvp-required authorization artifacts must use fixed tracking");
-  }
-  const helperBinarySha256 = helper.platforms?.[platformKey()]?.binarySha256;
-  if (!String(helper.version || "").trim() || !/^[a-f0-9]{64}$/.test(String(helperBinarySha256 || ""))) {
-    throw new Error("Harness helper version and binary sha256 must be fixed");
-  }
-  if (facade.version !== releaseSet.facadeVersion) {
-    throw new Error(`Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
-  }
-  if (real.version !== releaseSet.realIndicatorsVersion) {
-    throw new Error(`real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
-  }
-  const lumiPlatformKey = platformKey();
-  const facadeBinarySha256 = String(facade.platforms?.[lumiPlatformKey]?.binarySha256 || "");
-  if (!/^[a-f0-9]{64}$/.test(facadeBinarySha256)) {
-    throw new Error(`Facade binary sha256 is not fixed for ${lumiPlatformKey}`);
-  }
-  const realBinarySha256 = String(real.platforms?.[lumiPlatformKey]?.binarySha256 || "");
-  if (!/^[a-f0-9]{64}$/.test(realBinarySha256)) {
-    throw new Error(`real Indicators CLI binary sha256 is not fixed for ${lumiPlatformKey}`);
-  }
-  const publicFacade = path.join(runtimeDir, "bin", binaryName("qdm-indicators-cli"));
-  const publicHelper = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
-  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(publicHelper)) {
-    throw new Error(`Harness helper destination must be ${publicHelper}`);
-  }
-  if (path.resolve(toolDestination(runtimeDir, facade)) !== path.resolve(publicFacade)) {
-    throw new Error(`Facade destination must be ${publicFacade}`);
-  }
-  if (!path.isAbsolute(String(real.destination || ""))) {
-    throw new Error("real Indicators CLI destination must be an absolute private path");
-  }
-}
-
-export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
-  const facade = installedTools?.["qdm-indicators-facade"];
-  const real = installedTools?.["qdm-indicators-cli-real"];
-  if (!facade || !real) throw new Error("lumi-mvp-required installation is missing fixed Indicators artifacts");
-  if (facade.version !== releaseSet.facadeVersion) {
-    throw new Error(`installed Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
-  }
-  if (real.version !== releaseSet.realIndicatorsVersion) {
-    throw new Error(`installed real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
-  }
-  if (manifest) {
-    const key = platformKey();
-    const facadeTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
-    const realTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
-    const helperTool = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
-    const helper = installedTools?.["data-harness-cli"];
-    const facadeBinarySha256 = facadeTool?.platforms?.[key]?.binarySha256;
-    const realBinarySha256 = realTool?.platforms?.[key]?.binarySha256;
-    const helperBinarySha256 = helperTool?.platforms?.[key]?.binarySha256;
-    if (!/^[a-f0-9]{64}$/.test(String(facadeBinarySha256 || ""))) {
-      throw new Error(`manifest is missing Facade binary sha256 for ${key}`);
-    }
-    if (!/^[a-f0-9]{64}$/.test(String(realBinarySha256 || ""))) {
-      throw new Error(`manifest is missing real Indicators CLI binary sha256 for ${key}`);
-    }
-    if (facade.sha256 !== facadeBinarySha256) {
-      throw new Error(`installed Facade sha256 does not match manifest for ${key}`);
-    }
-    if (real.sha256 !== realBinarySha256) {
-      throw new Error(`installed real Indicators CLI sha256 does not match manifest for ${key}`);
-    }
-    if (!helper || helper.version !== helperTool?.version || helper.sha256 !== helperBinarySha256) {
-      throw new Error("installed Harness helper does not match its fixed manifest contract");
-    }
-  } else {
-    if (real.sha256 !== releaseSet.realIndicatorsSha256) {
-      throw new Error("installed real Indicators CLI sha256 does not match release-set");
-    }
-    if (facade.sha256 !== releaseSet.facadeSha256) {
-      throw new Error("installed Facade sha256 does not match release-set");
-    }
-  }
-}
-
-function fileSha256(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-export function installLumiCatalog(runtimeDir, manifest) {
-  const catalog = lumiCatalogArtifact(manifest);
-  const source = path.resolve(runtimeDir, catalog.source);
-  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-indicators-v1.json");
-  if (source !== expectedSource) throw new Error("approved indicator catalog source escapes the runtime bundle");
-  let sourceInfo;
-  try {
-    sourceInfo = fs.lstatSync(source);
-  } catch {
-    throw new Error(`business-approved indicator catalog is missing from the runtime bundle: ${source}`);
-  }
-  if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || sourceInfo.size <= 0 || sourceInfo.size > 4 * 1024 * 1024) {
-    throw new Error("business-approved indicator catalog is not a safe regular file");
-  }
-  if (fileSha256(source) !== catalog.sha256) {
-    throw new Error("business-approved indicator catalog sha256 does not match release-set");
-  }
-  const destination = catalog.destination;
-  if (fs.existsSync(destination)) {
-    const destinationInfo = fs.lstatSync(destination);
-    if (!destinationInfo.isFile() || destinationInfo.isSymbolicLink() || fileSha256(destination) !== catalog.sha256) {
-      throw new Error(`approved indicator catalog destination already contains a different artifact: ${destination}`);
-    }
-    fs.chmodSync(destination, 0o644);
-    return destination;
-  }
-  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
-  const staged = `${destination}.install-${process.pid}`;
-  try {
-    fs.copyFileSync(source, staged, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(staged, 0o644);
-    fs.renameSync(staged, destination);
-  } finally {
-    fs.rmSync(staged, { force: true });
-  }
-  return destination;
 }
 
 export async function installCommand(options = {}) {
@@ -604,49 +373,34 @@ export async function installCommand(options = {}) {
     `Profile：${profile}`
   ]);
 
-  step(1, 8, "检查本机依赖");
+  step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
 
-  step(2, 8, "安装 runtime bundle");
+  step(2, 7, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
   const bundle = await installRuntimeBundle(runtimeDir, { ...options, profile });
   blank();
 
-  step(3, 8, "安装 CLI 工具");
+  step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
   const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
   const sourceManifest = readManifest(manifestPath);
   const selectedManifest = selectManifestProfile(sourceManifest, profile);
-  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest) : null;
-  const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
-  if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
-
-  let manifest;
-  let localTools = {};
-  if (profile === lumiRequiredProfile) {
-    if (!tokenMode) throw new Error("lumi-mvp-required profile requires authenticated access to fixed release artifacts");
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
-      ...options,
-      state: installState,
-      manifestOverride: selectedManifest
-    });
-    verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
-    installLumiCatalog(runtimeDir, sourceManifest);
-  } else if (tokenMode) {
-    const latestManifest = await resolveLatestManifest(selectedManifest, key, options);
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-  } else {
-    const latestManifest = await resolveLatestManifest(selectedManifest, key, { ...options, tools: ["data-harness-cli"] });
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-    localTools = await installLocalTools(runtimeDir, profile, options);
-  }
+  const latestManifest = await resolveLatestManifest(selectedManifest, key, {
+    ...options,
+    tools: ["data-harness-cli"]
+  });
+  const manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
+    ...options,
+    state: installState,
+    manifestOverride: latestManifest
+  });
+  const localTools = await installLocalTools(runtimeDir, profile, options);
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已按 ${profile} profile 安装`);
   blank();
-  const installedManifestSha256 = profile === lumiRequiredProfile
-    ? fileSha256(manifestPath)
-    : manifestDigest(manifest);
+  const installedManifestSha256 = manifestDigest(manifest);
 
   // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
   writeState(runtimeDir, {
@@ -658,37 +412,25 @@ export async function installCommand(options = {}) {
     localTools,
     tools: manifest.installedTools || {},
     manifestSha256: installedManifestSha256,
-    packageVersion: packageVersion(),
-    releaseSet,
-    authzConfigPath
+    packageVersion: packageVersion()
   });
   blank();
 
-  step(4, 8, "同步 Wikis 知识库");
+  step(4, 7, "同步 Wikis 知识库");
   await installWikis(runtimeDir, profile, sourceManifest, options);
   blank();
 
-  step(5, 8, "生成本地配置");
+  step(5, 7, "生成本地配置");
   writeLocalConfig(runtimeDir, { overwrite: true, profile });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
   blank();
 
-  step(6, 8, "配置 CAS 认证");
-  let casDir = "";
-  if (profile === localUnrestrictedProfile) {
-    casDir = await configureCasAuthentication(runtimeDir, options);
-    await configureTokens(runtimeDir, casDir);
-  } else {
-    skip("lumi-mvp-required 由部署系统提供 Indicators 凭证，安装器不配置 CAS/token");
-  }
-  blank();
-
-  step(7, 8, "构建 Wikis 索引");
+  step(6, 7, "构建 Wikis 索引");
   await buildAndCheck(runtimeDir, { ...options, requiredIndexes: profile === lumiRequiredProfile });
   blank();
 
-  step(8, 8, "配置 Agent Hook");
+  step(7, 7, "配置 Agent Hook");
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
@@ -696,7 +438,7 @@ export async function installCommand(options = {}) {
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir, buildTime: profile === lumiRequiredProfile });
+  const doctor = await collectDoctor(runtimeDir, { ...options, buildTime: profile === lumiRequiredProfile });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();
@@ -711,8 +453,6 @@ export async function installCommand(options = {}) {
     manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
     agent: selectedAgent,
-    releaseSet,
-    authzConfigPath,
     lastCheckAt: new Date().toISOString()
   });
   console.log(`安装完成：${runtimeDir}`);

@@ -216,7 +216,6 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
           const tools = manifest.tools.filter((item) => item.repo === "lumi-ai-lab/harness-data");
           if (!tools.some((item) => item.name === "data-harness-cli")) throw new Error("manifest missing data-harness-cli");
-          if (!tools.some((item) => item.name === "qdm-indicators-facade")) throw new Error("manifest missing qdm-indicators-facade");
           function archiveSuffix(asset, platform) {
             if (asset.archive) return asset.archive;
             if (asset.url?.endsWith(".tar.gz")) return "tar.gz";

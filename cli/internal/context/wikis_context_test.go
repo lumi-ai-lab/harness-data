@@ -162,32 +162,6 @@ func TestBuildWithWikisIndexMultiSingleModeDefaultsWithoutValueIntent(t *testing
 	}
 }
 
-func TestBuildWithWikisIndexSQLPassthroughSkipsMetricRecall(t *testing.T) {
-	root, _ := testStructuredMetricWikiRoot(t, 1)
-	for _, question := range []string{
-		"执行SQL: show tables",
-		"select sum(metric_01) from ads_sale_amt where dt = '2026-07-05'",
-	} {
-		response, plan, err := BuildWithPlan(root, question)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if plan.Mode != sessionstate.ModeFree || plan.Reason != "free_sql_passthrough" || plan.SelectedPlaybook != "" || len(plan.SelectedPlaybooks) != 0 {
-			t.Fatalf("%q unexpected plan: %+v", question, plan)
-		}
-		got := contextPaths(response)
-		want := []string{
-			"wikis/rules/qdm-sql-cli/spec.md",
-		}
-		if strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("%q context paths:\n%s", question, strings.Join(got, "\n"))
-		}
-		if !strings.Contains(response.Instruction, "Harness mode: free") {
-			t.Fatalf("%q unexpected instruction: %s", question, response.Instruction)
-		}
-	}
-}
-
 func TestBuildWithWikisIndexMultiSingleCandidateLimitUsesFreeMode(t *testing.T) {
 	root, labels := testStructuredMetricWikiRoot(t, multiSingleCandidateLimit+1)
 	response, plan, err := BuildWithPlan(root, strings.Join(labels, "、"))
