@@ -1,9 +1,25 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { run } from "../lib/exec.js";
-import { findWorkspaceDir } from "../lib/paths.js";
-import { binaryName } from "../lib/platform.js";
-import { concreteAgentNames, qdmCliBinaries } from "../lib/config.js";
+import { findWorkspaceDir, readInstallerState } from "../lib/paths.js";
+import { binaryName, platformKey } from "../lib/platform.js";
+import { concreteAgentNames, qdmCliBinariesForProfile } from "../lib/config.js";
+import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
+import { readManifest, toolDestination } from "../lib/manifest.js";
+import {
+  authzConfigPathFor,
+  installerStateSchemaVersion,
+  lumiApprovedWikisArtifact,
+  lumiCatalogArtifact,
+  localUnrestrictedProfile,
+  lumiReleaseSet,
+  lumiReleaseSetDigest,
+  lumiRequiredProfile,
+  profileFromState,
+  sameLumiReleaseSet,
+  selectManifestProfile
+} from "../lib/profile.js";
 
 function existsExecutable(file) {
   try {
@@ -32,13 +48,131 @@ async function tokenCheck(workspace, binary, env) {
   return result.code === 0;
 }
 
-function configPathsValid(workspace) {
-  const file = path.join(workspace, "config", "qdm-cli-paths.env");
-  if (!fs.existsSync(file)) return false;
-  const content = fs.readFileSync(file, "utf8");
-  const required = ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
-  const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
-  return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
+function yamlCliPath(content, name) {
+  const match = content.match(new RegExp(`^\\s*${name}:\\s*(.+?)\\s*$`, "m"));
+  return String(match?.[1] || "").replace(/^["']|["']$/g, "");
+}
+
+function configPathsValid(workspace, profile) {
+  const envFile = path.join(workspace, "config", "qdm-cli-paths.env");
+  const harnessFile = path.join(workspace, "config", "harness-config.yaml");
+  if (!fs.existsSync(envFile) || !fs.existsSync(harnessFile)) return false;
+  const envContent = fs.readFileSync(envFile, "utf8");
+  const harnessContent = fs.readFileSync(harnessFile, "utf8");
+  const required = profile === lumiRequiredProfile
+    ? ["QDM_INDICATORS_CLI"]
+    : ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
+  const values = new Map([...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
+  if (!required.every((name) => values.has(name) && fs.existsSync(values.get(name)))) return false;
+  if (profile === lumiRequiredProfile) {
+    const forbiddenEnv = ["QDM_CMR_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI", "QDM_CAS_CONFIG_DIR"];
+    const forbiddenYaml = ["qdm_cmr_cli", "qdm_sql_cli", "qdm_cas_cli"];
+    if (forbiddenEnv.some((name) => values.has(name))) return false;
+    if (forbiddenYaml.some((name) => yamlCliPath(harnessContent, name))) return false;
+    const expected = path.resolve(workspace, "bin", binaryName("qdm-indicators-cli"));
+    return path.resolve(values.get("QDM_INDICATORS_CLI")) === expected &&
+      path.resolve(yamlCliPath(harnessContent, "qdm_indicators_cli")) === expected;
+  }
+  return true;
+}
+
+function fileSha256(file) {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
+function installedToolValid(state, name, expectedDestination = "") {
+  const tool = state.tools?.[name];
+  if (!tool?.destination || !tool.sha256) return false;
+  if (expectedDestination && path.resolve(tool.destination) !== path.resolve(expectedDestination)) return false;
+  return existsExecutable(tool.destination) && fileSha256(tool.destination) === tool.sha256;
+}
+
+function releaseSetStateValid(state, expected) {
+  const releaseSet = state.releaseSet;
+  const required = ["version", "facadeVersion", "facadeSha256", "realIndicatorsVersion", "realIndicatorsSha256", "catalogSha256", "piVersion"];
+  return Boolean(
+    releaseSet &&
+    required.every((field) => String(releaseSet[field] || "").trim()) &&
+    releaseSet.realIndicatorsVersion === "v0.0.4" &&
+    Number.isInteger(releaseSet.authzSchemaVersion) &&
+    releaseSet.authzSchemaVersion > 0 &&
+    /^[a-f0-9]{64}$/.test(String(releaseSet.facadeSha256 || "")) &&
+    /^[a-f0-9]{64}$/.test(String(releaseSet.realIndicatorsSha256 || "")) &&
+    /^[a-f0-9]{64}$/.test(String(releaseSet.catalogSha256 || "")) &&
+    releaseSet.sha256 === lumiReleaseSetDigest(releaseSet) &&
+    (!expected || sameLumiReleaseSet(releaseSet, expected))
+  );
+}
+
+function readLumiContract(workspace) {
+  try {
+    const manifestPath = path.join(workspace, "bootstrap", "cli-manifest.json");
+    const manifest = readManifest(manifestPath);
+    const selected = selectManifestProfile(manifest, lumiRequiredProfile);
+    const releaseSet = lumiReleaseSet(manifest);
+    const catalog = lumiCatalogArtifact(manifest);
+    const approvedWikis = lumiApprovedWikisArtifact(manifest);
+    const helper = selected.tools.find((tool) => tool.name === "data-harness-cli");
+    const facade = selected.tools.find((tool) => tool.name === "qdm-indicators-facade");
+    const real = selected.tools.find((tool) => tool.name === "qdm-indicators-cli-real");
+    if (!helper || !facade || !real) throw new Error("manifest is missing fixed Harness authorization artifacts");
+    if (helper.tracking !== "fixed" || facade.tracking !== "fixed" || real.tracking !== "fixed") {
+      throw new Error("Harness authorization artifacts are not fixed");
+    }
+    if (!String(helper.version || "").trim()) throw new Error("Harness helper version is not fixed");
+    const helperBinarySha256 = String(helper.platforms?.[platformKey()]?.binarySha256 || "");
+    if (!/^[a-f0-9]{64}$/.test(helperBinarySha256)) throw new Error("Harness helper binary sha256 is not fixed");
+    if (facade.version !== releaseSet.facadeVersion || real.version !== releaseSet.realIndicatorsVersion) {
+      throw new Error("Indicators artifact versions do not match release-set");
+    }
+    const publicFacade = path.join(workspace, "bin", binaryName("qdm-indicators-cli"));
+    const publicHelper = path.join(workspace, "bin", binaryName("data-harness-cli"));
+    const helperDestination = toolDestination(workspace, helper);
+    const facadeDestination = toolDestination(workspace, facade);
+    const realDestination = toolDestination(workspace, real);
+    if (path.resolve(facadeDestination) !== path.resolve(publicFacade)) throw new Error("Facade destination is not public qdm-indicators-cli");
+    if (path.resolve(helperDestination) !== path.resolve(publicHelper)) throw new Error("Harness helper destination is not public data-harness-cli");
+    if (!path.isAbsolute(String(real.destination || ""))) throw new Error("real Indicators CLI destination is not absolute");
+    return {
+      authzConfigPath: authzConfigPathFor(manifest, lumiRequiredProfile),
+      facadeDestination,
+      helperDestination,
+      helperBinarySha256,
+      helperVersion: helper.version,
+      realDestination,
+      catalogDestination: catalog.destination,
+      approvedWikis,
+      manifestSha256: fileSha256(manifestPath),
+      releaseSet
+    };
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
+function versionWithoutPrefix(value) {
+  return String(value || "").replace(/^v/, "");
+}
+
+function authzConfigMatchesState(file, state, expectedRealDestination, expectedCatalogDestination) {
+  try {
+    const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    const releaseSet = state.releaseSet || {};
+    return config?.mode === lumiRequiredProfile &&
+      config.version === releaseSet.authzSchemaVersion &&
+      config.piVersion === releaseSet.piVersion &&
+      path.resolve(config.realIndicatorsCli?.path || "") === path.resolve(expectedRealDestination || "") &&
+      versionWithoutPrefix(config.realIndicatorsCli?.version) === versionWithoutPrefix(releaseSet.realIndicatorsVersion) &&
+      config.realIndicatorsCli?.artifactSha256 === releaseSet.realIndicatorsSha256 &&
+      path.resolve(config.approvedIndicatorCatalog?.path || "") === path.resolve(expectedCatalogDestination || "") &&
+      config.approvedIndicatorCatalog?.sha256 === releaseSet.catalogSha256;
+  } catch {
+    return false;
+  }
 }
 
 function casCredentialsValid(dir) {
@@ -55,41 +189,224 @@ function casCredentialsValid(dir) {
   }
 }
 
+function pathDirectories(options = {}) {
+  const value = options.env && Object.hasOwn(options.env, "PATH") ? options.env.PATH : process.env.PATH;
+  return String(value || "").split(path.delimiter).filter(Boolean).map((entry) => path.resolve(entry));
+}
+
+function binaryVisibleOnPath(binary, options = {}) {
+  return pathDirectories(options).some((dir) => existsExecutable(path.join(dir, binaryName(binary))));
+}
+
+function nonEmptyRegularFile(file) {
+  try {
+    const info = fs.lstatSync(file);
+    return info.isFile() && !info.isSymbolicLink() && info.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function approvedWikisValid(workspace, contract) {
+  try {
+    const manifestPath = path.resolve(workspace, contract.manifest);
+    const expectedManifest = path.join(path.resolve(workspace), "bootstrap", "approved-lumi-wikis-manifest.json");
+    if (manifestPath !== expectedManifest) return false;
+    const bundledSource = path.resolve(workspace, contract.source);
+    const expectedSource = path.join(path.resolve(workspace), "bootstrap", "approved-lumi-wikis");
+    if (bundledSource !== expectedSource) return false;
+    verifyApprovedWikisSource(bundledSource, manifestPath, contract.manifestSha256);
+    verifyApprovedWikisSource(path.join(workspace, "wikis"), manifestPath, contract.manifestSha256);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runAuthzReadiness(workspace, configPath, options = {}) {
+  const helper = path.join(workspace, "bin", binaryName("data-harness-cli"));
+  if (!existsExecutable(helper)) return { ok: false, detail: "Harness helper is unavailable" };
+  try {
+    const result = await run(helper, ["authz-readiness", "--config", configPath], {
+      cwd: workspace,
+      env: options.env,
+      allowFailure: true
+    });
+    let body = null;
+    try {
+      body = JSON.parse(result.stdout);
+    } catch {}
+    if (result.code === 0 && body?.ready === true) return { ok: true, detail: "ready" };
+    const code = String(body?.error?.code || "AUTHZ_READINESS_FAILED");
+    return { ok: false, detail: code };
+  } catch {
+    return { ok: false, detail: "AUTHZ_READINESS_FAILED" };
+  }
+}
+
+async function runCatalogContract(workspace, catalogPath, catalogSha256, options = {}) {
+  const helper = path.join(workspace, "bin", binaryName("data-harness-cli"));
+  if (!existsExecutable(helper)) return { ok: false, detail: "Harness helper is unavailable" };
+  try {
+    const result = await run(helper, [
+      "authz-validate-catalog",
+      "--path",
+      catalogPath,
+      "--sha256",
+      catalogSha256
+    ], { cwd: workspace, env: options.env, allowFailure: true });
+    let body = null;
+    try {
+      body = JSON.parse(result.stdout);
+    } catch {}
+    return {
+      ok: result.code === 0 && body?.valid === true,
+      detail: result.code === 0 && body?.valid === true
+        ? "valid"
+        : String(body?.error?.code || "CATALOG_CONTRACT_FAILED")
+    };
+  } catch {
+    return { ok: false, detail: "CATALOG_CONTRACT_FAILED" };
+  }
+}
+
 export async function collectDoctor(workspace, options = {}) {
+  const state = readInstallerState(workspace);
+  let profile = "";
+  let profileError = "";
+  try {
+    profile = profileFromState(state);
+  } catch (error) {
+    profileError = String(error?.message || error);
+  }
+  const effectiveProfile = profile === lumiRequiredProfile ? lumiRequiredProfile : localUnrestrictedProfile;
   const casConfigDir = options.casConfigDir || path.join(workspace, ".qdm-auth", "cas");
   const env = { QDM_CAS_CONFIG_DIR: casConfigDir };
   const checks = [];
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
+  add("installer profile", Boolean(profile) && !profileError, profileError || profile || "missing");
+  const lumiContract = effectiveProfile === lumiRequiredProfile ? readLumiContract(workspace) : null;
+  if (effectiveProfile === lumiRequiredProfile) {
+    add("installer state v3", state.schemaVersion === installerStateSchemaVersion);
+    add("Pi-only profile", state.agent === "pi");
+    add("manifest release-set", !lumiContract.error, lumiContract.error || lumiContract.releaseSet.version);
+    add("manifest sha256", Boolean(!lumiContract.error && state.manifestSha256 === lumiContract.manifestSha256));
+    add("release-set", releaseSetStateValid(state, lumiContract.error ? null : lumiContract.releaseSet));
+  }
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
   add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
   add("wikis/metrics", fs.existsSync(path.join(workspace, "wikis", "metrics")));
   add("wikis/reports", fs.existsSync(path.join(workspace, "wikis", "reports")));
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
-  for (const binary of qdmCliBinaries) {
+  const wikisIndex = path.join(workspace, ".harness", "index", "wikis-index.json");
+  const wikisRuntimeIndex = path.join(workspace, ".harness", "index", "wikis-runtime-index.json");
+  if (effectiveProfile === lumiRequiredProfile) {
+    add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
+    add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);
+    add("approved Wikis content", Boolean(lumiContract && !lumiContract.error && approvedWikisValid(workspace, lumiContract.approvedWikis)));
+  }
+  for (const binary of qdmCliBinariesForProfile(effectiveProfile)) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
-  add("config CLI paths", configPathsValid(workspace));
-  add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
-  add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
-  add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
-  add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
-  add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
-  for (const name of ["openclaw", "hermes"]) {
-    if (fs.existsSync(path.join(workspace, `.${name}`))) {
-      add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
+  add("config CLI paths", configPathsValid(workspace, effectiveProfile));
+  if (effectiveProfile === lumiRequiredProfile) {
+    const forbidden = ["qdm-cmr-cli", "qdm-sql-cli", "cas-cli"];
+    for (const binary of forbidden) {
+      add(`bin/${binary} absent`, !fs.existsSync(path.join(workspace, "bin", binaryName(binary))));
+      add(`PATH/${binary} absent`, !binaryVisibleOnPath(binary, options));
+    }
+    const installedNames = new Set([
+      ...Object.keys(state.tools || {}),
+      ...Object.keys(state.localTools || {})
+    ]);
+    add("forbidden CLI state absent", forbidden.every((name) => !installedNames.has(name)));
+    add("authorized installer tool set", [
+      "data-harness-cli",
+      "qdm-indicators-cli-real",
+      "qdm-indicators-facade"
+    ].every((name) => installedNames.has(name)) && installedNames.size === 3);
+    const publicFacade = lumiContract?.facadeDestination || path.join(workspace, "bin", binaryName("qdm-indicators-cli"));
+    const helperDestination = lumiContract?.helperDestination || path.join(workspace, "bin", binaryName("data-harness-cli"));
+    const helperTool = state.tools?.["data-harness-cli"];
+    const helperValid = Boolean(
+      installedToolValid(state, "data-harness-cli", helperDestination) &&
+      helperTool?.version === lumiContract?.helperVersion &&
+      helperTool?.sha256 === lumiContract?.helperBinarySha256
+    );
+    add("Harness helper", helperValid, helperDestination);
+    const facadeTool = state.tools?.["qdm-indicators-facade"];
+    add("public Indicators Facade", Boolean(
+      installedToolValid(state, "qdm-indicators-facade", publicFacade) &&
+      facadeTool?.version === state.releaseSet?.facadeVersion &&
+      facadeTool?.sha256 === state.releaseSet?.facadeSha256
+    ), publicFacade);
+    const realTool = state.tools?.["qdm-indicators-cli-real"];
+    const realDestination = lumiContract?.realDestination || realTool?.destination || "";
+    add("private real Indicators CLI", Boolean(
+      installedToolValid(state, "qdm-indicators-cli-real", realDestination) &&
+      realTool?.version === state.releaseSet?.realIndicatorsVersion &&
+      realTool?.sha256 === state.releaseSet?.realIndicatorsSha256
+    ), realDestination);
+    add("private real Indicators CLI outside PATH", Boolean(
+      realDestination && !pathDirectories(options).includes(path.resolve(path.dirname(realDestination)))
+    ), realDestination);
+    const catalogDestination = lumiContract?.catalogDestination || "";
+    add("approved indicator catalog", Boolean(
+      catalogDestination && nonEmptyRegularFile(catalogDestination) &&
+      fileSha256(catalogDestination) === state.releaseSet?.catalogSha256
+    ), catalogDestination);
+    const catalogContract = helperValid
+      ? await runCatalogContract(
+          workspace,
+          catalogDestination,
+          state.releaseSet?.catalogSha256 || "",
+          options
+        )
+      : { ok: false, detail: "Harness helper integrity failed" };
+    add("approved indicator catalog contract", catalogContract.ok, catalogContract.detail);
+    const authzPath = state.authzConfigPath || "";
+    add("authz config path", Boolean(
+      path.isAbsolute(authzPath) &&
+      (!lumiContract?.authzConfigPath || path.resolve(authzPath) === path.resolve(lumiContract.authzConfigPath))
+    ), authzPath);
+    const pendingRuntimeMount = Boolean(options.buildTime && path.isAbsolute(authzPath) && !fs.existsSync(authzPath));
+    add("authz config", pendingRuntimeMount || authzConfigMatchesState(authzPath, state, realDestination, catalogDestination),
+      pendingRuntimeMount ? "runtime mount pending" : authzPath);
+    if (options.buildTime) {
+      add("authorization readiness", true, "runtime mounts, control state, context directory, and credentials pending");
+    } else {
+      const readiness = helperValid
+        ? await runAuthzReadiness(workspace, authzPath, options)
+        : { ok: false, detail: "Harness helper integrity failed" };
+      add("authorization readiness", readiness.ok, readiness.detail);
+    }
+    add("Agent hook .pi", agentOk(workspace, "pi"), "agents/pi");
+    for (const name of concreteAgentNames.filter((name) => name !== "pi")) {
+      add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));
+    }
+  } else {
+    add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
+    add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
+    add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
+    add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
+    add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
+    for (const name of ["openclaw", "hermes"]) {
+      if (fs.existsSync(path.join(workspace, `.${name}`))) {
+        add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
+      }
     }
   }
-  if (!fs.existsSync(path.join(workspace, ".harness", "index", "wikis-index.json")) &&
-      !fs.existsSync(path.join(workspace, ".harness", "index", "wikis-runtime-index.json"))) {
+  if (effectiveProfile !== lumiRequiredProfile && !fs.existsSync(wikisIndex) && !fs.existsSync(wikisRuntimeIndex)) {
     checks.push({ name: "wikis index", ok: true, detail: "missing; run data-harness-cli wikis build-index --skip-checks" });
   }
 
   return {
     workspace,
+    profile,
     checks
   };
 }

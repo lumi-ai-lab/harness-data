@@ -32,6 +32,9 @@ type authApp struct {
 }
 
 func preflightAuth(root string, plan WikiPlan) []string {
+	if isLumiMVPRequiredRuntime(root) {
+		return nil
+	}
 	cfg, err := harness.LoadConfig(root)
 	if err != nil {
 		return []string{"auth preflight skipped: " + err.Error()}

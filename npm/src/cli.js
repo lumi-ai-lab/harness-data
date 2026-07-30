@@ -46,7 +46,9 @@ Commands:
 
 Install and auth options:
   --dir PATH                         Runtime directory (default: current directory)
+  --profile NAME                     local-unrestricted or lumi-mvp-required (interactive installs default local)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
+  --wikis-source PATH                Approved Wikis source (required for lumi-mvp-required)
   --github-token TOKEN               GitHub token for private Release assets
   --cas-username USERNAME            CAS username (skip interactive prompt)
   --cas-password PASSWORD            CAS password (skip interactive prompt)`);

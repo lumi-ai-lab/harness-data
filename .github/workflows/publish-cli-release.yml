@@ -16,6 +16,10 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      RELEASE_GH_TOKEN:
+        description: Token with read access to the pinned private Indicators CLI release
+        required: false
   pull_request:
     branches:
       - master
@@ -27,6 +31,53 @@ permissions:
   contents: write
 
 jobs:
+  contracts:
+    name: Pi and cross-language authorization contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test npm installer and release materializer
+        working-directory: npm
+        run: |
+          npm install
+          npm test -- --test-concurrency=1
+
+      - name: Install pinned Pi runtime for smoke test
+        run: |
+          set -euo pipefail
+          npm install \
+            --prefix /tmp/harness-pi-runtime \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            @earendil-works/pi-coding-agent@0.81.1
+
+      - name: Test Pi extension
+        env:
+          QDM_PI_RUNTIME_MODULE: /tmp/harness-pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js
+        run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
+
+      - name: Test Go authz-bind output with the Pi parser
+        run: |
+          set -euo pipefail
+          go build -trimpath -o /tmp/data-harness-cli-authz-smoke ./cli/cmd/data-harness-cli
+          node .github/scripts/authz-bind-pi-smoke.mjs /tmp/data-harness-cli-authz-smoke
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -39,21 +90,25 @@ jobs:
             goos: windows
             goarch: amd64
             binary: data-harness-cli.exe
+            facade_binary: qdm-indicators-facade.exe
             archive: zip
           - target: linux-amd64
             goos: linux
             goarch: amd64
             binary: data-harness-cli
+            facade_binary: qdm-indicators-facade
             archive: tar.gz
           - target: darwin-amd64
             goos: darwin
             goarch: amd64
             binary: data-harness-cli
+            facade_binary: qdm-indicators-facade
             archive: tar.gz
           - target: darwin-arm64
             goos: darwin
             goarch: arm64
             binary: data-harness-cli
+            facade_binary: qdm-indicators-facade
             archive: tar.gz
 
     steps:
@@ -76,11 +131,13 @@ jobs:
           set -euo pipefail
           mkdir -p build dist
           go build -trimpath -ldflags="-s -w" -o "build/${{ matrix.binary }}" ./cli/cmd/data-harness-cli
+          go build -trimpath -ldflags="-s -w" -o "build/${{ matrix.facade_binary }}" ./cli/cmd/qdm-indicators-cli
 
       - name: Package artifact
         env:
           TARGET: ${{ matrix.target }}
           BINARY: ${{ matrix.binary }}
+          FACADE_BINARY: ${{ matrix.facade_binary }}
           ARCHIVE: ${{ matrix.archive }}
           REF_NAME: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
@@ -95,28 +152,35 @@ jobs:
             version="ci-${RUN_ID}"
           fi
 
-          base="data-harness-cli-${version}-${TARGET}"
           if [[ "${ARCHIVE}" == "zip" ]]; then
-            (cd build && zip "../dist/${base}.zip" "${BINARY}")
-            asset="dist/${base}.zip"
+            helper_asset="data-harness-cli-${version}-${TARGET}.zip"
+            facade_asset="qdm-indicators-facade-${version}-${TARGET}.zip"
+            (cd build && zip "../dist/${helper_asset}" "${BINARY}")
+            (cd build && zip "../dist/${facade_asset}" "${FACADE_BINARY}")
           else
-            tar -C build -czf "dist/${base}.tar.gz" "${BINARY}"
-            asset="dist/${base}.tar.gz"
+            helper_asset="data-harness-cli-${version}-${TARGET}.tar.gz"
+            facade_asset="qdm-indicators-facade-${version}-${TARGET}.tar.gz"
+            tar -C build -czf "dist/${helper_asset}" "${BINARY}"
+            tar -C build -czf "dist/${facade_asset}" "${FACADE_BINARY}"
           fi
-
-          (cd dist && shasum -a 256 "$(basename "${asset}")" > "$(basename "${asset}").sha256")
+          (cd dist && shasum -a 256 "${helper_asset}" > "${helper_asset}.sha256")
+          (cd dist && shasum -a 256 "${facade_asset}" > "${facade_asset}.sha256")
+          shasum -a 256 "build/${BINARY}" > "dist/${helper_asset}.binary.sha256"
+          shasum -a 256 "build/${FACADE_BINARY}" > "dist/${facade_asset}.binary.sha256"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: data-harness-cli-${{ matrix.target }}
+          name: harness-cli-release-set-${{ matrix.target }}
           path: |
             dist/*
 
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - build
+      - contracts
     if: inputs.publish || startsWith(github.ref, 'refs/tags/v')
 
     steps:
@@ -131,6 +195,40 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           clean: false
+          submodules: recursive
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify pinned real Indicators CLI
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          private_dir="/tmp/harness-private-assets-${GITHUB_RUN_ID}"
+          extract_dir="/tmp/harness-private-extract-${GITHUB_RUN_ID}"
+          mkdir -p "${private_dir}" "${extract_dir}"
+          gh release download v0.0.4 \
+            --repo pengmide/qdm-indicators-cli \
+            --pattern qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz \
+            --dir "${private_dir}"
+          echo "c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1  ${private_dir}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf "${private_dir}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" -C "${extract_dir}"
+          echo "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f  ${extract_dir}/qdm-indicators-cli" | sha256sum -c -
+          real_cli="${extract_dir}/qdm-indicators-cli"
+          "${real_cli}" --help > /tmp/qdm-indicators-root-help.txt 2>&1
+          "${real_cli}" analysis execute --help > /tmp/qdm-indicators-analysis-help.txt 2>&1
+          "${real_cli}" dim values --help > /tmp/qdm-indicators-dim-values-help.txt 2>&1
+          "${real_cli}" indicator search --help > /tmp/qdm-indicators-indicator-search-help.txt 2>&1
+          "${real_cli}" dictionary list --help > /tmp/qdm-indicators-dictionary-list-help.txt 2>&1
+          for command in analysis dim indicator dictionary wikis; do
+            grep -F -- "${command}" /tmp/qdm-indicators-root-help.txt >/dev/null
+          done
+          for flag in --indicator --agg-dim --column-agg-dim --filter --other-filter --single-page --page-size --curr-page; do
+            grep -F -- "${flag}" /tmp/qdm-indicators-analysis-help.txt >/dev/null
+          done
 
       - name: Package runtime bundle
         env:
@@ -146,7 +244,21 @@ jobs:
           cp -R .agents/hermes runtime/agents/hermes
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
-          cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
+          cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
+          helper_extract="/tmp/harness-helper-${GITHUB_RUN_ID}"
+          mkdir -p "${helper_extract}"
+          tar -xzf "dist/data-harness-cli-${VERSION_TAG}-linux-amd64.tar.gz" -C "${helper_extract}"
+          node bootstrap/materialize-cli-manifest.mjs \
+            --manifest bootstrap/cli-manifest.json \
+            --output runtime/bootstrap/cli-manifest.json \
+            --version "${VERSION_TAG}" \
+            --dist dist \
+            --catalog bootstrap/approved-indicators-v1.json \
+            --catalog-validator "${helper_extract}/data-harness-cli" \
+            --catalog-output runtime/bootstrap/approved-indicators-v1.json \
+            --approved-wikis-source bootstrap/approved-lumi-wikis \
+            --approved-wikis-manifest bootstrap/approved-lumi-wikis-manifest.json \
+            --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz"
           ln -s agents/claude runtime/.claude
           ln -s agents/codex runtime/.codex
           ln -s agents/pi runtime/.pi
@@ -155,11 +267,33 @@ jobs:
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
           (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")
 
+      - name: Smoke test Lumi build-time installation
+        env:
+          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          smoke_root="/tmp/harness-lumi-smoke-${GITHUB_RUN_ID}"
+          smoke_assets="${smoke_root}/assets"
+          mkdir -p "${smoke_assets}"
+          cp dist/data-harness-cli-${VERSION_TAG}-linux-amd64.tar.gz "${smoke_assets}/"
+          cp dist/qdm-indicators-facade-${VERSION_TAG}-linux-amd64.tar.gz "${smoke_assets}/"
+          cp "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" "${smoke_assets}/"
+          sudo env "HOME=${smoke_root}/home" "PATH=${PATH}" \
+            node npm/bin/harness-data.js install \
+              --dir "${smoke_root}/runtime" \
+              --profile lumi-mvp-required \
+              --agent pi \
+              --yes \
+              --github-token local-release-smoke \
+              --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
+              --runtime-tag "${VERSION_TAG}" \
+              --asset-dir "${smoke_assets}" \
+              --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
+
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version_tag || github.ref_name }}
-          overwrite_files: true
           files: |
             dist/*
           generate_release_notes: true

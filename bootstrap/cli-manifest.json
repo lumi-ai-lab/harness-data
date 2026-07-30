@@ -1,24 +1,61 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "owner": "lumi-ai-lab",
+  "profiles": {
+    "local-unrestricted": {
+      "tools": [
+        "data-harness-cli",
+        "qdm-cmr-cli",
+        "qdm-indicators-cli",
+        "qdm-sql-cli",
+        "cas-cli"
+      ]
+    },
+    "lumi-mvp-required": {
+      "agent": "pi",
+      "authzConfigPath": "/etc/harness-data/authz.json",
+      "approvedIndicatorCatalog": {
+        "source": "bootstrap/approved-indicators-v1.json",
+        "destination": "/etc/harness-data/approved-indicators-v1.json",
+        "sha256": ""
+      },
+      "approvedWikis": {
+        "source": "bootstrap/approved-lumi-wikis",
+        "manifest": "bootstrap/approved-lumi-wikis-manifest.json",
+        "manifestSha256": ""
+      },
+      "releaseSet": "lumi-mvp-v1",
+      "tools": [
+        "data-harness-cli",
+        "qdm-indicators-facade",
+        "qdm-indicators-cli-real"
+      ]
+    }
+  },
+  "releaseSets": {
+    "lumi-mvp-v1": {
+      "version": "",
+      "sha256": "",
+      "facadeVersion": "",
+      "facadeSha256": "",
+      "realIndicatorsVersion": "v0.0.4",
+      "realIndicatorsSha256": "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f",
+      "catalogSha256": "",
+      "authzSchemaVersion": 1,
+      "piVersion": "0.81.1"
+    }
+  },
   "tools": [
     {
       "name": "data-harness-cli",
       "binary": "data-harness-cli",
       "repo": "lumi-ai-lab/harness-data",
+      "destination": "bin/data-harness-cli",
       "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
+        "darwin-arm64": { "archive": "tar.gz" },
+        "darwin-amd64": { "archive": "tar.gz" },
+        "linux-amd64": { "archive": "tar.gz" },
+        "windows-amd64": { "archive": "zip" }
       }
     },
     {
@@ -26,19 +63,12 @@
       "binary": "qdm-cmr-cli",
       "repo": "pengmide/qdm-cmr-cli",
       "private": true,
+      "destination": "bin/qdm-cmr-cli",
       "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
+        "darwin-arm64": { "archive": "tar.gz" },
+        "darwin-amd64": { "archive": "tar.gz" },
+        "linux-amd64": { "archive": "tar.gz" },
+        "windows-amd64": { "archive": "zip" }
       }
     },
     {
@@ -46,19 +76,12 @@
       "binary": "qdm-indicators-cli",
       "repo": "pengmide/qdm-indicators-cli",
       "private": true,
+      "destination": "bin/qdm-indicators-cli",
       "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
+        "darwin-arm64": { "archive": "tar.gz" },
+        "darwin-amd64": { "archive": "tar.gz" },
+        "linux-amd64": { "archive": "tar.gz" },
+        "windows-amd64": { "archive": "zip" }
       }
     },
     {
@@ -66,19 +89,12 @@
       "binary": "qdm-sql-cli",
       "repo": "pengmide/qdm-sql-cli",
       "private": true,
+      "destination": "bin/qdm-sql-cli",
       "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
+        "darwin-arm64": { "archive": "tar.gz" },
+        "darwin-amd64": { "archive": "tar.gz" },
+        "linux-amd64": { "archive": "tar.gz" },
+        "windows-amd64": { "archive": "zip" }
       }
     },
     {
@@ -86,18 +102,43 @@
       "binary": "cas-cli",
       "repo": "pengmide/qdm-cas-cli",
       "private": true,
+      "destination": "bin/cas-cli",
       "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
+        "darwin-arm64": { "archive": "tar.gz" },
+        "darwin-amd64": { "archive": "tar.gz" },
+        "linux-amd64": { "archive": "tar.gz" },
+        "windows-amd64": { "archive": "zip" }
+      }
+    },
+    {
+      "name": "qdm-indicators-facade",
+      "binary": "qdm-indicators-facade",
+      "repo": "lumi-ai-lab/harness-data",
+      "destination": "bin/qdm-indicators-cli",
+      "tracking": "fixed",
+      "version": "",
+      "requireAssetSha256": true,
+      "requireBinarySha256": true,
+      "platforms": {
+        "linux-amd64": { "archive": "tar.gz", "url": "", "sha256": "" }
+      }
+    },
+    {
+      "name": "qdm-indicators-cli-real",
+      "binary": "qdm-indicators-cli",
+      "repo": "pengmide/qdm-indicators-cli",
+      "private": true,
+      "destination": "/opt/harness-data/private/qdm-indicators-cli-v0.0.4",
+      "tracking": "fixed",
+      "version": "v0.0.4",
+      "requireAssetSha256": true,
+      "requireBinarySha256": true,
+      "platforms": {
         "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
+          "archive": "tar.gz",
+          "url": "https://github.com/pengmide/qdm-indicators-cli/releases/download/v0.0.4/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz",
+          "sha256": "c1082702ccd8a968dbb3ebb0fdc6a5043eff2fa5586bd180c78f5292308492a1",
+          "binarySha256": "45a7537669fb4950b7b812fe14815ab002ea7dc66efed6ce7876b24c98ce731f"
         }
       }
     }

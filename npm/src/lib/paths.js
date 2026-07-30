@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installerStateSchemaVersion, lumiRequiredProfile } from "./profile.js";
 
 const stateDir = path.join("lumi-ai-lab", "harness-data-installer");
 
@@ -29,17 +30,59 @@ export function readUserState() {
   }
 }
 
-export function writeState(workspace, patch) {
-  const file = userStatePath();
-  const state = {
-    ...readUserState(),
+export function installerStatePath(workspace) {
+  return path.join(workspace, ".harness", "installer-state.json");
+}
+
+export function readInstallerState(workspace) {
+  try {
+    return JSON.parse(fs.readFileSync(installerStatePath(workspace), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+const lumiStateFields = [
+  "schemaVersion",
+  "profile",
+  "agent",
+  "installMode",
+  "runtimeTag",
+  "localTools",
+  "tools",
+  "manifestSha256",
+  "packageVersion",
+  "releaseSet",
+  "authzConfigPath",
+  "lastCheckAt"
+];
+
+export function installerStateDocument(workspace, patch, options = {}) {
+  const updatedAt = options.updatedAt || new Date().toISOString();
+  if (patch?.profile === lumiRequiredProfile) {
+    if (patch.schemaVersion !== installerStateSchemaVersion) {
+      throw new Error("lumi-mvp-required installer state must be a fresh schemaVersion 3 document");
+    }
+    const state = { lastInstallDir: workspace, updatedAt };
+    for (const field of lumiStateFields) {
+      if (patch[field] !== undefined) state[field] = patch[field];
+    }
+    return state;
+  }
+  return {
+    ...(options.currentState || readUserState()),
     lastInstallDir: workspace,
-    updatedAt: new Date().toISOString(),
+    updatedAt,
     ...patch
   };
+}
+
+export function writeState(workspace, patch) {
+  const file = userStatePath();
+  const state = installerStateDocument(workspace, patch);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  const local = path.join(workspace, ".harness", "installer-state.json");
+  const local = installerStatePath(workspace);
   fs.mkdirSync(path.dirname(local), { recursive: true });
   fs.writeFileSync(local, `${JSON.stringify(state, null, 2)}\n`);
   return state;

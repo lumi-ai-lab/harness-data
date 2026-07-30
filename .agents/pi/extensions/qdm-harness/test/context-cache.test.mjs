@@ -6,6 +6,7 @@ import {
   ContextCache,
   HARNESS_CONTEXT_MARKER,
   latestUserMessage,
+  upsertHarnessContext,
 } from "../context-cache.mjs";
 
 function userMessage(text, timestamp) {
@@ -119,4 +120,15 @@ test("appendHarnessContext never duplicates its marker", () => {
   const text = once[0].content.map((part) => part.text ?? "").join("\n");
   assert.equal(text.split(HARNESS_CONTEXT_MARKER).length - 1, 1);
   assert.doesNotMatch(text, /second context/);
+});
+
+test("upsertHarnessContext replaces a stale authorization summary without duplicating markers", () => {
+  const messages = [userMessage("question", 1)];
+  const once = upsertHarnessContext(messages, 0, "Requester: first");
+  const twice = upsertHarnessContext(once, 0, "Requester: second");
+
+  const text = twice[0].content.map((part) => part.text ?? "").join("\n");
+  assert.equal(text.split(HARNESS_CONTEXT_MARKER).length - 1, 1);
+  assert.doesNotMatch(text, /Requester: first/);
+  assert.match(text, /Requester: second/);
 });

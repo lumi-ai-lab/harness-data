@@ -17,6 +17,13 @@ export function releaseAsset(release, name) {
 }
 
 export async function resolveLatestTool(tool, key, options = {}) {
+  if (tool.tracking === "fixed") {
+    const asset = tool.platforms?.[key];
+    if (!tool.version || !asset?.url || !asset.sha256) {
+      throw new Error(`fixed tool ${tool.name} is incomplete for ${key}`);
+    }
+    return tool;
+  }
   const release = await latestRelease(tool.repo, options);
   const tag = release.tag_name;
   const name = toolAssetName(tool, tag, key);

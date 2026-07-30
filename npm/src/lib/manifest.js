@@ -256,6 +256,21 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
+  if (options.assetDir) {
+    const source = path.join(path.resolve(options.assetDir), assetName(asset));
+    let info;
+    try {
+      info = fs.lstatSync(source);
+    } catch {
+      throw new Error(`local release asset is missing: ${source}`);
+    }
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw new Error(`local release asset is not a regular file: ${source}`);
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.copyFileSync(source, file);
+    return;
+  }
   if (!tool.private && !githubToken(options)) {
     await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
@@ -299,6 +314,24 @@ function fileSha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function withPlatformExecutableSuffix(file) {
+  if (process.platform !== "win32" || file.toLowerCase().endsWith(".exe")) return file;
+  return `${file}.exe`;
+}
+
+export function toolDestination(workspace, tool) {
+  const configured = String(tool.destination || "").trim();
+  if (!configured) return path.join(workspace, "bin", binaryName(tool.binary));
+  const suffixed = withPlatformExecutableSuffix(configured);
+  if (path.isAbsolute(suffixed)) return path.normalize(suffixed);
+  const resolved = path.resolve(workspace, suffixed);
+  const relative = path.relative(path.resolve(workspace), resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${tool.name} destination escapes the runtime workspace: ${configured}`);
+  }
+  return resolved;
+}
+
 function executable(file) {
   try {
     fs.accessSync(file, fs.constants.X_OK);
@@ -312,7 +345,9 @@ function reusableInstalledTool(workspace, tool, asset, options = {}) {
   const current = tool.version ? optionsStateTool(options, tool.name) : null;
   if (!current?.version || current.version !== tool.version) return null;
   if (!current.sha256) return null;
-  const binary = path.join(workspace, "bin", binaryName(tool.binary));
+  if (asset.sha256 && current.assetSha256 !== asset.sha256) return null;
+  if (asset.binarySha256 && current.sha256 !== asset.binarySha256) return null;
+  const binary = toolDestination(workspace, tool);
   if (!executable(binary)) return null;
   const actualSha = fileSha256(binary);
   if (actualSha !== current.sha256) return null;
@@ -320,6 +355,7 @@ function reusableInstalledTool(workspace, tool, asset, options = {}) {
     version: current.version,
     asset: current.asset || assetName(asset),
     sha256: current.sha256,
+    destination: binary,
     ...(current.assetSha256 ? { assetSha256: current.assetSha256 } : {})
   };
 }
@@ -328,7 +364,7 @@ function optionsStateTool(options, name) {
   return options?.state?.tools?.[name] || null;
 }
 
-async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) {
+async function extractArchiveBinary(workspace, cacheDir, archive, tool) {
   const extractDir = fs.mkdtempSync(path.join(cacheDir, `${tool.name}-extract-`));
   try {
     if (archive.endsWith(".zip")) {
@@ -339,9 +375,11 @@ async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) 
     const extracted = path.join(extractDir, binaryName(tool.binary));
     if (!fs.existsSync(extracted)) throw new Error(`${tool.binary} was not extracted to archive root`);
     fs.chmodSync(extracted, 0o755);
-    const binary = path.join(binDir, binaryName(tool.binary));
-    fs.renameSync(extracted, binary);
-    return binary;
+    const destination = toolDestination(workspace, tool);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.rmSync(destination, { force: true });
+    fs.renameSync(extracted, destination);
+    return destination;
   } finally {
     fs.rmSync(extractDir, { recursive: true, force: true });
   }
@@ -352,13 +390,31 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
   const only = options.tools ? new Set(options.tools) : null;
   const key = platformKey();
   const cacheDir = path.join(workspace, ".bootstrap-cache");
-  const binDir = path.join(workspace, "bin");
   fs.mkdirSync(cacheDir, { recursive: true });
-  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
   const installedTools = {};
 
-  for (const tool of manifest.tools || []) {
-    if (only && !only.has(tool.name)) continue;
+  const selectedTools = (manifest.tools || []).filter((tool) => !only || only.has(tool.name));
+  const destinations = new Set();
+  for (const tool of selectedTools) {
+    if (!tool?.name || !tool?.binary) throw new Error("manifest tool requires name and binary");
+    const asset = tool.platforms?.[key];
+    if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
+    if ((tool.tracking === "fixed" || tool.requireAssetSha256) && !/^[a-f0-9]{64}$/.test(String(asset.sha256 || ""))) {
+      throw new Error(`manifest missing fixed sha256 for ${tool.name} ${key}`);
+    }
+    if (tool.requireBinarySha256 && !/^[a-f0-9]{64}$/.test(String(asset.binarySha256 || ""))) {
+      throw new Error(`manifest missing fixed binarySha256 for ${tool.name} ${key}`);
+    }
+    if (tool.tracking === "fixed" && !String(tool.version || "").trim()) {
+      throw new Error(`manifest fixed tool ${tool.name} requires version`);
+    }
+    const destination = toolDestination(workspace, tool);
+    if (destinations.has(destination)) throw new Error(`manifest tools share destination: ${destination}`);
+    destinations.add(destination);
+  }
+
+  for (const tool of selectedTools) {
     const asset = tool.platforms?.[key];
     if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
     const reusable = !options.force ? reusableInstalledTool(workspace, tool, asset, options) : null;
@@ -374,13 +430,18 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const actualSha = fileSha256(archive);
     if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
     if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
-    const binary = await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool);
+    const binary = await extractArchiveBinary(workspace, cacheDir, archive, tool);
     const binarySha = fileSha256(binary);
+    if (asset.binarySha256 && binarySha !== asset.binarySha256) {
+      fs.rmSync(binary, { force: true });
+      throw new Error(`${tool.name} binary sha256 mismatch`);
+    }
     installedTools[tool.name] = {
       version: tool.version || "",
       asset: assetName(asset),
       sha256: binarySha,
-      assetSha256: sha || actualSha
+      assetSha256: sha || actualSha,
+      destination: binary
     };
   }
   Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
