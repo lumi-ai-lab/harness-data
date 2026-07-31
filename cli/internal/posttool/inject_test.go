@@ -72,6 +72,36 @@ func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	}
 }
 
+func TestRunClaudeHookAcceptsCodexShellCommandAndWindowsExecutable(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "codex-windows-shell"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeSingle,
+		SelectedPlaybook: "playbooks/idx/business/s-sale-amt.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "functions.shell_command",
+		"tool_input": map[string]any{
+			"command": `& 'E:\harness-data\bin\data-harness-cli.exe' inject-template`,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := RunClaudeHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "QDM_DELIVERY_MODE=chat") {
+		t.Fatalf("expected codex template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
+	}
+}
+
 func TestRunClaudeHookDoesNotRequireTemplateInFreeMode(t *testing.T) {
 	root := testInjectRoot(t)
 	sessionID := "free-data"

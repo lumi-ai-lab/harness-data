@@ -16,8 +16,8 @@ Claude Code 的 `PostToolUse` hook 调用：
 
 Codex 使用 `.codex/hooks.json` 配置同等事件：
 
-- `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
-- `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
+- `UserPromptSubmit` 通过安装器按平台生成的 Python 3 命令调用 `.codex/qdm_codex_hook.py context`，再转发到 `bin/data-harness-cli context --format codex-hook`
+- `PostToolUse` 通过安装器按平台生成的 Python 3 命令调用 `.codex/qdm_codex_hook.py posttool`，再转发到 `bin/data-harness-cli posttool --format codex-hook`；后置处理兼容 Bash 与 Codex shell 工具事件
 
 Pi 使用 `.pi/settings.json` 加载项目扩展：
 

@@ -60,7 +60,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return false, Output{}, nil
 	}
-	if payload.ToolName != "Bash" || strings.TrimSpace(payload.ToolInput.Command) == "" {
+	if !isShellToolName(payload.ToolName) || strings.TrimSpace(payload.ToolInput.Command) == "" {
 		return false, Output{}, nil
 	}
 	sessionID := payload.SessionID
@@ -222,8 +222,8 @@ func isTemplateInjectionCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)&?\s*["']?(\./)?(bin/)?data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized)
 }
 
 func isTemplateStageCommand(command string) bool {
@@ -231,8 +231,8 @@ func isTemplateStageCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)&?\s*["']?(\./)?(bin/)?data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {
@@ -275,7 +275,16 @@ func stripMarkdownFrontmatter(data []byte) []byte {
 }
 
 func normalizeCommand(command string) string {
-	return strings.Join(strings.Fields(command), " ")
+	return strings.Join(strings.Fields(strings.ReplaceAll(command, `\`, "/")), " ")
+}
+
+func isShellToolName(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "shell", "shell_command", "functions.shell_command", "powershell":
+		return true
+	default:
+		return false
+	}
 }
 
 func getReportState(state sessionstate.File, reportName string) *sessionstate.Report {

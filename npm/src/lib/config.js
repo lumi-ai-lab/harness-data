@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { binaryName } from "./platform.js";
 
 export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
@@ -58,6 +59,7 @@ export function validateCasConfigDir(dir) {
 export function linkAgents(workspace, agent) {
   const pairs = agentLinks[agent];
   if (!pairs) throw new Error(`agent must be ${agentChoiceText}`);
+  configureCodexHooks(workspace, agent);
   for (const [sourceRel, targetRel] of pairs) {
     const source = path.join(workspace, sourceRel);
     const target = path.join(workspace, targetRel);
@@ -66,4 +68,53 @@ export function linkAgents(workspace, agent) {
     fs.symlinkSync(source, target, "junction");
   }
   return pairs;
+}
+
+export function configureCodexHooks(workspace, agent) {
+  if (!agentLinks[agent]?.some(([sourceRel]) => sourceRel === "agents/codex")) return null;
+  const hooksPath = path.join(workspace, "agents", "codex", "hooks.json");
+  if (!fs.existsSync(hooksPath)) return null;
+  const python = detectPythonCommand();
+  const config = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+  const hookScript = path.join(workspace, "agents", "codex", "qdm_codex_hook.py").replaceAll("\\", "/");
+  const contextCommand = formatHookCommand([...python, hookScript, "context"]);
+  const posttoolCommand = formatHookCommand([...python, hookScript, "posttool"]);
+  const contextHooks = config?.hooks?.UserPromptSubmit?.[0]?.hooks;
+  const posttoolHooks = config?.hooks?.PostToolUse?.[0]?.hooks;
+  if (!Array.isArray(contextHooks) || !contextHooks[0]) throw new Error("codex hooks.json missing UserPromptSubmit hook");
+  if (!Array.isArray(posttoolHooks) || !posttoolHooks[0]) throw new Error("codex hooks.json missing PostToolUse hook");
+  contextHooks[0].command = contextCommand;
+  posttoolHooks[0].command = posttoolCommand;
+  config.hooks.PostToolUse[0].matcher = "Bash|shell_command|functions\\.shell_command|powershell";
+  fs.writeFileSync(hooksPath, `${JSON.stringify(config, null, 2)}\n`);
+  return { hooksPath, python };
+}
+
+export function detectPythonCommand() {
+  const candidates = process.platform === "win32"
+    ? [["python"], ["py", "-3"], ["python3"]]
+    : [["python3"], ["python"]];
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate[0], [...candidate.slice(1), "--version"], { encoding: "utf8" });
+    const versionOutput = `${result.stdout || ""}\n${result.stderr || ""}`;
+    if (result.status === 0 && isPython3VersionOutput(versionOutput)) return candidate;
+  }
+  throw new Error("Python 3 is required for Codex hooks; install python3 or ensure python is on PATH");
+}
+
+export function isPython3VersionOutput(output) {
+  return /\bPython 3\./.test(output);
+}
+
+export function formatHookCommand(args) {
+  return args.map((arg) => needsCommandQuoting(arg) ? quoteCommandArg(arg) : arg).join(" ");
+}
+
+function needsCommandQuoting(arg) {
+  return /[\s"'()&|<>^;]/.test(arg) || arg.includes("/");
+}
+
+function quoteCommandArg(arg) {
+  if (process.platform === "win32") return `"${arg.replaceAll('"', '\\"')}"`;
+  return `'${arg.replaceAll("'", "'\"'\"'")}'`;
 }

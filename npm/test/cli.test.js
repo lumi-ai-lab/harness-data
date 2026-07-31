@@ -20,7 +20,7 @@ import { buildAndCheck, configureCasAuthentication, configureTokens, installRunt
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { authCommand } from "../src/commands/auth.js";
-import { agentChoices, hasAnyAgentHook, linkAgents, localPathToolNames, qdmCliBinaries, writeLocalConfig } from "../src/lib/config.js";
+import { agentChoices, formatHookCommand, hasAnyAgentHook, isPython3VersionOutput, linkAgents, localPathToolNames, qdmCliBinaries, writeLocalConfig } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1318,6 +1318,54 @@ test("links selected agent templates", () => {
   ]);
   assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+});
+
+test("linking Codex generates platform Python hook commands", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  fs.mkdirSync(path.join(workspace, "agents", "codex"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "agents", "codex", "hooks.json"), JSON.stringify({
+    hooks: {
+      UserPromptSubmit: [
+        { hooks: [{ type: "command", command: "placeholder", statusMessage: "Loading QDM Harness context" }] }
+      ],
+      PostToolUse: [
+        { matcher: "Bash", hooks: [{ type: "command", command: "placeholder", statusMessage: "Updating QDM Harness state" }] }
+      ]
+    }
+  }, null, 2));
+
+  linkAgents(workspace, "codex");
+
+  const config = JSON.parse(fs.readFileSync(path.join(workspace, "agents", "codex", "hooks.json"), "utf8"));
+  const contextCommand = config.hooks.UserPromptSubmit[0].hooks[0].command;
+  const posttoolCommand = config.hooks.PostToolUse[0].hooks[0].command;
+  const expectedPrefix = process.platform === "win32"
+    ? /^(python|py -3|python3) /
+    : /^(python3|python) /;
+  const hookScript = path.join(workspace, "agents", "codex", "qdm_codex_hook.py").replaceAll("\\", "/");
+  const hookScriptArg = process.platform === "win32" ? `"${hookScript}"` : `'${hookScript}'`;
+  assert.match(contextCommand, expectedPrefix);
+  assert.match(posttoolCommand, expectedPrefix);
+  assert.equal(contextCommand.includes(`${hookScriptArg} context`), true);
+  assert.equal(posttoolCommand.includes(`${hookScriptArg} posttool`), true);
+  assert.equal(contextCommand.endsWith(" context"), true);
+  assert.equal(posttoolCommand.endsWith(" posttool"), true);
+  assert.equal(config.hooks.PostToolUse[0].matcher, "Bash|shell_command|functions\\.shell_command|powershell");
+});
+
+test("Codex hook Python detection requires Python 3", () => {
+  assert.equal(isPython3VersionOutput("Python 3.12.4"), true);
+  assert.equal(isPython3VersionOutput("Python 2.7.18"), false);
+  assert.equal(isPython3VersionOutput("Python 3"), false);
+  assert.equal(isPython3VersionOutput(""), false);
+});
+
+test("Codex hook commands quote script paths", () => {
+  const scriptPath = process.platform === "win32"
+    ? "C:/Harness Data/agents/codex/qdm_codex_hook.py"
+    : "/tmp/Harness Data/agents/codex/qdm_codex_hook.py";
+  const expectedScriptArg = process.platform === "win32" ? `"${scriptPath}"` : `'${scriptPath}'`;
+  assert.equal(formatHookCommand(["python3", scriptPath, "context"]), `python3 ${expectedScriptArg} context`);
 });
 
 function createAgentWorkspace() {

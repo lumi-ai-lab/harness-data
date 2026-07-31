@@ -49,3 +49,5 @@ npx @lumi-ai-lab/harness-data doctor
 The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks. SQL CLI tokens are fetched through `cas-cli token --app rtp`.
 
 `--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.
+
+When Codex hooks are installed, the installer detects a local Python 3 launcher and writes the matching command into `.codex/hooks.json`. Windows tries `python`, `py -3`, then `python3`; macOS and Linux try `python3`, then `python`.
