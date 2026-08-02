@@ -1824,9 +1824,8 @@ test("links selected agent templates", () => {
 });
 
 function createAgentWorkspace(options = {}) {
-  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const workspace = options.withSpaces ? path.join(parent, "Harness Data 中文") : parent;
-  fs.mkdirSync(workspace, { recursive: true });
+  const prefix = options.withSpaces ? "Harness Data 中文-" : "harness-data-test-";
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   fs.cpSync(path.join(root, "..", ".agents"), path.join(workspace, "agents"), { recursive: true });
   fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
   const platform = options.platform || process.platform;

@@ -24,8 +24,8 @@ import {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repository = path.resolve(scriptDir, "../..");
-const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "harness-hooks-e2e-"));
-const workspace = path.join(temporaryRoot, "Harness Data 中文 workspace");
+const workspace = mkdtempSync(path.join(os.tmpdir(), "Harness Data 中文 workspace-"));
+const outsideRoot = mkdtempSync(path.join(os.tmpdir(), "harness-hooks-outside-"));
 const executableName = process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli";
 const executable = path.join(workspace, "bin", executableName);
 const reportPrompt = "请生成经营综合分析报告";
@@ -189,7 +189,7 @@ try {
     assert.match(contextOutput.hookSpecificOutput?.additionalContext || "", /data-harness-cli\.exe stage template/);
   }
 
-  const outsideCwd = path.join(temporaryRoot, "outside workspace");
+  const outsideCwd = outsideRoot;
   mkdirSync(outsideCwd, { recursive: true });
   const fallbackOutput = runDeclarativeHook(
     hookCommand(codexHooks, "UserPromptSubmit"),
@@ -256,5 +256,6 @@ try {
 
   console.log(`Cross-platform Hook E2E passed on ${process.platform}/${process.arch}: ${workspace}`);
 } finally {
-  rmSync(temporaryRoot, { recursive: true, force: true });
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(outsideRoot, { recursive: true, force: true });
 }
