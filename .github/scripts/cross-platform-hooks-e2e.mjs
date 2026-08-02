@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
   appendFileSync,
-  cpSync,
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -67,10 +69,25 @@ function runDeclarativeHook(command, payload, cwd) {
   return JSON.parse(result.stdout);
 }
 
+function copyFixtureTree(source, target) {
+  mkdirSync(target, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const sourceEntry = path.join(source, entry.name);
+    const targetEntry = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyFixtureTree(sourceEntry, targetEntry);
+      continue;
+    }
+    assert.equal(entry.isFile(), true, `unsupported fixture entry: ${sourceEntry}`);
+    copyFileSync(sourceEntry, targetEntry);
+    chmodSync(targetEntry, statSync(sourceEntry).mode);
+  }
+}
+
 function copyAgentTemplates() {
   const target = path.join(workspace, "agents");
   rmSync(target, { recursive: true, force: true });
-  cpSync(path.join(repository, ".agents"), target, { recursive: true });
+  copyFixtureTree(path.join(repository, ".agents"), target);
 }
 
 function hookCommand(document, eventName) {
@@ -130,7 +147,7 @@ function verifyOpenClawAdapter() {
 try {
   mkdirSync(path.join(workspace, "bin"), { recursive: true });
   mkdirSync(path.join(workspace, "config"), { recursive: true });
-  cpSync(path.join(repository, "wikis"), path.join(workspace, "wikis"), { recursive: true });
+  copyFixtureTree(path.join(repository, "wikis"), path.join(workspace, "wikis"));
   copyAgentTemplates();
 
   runExecutable("go", ["build", "-trimpath", "-o", executable, "./cli/cmd/data-harness-cli"]);

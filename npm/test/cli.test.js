@@ -1826,11 +1826,26 @@ test("links selected agent templates", () => {
 function createAgentWorkspace(options = {}) {
   const prefix = options.withSpaces ? "Harness Data 中文-" : "harness-data-test-";
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  fs.cpSync(path.join(root, "..", ".agents"), path.join(workspace, "agents"), { recursive: true });
+  copyFixtureTree(path.join(root, "..", ".agents"), path.join(workspace, "agents"));
   fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
   const platform = options.platform || process.platform;
   fs.writeFileSync(path.join(workspace, "bin", binaryName("data-harness-cli", platform)), "fixture", { mode: 0o755 });
   return workspace;
+}
+
+function copyFixtureTree(source, target) {
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourceEntry = path.join(source, entry.name);
+    const targetEntry = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyFixtureTree(sourceEntry, targetEntry);
+      continue;
+    }
+    assert.equal(entry.isFile(), true, `unsupported fixture entry: ${sourceEntry}`);
+    fs.copyFileSync(sourceEntry, targetEntry);
+    fs.chmodSync(targetEntry, fs.statSync(sourceEntry).mode);
+  }
 }
 
 test("expands aggregate agent choices into stable concrete names", () => {
