@@ -43,11 +43,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Run Go tests without the private Wikis snapshot
-        run: |
-          go list ./cli/... \
-            | grep -v '^harness-data/cli/tests$' \
-            | xargs go test -count=1
+      - run: go test -count=1 ./cli/...
       - working-directory: npm
         run: npm test -- --test-concurrency=1
       - run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
