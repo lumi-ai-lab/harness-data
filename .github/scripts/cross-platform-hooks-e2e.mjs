@@ -80,7 +80,7 @@ function copyFixtureTree(source, target) {
     }
     assert.equal(entry.isFile(), true, `unsupported fixture entry: ${sourceEntry}`);
     copyFileSync(sourceEntry, targetEntry);
-    chmodSync(targetEntry, statSync(sourceEntry).mode);
+    if (process.platform !== "win32") chmodSync(targetEntry, statSync(sourceEntry).mode);
   }
 }
 
