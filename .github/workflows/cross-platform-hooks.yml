@@ -40,10 +40,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Test Go packages
+      - name: Test Go Hook packages
         if: runner.os != 'Windows'
         working-directory: cli
-        run: go test ./...
+        run: go test ./cmd/data-harness-cli ./internal/context ./internal/harness ./internal/posttool ./tests
 
       - name: Test Windows Go Hook packages
         if: runner.os == 'Windows'

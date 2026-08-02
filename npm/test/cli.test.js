@@ -1827,9 +1827,7 @@ function createAgentWorkspace(options = {}) {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const workspace = options.withSpaces ? path.join(parent, "Harness Data 中文") : parent;
   fs.mkdirSync(workspace, { recursive: true });
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
-    fs.cpSync(path.join(root, "..", ".agents", name), path.join(workspace, "agents", name), { recursive: true });
-  }
+  fs.cpSync(path.join(root, "..", ".agents"), path.join(workspace, "agents"), { recursive: true });
   fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
   const platform = options.platform || process.platform;
   fs.writeFileSync(path.join(workspace, "bin", binaryName("data-harness-cli", platform)), "fixture", { mode: 0o755 });

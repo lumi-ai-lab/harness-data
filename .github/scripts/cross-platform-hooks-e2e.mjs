@@ -70,10 +70,7 @@ function runDeclarativeHook(command, payload, cwd) {
 function copyAgentTemplates() {
   const target = path.join(workspace, "agents");
   rmSync(target, { recursive: true, force: true });
-  mkdirSync(target, { recursive: true });
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
-    cpSync(path.join(repository, ".agents", name), path.join(target, name), { recursive: true });
-  }
+  cpSync(path.join(repository, ".agents"), target, { recursive: true });
 }
 
 function hookCommand(document, eventName) {
