@@ -163,6 +163,25 @@ function renderDeclarativeHooks(stage, agent, executable, platform) {
   writeDeterministicJSON(file, document);
 }
 
+function copyTemplateTree(source, target) {
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourceEntry = path.join(source, entry.name);
+    const targetEntry = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyTemplateTree(sourceEntry, targetEntry);
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(sourceEntry), targetEntry);
+      continue;
+    }
+    if (!entry.isFile()) throw new Error(`unsupported agent template entry: ${sourceEntry}`);
+    fs.copyFileSync(sourceEntry, targetEntry);
+    if (process.platform !== "win32") fs.chmodSync(targetEntry, fs.statSync(sourceEntry).mode & 0o777);
+  }
+}
+
 function treeSignature(root) {
   if (!fs.existsSync(root)) return "";
   const entries = [];
@@ -230,7 +249,7 @@ export function reconcileAgentIntegrations(workspace, selection, options = {}) {
     const template = path.join(workspace, "agents", name);
     if (!fs.existsSync(template)) throw new Error(`agent template missing: agents/${name}`);
     const stage = fs.mkdtempSync(path.join(generatedRoot, `.render-${name}-`));
-    fs.cpSync(template, stage, { recursive: true });
+    copyTemplateTree(template, stage);
     if (name === "claude" || name === "codex") {
       renderDeclarativeHooks(stage, name, executable, platform);
     }
