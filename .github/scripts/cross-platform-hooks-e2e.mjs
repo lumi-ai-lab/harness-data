@@ -145,6 +145,7 @@ function verifyOpenClawAdapter() {
 }
 
 try {
+  console.log(`E2E phase: prepare Unicode workspace (${workspace})`);
   mkdirSync(path.join(workspace, "bin"), { recursive: true });
   mkdirSync(path.join(workspace, "config"), { recursive: true });
   copyFixtureTree(path.join(repository, "wikis"), path.join(workspace, "wikis"));
@@ -159,6 +160,7 @@ try {
 
   runExecutable(executable, ["wikis", "build-index", "--skip-checks"], { cwd: workspace });
 
+  console.log("E2E phase: reconcile Agent integrations");
   const first = reconcileAgentIntegrations(workspace, "all");
   assert.equal(first.changed, true);
   assert.equal(first.codexTrustReviewRequired, true);
@@ -195,6 +197,7 @@ try {
     session_id: "native-codex-report",
     prompt: reportPrompt,
   });
+  console.log("E2E phase: execute Codex and Claude declarative Hooks");
   const contextOutput = runDeclarativeHook(
     hookCommand(codexHooks, "UserPromptSubmit"),
     userPromptFixture,
@@ -260,6 +263,7 @@ try {
   assert.equal(posttoolOutput.hookSpecificOutput?.hookEventName, "PostToolUse");
   assert.match(posttoolOutput.hookSpecificOutput?.additionalContext || "", /QDM_FINAL_OUTPUT_CONTRACT/);
 
+  console.log("E2E phase: execute Pi, OpenClaw, and Hermes adapters");
   await verifyPiAdapter();
   verifyOpenClawAdapter();
   if (process.env.HARNESS_HERMES_E2E === "1") {

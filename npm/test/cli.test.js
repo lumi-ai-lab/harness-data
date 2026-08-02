@@ -1824,8 +1824,7 @@ test("links selected agent templates", () => {
 });
 
 function createAgentWorkspace(options = {}) {
-  const prefix = options.withSpaces ? "Harness Data 中文-" : "harness-data-test-";
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   copyFixtureTree(path.join(root, "..", ".agents"), path.join(workspace, "agents"));
   fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
   const platform = options.platform || process.platform;
@@ -1855,7 +1854,7 @@ test("expands aggregate agent choices into stable concrete names", () => {
 });
 
 test("renders deterministic native Windows Codex hooks with an absolute exe", () => {
-  const workspace = createAgentWorkspace({ platform: "win32", withSpaces: true });
+  const workspace = createAgentWorkspace({ platform: "win32" });
   const first = reconcileAgentIntegrations(workspace, ["claude", "codex", "hermes"], { platform: "win32" });
   const hooksFile = path.join(workspace, ".harness", "generated", "agents", "codex", "hooks.json");
   const firstBody = fs.readFileSync(hooksFile, "utf8");
