@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" context --format codex-hook",
+            "command": "__HARNESS_DATA_CLI__ context --format codex-hook",
             "statusMessage": "Loading QDM Harness context"
           }
         ]
@@ -13,11 +13,11 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "^Bash$",
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" posttool --format codex-hook",
+            "command": "__HARNESS_DATA_CLI__ posttool --format codex-hook",
             "statusMessage": "Updating QDM Harness state"
           }
         ]

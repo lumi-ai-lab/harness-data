@@ -266,6 +266,7 @@ jobs:
           cp -R .agents/hermes runtime/agents/hermes
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
+          cp config/qdm-cli-paths.ps1.example runtime/config/qdm-cli-paths.ps1.example
           cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
           helper_extract="/tmp/harness-helper-${GITHUB_RUN_ID}"
           mkdir -p "${helper_extract}"
@@ -284,11 +285,14 @@ jobs:
             --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-darwin-arm64.tar.gz" \
             --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-linux-amd64.tar.gz" \
             --real-cli-archive "/tmp/harness-private-assets-${GITHUB_RUN_ID}/qdm-indicators-cli-v0.0.4-windows-amd64.zip"
-          ln -s agents/claude runtime/.claude
-          ln -s agents/codex runtime/.codex
-          ln -s agents/pi runtime/.pi
-          ln -s agents/openclaw runtime/.openclaw
-          ln -s agents/hermes runtime/.hermes
+          grep -F "__HARNESS_DATA_CLI__" runtime/agents/codex/hooks.json >/dev/null
+          for effective_config in .claude .codex .pi .openclaw .hermes .harness/generated; do
+            test ! -e "runtime/${effective_config}"
+          done
+          if grep -R -F "${GITHUB_WORKSPACE}" runtime/agents >/dev/null; then
+            echo "runtime Agent templates contain a build-machine absolute path" >&2
+            exit 1
+          fi
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
           (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")
 

@@ -8,6 +8,6 @@ export function platformKey() {
   return key;
 }
 
-export function binaryName(name) {
-  return process.platform === "win32" ? `${name}.exe` : name;
+export function binaryName(name, platform = process.platform) {
+  return platform === "win32" ? `${name}.exe` : name;
 }

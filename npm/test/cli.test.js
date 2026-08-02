@@ -29,16 +29,19 @@ import {
   verifyLumiInstalledReleaseSet
 } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateCommand, updateWikis } from "../src/commands/update.js";
-import { collectDoctor } from "../src/commands/doctor.js";
+import { collectDoctor, repairAgentIntegrations } from "../src/commands/doctor.js";
 import { authCommand } from "../src/commands/auth.js";
 import {
   agentChoices,
+  expandAgentSelection,
   hasAnyAgentHook,
   linkAgents,
   localPathToolNames,
   localPathToolNamesForProfile,
   qdmCliBinaries,
   qdmCliBinariesForProfile,
+  reconcileAgentIntegrations,
+  serializeHookCommand,
   writeLocalConfig
 } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
@@ -1162,6 +1165,8 @@ test("runtime bundle update preserves local config while refreshing examples", {
     ["config/harness-config.yaml", "old harness config\n"],
     ["config/qdm-cli-paths.env", "old cli paths\n"],
     ["config/qdm-cli-paths.env.example", "old example\n"],
+    ["config/qdm-cli-paths.ps1", "old PowerShell cli paths\n"],
+    ["config/qdm-cli-paths.ps1.example", "old PowerShell example\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1179,7 +1184,9 @@ printf 'new agents\\n' > "$dir/agents/new.txt"
 printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
 printf 'new harness example\\n' > "$dir/config/harness-config.yaml.example"
 printf 'new cli paths example\\n' > "$dir/config/qdm-cli-paths.env.example"
+printf 'new PowerShell cli paths example\\n' > "$dir/config/qdm-cli-paths.ps1.example"
 printf 'should not replace local cli paths\\n' > "$dir/config/qdm-cli-paths.env"
+printf 'should not replace local PowerShell cli paths\\n' > "$dir/config/qdm-cli-paths.ps1"
 exit 0
 `, { mode: 0o755 });
 
@@ -1217,8 +1224,10 @@ exit 0
   assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), "{\"new\":true}\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8"), "old harness config\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old cli paths\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1"), "utf8"), "old PowerShell cli paths\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml.example"), "utf8"), "new harness example\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env.example"), "utf8"), "new cli paths example\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1.example"), "utf8"), "new PowerShell cli paths example\n");
 });
 
 test("Lumi runtime bundle requires a valid matching checksum sidecar", async () => {
@@ -1573,11 +1582,25 @@ test("local config exports workspace CAS config dir", () => {
   writeLocalConfig(workspace, { overwrite: true });
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
+  const powershell = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
   const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
   assert.match(env, /export QDM_SQL_CLI=".*qdm-sql-cli"/);
+  assert.match(powershell, /\$env:QDM_SQL_CLI = '.*qdm-sql-cli'/);
+  assert.match(powershell, /\$env:QDM_CAS_CONFIG_DIR = '.*\.qdm-auth.*cas'/);
   assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
+});
+
+test("Windows local config uses native exe paths in PowerShell", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+
+  writeLocalConfig(workspace, { overwrite: true, platform: "win32" });
+
+  const powershell = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1"), "utf8");
+  for (const variable of ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"]) {
+    assert.match(powershell, new RegExp(`\\$env:${variable} = '.*\\.exe'`));
+  }
 });
 
 test("Lumi config exposes only the public Indicators Facade", () => {
@@ -1586,9 +1609,11 @@ test("Lumi config exposes only the public Indicators Facade", () => {
   writeLocalConfig(workspace, { overwrite: true, profile: lumiRequiredProfile });
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
+  const powershell = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
   const facade = path.join(workspace, "bin", binaryName("qdm-indicators-cli")).replaceAll("\\", "/");
   assert.equal(env, `export QDM_INDICATORS_CLI="${facade}"\n`);
+  assert.equal(powershell, `\uFEFF$env:QDM_INDICATORS_CLI = '${path.join(workspace, "bin", binaryName("qdm-indicators-cli"))}'\n`);
   assert.match(harnessConfig, new RegExp(`qdm_indicators_cli: ${facade.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   assert.doesNotMatch(`${env}\n${harnessConfig}`, /QDM_(CMR|SQL|CAS)|qdm_(cmr|sql|cas)_cli/);
 });
@@ -1770,44 +1795,119 @@ test("agent choices include OpenClaw, Hermes, both, and all", () => {
 });
 
 test("links selected agent templates", () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
-    fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
-  }
+  const workspace = createAgentWorkspace();
 
   const openclaw = linkAgents(workspace, "openclaw");
-  assert.deepEqual(openclaw, [["agents/openclaw", ".openclaw"]]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
+  assert.deepEqual(openclaw, [[".harness/generated/agents/openclaw", ".openclaw"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/openclaw")));
 
   const hermes = linkAgents(workspace, "hermes");
-  assert.deepEqual(hermes, [["agents/hermes", ".hermes"]]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+  assert.deepEqual(hermes, [[".harness/generated/agents/hermes", ".hermes"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/hermes")));
 
   const both = linkAgents(workspace, "both");
-  assert.deepEqual(both, [["agents/claude", ".claude"], ["agents/codex", ".codex"]]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".claude")), fs.realpathSync(path.join(workspace, "agents", "claude")));
-  assert.equal(fs.realpathSync(path.join(workspace, ".codex")), fs.realpathSync(path.join(workspace, "agents", "codex")));
+  assert.deepEqual(both, [[".harness/generated/agents/claude", ".claude"], [".harness/generated/agents/codex", ".codex"]]);
+  assert.equal(fs.realpathSync(path.join(workspace, ".claude")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/claude")));
+  assert.equal(fs.realpathSync(path.join(workspace, ".codex")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/codex")));
   assert.equal(fs.existsSync(path.join(workspace, ".pi")), false);
 
   const all = linkAgents(workspace, "all");
   assert.deepEqual(all, [
-    ["agents/claude", ".claude"],
-    ["agents/codex", ".codex"],
-    ["agents/pi", ".pi"],
-    ["agents/openclaw", ".openclaw"],
-    ["agents/hermes", ".hermes"],
+    [".harness/generated/agents/claude", ".claude"],
+    [".harness/generated/agents/codex", ".codex"],
+    [".harness/generated/agents/pi", ".pi"],
+    [".harness/generated/agents/openclaw", ".openclaw"],
+    [".harness/generated/agents/hermes", ".hermes"],
   ]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
-  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/openclaw")));
+  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, ".harness/generated/agents/hermes")));
 });
 
-function createAgentWorkspace() {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+function createAgentWorkspace(options = {}) {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const workspace = options.withSpaces ? path.join(parent, "Harness Data 中文") : parent;
+  fs.mkdirSync(workspace, { recursive: true });
   for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
-    fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
+    fs.cpSync(path.join(root, "..", ".agents", name), path.join(workspace, "agents", name), { recursive: true });
   }
+  fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+  const platform = options.platform || process.platform;
+  fs.writeFileSync(path.join(workspace, "bin", binaryName("data-harness-cli", platform)), "fixture", { mode: 0o755 });
   return workspace;
 }
+
+test("expands aggregate agent choices into stable concrete names", () => {
+  assert.deepEqual(expandAgentSelection("both"), ["claude", "codex"]);
+  assert.deepEqual(expandAgentSelection("all"), ["claude", "codex", "pi", "openclaw", "hermes"]);
+  assert.throws(() => expandAgentSelection([]), /agent must be/);
+});
+
+test("renders deterministic native Windows Codex hooks with an absolute exe", () => {
+  const workspace = createAgentWorkspace({ platform: "win32", withSpaces: true });
+  const first = reconcileAgentIntegrations(workspace, ["claude", "codex", "hermes"], { platform: "win32" });
+  const hooksFile = path.join(workspace, ".harness", "generated", "agents", "codex", "hooks.json");
+  const firstBody = fs.readFileSync(hooksFile, "utf8");
+  const hooks = JSON.parse(firstBody);
+  const contextHook = hooks.hooks.UserPromptSubmit[0].hooks[0];
+  const posttoolGroup = hooks.hooks.PostToolUse[0];
+
+  assert.equal(first.codexTrustReviewRequired, true);
+  assert.equal(posttoolGroup.matcher, "^Bash$");
+  assert.equal(contextHook.command, contextHook.commandWindows);
+  assert.match(contextHook.commandWindows, /^".*data-harness-cli\.exe" context --format codex-hook$/u);
+  assert.doesNotMatch(contextHook.commandWindows, /\$PWD|dirname|python|powershell/iu);
+  const claudeSettings = JSON.parse(fs.readFileSync(
+    path.join(workspace, ".harness", "generated", "agents", "claude", "settings.json"),
+    "utf8",
+  ));
+  const claudeContextHook = claudeSettings.hooks.UserPromptSubmit[0].hooks[0];
+  assert.match(claudeContextHook.command, /^".*data-harness-cli\.exe" context --format claude-hook$/u);
+  assert.equal(claudeContextHook.commandWindows, undefined);
+  assert.equal(fs.existsSync(path.join(workspace, ".harness", "generated", "agents", "hermes", "agent-hooks")), false);
+
+  const second = reconcileAgentIntegrations(workspace, ["claude", "codex", "hermes"], { platform: "win32" });
+  assert.equal(second.changed, false);
+  assert.equal(second.codexTrustReviewRequired, false);
+  assert.equal(fs.readFileSync(hooksFile, "utf8"), firstBody);
+});
+
+test("reconcile refreshes generated config after runtime templates change", () => {
+  const workspace = createAgentWorkspace();
+  reconcileAgentIntegrations(workspace, "codex");
+  const template = path.join(workspace, "agents", "codex", "AGENTS.md");
+  fs.appendFileSync(template, "\nruntime update\n");
+
+  const result = reconcileAgentIntegrations(workspace, "codex");
+
+  assert.equal(result.changed, true);
+  assert.equal(result.codexTrustReviewRequired, false);
+  assert.match(fs.readFileSync(path.join(workspace, ".codex", "AGENTS.md"), "utf8"), /runtime update/);
+});
+
+test("reconcile requests Codex review only for an actual Hook definition change", () => {
+  const workspace = createAgentWorkspace();
+  reconcileAgentIntegrations(workspace, "codex");
+  const template = path.join(workspace, "agents", "codex", "hooks.json");
+  const hooks = JSON.parse(fs.readFileSync(template, "utf8"));
+  hooks.hooks.UserPromptSubmit[0].hooks[0].statusMessage = "Updated Hook status";
+  fs.writeFileSync(template, `${JSON.stringify(hooks, null, 2)}\n`);
+
+  const result = reconcileAgentIntegrations(workspace, "codex");
+
+  assert.equal(result.changed, true);
+  assert.equal(result.codexTrustReviewRequired, true);
+});
+
+test("serializes hook paths without invoking an interpreter wrapper", () => {
+  assert.equal(
+    serializeHookCommand("C:\\Harness Data\\bin\\data-harness-cli.exe", ["context", "--format", "codex-hook"], { platform: "win32" }),
+    '"C:\\Harness Data\\bin\\data-harness-cli.exe" context --format codex-hook',
+  );
+  assert.equal(
+    serializeHookCommand("/tmp/Harness Data/bin/data-harness-cli", ["posttool", "--format", "codex-hook"], { platform: "linux" }),
+    "'/tmp/Harness Data/bin/data-harness-cli' 'posttool' '--format' 'codex-hook'",
+  );
+});
 
 test("detects whether any agent hook exists", () => {
   const workspace = createAgentWorkspace();
@@ -1819,33 +1919,58 @@ test("detects whether any agent hook exists", () => {
   assert.equal(hasAnyAgentHook(workspace), true);
 });
 
-test("update restore recreates agent hooks only when all are missing", async () => {
+test("update reconcile repairs and preserves generated agent hooks", async () => {
   const missingWorkspace = createAgentWorkspace();
 
   const restored = await restoreAgentHooksIfMissing(missingWorkspace, { agent: "codex" });
 
-  assert.deepEqual(restored, { agent: "codex", linkedAgents: [["agents/codex", ".codex"]] });
-  assert.equal(fs.realpathSync(path.join(missingWorkspace, ".codex")), fs.realpathSync(path.join(missingWorkspace, "agents", "codex")));
+  assert.deepEqual(restored.agents, ["codex"]);
+  assert.equal(restored.changed, true);
+  assert.equal(fs.realpathSync(path.join(missingWorkspace, ".codex")), fs.realpathSync(path.join(missingWorkspace, ".harness/generated/agents/codex")));
 
   const existingWorkspace = createAgentWorkspace();
   linkAgents(existingWorkspace, "codex");
   const before = fs.realpathSync(path.join(existingWorkspace, ".codex"));
 
-  const skipped = await restoreAgentHooksIfMissing(existingWorkspace, { agent: "not-real" });
+  const skipped = await restoreAgentHooksIfMissing(existingWorkspace, { agent: "codex" });
 
-  assert.equal(skipped, null);
+  assert.equal(skipped.changed, false);
   assert.equal(fs.realpathSync(path.join(existingWorkspace, ".codex")), before);
   assert.equal(fs.existsSync(path.join(existingWorkspace, ".claude")), false);
 });
 
+test("doctor repair uses installer state and requires an explicit selection when unknown", () => {
+  const workspace = createAgentWorkspace();
+  writeInstallerStateFile(workspace, localInstallerStateFixture({ agent: "codex" }));
+
+  const repaired = repairAgentIntegrations(workspace);
+
+  assert.deepEqual(repaired.agents, ["codex"]);
+  assert.equal(repaired.changed, true);
+  assert.equal(
+    fs.realpathSync(path.join(workspace, ".codex")),
+    fs.realpathSync(path.join(workspace, ".harness/generated/agents/codex")),
+  );
+
+  const unknownWorkspace = createAgentWorkspace();
+  assert.throws(() => repairAgentIntegrations(unknownWorkspace), /rerun with --agent/);
+  fs.mkdirSync(path.join(unknownWorkspace, ".codex"));
+  assert.throws(() => repairAgentIntegrations(unknownWorkspace), /rerun with --agent/);
+  assert.equal(fs.statSync(path.join(unknownWorkspace, ".codex")).isDirectory(), true);
+  assert.deepEqual(repairAgentIntegrations(unknownWorkspace, { agent: "pi" }).agents, ["pi"]);
+
+  const legacyWorkspace = createAgentWorkspace();
+  fs.symlinkSync(path.join(legacyWorkspace, "agents", "codex"), path.join(legacyWorkspace, ".codex"), "junction");
+  assert.deepEqual(repairAgentIntegrations(legacyWorkspace).agents, ["codex"]);
+  assert.equal(
+    fs.realpathSync(path.join(legacyWorkspace, ".codex")),
+    fs.realpathSync(path.join(legacyWorkspace, ".harness/generated/agents/codex")),
+  );
+});
+
 function createDoctorWorkspace(agent) {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const workspace = createAgentWorkspace();
   for (const dir of [
-    "agents/claude",
-    "agents/codex",
-    "agents/pi",
-    "agents/openclaw",
-    "agents/hermes",
     "bootstrap",
     "wikis/metrics",
     "wikis/reports",
@@ -1856,7 +1981,6 @@ function createDoctorWorkspace(agent) {
   ]) {
     fs.mkdirSync(path.join(workspace, dir), { recursive: true });
   }
-
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
   fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
   fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "credentials.enc"), "encrypted-test-credentials");
@@ -1876,6 +2000,16 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
     assert.ok(agentChecks.length > 0);
     assert.equal(agentChecks.every((check) => check.ok), true, agent);
   }
+});
+
+test("doctor validates the generated PowerShell CLI path config", async () => {
+  const workspace = createDoctorWorkspace("codex");
+  fs.writeFileSync(path.join(workspace, "config", "qdm-cli-paths.ps1"), "$env:QDM_CMR_CLI = 'broken'\n");
+
+  const report = await collectDoctor(workspace);
+  const check = report.checks.find((item) => item.name === "config CLI paths");
+
+  assert.equal(check?.ok, false);
 });
 
 test("Lumi doctor validates release-set, Facade, private CLI, config, and Pi-only hooks", async () => {
@@ -1905,6 +2039,7 @@ exit 0
   ]) {
     fs.mkdirSync(path.join(workspace, dir), { recursive: true });
   }
+  fs.cpSync(path.join(root, "..", ".agents", "pi"), path.join(workspace, "agents", "pi"), { recursive: true });
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), `${JSON.stringify(fixture.manifest, null, 2)}\n`);
   fs.writeFileSync(path.join(workspace, "bootstrap", "approved-lumi-wikis-manifest.json"), fixture.approvedWikisManifest);
   for (const [file, value] of Object.entries(fixture.approvedWikisFiles)) {

@@ -7,21 +7,39 @@ import { extractAdditionalContext } from "./extract-additional-context.ts";
 type JsonObject = Record<string, unknown>;
 
 const pluginDir = dirname(fileURLToPath(import.meta.url));
-const workspaceHint = resolve(pluginDir, "../../../../..");
+
+function harnessBinaryName(): string {
+  return process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli";
+}
+
+function harnessExecutable(projectRoot: string): string {
+  return join(projectRoot, "bin", harnessBinaryName());
+}
+
+function rootFrom(startDir: string): string | undefined {
+  let current = resolve(startDir);
+  while (true) {
+    if (existsSync(harnessExecutable(current))) return current;
+    if (
+      existsSync(join(current, "wikis")) &&
+      (existsSync(join(current, ".agents")) ||
+        existsSync(join(current, "agents")) ||
+        existsSync(join(current, "config", "harness-config.yaml")))
+    ) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findProjectRoot(startDir = process.cwd()): string {
-  let current = resolve(startDir);
-  while (true) {
-    if (existsSync(join(current, "bin", "data-harness-cli"))) return current;
-    if (existsSync(join(current, ".agents")) && existsSync(join(current, "wikis"))) return current;
-    const parent = dirname(current);
-    if (parent === current) return workspaceHint;
-    current = parent;
-  }
+  return rootFrom(startDir) ?? rootFrom(pluginDir) ?? resolve(startDir);
 }
 
 function contentText(content: unknown): string {
@@ -95,18 +113,19 @@ function isTemplateCommand(command: string): boolean {
 function runHarnessContext(projectRoot: string, event: unknown): string {
   const prompt = latestUserPrompt(event);
   if (!prompt) return "";
-  const cli = join(projectRoot, "bin", "data-harness-cli");
+  const cli = harnessExecutable(projectRoot);
   const result = spawnSync(cli, ["context", "--format", "agent-hook"], {
     cwd: projectRoot,
     input: JSON.stringify({ session_id: sessionId(event), prompt }),
     encoding: "utf8",
+    shell: false,
   });
   if (result.status !== 0) return "";
   return extractAdditionalContext(result.stdout);
 }
 
 function runPosttool(projectRoot: string, event: unknown, command: string): string {
-  const cli = join(projectRoot, "bin", "data-harness-cli");
+  const cli = harnessExecutable(projectRoot);
   const result = spawnSync(cli, ["posttool", "--format", "agent-hook"], {
     cwd: projectRoot,
     input: JSON.stringify({
@@ -115,6 +134,7 @@ function runPosttool(projectRoot: string, event: unknown, command: string): stri
       tool_input: { command },
     }),
     encoding: "utf8",
+    shell: false,
   });
   if (result.status !== 0) return "";
   return extractAdditionalContext(result.stdout);

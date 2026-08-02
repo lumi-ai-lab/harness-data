@@ -11,6 +11,7 @@ type JsonObject = Record<string, unknown>;
 
 interface PiExtensionContext {
   cwd?: string;
+  signal?: AbortSignal;
   sessionManager?: {
     getSessionId?: () => string;
     getSessionFile?: () => string | undefined;
@@ -33,14 +34,13 @@ interface PiMessageEvent {
   message?: unknown;
 }
 
-interface PiToolCallEvent {
+interface PiToolResultEvent {
   toolCallId?: string;
   toolName?: string;
   input?: JsonObject;
-}
-
-interface PiToolResultEvent {
-  toolCallId?: string;
+  content?: unknown[];
+  details?: unknown;
+  isError?: boolean;
 }
 
 interface PiToolExecutionEndEvent {
@@ -66,7 +66,6 @@ interface PendingAssistantBinding {
 }
 
 const extensionDir = dirname(fileURLToPath(import.meta.url));
-const extractContextScript = join(extensionDir, "extract-additional-context.mjs");
 const CONTEXT_STATUS_KEY = "qdm-harness";
 const CONTEXT_STATUS_DELAY_MS = 120;
 const DEFAULT_CONTEXT_TIMEOUT_MS = 5_000;
@@ -131,18 +130,37 @@ function sameBindingSnapshot(
 }
 
 function cliMissingMessage(cli: string): string {
-  return `missing ${cli}; run \`go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli\` or reinstall harness-data`;
+  return `missing ${cli}; run \`go build -o bin/${harnessBinaryName()} ./cli/cmd/data-harness-cli\` or reinstall harness-data`;
+}
+
+function harnessBinaryName(): string {
+  return process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli";
+}
+
+function harnessExecutable(projectRoot: string): string {
+  return join(projectRoot, "bin", harnessBinaryName());
+}
+
+function rootFrom(startDir: string): string | undefined {
+  let current = resolve(startDir);
+  while (true) {
+    if (existsSync(harnessExecutable(current))) return current;
+    if (
+      existsSync(join(current, "wikis")) &&
+      (existsSync(join(current, ".agents")) ||
+        existsSync(join(current, "agents")) ||
+        existsSync(join(current, "config", "harness-config.yaml")))
+    ) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
 }
 
 function findProjectRoot(startDir: string): string {
-  let current = resolve(startDir);
-  while (true) {
-    if (existsSync(join(current, "bin", "data-harness-cli"))) return current;
-    if (existsSync(join(current, ".agents")) && existsSync(join(current, "wikis"))) return current;
-    const parent = dirname(current);
-    if (parent === current) return resolve(startDir);
-    current = parent;
-  }
+  return rootFrom(startDir) ?? rootFrom(extensionDir) ?? resolve(startDir);
 }
 
 function usesLumiAuthorizationProfile(projectRoot: string): boolean {
@@ -241,7 +259,7 @@ async function runHarnessContext(
 ): Promise<string> {
   if (!prompt) return "";
 
-  const cli = join(projectRoot, "bin", "data-harness-cli");
+  const cli = harnessExecutable(projectRoot);
   if (!existsSync(cli)) return notifyContextFailure(ctx, cliMissingMessage(cli));
 
   const timeoutMs = contextTimeoutMs();
@@ -284,7 +302,7 @@ async function runHarnessAuthzBind(
   projectRoot: string,
   requestedSessionId: string,
 ): Promise<ReturnType<typeof parseAuthzBindOutput>> {
-  const cli = join(projectRoot, "bin", "data-harness-cli");
+  const cli = harnessExecutable(projectRoot);
   if (!existsSync(cli)) throw new Error(cliMissingMessage(cli));
 
   const timeoutMs = contextTimeoutMs();
@@ -314,48 +332,46 @@ function assertPiRuntime(runtime: PiRuntime): asserts runtime is Required<PiRunt
   }
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 function isTemplateCommand(command: string): boolean {
   return /\bdata-harness-cli\b/.test(command) && /\b(inject-template|stage\s+template)\b/.test(command);
 }
 
-function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionContext): void {
-  const toolCall = event as PiToolCallEvent;
-  if (!["bash", "Bash"].includes(toolCall.toolName ?? "") || !isObject(toolCall.input)) return;
-  const command = toolCall.input.command;
-  if (typeof command !== "string" || !isTemplateCommand(command)) return;
+async function posttoolContext(
+  projectRoot: string,
+  event: PiToolResultEvent,
+  ctx?: PiExtensionContext,
+): Promise<string> {
+  if (String(event.toolName || "").toLowerCase() !== "bash" || !isObject(event.input)) return "";
+  const command = event.input.command;
+  if (typeof command !== "string" || !isTemplateCommand(command)) return "";
 
-  const payload = JSON.stringify({
-    session_id: contextSessionId(ctx),
-    tool_name: "Bash",
-    tool_input: { command },
-  });
-  const cli = join(projectRoot, "bin", "data-harness-cli");
+  const cli = harnessExecutable(projectRoot);
   if (!existsSync(cli)) {
     ctx?.ui?.notify?.(`QDM Harness posttool failed: ${cliMissingMessage(cli)}`, "warning");
-    return;
+    return "";
   }
-  toolCall.input.command = [
-    "{",
-    command,
-    ";",
-    "}",
-    ";",
-    "__qdm_status=$?",
-    ";",
-    "printf %s",
-    shellQuote(payload),
-    "|",
-    shellQuote(cli),
-    "posttool --format agent-hook",
-    "| node",
-    shellQuote(extractContextScript),
-    ";",
-    "exit $__qdm_status",
-  ].join(" ");
+
+  const timeoutMs = contextTimeoutMs();
+  const result = (await runAsyncCommand(cli, ["posttool", "--format", "agent-hook"], {
+    cwd: projectRoot,
+    input: JSON.stringify({
+      session_id: contextSessionId(ctx),
+      tool_name: "Bash",
+      tool_input: { command },
+    }),
+    signal: ctx?.signal,
+    timeoutMs,
+  })) as JsonObject;
+  if (result.error || result.timedOut || result.aborted || result.truncated || result.code !== 0) {
+    ctx?.ui?.notify?.(`QDM Harness posttool failed: ${commandFailureMessage(result, timeoutMs)}`, "warning");
+    return "";
+  }
+  try {
+    return extractAdditionalContext(String(result.stdout ?? ""));
+  } catch (error) {
+    ctx?.ui?.notify?.(`QDM Harness posttool failed: ${concise(error) || "invalid JSON"}`, "warning");
+    return "";
+  }
 }
 
 interface ExtensionDependencies {
@@ -628,14 +644,22 @@ export async function installQdmHarnessExtension(
     return undefined;
   });
 
-  pi.on?.("tool_call", (event, ctx) => {
-    injectPosttool(projectRoot, event, ctx);
-    return undefined;
-  });
+  pi.on?.("tool_call", () => undefined);
 
-  pi.on?.("tool_result", (event) => {
-    authorizationState?.clearToolCall((event as PiToolResultEvent).toolCallId ?? "");
-    return undefined;
+  pi.on?.("tool_result", async (event, ctx) => {
+    const toolResult = event as PiToolResultEvent;
+    try {
+      const additionalContext = await posttoolContext(projectRoot, toolResult, ctx);
+      if (!additionalContext) return undefined;
+      return {
+        content: [
+          ...(Array.isArray(toolResult.content) ? toolResult.content : []),
+          { type: "text", text: additionalContext },
+        ],
+      };
+    } finally {
+      authorizationState?.clearToolCall(toolResult.toolCallId ?? "");
+    }
   });
 
   pi.on?.("tool_execution_end", (event) => {

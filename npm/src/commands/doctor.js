@@ -4,7 +4,12 @@ import path from "node:path";
 import { run } from "../lib/exec.js";
 import { findWorkspaceDir, readInstallerState } from "../lib/paths.js";
 import { binaryName, platformKey } from "../lib/platform.js";
-import { concreteAgentNames, qdmCliBinariesForProfile } from "../lib/config.js";
+import {
+  configuredAgentNames,
+  concreteAgentNames,
+  qdmCliBinariesForProfile,
+  reconcileAgentIntegrations
+} from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { readManifest, toolDestination } from "../lib/manifest.js";
 import {
@@ -32,7 +37,7 @@ function existsExecutable(file) {
 
 function agentOk(workspace, name) {
   const target = path.join(workspace, `.${name}`);
-  const source = path.join(workspace, "agents", name);
+  const source = path.join(workspace, ".harness", "generated", "agents", name);
   if (!fs.existsSync(target) || !fs.existsSync(source)) return false;
   try {
     return fs.realpathSync(target) === fs.realpathSync(source);
@@ -55,25 +60,43 @@ function yamlCliPath(content, name) {
 
 function configPathsValid(workspace, profile) {
   const envFile = path.join(workspace, "config", "qdm-cli-paths.env");
+  const powershellFile = path.join(workspace, "config", "qdm-cli-paths.ps1");
   const harnessFile = path.join(workspace, "config", "harness-config.yaml");
-  if (!fs.existsSync(envFile) || !fs.existsSync(harnessFile)) return false;
+  if (!fs.existsSync(envFile) || !fs.existsSync(powershellFile) || !fs.existsSync(harnessFile)) return false;
   const envContent = fs.readFileSync(envFile, "utf8");
+  const powershellContent = fs.readFileSync(powershellFile, "utf8").replace(/^\uFEFF/u, "");
   const harnessContent = fs.readFileSync(harnessFile, "utf8");
-  const required = profile === lumiRequiredProfile
-    ? ["QDM_INDICATORS_CLI"]
-    : ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
-  const values = new Map([...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
-  if (!required.every((name) => values.has(name) && fs.existsSync(values.get(name)))) return false;
+  const binaries = profile === lumiRequiredProfile
+    ? { QDM_INDICATORS_CLI: ["qdm_indicators_cli", "qdm-indicators-cli"] }
+    : {
+        QDM_CMR_CLI: ["qdm_cmr_cli", "qdm-cmr-cli"],
+        QDM_INDICATORS_CLI: ["qdm_indicators_cli", "qdm-indicators-cli"],
+        QDM_SQL_CLI: ["qdm_sql_cli", "qdm-sql-cli"],
+        QDM_CAS_CLI: ["qdm_cas_cli", "cas-cli"]
+      };
+  const envValues = new Map([...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
+  const powershellValues = new Map(
+    [...powershellContent.matchAll(/^\$env:([A-Z0-9_]+)\s*=\s*'((?:[^']|'')*)'\s*$/gm)]
+      .map((match) => [match[1], match[2].replaceAll("''", "'")]),
+  );
+  for (const [environmentName, [yamlName, binary]] of Object.entries(binaries)) {
+    const expected = path.resolve(workspace, "bin", binaryName(binary));
+    const envValue = envValues.get(environmentName);
+    const powershellValue = powershellValues.get(environmentName);
+    if (!envValue || !powershellValue || !fs.existsSync(envValue) || !fs.existsSync(powershellValue)) return false;
+    if (path.resolve(envValue) !== expected || path.resolve(powershellValue) !== expected) return false;
+    if (path.resolve(yamlCliPath(harnessContent, yamlName)) !== expected) return false;
+  }
   if (profile === lumiRequiredProfile) {
     const forbiddenEnv = ["QDM_CMR_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI", "QDM_CAS_CONFIG_DIR"];
     const forbiddenYaml = ["qdm_cmr_cli", "qdm_sql_cli", "qdm_cas_cli"];
-    if (forbiddenEnv.some((name) => values.has(name))) return false;
+    if (forbiddenEnv.some((name) => envValues.has(name) || powershellValues.has(name))) return false;
     if (forbiddenYaml.some((name) => yamlCliPath(harnessContent, name))) return false;
-    const expected = path.resolve(workspace, "bin", binaryName("qdm-indicators-cli"));
-    return path.resolve(values.get("QDM_INDICATORS_CLI")) === expected &&
-      path.resolve(yamlCliPath(harnessContent, "qdm_indicators_cli")) === expected;
+    return true;
   }
-  return true;
+  const expectedCasConfig = path.resolve(workspace, ".qdm-auth", "cas");
+  return path.resolve(envValues.get("QDM_CAS_CONFIG_DIR") || "") === expectedCasConfig &&
+    path.resolve(powershellValues.get("QDM_CAS_CONFIG_DIR") || "") === expectedCasConfig;
 }
 
 function fileSha256(file) {
@@ -320,6 +343,7 @@ export async function collectDoctor(workspace, options = {}) {
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
+  add("config/qdm-cli-paths.ps1", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.ps1")));
   add("config CLI paths", configPathsValid(workspace, effectiveProfile));
   if (effectiveProfile === lumiRequiredProfile) {
     const forbidden = ["qdm-cmr-cli", "qdm-sql-cli", "cas-cli"];
@@ -392,7 +416,7 @@ export async function collectDoctor(workspace, options = {}) {
         : { ok: false, detail: "Harness helper integrity failed" };
       add("authorization readiness", readiness.ok, readiness.detail);
     }
-    add("Agent hook .pi", agentOk(workspace, "pi"), "agents/pi");
+    add("Agent hook .pi", agentOk(workspace, "pi"), ".harness/generated/agents/pi");
     for (const name of concreteAgentNames.filter((name) => name !== "pi")) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));
     }
@@ -404,7 +428,7 @@ export async function collectDoctor(workspace, options = {}) {
     add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
     for (const name of ["openclaw", "hermes"]) {
       if (fs.existsSync(path.join(workspace, `.${name}`))) {
-        add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
+        add(`Agent hook .${name}`, agentOk(workspace, name), `.harness/generated/agents/${name}`);
       }
     }
   }
@@ -421,7 +445,24 @@ export async function collectDoctor(workspace, options = {}) {
 
 export async function doctorCommand(options = {}) {
   const workspace = findWorkspaceDir(options.dir);
+  let repair = null;
+  if (options.fix) {
+    repair = repairAgentIntegrations(workspace, options);
+    if (!options.json) {
+      console.log(`已对账 Agent Hook：${repair.agents.join(", ")}`);
+      if (repair.codexTrustReviewRequired) {
+        console.log("Codex Hook 定义已变更；请在 Codex 中运行 /hooks 完成 review 与 trust");
+      }
+    }
+  }
   const report = await collectDoctor(workspace, options);
+  if (repair) {
+    report.repair = {
+      agents: repair.agents,
+      changed: repair.changed,
+      codexTrustReviewRequired: repair.codexTrustReviewRequired
+    };
+  }
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
@@ -432,4 +473,15 @@ export async function doctorCommand(options = {}) {
   }
   if (report.checks.some((check) => !check.ok)) process.exitCode = 1;
   return report;
+}
+
+export function repairAgentIntegrations(workspace, options = {}) {
+  const state = readInstallerState(workspace);
+  const configured = configuredAgentNames(workspace);
+  const savedAgents = Array.isArray(state.agents) && state.agents.length === 0 ? null : state.agents;
+  const selection = options.agent || savedAgents || state.agent || (configured.length ? configured : null);
+  if (!selection) {
+    throw new Error("doctor --fix cannot determine the Agent selection; rerun with --agent");
+  }
+  return reconcileAgentIntegrations(workspace, selection, options);
 }

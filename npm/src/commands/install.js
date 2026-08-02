@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNamesForProfile, writeLocalConfig, linkAgents } from "../lib/config.js";
+import { expandAgentSelection, localPathToolNamesForProfile, reconcileAgentIntegrations, writeLocalConfig } from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
@@ -653,6 +653,7 @@ export async function installCommand(options = {}) {
     schemaVersion: installerStateSchemaVersion,
     profile,
     agent: selectedAgent,
+    agents: expandAgentSelection(selectedAgent),
     installMode: tokenMode ? "github-token" : "local-path",
     runtimeTag: bundle.tag,
     localTools,
@@ -672,6 +673,7 @@ export async function installCommand(options = {}) {
   writeLocalConfig(runtimeDir, { overwrite: true, profile });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
+  ok("config/qdm-cli-paths.ps1");
   blank();
 
   step(6, 8, "配置 CAS 认证");
@@ -689,9 +691,12 @@ export async function installCommand(options = {}) {
   blank();
 
   step(8, 8, "配置 Agent Hook");
-  const linkedAgents = linkAgents(runtimeDir, selectedAgent);
-  for (const [source, target] of linkedAgents) {
+  const agentReconciliation = reconcileAgentIntegrations(runtimeDir, selectedAgent);
+  for (const [source, target] of agentReconciliation.linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
+  }
+  if (agentReconciliation.codexTrustReviewRequired) {
+    warn("Codex Hook 定义已生成或变更；请在 Codex 中运行 /hooks 完成 review 与 trust");
   }
   blank();
 
@@ -711,6 +716,7 @@ export async function installCommand(options = {}) {
     manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
     agent: selectedAgent,
+    agents: agentReconciliation.agents,
     releaseSet,
     authzConfigPath,
     lastCheckAt: new Date().toISOString()

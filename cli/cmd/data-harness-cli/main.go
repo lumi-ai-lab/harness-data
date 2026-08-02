@@ -65,12 +65,12 @@ func run() error {
 	case "authz-validate-catalog":
 		return runAuthzValidateCatalog(os.Args[2:], os.Stdout)
 	}
-	root, err := harness.FindRoot(rootStart())
-	if err != nil {
-		return fmt.Errorf("cannot find harness root: %w", err)
-	}
 	switch os.Args[1] {
 	case "wikis":
+		root, err := findHarnessRoot(nil)
+		if err != nil {
+			return err
+		}
 		return runWikis(root, os.Args[2:])
 	case "context":
 		fs := flag.NewFlagSet("context", flag.ExitOnError)
@@ -86,6 +86,10 @@ func run() error {
 			if *question == "" {
 				return fmt.Errorf("context requires --question")
 			}
+			root, err := findHarnessRoot(nil)
+			if err != nil {
+				return err
+			}
 			response, err := dhcontext.Build(root, *question)
 			if err != nil {
 				return err
@@ -98,6 +102,10 @@ func run() error {
 			}
 		case "claude-hook", "codex-hook", "agent-hook":
 			input, err := dhcontext.ReadHookStdin()
+			if err != nil {
+				return err
+			}
+			root, err := findHarnessRoot(input)
 			if err != nil {
 				return err
 			}
@@ -122,6 +130,10 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		root, err := findHarnessRoot(input)
+		if err != nil {
+			return err
+		}
 		ok, output, err := posttool.RunClaudeHook(root, input)
 		if err != nil {
 			return err
@@ -139,6 +151,10 @@ func run() error {
 	case "stage":
 		return runStage(os.Args[2:])
 	case "show":
+		root, err := findHarnessRoot(nil)
+		if err != nil {
+			return err
+		}
 		return runShow(root, os.Args[2:])
 	default:
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -914,7 +930,7 @@ func runWikiSyncIndexMD(root string, args []string) (wikis.SyncIndexMDResult, er
 		for _, file := range result.Outdated {
 			fmt.Printf("%s\toutdated\n", file)
 		}
-		fmt.Println("run: bin/data-harness-cli wikis sync-index-md")
+		fmt.Println("run data-harness-cli[.exe] wikis sync-index-md from the runtime bin directory")
 		return result, nil
 	}
 	fmt.Printf("sync-index-md updated scanned=%d changed=%d created=%d\n", result.Scanned, len(result.Changed), len(result.Created))
@@ -1606,11 +1622,24 @@ func splitCSV(value string) []string {
 	return out
 }
 
-func rootStart() string {
-	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
-		return projectDir
+func findHarnessRoot(hookInput []byte) (string, error) {
+	var payload struct {
+		Cwd string `json:"cwd"`
 	}
-	return "."
+	if len(hookInput) > 0 {
+		_ = json.Unmarshal(hookInput, &payload)
+	}
+	executable, _ := os.Executable()
+	root, err := harness.FindRootFrom(
+		payload.Cwd,
+		os.Getenv("CLAUDE_PROJECT_DIR"),
+		".",
+		filepath.Dir(executable),
+	)
+	if err != nil {
+		return "", fmt.Errorf("cannot find harness root from hook cwd, process cwd, or executable: %w", err)
+	}
+	return root, nil
 }
 
 func normalizeArgs(args []string, jsonOut *bool) []string {

@@ -42,6 +42,62 @@ func TestInjectTemplateUsesSelectedTemplateAndStripsFrontmatter(t *testing.T) {
 	}
 }
 
+func TestTemplateCommandRecognitionSupportsNativeWindowsShells(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   string
+		injection bool
+		stage     bool
+	}{
+		{name: "posix relative", command: "./bin/data-harness-cli inject-template", injection: true},
+		{name: "windows powershell", command: `& "C:\\Harness Data\\中文\\bin\\data-harness-cli.exe" inject-template`, injection: true},
+		{name: "windows cmd", command: `call "C:\\Harness Data\\bin\\data-harness-cli.exe" stage template`, stage: true},
+		{name: "windows unquoted", command: `C:\\harness\\bin\\data-harness-cli.exe stage template`, stage: true},
+		{name: "echo is not invocation", command: `echo data-harness-cli.exe inject-template`},
+		{name: "powershell output is not invocation", command: `Write-Output "data-harness-cli.exe stage template"`},
+		{name: "comment is not invocation", command: `# data-harness-cli inject-template`},
+		{name: "different executable", command: `C:\\harness\\bin\\other.exe inject-template`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isTemplateInjectionCommand(test.command); got != test.injection {
+				t.Fatalf("injection=%v, want %v for %q", got, test.injection, test.command)
+			}
+			if got := isTemplateStageCommand(test.command); got != test.stage {
+				t.Fatalf("stage=%v, want %v for %q", got, test.stage, test.command)
+			}
+		})
+	}
+}
+
+func TestCodexWindowsPostToolUseFixtureKeepsBashProtocolName(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "codex-windows-fixture"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeReport,
+		SelectedPlaybook: "playbooks/idx/business/s-sale-amt.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	payload, err := os.ReadFile(filepath.Join("..", "..", "testdata", "hooks", "codex-post-tool-use-windows.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok, output, err := RunClaudeHook(root, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected native Windows Codex fixture with tool_name=Bash to be handled")
+	}
+	if output.HookSpecificOutput.HookEventName != "PostToolUse" {
+		t.Fatalf("unexpected hook event: %s", output.HookSpecificOutput.HookEventName)
+	}
+}
+
 func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	root := testInjectRoot(t)
 	sessionID := "needs-template"

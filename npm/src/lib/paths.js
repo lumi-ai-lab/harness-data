@@ -46,6 +46,7 @@ const lumiStateFields = [
   "schemaVersion",
   "profile",
   "agent",
+  "agents",
   "installMode",
   "runtimeTag",
   "localTools",

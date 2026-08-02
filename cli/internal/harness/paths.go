@@ -55,8 +55,31 @@ func FindRoot(start string) (string, error) {
 	}
 }
 
+func FindRootFrom(starts ...string) (string, error) {
+	seen := map[string]bool{}
+	for _, start := range starts {
+		if strings.TrimSpace(start) == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(start)
+		if err != nil || seen[absolute] {
+			continue
+		}
+		seen[absolute] = true
+		if root, err := FindRoot(absolute); err == nil {
+			return root, nil
+		}
+	}
+	return "", os.ErrNotExist
+}
+
 func isRoot(dir string) bool {
-	if exists(filepath.Join(dir, ConfigRel)) || exists(filepath.Join(dir, PathsConfigRel)) || exists(filepath.Join(dir, ".harness")) {
+	if exists(filepath.Join(dir, ConfigRel)) || exists(filepath.Join(dir, PathsConfigRel)) {
+		return true
+	}
+	if exists(filepath.Join(dir, ".harness")) &&
+		(exists(filepath.Join(dir, "agents")) || exists(filepath.Join(dir, "wikis")) ||
+			exists(filepath.Join(dir, "bin", "data-harness-cli")) || exists(filepath.Join(dir, "bin", "data-harness-cli.exe"))) {
 		return true
 	}
 	if exists(filepath.Join(dir, "cli", "cmd", "data-harness-cli", "main.go")) {

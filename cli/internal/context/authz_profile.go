@@ -36,7 +36,6 @@ func isLumiMVPRequiredRuntime(root string) bool {
 }
 
 func applyLumiMVPConstraints(response harness.ContextResponse) harness.ContextResponse {
-	const localCredentialGuidance = "If CMR, Indicators, or SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login."
 	const authorizedGuidance = "Authorization deployment: use only qdm-indicators-cli through the configured Facade. Every invocation requires the current request binding, and the Facade applies final area/category authorization. CMR, SQL, CAS refresh, report CLI paths, raw payload, preview/total, --biz-thresh, and config/token commands are disabled. Never refresh or modify runtime credentials."
 	response.Instruction = strings.ReplaceAll(response.Instruction, localCredentialGuidance, authorizedGuidance)
 	constraints := make([]string, 0, len(response.Constraints)+len(lumiMVPConstraints))

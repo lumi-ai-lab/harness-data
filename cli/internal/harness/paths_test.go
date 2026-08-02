@@ -49,3 +49,47 @@ cli:
 		t.Fatalf("unexpected sql cli path: %+v", cfg.CLI)
 	}
 }
+
+func TestFindRootFromFallsBackToExecutableDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ConfigRel), []byte("paths:\n  knowledge: wikis\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(workspace, "bin", "data-harness-cli.exe")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := FindRootFrom(filepath.Join(t.TempDir(), "outside"), filepath.Dir(executable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != workspace {
+		t.Fatalf("expected %s, got %s", workspace, root)
+	}
+}
+
+func TestFindRootFromDoesNotSelectUnrelatedHarnessStateDirectory(t *testing.T) {
+	unrelated := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(unrelated, ".harness"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ConfigRel), []byte("paths:\n  knowledge: wikis\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := FindRootFrom(unrelated, filepath.Join(workspace, "bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != workspace {
+		t.Fatalf("expected %s, got %s", workspace, root)
+	}
+}

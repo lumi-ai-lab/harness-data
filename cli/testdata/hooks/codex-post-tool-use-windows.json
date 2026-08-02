@@ -1,0 +1,18 @@
+{
+  "session_id": "codex-windows-fixture",
+  "transcript_path": null,
+  "cwd": "C:\\Harness Data\\中文 workspace",
+  "hook_event_name": "PostToolUse",
+  "turn_id": "turn-fixture",
+  "permission_mode": "default",
+  "model": "fixture-model",
+  "tool_name": "Bash",
+  "tool_use_id": "tool-fixture",
+  "tool_input": {
+    "command": "& \"C:\\Harness Data\\中文 workspace\\bin\\data-harness-cli.exe\" stage template"
+  },
+  "tool_response": {
+    "output": "QDM_STAGE_TEMPLATE_SIGNAL emitted.",
+    "exit_code": 0
+  }
+}

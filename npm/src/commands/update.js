@@ -11,7 +11,7 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
+import { configuredAgentNames, reconcileAgentIntegrations, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import {
   installerStateSchemaVersion,
@@ -109,18 +109,27 @@ export async function updateWikis(runtimeDir, options, state) {
   return { commit };
 }
 
-export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
-  if (hasAnyAgentHook(runtimeDir)) {
-    ok("Agent Hook 已配置");
-    return null;
+export async function reconcileAgentHooks(runtimeDir, options = {}) {
+  const state = options.state || readInstallerState(runtimeDir);
+  let selection = options.agents?.length ? options.agents : options.agent || state.agents || state.agent;
+  if (!selection || (Array.isArray(selection) && selection.length === 0)) {
+    const configured = configuredAgentNames(runtimeDir);
+    selection = configured.length ? configured : await chooseAgent(options);
   }
-  action("未检测到 Agent Hook，重新配置");
-  const agent = await chooseAgent(options);
-  const linkedAgents = linkAgents(runtimeDir, agent);
-  for (const [source, target] of linkedAgents) {
+  const result = reconcileAgentIntegrations(runtimeDir, selection, options);
+  if (result.changed) action("Agent Hook 配置已对账");
+  else ok("Agent Hook 配置已是目标状态");
+  for (const [source, target] of result.linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
-  return { agent, linkedAgents };
+  if (result.codexTrustReviewRequired) {
+    warn("Codex Hook 定义已变更；请在 Codex 中运行 /hooks 完成 review 与 trust");
+  }
+  return result;
+}
+
+export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
+  return reconcileAgentHooks(runtimeDir, options);
 }
 
 export async function checkUpdates(workspace, options = {}) {
@@ -154,7 +163,7 @@ export async function updateCommand(options = {}) {
   const nextTools = { ...(state.tools || {}) };
   const applied = [];
   const skipped = [];
-  const trackingOptions = { ...options, skippedUpdates: skipped };
+  const trackingOptions = { ...options, skippedUpdates: skipped, state };
 
   step(1, 7, "检查 installer");
   const latestInstaller = await npmLatest();
@@ -208,7 +217,7 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(5, 7, "检查 Agent Hook");
-  const restoredAgent = await restoreAgentHooksIfMissing(runtimeDir, trackingOptions);
+  const agentReconciliation = await reconcileAgentHooks(runtimeDir, trackingOptions);
   blank();
 
   step(6, 7, "构建 Wikis 索引");
@@ -220,7 +229,8 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(7, 7, "安装校验");
-  if (changed) {
+  const configurationChanged = agentReconciliation.changed;
+  if (changed || configurationChanged) {
     writeLocalConfig(runtimeDir, { overwrite: true, profile });
     ok("本地配置已刷新");
     const doctor = await collectDoctor(runtimeDir, trackingOptions);
@@ -233,7 +243,7 @@ export async function updateCommand(options = {}) {
       runtimeTag,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
-      ...(restoredAgent ? { agent: restoredAgent.agent } : {}),
+      agents: agentReconciliation.agents,
       lastCheckAt: new Date().toISOString()
     });
     blank();
@@ -248,29 +258,10 @@ export async function updateCommand(options = {}) {
       console.log("已跳过：");
       for (const item of skipped) console.log(`- ${item}`);
     }
-    if (restoredAgent) {
+    if (configurationChanged) {
       console.log("");
-      console.log("已恢复：");
-      console.log(`- Agent Hook ${restoredAgent.agent}`);
-    }
-  } else if (restoredAgent) {
-    ok("Agent Hook 已恢复");
-    writeState(runtimeDir, {
-      ...state,
-      schemaVersion: installerStateSchemaVersion,
-      profile,
-      agent: restoredAgent.agent,
-      lastCheckAt: new Date().toISOString()
-    });
-    blank();
-    console.log(`配置已恢复：${runtimeDir}`);
-    console.log("");
-    console.log("已恢复：");
-    console.log(`- Agent Hook ${restoredAgent.agent}`);
-    if (skipped.length) {
-      console.log("");
-      console.log("已跳过：");
-      for (const item of skipped) console.log(`- ${item}`);
+      console.log("已对账：");
+      console.log(`- Agent Hook ${agentReconciliation.agents.join(", ")}`);
     }
   } else {
     skip("没有组件更新");
@@ -278,6 +269,7 @@ export async function updateCommand(options = {}) {
       ...state,
       schemaVersion: installerStateSchemaVersion,
       profile,
+      agents: agentReconciliation.agents,
       lastCheckAt: new Date().toISOString()
     });
     blank();

@@ -146,7 +146,7 @@ func shouldRequireTemplateInjection(state sessionstate.File) bool {
 
 func templateInjectionRequiredMessage(state sessionstate.File) string {
 	var b strings.Builder
-	b.WriteString("QDM_TEMPLATE_REQUIRED: data collection command was recorded for a template-backed Harness plan. Do not answer, summarize, calculate a final report, or read template files yet. Run `bin/data-harness-cli inject-template` now. After the PostToolUse hook injects the selected template, use that injected template to produce the final answer.")
+	b.WriteString("QDM_TEMPLATE_REQUIRED: data collection command was recorded for a template-backed Harness plan. Do not answer, summarize, calculate a final report, or read template files yet. Run `bin/data-harness-cli inject-template` on POSIX or `.\\bin\\data-harness-cli.exe inject-template` in Windows PowerShell now. After the PostToolUse hook injects the selected template, use that injected template to produce the final answer.")
 	if state.SelectedPlaybook != "" {
 		b.WriteString(" selectedPlaybook=")
 		b.WriteString(state.SelectedPlaybook)
@@ -218,21 +218,70 @@ func financialTableCommand(normalized, lowered string) bool {
 }
 
 func isTemplateInjectionCommand(command string) bool {
-	normalized := normalizeCommand(command)
-	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
-		return false
-	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
+	return isHarnessSubcommand(command, "inject-template")
 }
 
 func isTemplateStageCommand(command string) bool {
-	normalized := normalizeCommand(command)
-	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
+	return isHarnessSubcommand(command, "stage", "template")
+}
+
+func isHarnessSubcommand(command string, expected ...string) bool {
+	value := strings.TrimSpace(command)
+	if value == "" {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+	lowered := strings.ToLower(value)
+	for _, prefix := range []string{"#", "::", "rem ", "echo ", "printf ", "write-output "} {
+		if strings.HasPrefix(lowered, prefix) {
+			return false
+		}
+	}
+	if strings.HasPrefix(value, "&") {
+		value = strings.TrimSpace(value[1:])
+	}
+	if len(value) >= 5 && strings.EqualFold(value[:5], "call ") {
+		value = strings.TrimSpace(value[5:])
+	}
+	executable, rest, ok := consumeCommandToken(value)
+	if !ok {
+		return false
+	}
+	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
+	name := strings.ToLower(path.Base(normalizedExecutable))
+	if name != "data-harness-cli" && name != "data-harness-cli.exe" {
+		return false
+	}
+	args := strings.Fields(rest)
+	if len(args) < len(expected) {
+		return false
+	}
+	for index, want := range expected {
+		if !strings.EqualFold(strings.Trim(args[index], `"'`), want) {
+			return false
+		}
+	}
+	return true
+}
+
+func consumeCommandToken(value string) (token, rest string, ok bool) {
+	if value == "" {
+		return "", "", false
+	}
+	if value[0] == '\'' || value[0] == '"' {
+		quote := value[0]
+		for index := 1; index < len(value); index++ {
+			if value[index] == quote {
+				return value[1:index], strings.TrimSpace(value[index+1:]), true
+			}
+		}
+		return "", "", false
+	}
+	for index, character := range value {
+		if character == ' ' || character == '\t' || character == '\r' || character == '\n' {
+			return value[:index], strings.TrimSpace(value[index:]), true
+		}
+	}
+	return value, "", true
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {

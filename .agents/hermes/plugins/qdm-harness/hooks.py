@@ -7,20 +7,40 @@ from typing import Any, Dict
 JsonObject = Dict[str, Any]
 
 
+def _harness_binary_name() -> str:
+    return "data-harness-cli.exe" if os.name == "nt" else "data-harness-cli"
+
+
+def _harness_executable(project_root: Path) -> Path:
+    return project_root / "bin" / _harness_binary_name()
+
+
 def _is_object(value: Any) -> bool:
     return isinstance(value, dict)
 
 
-def _find_project_root(start_dir: str | None = None) -> Path:
+def _root_from(start_dir: str | Path) -> Path | None:
     current = Path(start_dir or os.getcwd()).resolve()
     while True:
-        if (current / "bin" / "data-harness-cli").exists():
+        if _harness_executable(current).exists():
             return current
-        if (current / ".agents").exists() and (current / "wikis").exists():
+        if (current / "wikis").exists() and (
+            (current / ".agents").exists()
+            or (current / "agents").exists()
+            or (current / "config" / "harness-config.yaml").exists()
+        ):
             return current
         if current.parent == current:
-            return Path(__file__).resolve().parents[4]
+            return None
         current = current.parent
+
+
+def _find_project_root(start_dir: str | None = None) -> Path:
+    return (
+        _root_from(start_dir or os.getcwd())
+        or _root_from(Path(__file__).resolve().parent)
+        or Path(start_dir or os.getcwd()).resolve()
+    )
 
 
 def _content_text(content: Any) -> str:
@@ -81,12 +101,14 @@ def _extract_context(output: str) -> str:
 
 def _run_cli(project_root: Path, args: list[str], payload: JsonObject) -> str:
     result = subprocess.run(
-        [str(project_root / "bin" / "data-harness-cli"), *args],
+        [str(_harness_executable(project_root)), *args],
         cwd=project_root,
         input=json.dumps(payload, ensure_ascii=False),
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=False,
+        shell=False,
     )
     if result.returncode != 0:
         return ""

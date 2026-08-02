@@ -1,0 +1,79 @@
+name: Cross-platform Hooks
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  native-hooks:
+    name: Native Hooks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test Go packages
+        if: runner.os != 'Windows'
+        working-directory: cli
+        run: go test ./...
+
+      - name: Test Windows Go Hook packages
+        if: runner.os == 'Windows'
+        working-directory: cli
+        run: |
+          go test ./cmd/data-harness-cli ./internal/harness ./internal/posttool
+          go test ./internal/context -run "TestCodexUserPromptSubmitFixtureUsesOfficialWireFields|TestLumiMVPProfileDisablesPromptTimeCredentialRefresh"
+
+      - name: Test npm installer
+        if: runner.os != 'Windows'
+        working-directory: npm
+        run: npm test -- --test-concurrency=1
+
+      - name: Test Windows renderer and reconciliation
+        if: runner.os == 'Windows'
+        working-directory: npm
+        run: npm test -- --test-concurrency=1 --test-name-pattern="Windows|reconcile|serializes hook paths|agent choices|links selected"
+
+      - name: Test Pi extension
+        if: runner.os != 'Windows'
+        run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
+
+      - name: Check OpenClaw adapter syntax
+        run: node --experimental-strip-types --check .agents/openclaw/plugins/qdm-harness/src/index.ts
+
+      - name: Check Hermes adapter syntax
+        if: runner.os != 'Windows'
+        run: python3 -m py_compile .agents/hermes/plugins/qdm-harness/hooks.py
+
+      - name: Execute native Hook E2E
+        env:
+          HARNESS_HERMES_E2E: "1"
+        run: node --experimental-strip-types .github/scripts/cross-platform-hooks-e2e.mjs

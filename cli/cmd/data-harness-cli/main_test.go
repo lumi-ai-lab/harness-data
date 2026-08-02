@@ -107,3 +107,30 @@ func writeMainTestFile(t *testing.T, root, rel, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestFindHarnessRootPrefersHookPayloadCwd(t *testing.T) {
+	root := t.TempDir()
+	writeMainTestFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	nested := filepath.Join(root, "work", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"session_id":"test","cwd":` + mustMainTestJSON(t, nested) + `,"hook_event_name":"UserPromptSubmit","prompt":"test"}`)
+
+	found, err := findHarnessRoot(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != root {
+		t.Fatalf("expected %s, got %s", root, found)
+	}
+}
+
+func mustMainTestJSON(t *testing.T, value string) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

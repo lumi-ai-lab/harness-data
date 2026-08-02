@@ -4,6 +4,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -15,6 +16,10 @@ import (
 
 const multiSingleCandidateLimit = 20
 
+const localCredentialGuidance = "If CMR, Indicators, or SQL token is expired, use Auth preflight first; when CAS credentials are configured, load CLI paths with `source config/qdm-cli-paths.env` on POSIX or `. .\\config\\qdm-cli-paths.ps1` in PowerShell, then invoke the configured CAS CLI with `\"$QDM_CAS_CLI\" token --app ...` on POSIX or `& $env:QDM_CAS_CLI token --app ...` in PowerShell (use app rtp for SQL), update the target CLI with config set-token, and retry once; if CAS credentials are missing, do not start QR login."
+
+const templateCommandGuidance = "the platform Harness command (`bin/data-harness-cli stage template` on POSIX or `.\\bin\\data-harness-cli.exe stage template` in Windows PowerShell)"
+
 var selectFromSQLPattern = regexp.MustCompile(`(?is)\bselect\b.+\bfrom\b`)
 
 var constraints = []string{
@@ -22,7 +27,8 @@ var constraints = []string{
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"when CMR, Indicators, or SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr, \"$QDM_CAS_CLI\" token --app indicators, or \"$QDM_CAS_CLI\" token --app rtp for SQL, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
+	"use_platform_native_cli_invocation_syntax",
+	localCredentialGuidance,
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -790,21 +796,28 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR, Indicators, or SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. " + platformExecutionGuidance(runtime.GOOS) + localCredentialGuidance
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
-		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."
+		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run any Harness template stage/injection command, and do not read, open, guess, or use template files."
 	case sessionstate.ModeMulti:
-		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use template files, and do not turn this into a report-style analysis."
+		return common + " Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run any Harness template stage/injection command, do not use template files, and do not turn this into a report-style analysis."
 	case sessionstate.ModeReport:
-		templateInstruction := "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template. Do not read, open, guess, or use template files before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body."
+		templateInstruction := "After report playbook data collection and evidence preparation, run " + templateCommandGuidance + ". Do not read, open, guess, or use template files before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body."
 		if plan.SelectedTemplate == "" {
 			templateInstruction = "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use template files."
 		}
 		return common + " Harness mode: report. selectedPlaybook=" + plan.SelectedPlaybook + " selectedTemplate=" + plan.SelectedTemplate + ". Read the report index when present, the matched report spec, and the selected report playbook in contextFiles. Use the report index as the Agent knowledge directory, the report playbook for data collection and JSON handling, and the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. " + templateInstruction
 	default:
-		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run bin/data-harness-cli inject-template. Do not read, open, guess, or use template files. You may reference specs/playbooks, but must not apply any template."
+		return common + " Harness mode: free. reason=" + plan.Reason + ". Do not run any Harness template stage/injection command. Do not read, open, guess, or use template files. You may reference specs/playbooks, but must not apply any template."
 	}
+}
+
+func platformExecutionGuidance(goos string) string {
+	if goos != "windows" {
+		return ""
+	}
+	return "Windows execution overrides POSIX command syntax shown in contextFiles: do not execute `source`, `\"$QDM_*\"`, or `./bin/...` forms. Dot-source `. .\\config\\qdm-cli-paths.ps1`; invoke configured tools with the PowerShell call operator, for example `& $env:QDM_INDICATORS_CLI ...`; invoke workspace binaries as `.\\bin\\<name>.exe`. "
 }
 
 func hasAny(s string, keywords []string) bool {

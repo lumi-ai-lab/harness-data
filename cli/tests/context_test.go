@@ -135,7 +135,7 @@ func TestClaudeHookFormatOmitsQueryType(t *testing.T) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
 	}
-	for _, want := range []string{"Do not run bin/data-harness-cli inject-template", "do_not_read_or_use_templates_unless_selectedTemplate_is_set"} {
+	for _, want := range []string{"Do not run any Harness template stage/injection command", "do_not_read_or_use_templates_unless_selectedTemplate_is_set"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, text)
 		}
@@ -275,7 +275,7 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	context := output.HookSpecificOutput.AdditionalContext
 	for _, want := range []string{
 		"Harness mode: free",
-		"Do not run bin/data-harness-cli inject-template",
+		"Do not run any Harness template stage/injection command",
 		"wikis/reports/经营综合分析报告/index.md",
 		"wikis/reports/经营综合分析报告/spec.md",
 		"wikis/reports/用户分析报告/index.md",

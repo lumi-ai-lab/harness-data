@@ -25,7 +25,7 @@ func TestLumiMVPProfileDisablesPromptTimeCredentialRefresh(t *testing.T) {
 		t.Fatal("Lumi profile not detected from installer-state")
 	}
 	response := harness.ContextResponse{
-		Instruction: "Before. If CMR, Indicators, or SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login. After.",
+		Instruction: "Before. " + localCredentialGuidance + " After.",
 		Constraints: []string{"values_must_come_from_cli", constraints[len(constraints)-1]},
 	}
 	adapted := applyLumiMVPConstraints(response)

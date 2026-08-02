@@ -53,7 +53,7 @@ function createProject(t, options = {}) {
 
   const callsFile = join(root, "calls.jsonl");
   if (options.withCli !== false) {
-    const cli = join(root, "bin", "data-harness-cli");
+    const cli = join(root, "bin", process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli");
     const delayMs = options.delayMs ?? 0;
     const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -602,8 +602,8 @@ test("overlapping context refreshes in one session fail the older generation clo
   assert.equal(loaded.executions.at(-1).spawn.env.HARNESS_AUTHZ_BINDING_V1, newCandidate.bindingBase64url);
 });
 
-test("posttool mutation and finalized-message binding preserve Bash result/error semantics", async (t) => {
-  const { root } = createProject(t);
+test("posttool uses Pi tool_result without mutating the Bash command", async (t) => {
+  const { callsFile, root } = createProject(t);
   const bound = authzCandidate();
   const loaded = await loadExtension(root, { bindAuthorization: async () => bound });
   const { ctx } = createContext(root);
@@ -616,11 +616,15 @@ test("posttool mutation and finalized-message binding preserve Bash result/error
   };
   const result = await executeCaptured(loaded, ctx, event);
   const execution = loaded.executions.at(-1);
-  assert.match(execution.spawn.command, /posttool --format agent-hook/);
-  assert.match(execution.spawn.command, /extract-additional-context\.mjs/);
-  assert.match(execution.spawn.command, /exit \$__qdm_status/);
+  assert.equal(execution.spawn.command, event.input.command);
   assert.equal(execution.spawn.env.HARNESS_AUTHZ_BINDING_V1, bound.bindingBase64url);
   assert.equal(result.content[0].text, `ran:${event.input.command}`);
+  const patch = await loaded.handlers.get("tool_result")({ ...event, ...result, isError: false }, ctx);
+  assert.deepEqual(patch.content.slice(0, result.content.length), result.content);
+  assert.match(patch.content.at(-1).text, /# Data Harness Context/);
+  const posttoolCall = readCalls(callsFile).at(-1);
+  assert.deepEqual(posttoolCall.args, ["posttool", "--format", "agent-hook"]);
+  assert.equal(JSON.parse(posttoolCall.input).tool_input.command, event.input.command);
 
   const failure = { toolCallId: "tool-fail", toolName: "bash", input: { command: "__FAIL__" } };
   prebindToolCall(loaded, ctx, failure);

@@ -46,6 +46,12 @@ Diagnose a runtime:
 npx @lumi-ai-lab/harness-data doctor
 ```
 
+Repair generated Agent integrations and their link/junctions:
+
+```bash
+npx @lumi-ai-lab/harness-data doctor --fix --agent codex
+```
+
 The immutable Lumi profile must be selected explicitly and accepts only Wikis
 content that exactly matches the business-approved file allowlist shipped in
 the materialized runtime bundle:
@@ -62,6 +68,21 @@ At image build time `doctor` reports runtime-only mounts and credentials as
 pending; at runtime it invokes `data-harness-cli authz-readiness` and fails if
 the complete authorization deployment is not ready.
 
-The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets, `harness-data-wikis`, generated local config, CAS credentials, and selected Agent symlinks. SQL CLI tokens are fetched through `cas-cli token --app rtp`.
+The runtime is assembled from immutable Agent templates, platform-specific CLI
+Release assets, `harness-data-wikis`, generated local config, and CAS
+credentials. The installer renders selected integrations into
+`.harness/generated/agents/*`; `.codex`, `.claude`, `.pi`, `.openclaw`, and
+`.hermes` point to those generated directories. Runtime updates always
+reconcile them and leave byte-identical Hook definitions untouched.
+
+On native Windows, declarative Hooks call the downloaded
+`data-harness-cli.exe` through an absolute `commandWindows`; programmatic
+adapters use executable + argv with `shell:false`. No Python or Git Bash is
+required for the Codex/Claude Hook path. The installer generates both
+`config/qdm-cli-paths.env` and `config/qdm-cli-paths.ps1`.
+
+When a Codex Hook definition is first generated or materially changes, run
+`/hooks` in Codex to review and trust it. The installer never edits the Codex
+trust store.
 
 `--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.

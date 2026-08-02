@@ -42,7 +42,7 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 			t.Fatalf("unexpected ancestor index %s in %#v", unwanted, got)
 		}
 	}
-	if !strings.Contains(response.Instruction, "Harness mode: single") || !strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md") {
+	if !strings.Contains(response.Instruction, "Harness mode: single") || !strings.Contains(response.Instruction, "Do not run any Harness template stage/injection command") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
@@ -135,7 +135,7 @@ func TestBuildWithWikisIndexMultiSingleMode(t *testing.T) {
 			t.Fatalf("unexpected %s in %#v", unwanted, got)
 		}
 	}
-	if !strings.Contains(response.Instruction, "Harness mode: multi_single") || !strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") {
+	if !strings.Contains(response.Instruction, "Harness mode: multi_single") || !strings.Contains(response.Instruction, "Do not run any Harness template stage/injection command") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
 }
@@ -250,8 +250,9 @@ func TestBuildWithWikisIndexReportMode(t *testing.T) {
 	}
 	if !strings.Contains(response.Instruction, "Harness mode: report") ||
 		!strings.Contains(response.Instruction, "selectedTemplate=templates/idx/business/r-business-analysis-report.md") ||
-		!strings.Contains(response.Instruction, "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template") ||
-		strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") ||
+		!strings.Contains(response.Instruction, "After report playbook data collection and evidence preparation, run the platform Harness command") ||
+		!strings.Contains(response.Instruction, `.\bin\data-harness-cli.exe stage template`) ||
+		strings.Contains(response.Instruction, "Do not run any Harness template stage/injection command") ||
 		strings.Contains(response.Instruction, "Harness mode: combo") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
@@ -486,7 +487,7 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hook output")
 	}
-	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Harness mode: free") || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Do not run bin/data-harness-cli inject-template") {
+	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Harness mode: free") || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Do not run any Harness template stage/injection command") {
 		t.Fatalf("unexpected context: %s", output.HookSpecificOutput.AdditionalContext)
 	}
 	data, err := os.ReadFile(sessionstate.Path(root, sessionID))
@@ -499,6 +500,37 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	}
 	if state.Mode != sessionstate.ModeFree || state.Reason != "concept_only" || state.SelectedPlaybook != "" || state.SelectedTemplate != "" {
 		t.Fatalf("unexpected state: %s", string(data))
+	}
+}
+
+func TestCodexUserPromptSubmitFixtureUsesOfficialWireFields(t *testing.T) {
+	root := testContextWikiRoot(t)
+	payload, err := os.ReadFile(filepath.Join("..", "..", "testdata", "hooks", "codex-user-prompt-submit.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok, output, err := RunClaudeHook(root, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected Codex UserPromptSubmit fixture to be handled")
+	}
+	if output.HookSpecificOutput.HookEventName != "UserPromptSubmit" {
+		t.Fatalf("unexpected hook event: %s", output.HookSpecificOutput.HookEventName)
+	}
+}
+
+func TestWindowsExecutionGuidanceOverridesPosixWikiExamples(t *testing.T) {
+	guidance := platformExecutionGuidance("windows")
+	for _, required := range []string{"do not execute `source`", `. .\config\qdm-cli-paths.ps1`, `& $env:QDM_INDICATORS_CLI`, `.\bin\<name>.exe`} {
+		if !strings.Contains(guidance, required) {
+			t.Fatalf("Windows guidance missing %q: %s", required, guidance)
+		}
+	}
+	if got := platformExecutionGuidance("linux"); got != "" {
+		t.Fatalf("unexpected POSIX override guidance: %s", got)
 	}
 }
 
