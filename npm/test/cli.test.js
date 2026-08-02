@@ -257,8 +257,8 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.doesNotMatch(workflow, /qdm-indicators|qdm-cmr|qdm-sql|cas-cli/i);
 
   const gitmodules = fs.readFileSync(path.join(repository, ".gitmodules"), "utf8");
-  assert.match(gitmodules, /git@github\.com:lumi-ai-lab\/harness-data-wikis\.git/);
-  assert.doesNotMatch(gitmodules, /yaw0110|url\s*=\s*\.\.\//);
+  assert.match(gitmodules, /url\s*=\s*\.\.\/harness-data-wikis/);
+  assert.doesNotMatch(gitmodules, /yaw0110/);
 });
 
 test("profile state accepts both profiles without auth release state", () => {
