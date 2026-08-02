@@ -61,6 +61,10 @@ export function materializeReleaseManifest(options) {
   if (!/^v\d+\.\d+\.\d+$/.test(version)) {
     throw new Error(`release version must match vMAJOR.MINOR.PATCH: ${version || "missing"}`);
   }
+  const qdmMetricVersion = String(options.qdmMetricVersion || "").trim();
+  if (!/^v\d+\.\d+\.\d+$/.test(qdmMetricVersion)) {
+    throw new Error(`qdm-metric-cli version must match vMAJOR.MINOR.PATCH: ${qdmMetricVersion || "missing"}`);
+  }
   if (!options.approvedWikisSource || !options.approvedWikisManifest) {
     throw new Error("business-approved Wikis source and allowlist manifest are required for release");
   }
@@ -68,8 +72,16 @@ export function materializeReleaseManifest(options) {
   const templatePath = path.resolve(options.manifest);
   const outputPath = path.resolve(options.output);
   const distDir = path.resolve(options.dist);
+  const qdmMetricDist = path.resolve(options.qdmMetricDist);
   const approvedWikisSource = path.resolve(options.approvedWikisSource);
   const approvedWikisManifest = path.resolve(options.approvedWikisManifest);
+  const approvedMetricCatalog = path.resolve(
+    options.approvedMetricCatalog || path.join(templatePath, "..", "approved-metrics-v1.json")
+  );
+  if (!fs.existsSync(approvedMetricCatalog)) {
+    throw new Error(`approved Metric catalog is missing: ${approvedMetricCatalog}`);
+  }
+  const approvedMetricCatalogSha256 = sha256(fs.readFileSync(approvedMetricCatalog));
   const approvedWikisManifestRaw = fs.readFileSync(approvedWikisManifest);
   const approvedWikisManifestSha256 = sha256(approvedWikisManifestRaw);
   verifyApprovedWikisSource(
@@ -100,10 +112,63 @@ export function materializeReleaseManifest(options) {
     };
   }
 
+  const publicMetric = requireTool(manifest, "qdm-metric-cli");
+  publicMetric.tracking = "fixed";
+  publicMetric.version = version;
+  publicMetric.requireAssetSha256 = true;
+  publicMetric.requireBinarySha256 = true;
+  for (const platform of Object.keys(publicMetric.platforms || {})) {
+    const metadata = releaseAssetMetadata(distDir, publicMetric, version, platform);
+    publicMetric.platforms[platform] = {
+      ...publicMetric.platforms[platform],
+      url: fixedReleaseURL(publicMetric.repo, version, metadata.name),
+      sha256: metadata.archiveSha256,
+      binarySha256: metadata.binarySha256
+    };
+  }
+  const realMetric = requireTool(manifest, "qdm-metric-cli-real");
+  realMetric.tracking = "fixed";
+  realMetric.version = qdmMetricVersion;
+  realMetric.requireAssetSha256 = true;
+  realMetric.requireBinarySha256 = true;
+  for (const platform of Object.keys(realMetric.platforms || {})) {
+    const metadata = releaseAssetMetadata(qdmMetricDist, realMetric, qdmMetricVersion, platform);
+    realMetric.platforms[platform] = {
+      ...realMetric.platforms[platform],
+      url: fixedReleaseURL(realMetric.repo, qdmMetricVersion, metadata.name),
+      sha256: metadata.archiveSha256,
+      binarySha256: metadata.binarySha256
+    };
+  }
+
+  const releaseSet = manifest.releaseSets?.["lumi-mvp-v1"];
+  if (!releaseSet) throw new Error("release manifest template is missing lumi-mvp-v1 release-set");
+  releaseSet.version = version;
+  releaseSet.publicMetricVersion = version;
+  releaseSet.publicMetricSha256 = publicMetric.platforms[Object.keys(publicMetric.platforms)[0]].binarySha256;
+  releaseSet.realMetricVersion = qdmMetricVersion;
+  releaseSet.realMetricSha256 = realMetric.platforms[Object.keys(realMetric.platforms)[0]].binarySha256;
+  releaseSet.catalogSha256 = approvedMetricCatalogSha256;
+  releaseSet.sha256 = sha256(JSON.stringify({
+    version: releaseSet.version,
+    publicMetricVersion: releaseSet.publicMetricVersion,
+    publicMetricSha256: releaseSet.publicMetricSha256,
+    realMetricVersion: releaseSet.realMetricVersion,
+    realMetricSha256: releaseSet.realMetricSha256,
+    catalogSha256: releaseSet.catalogSha256,
+    authzSchemaVersion: releaseSet.authzSchemaVersion,
+    piVersion: releaseSet.piVersion
+  }));
+
   profile.approvedWikis = {
     source: "bootstrap/approved-lumi-wikis",
     manifest: "bootstrap/approved-lumi-wikis-manifest.json",
     manifestSha256: approvedWikisManifestSha256
+  };
+  profile.approvedMetricCatalog = {
+    source: "bootstrap/approved-metrics-v1.json",
+    destination: "/etc/harness-data/approved-metrics-v1.json",
+    sha256: approvedMetricCatalogSha256
   };
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -113,10 +178,17 @@ export function materializeReleaseManifest(options) {
     throw new Error("approved Wikis release output must not overwrite its source");
   }
   fs.rmSync(approvedWikisOutput, { recursive: true, force: true });
-  fs.cpSync(approvedWikisSource, approvedWikisOutput, { recursive: true });
+  fs.cpSync(approvedWikisSource, approvedWikisOutput, {
+    recursive: true,
+    filter: (source) => path.basename(source) !== ".git"
+  });
   fs.copyFileSync(
     approvedWikisManifest,
     path.join(path.dirname(outputPath), "approved-lumi-wikis-manifest.json")
+  );
+  fs.copyFileSync(
+    approvedMetricCatalog,
+    path.join(path.dirname(outputPath), "approved-metrics-v1.json")
   );
   return manifest;
 }
@@ -130,6 +202,21 @@ function parseArgs(argv) {
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
     options[key] = value;
+  }
+  for (const key of [
+    "manifest",
+    "output",
+    "version",
+    "dist",
+    "qdmMetricVersion",
+    "qdmMetricDist",
+    "approvedWikisSource",
+    "approvedWikisManifest"
+  ]) {
+    if (!options[key]) {
+      const flag = key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+      throw new Error(`--${flag} is required`);
+    }
   }
   return options;
 }

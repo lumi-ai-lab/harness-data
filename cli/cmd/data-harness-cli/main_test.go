@@ -1,10 +1,56 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"harness-data/cli/internal/authz"
 )
+
+func TestUsageListsAuthorizationCommands(t *testing.T) {
+	usage := usageText()
+	for _, command := range []string{"authz-bind", "authz-readiness", "authz-validate-catalog", "authz-hook"} {
+		if !strings.Contains(usage, command) {
+			t.Fatalf("usage missing %s: %s", command, usage)
+		}
+	}
+}
+
+func TestRootIndependentAuthorizationCommandDispatch(t *testing.T) {
+	var output bytes.Buffer
+	handled, err := runRootIndependentAuthzCommand("authz-bind", nil, &output)
+	if !handled {
+		t.Fatal("authz-bind was not handled")
+	}
+	var exitErr exitCodeError
+	if !asExitCodeError(err, &exitErr) || exitErr.Code != 1 || !exitErr.Silent {
+		t.Fatalf("unexpected authz-bind error: %#v", err)
+	}
+	var failure authzCommandFailure
+	if err := json.Unmarshal(output.Bytes(), &failure); err != nil {
+		t.Fatalf("invalid authz-bind failure JSON %q: %v", output.String(), err)
+	}
+	if failure.Error.Code != authz.CodeBindingInvalid {
+		t.Fatalf("authz-bind code = %q", failure.Error.Code)
+	}
+
+	handled, err = runRootIndependentAuthzCommand("wikis", nil, &output)
+	if handled || err != nil {
+		t.Fatalf("non-authz command handled=%v err=%v", handled, err)
+	}
+}
+
+func TestAuthorizationHookCommandRejectsInvalidArguments(t *testing.T) {
+	err := runAuthzHook(t.TempDir(), nil, bytes.NewReader(nil), &bytes.Buffer{})
+	var exitErr exitCodeError
+	if !asExitCodeError(err, &exitErr) || exitErr.Code != 2 || exitErr.Silent {
+		t.Fatalf("unexpected authz-hook error: %#v", err)
+	}
+}
 
 func TestFindShowDocumentUsesWikisCorpusForStructuredLayout(t *testing.T) {
 	root := t.TempDir()

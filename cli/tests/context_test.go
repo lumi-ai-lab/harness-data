@@ -42,7 +42,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 }
 
 func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
-	response, err := dhcontext.Build(currentRootWithIndex(t), "门店净利润最近表现")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "门店毛利额最近表现")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestNoRecallUsesStructuredDefaultIndexes(t *testing.T) {
 }
 
 func TestMultiDomainContextRecall(t *testing.T) {
-	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店净利润最近为什么下降？")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店毛利额最近为什么下降？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,8 @@ func TestMultiDomainContextRecall(t *testing.T) {
 	}
 	for _, want := range []string{
 		"wikis/metrics/会员复购次数/spec.md",
-		"wikis/metrics/门店净利润/spec.md",
-		"wikis/metrics/门店净利润/playbook.md",
+		"wikis/metrics/门店毛利额/spec.md",
+		"wikis/metrics/门店毛利额/playbook.md",
 	} {
 		if !got[want] {
 			if want == "wikis/metrics/会员复购次数/spec.md" && got["wikis/metrics/会员复购次数/playbook.md"] {
@@ -251,8 +251,8 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	}
 }
 
-func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
-	sessionID := "go-context-free-analysis"
+func TestClaudeHookMemberBusinessQuestionUsesBusinessReport(t *testing.T) {
+	sessionID := "go-context-member-business-report"
 	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -274,15 +274,23 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	}
 	context := output.HookSpecificOutput.AdditionalContext
 	for _, want := range []string{
-		"Harness mode: free",
-		"Do not run bin/data-harness-cli inject-template",
+		"Harness mode: report",
+		"selectedPlaybook: reports/经营综合分析报告/playbook.md",
+		"selectedTemplate: reports/经营综合分析报告/template.md",
 		"wikis/reports/经营综合分析报告/index.md",
 		"wikis/reports/经营综合分析报告/spec.md",
-		"wikis/reports/用户分析报告/index.md",
-		"wikis/reports/用户分析报告/spec.md",
 	} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
+		}
+	}
+	for _, unwanted := range []string{
+		"Harness mode: free",
+		"wikis/reports/用户分析报告/index.md",
+		"wikis/reports/用户分析报告/spec.md",
+	} {
+		if bytes.Contains([]byte(context), []byte(unwanted)) {
+			t.Fatalf("unexpected %s in %s", unwanted, context)
 		}
 	}
 
@@ -294,17 +302,14 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state["mode"] != "free" {
+	if state["mode"] != "report" {
 		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
 	}
-	if state["selected_playbook"] != nil {
+	if state["selected_playbook"] != "reports/经营综合分析报告/playbook.md" {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != nil {
+	if state["selected_template"] != "reports/经营综合分析报告/template.md" {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
-	}
-	if state["reason"] != "concept_only" {
-		t.Fatalf("reason = %#v", state["reason"])
 	}
 }
 
@@ -361,6 +366,28 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 	selected, ok := state["selected_playbooks"].([]any)
 	if !ok || len(selected) != 2 {
 		t.Fatalf("selected_playbooks = %#v", state["selected_playbooks"])
+	}
+}
+
+func TestCodexHookMetricCLIDiagnosticHasNoContextReadInstruction(t *testing.T) {
+	root := currentRootWithIndex(t)
+	payload := bytes.NewBufferString(`{"session_id":"diagnostic-version","prompt":"请执行公开 qdm-metric-cli 的 version 命令，并返回实际执行结果和退出状态。不要读取任何文件"}`)
+	ok, output, err := dhcontext.RunClaudeHook(root, payload.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected hook output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, forbidden := range []string{"必须先读取以下 contextFiles", "read all contextFiles", "selectedPlaybooks:"} {
+		if strings.Contains(context, forbidden) {
+			t.Fatalf("diagnostic context contains %q: %s", forbidden, context)
+		}
+	}
+	if !strings.Contains(context, "reason: metric_cli_diagnostic") ||
+		!strings.Contains(context, "Do not read context files") {
+		t.Fatalf("unexpected diagnostic context: %s", context)
 	}
 }
 

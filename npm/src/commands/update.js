@@ -182,7 +182,7 @@ export async function updateCommand(options = {}) {
 
   step(3, 7, "检查 CLI 工具");
   for (const tool of manifest.tools || []) {
-    if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
+    if (state.localTools?.[tool.name]) {
       skip(`${tool.name} 为本地路径模式，请手动检查`);
       continue;
     }

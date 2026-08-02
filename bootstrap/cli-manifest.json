@@ -4,7 +4,8 @@
   "profiles": {
     "local-unrestricted": {
       "tools": [
-        "data-harness-cli"
+        "data-harness-cli",
+        "qdm-metric-cli"
       ]
     },
     "lumi-mvp-required": {
@@ -19,9 +20,31 @@
         "manifest": "bootstrap/approved-lumi-wikis-manifest.json",
         "manifestSha256": ""
       },
+      "authzConfigPath": "/etc/harness-data/authz.json",
+      "approvedMetricCatalog": {
+        "source": "bootstrap/approved-metrics-v1.json",
+        "destination": "/etc/harness-data/approved-metrics-v1.json",
+        "sha256": ""
+      },
+      "releaseSet": "lumi-mvp-v1",
       "tools": [
-        "data-harness-cli"
+        "data-harness-cli",
+        "qdm-metric-cli",
+        "qdm-metric-cli-real"
       ]
+    }
+  },
+  "releaseSets": {
+    "lumi-mvp-v1": {
+      "version": "",
+      "sha256": "",
+      "publicMetricVersion": "",
+      "publicMetricSha256": "",
+      "realMetricVersion": "v0.1.0",
+      "realMetricSha256": "",
+      "catalogSha256": "",
+      "authzSchemaVersion": 1,
+      "piVersion": "0.81.1"
     }
   },
   "tools": [
@@ -35,6 +58,39 @@
         "darwin-amd64": { "archive": "tar.gz" },
         "linux-amd64": { "archive": "tar.gz" },
         "windows-amd64": { "archive": "zip" }
+      }
+    },
+    {
+      "name": "qdm-metric-cli",
+      "binary": "qdm-metric-cli",
+      "repo": "lumi-ai-lab/harness-data",
+      "destination": "bin/qdm-metric-cli",
+      "tracking": "fixed",
+      "version": "",
+      "requireAssetSha256": true,
+      "requireBinarySha256": true,
+      "platforms": {
+        "darwin-arm64": { "archive": "tar.gz", "url": "", "sha256": "" },
+        "darwin-amd64": { "archive": "tar.gz", "url": "", "sha256": "" },
+        "linux-amd64": { "archive": "tar.gz", "url": "", "sha256": "" },
+        "windows-amd64": { "archive": "zip", "url": "", "sha256": "" }
+      }
+    },
+    {
+      "name": "qdm-metric-cli-real",
+      "binary": "qdm-metric-cli",
+      "repo": "pengmide/qdm-metric-cli",
+      "private": true,
+      "destination": "/opt/harness-data/private/qdm-metric-cli-v0.1.0",
+      "tracking": "fixed",
+      "version": "v0.1.0",
+      "requireAssetSha256": true,
+      "requireBinarySha256": true,
+      "platforms": {
+        "darwin-arm64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
+        "darwin-amd64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
+        "linux-amd64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
+        "windows-amd64": { "archive": "zip", "url": "", "sha256": "", "binarySha256": "" }
       }
     }
   ]

@@ -2,11 +2,16 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNamesForProfile, writeLocalConfig, linkAgents } from "../lib/config.js";
+import {
+  localPathToolNamesForProfile,
+  qdmCliBinariesForProfile,
+  writeLocalConfig,
+  linkAgents
+} from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -16,8 +21,11 @@ import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, lat
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import {
+  authzConfigPathFor,
   installerStateSchemaVersion,
+  lumiMetricCatalogArtifact,
   lumiApprovedWikisArtifact,
+  lumiReleaseSet,
   localUnrestrictedProfile,
   lumiRequiredProfile,
   normalizeProfile,
@@ -194,7 +202,7 @@ async function installLocalTools(runtimeDir, profile, options = {}) {
   const binDir = path.join(runtimeDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const installed = {};
-  for (const name of localPathToolNamesForProfile(profile)) {
+  for (const name of localPathToolNamesForProfile(profile, options)) {
     const source = await promptExecutable(runtimeDir, name, options);
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
@@ -304,6 +312,149 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   return { ok: true, docs, recall, runtimeDocs };
 }
 
+function fileSha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function checkedExecutable(file) {
+  const info = fs.lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink() || !executable(file)) {
+    throw new Error(`sandbox CLI is not a regular executable: ${file}`);
+  }
+  return file;
+}
+
+function platformDispatcher(name) {
+  return `#!/bin/sh
+set -eu
+
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) platform="darwin-arm64" ;;
+  Darwin:x86_64) platform="darwin-amd64" ;;
+  Linux:aarch64|Linux:arm64) platform="linux-arm64" ;;
+  Linux:x86_64|Linux:amd64) platform="linux-amd64" ;;
+  *)
+    echo "unsupported platform for ${name}: $(uname -s) $(uname -m)" >&2
+    exit 126
+    ;;
+esac
+
+runtime_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$runtime_root/.harness/platform-bin/$platform/${name}" "$@"
+`;
+}
+
+function replaceExecutableCopy(source, target) {
+  const temporary = `${target}.install-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  try {
+    fs.copyFileSync(source, temporary);
+    fs.chmodSync(temporary, 0o755);
+    fs.renameSync(temporary, target);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function installSandboxPlatformTools(runtimeDir, profile, options = {}) {
+  if (!String(options.sandboxCliDir || "").trim()) return {};
+  if (profile !== localUnrestrictedProfile) {
+    throw new Error("--sandbox-cli-dir is supported only for local-unrestricted");
+  }
+
+  const sourceDir = path.resolve(options.sandboxCliDir);
+  const hostPlatform = String(options.hostPlatformKey || platformKey());
+  const sandboxPlatform = String(options.sandboxPlatform || "linux-arm64");
+  if (!["linux-arm64", "linux-amd64"].includes(sandboxPlatform)) {
+    throw new Error(`unsupported sandbox platform: ${sandboxPlatform}`);
+  }
+
+  const platformRoot = path.join(runtimeDir, ".harness", "platform-bin");
+  const installed = {};
+  for (const name of qdmCliBinariesForProfile(profile)) {
+    const active = checkedExecutable(path.join(runtimeDir, "bin", binaryName(name)));
+    const sandboxSource = checkedExecutable(path.join(sourceDir, binaryName(name)));
+    const hostTarget = path.join(platformRoot, hostPlatform, binaryName(name));
+    const sandboxTarget = path.join(platformRoot, sandboxPlatform, binaryName(name));
+    fs.mkdirSync(path.dirname(hostTarget), { recursive: true });
+    fs.mkdirSync(path.dirname(sandboxTarget), { recursive: true });
+    replaceExecutableCopy(active, hostTarget);
+    replaceExecutableCopy(sandboxSource, sandboxTarget);
+    fs.writeFileSync(active, platformDispatcher(binaryName(name)), { mode: 0o755 });
+    installed[name] = {
+      mode: "platform-dispatch",
+      hostPlatform,
+      hostSha256: fileSha256(hostTarget),
+      sandboxPlatform,
+      sandboxSha256: fileSha256(sandboxTarget)
+    };
+  }
+  return installed;
+}
+
+export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
+  const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
+  const publicMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli");
+  const realMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
+  if (!helper || !publicMetric || !realMetric) {
+    throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
+  }
+  for (const tool of [helper, publicMetric, realMetric]) {
+    if (tool.tracking !== "fixed") throw new Error("Lumi authorization artifacts must use fixed tracking");
+  }
+  const platform = platformKey();
+  for (const [name, tool] of [["data-harness-cli", helper], ["qdm-metric-cli", publicMetric], ["qdm-metric-cli-real", realMetric]]) {
+    if (!/^[a-f0-9]{64}$/.test(String(tool.platforms?.[platform]?.binarySha256 || ""))) {
+      throw new Error(`${name} binary sha256 is not fixed for ${platform}`);
+    }
+  }
+  if (publicMetric.version !== releaseSet.publicMetricVersion ||
+      realMetric.version !== releaseSet.realMetricVersion) {
+    throw new Error("Metric CLI versions do not match the Lumi release-set");
+  }
+  const publicPath = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
+  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
+      path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
+      !path.isAbsolute(String(realMetric.destination || ""))) {
+    throw new Error("Lumi authorization artifact destinations are invalid");
+  }
+}
+
+export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
+  const publicMetric = installedTools?.["qdm-metric-cli"];
+  const realMetric = installedTools?.["qdm-metric-cli-real"];
+  if (!publicMetric || !realMetric) throw new Error("Lumi installation is missing Metric authorization artifacts");
+  if (publicMetric.version !== releaseSet.publicMetricVersion ||
+      realMetric.version !== releaseSet.realMetricVersion ||
+      realMetric.sha256 !== releaseSet.realMetricSha256) {
+    throw new Error("installed Metric CLI artifacts do not match the release-set");
+  }
+  if (manifest) {
+    const platform = platformKey();
+    const publicSha = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli")?.platforms?.[platform]?.binarySha256;
+    const realSha = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real")?.platforms?.[platform]?.binarySha256;
+    if (publicMetric.sha256 !== publicSha || realMetric.sha256 !== realSha) {
+      throw new Error("installed Metric CLI artifacts do not match the manifest");
+    }
+  }
+}
+
+export function installLumiMetricCatalog(runtimeDir, manifest) {
+  const catalog = lumiMetricCatalogArtifact(manifest);
+  const source = path.resolve(runtimeDir, catalog.source);
+  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-metrics-v1.json");
+  if (source !== expectedSource || fileSha256(source) !== catalog.sha256) {
+    throw new Error("approved Metric catalog does not match the release manifest");
+  }
+  const destination = catalog.destination;
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
+  if (fs.existsSync(destination) && fileSha256(destination) !== catalog.sha256) {
+    throw new Error(`approved Metric catalog destination already contains a different artifact: ${destination}`);
+  }
+  if (!fs.existsSync(destination)) fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(destination, 0o644);
+  return destination;
+}
+
 export function printDoctorSummary(doctor, options = {}) {
   const nonBlocking = options.nonBlocking || (() => false);
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
@@ -333,6 +484,13 @@ export function printDoctorSummary(doctor, options = {}) {
   for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
 }
 
+export function installModeFor(profile, options = {}, tokenMode = false) {
+  if (profile === localUnrestrictedProfile && String(options.wikisSource || "").trim()) {
+    return "local-path";
+  }
+  return tokenMode ? "github-token" : "local-path";
+}
+
 export async function installCommand(options = {}) {
   const explicitProfile = String(options.profile || "").trim();
   if (!explicitProfile && (options.yes || !process.stdin.isTTY)) {
@@ -341,6 +499,9 @@ export async function installCommand(options = {}) {
   const profile = normalizeProfile(options.profile);
   if (profile === lumiRequiredProfile && String(options.profile || "") !== lumiRequiredProfile) {
     throw new Error("Lumi installation must explicitly pass --profile lumi-mvp-required");
+  }
+  if (profile === localUnrestrictedProfile && !String(options.metricCliPath || "").trim()) {
+    throw new Error("local-unrestricted installation requires --metric-cli-path for the real qdm-metric-cli executable");
   }
   if (profile === lumiRequiredProfile && !options.agent) {
     throw new Error("lumi-mvp-required profile requires an explicit authorized --agent");
@@ -385,19 +546,42 @@ export async function installCommand(options = {}) {
   step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
+  const installMode = installModeFor(profile, options, tokenMode);
   const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
   const sourceManifest = readManifest(manifestPath);
   const selectedManifest = selectManifestProfile(sourceManifest, profile);
-  const latestManifest = await resolveLatestManifest(selectedManifest, key, {
-    ...options,
-    tools: ["data-harness-cli"]
-  });
-  const manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
-    ...options,
-    state: installState,
-    manifestOverride: latestManifest
-  });
-  const localTools = await installLocalTools(runtimeDir, profile, options);
+  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest) : null;
+  const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
+  if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
+
+  let manifest;
+  let localTools = {};
+  let platformTools = {};
+  if (profile === lumiRequiredProfile) {
+    if (!tokenMode) throw new Error("lumi-mvp-required profile requires authenticated access to fixed release artifacts");
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
+      ...options,
+      state: installState,
+      manifestOverride: selectedManifest
+    });
+    verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
+    installLumiMetricCatalog(runtimeDir, sourceManifest);
+  } else {
+    const releaseToolNames = selectedManifest.tools
+      .map((tool) => tool.name)
+      .filter((name) => !(name === "qdm-metric-cli" && options.metricCliPath));
+    const latestManifest = await resolveLatestManifest(selectedManifest, key, {
+      ...options,
+      tools: releaseToolNames
+    });
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
+      ...options,
+      state: installState,
+      manifestOverride: latestManifest
+    });
+    localTools = await installLocalTools(runtimeDir, profile, options);
+    platformTools = installSandboxPlatformTools(runtimeDir, profile, options);
+  }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已按 ${profile} profile 安装`);
   blank();
   const installedManifestSha256 = manifestDigest(manifest);
@@ -407,12 +591,15 @@ export async function installCommand(options = {}) {
     schemaVersion: installerStateSchemaVersion,
     profile,
     agent: selectedAgent,
-    installMode: tokenMode ? "github-token" : "local-path",
+    installMode,
     runtimeTag: bundle.tag,
     localTools,
+    platformTools,
     tools: manifest.installedTools || {},
     manifestSha256: installedManifestSha256,
-    packageVersion: packageVersion()
+    packageVersion: packageVersion(),
+    releaseSet,
+    authzConfigPath
   });
   blank();
 
@@ -446,13 +633,16 @@ export async function installCommand(options = {}) {
   writeState(runtimeDir, {
     schemaVersion: installerStateSchemaVersion,
     profile,
-    installMode: tokenMode ? "github-token" : "local-path",
+    installMode,
     runtimeTag: bundle.tag,
     localTools,
+    platformTools,
     tools: manifest.installedTools || {},
     manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
     agent: selectedAgent,
+    releaseSet,
+    authzConfigPath,
     lastCheckAt: new Date().toISOString()
   });
   console.log(`安装完成：${runtimeDir}`);

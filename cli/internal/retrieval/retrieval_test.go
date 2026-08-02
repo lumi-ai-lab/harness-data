@@ -101,6 +101,41 @@ func TestSearchSuppressesFuzzyExpansionOfExactTerm(t *testing.T) {
 	}
 }
 
+func TestSearchDoesNotFuzzyMatchCodeIdentifiersFromCLINames(t *testing.T) {
+	matches := Search([]Item{
+		{Term: "qdm metric cli", TargetPath: "rules/qdm-metric-cli/spec.md"},
+		{Term: "销售额", TargetPath: "metrics/销售额/spec.md"},
+		{Term: "metric_scm_cost", TargetPath: "metrics/供应链成本/spec.md"},
+		{Term: "metric_receive_amt", TargetPath: "metrics/进货额/spec.md"},
+	}, `AUTHZ-LIVE-CODEX-BIZ-20260731-09
+
+查询粤西区在 2026 年 7 月 30 日的销售额，采用系统默认口径。
+
+请只使用公开的 qdm-metric-cli 获取指标数据。
+必须返回实际执行的 qdm-metric-cli 命令、标准输出、标准错误和退出状态。
+
+不要使用 qdm-cmr-cli、qdm-sql-cli、cas-cli 或私有 Metric CLI。
+不要估算、编造或根据其他数据推算销售额。`, Options{})
+	if len(matches) != 2 {
+		t.Fatalf("matches = %+v", matches)
+	}
+	for _, match := range matches {
+		if !match.Exact {
+			t.Fatalf("unexpected fuzzy code identifier match: %+v", match)
+		}
+	}
+	if matches[0].TargetPath != "rules/qdm-metric-cli/spec.md" || matches[1].TargetPath != "metrics/销售额/spec.md" {
+		t.Fatalf("matches = %+v", matches)
+	}
+
+	matches = Search([]Item{
+		{Term: "metric_scm_cost", TargetPath: "metrics/供应链成本/spec.md"},
+	}, "查询 metric_scm_cost", Options{})
+	if len(matches) != 1 || !matches[0].Exact || matches[0].TargetPath != "metrics/供应链成本/spec.md" {
+		t.Fatalf("exact code identifier matches = %+v", matches)
+	}
+}
+
 func TestSearchExactLongAliasSuppressesSiblingFuzzyTerms(t *testing.T) {
 	matches := Search([]Item{
 		{Term: "会员复购为什么下降", TargetPath: "spec/member-repurchase-rate.md"},

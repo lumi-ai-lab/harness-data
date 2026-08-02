@@ -1,8 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir, readInstallerState } from "../lib/paths.js";
 import { binaryName } from "../lib/platform.js";
-import { concreteAgentNames, qdmCliBinariesForProfile } from "../lib/config.js";
+import { agentNamesForChoice, concreteAgentNames, qdmCliBinariesForProfile } from "../lib/config.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
@@ -13,17 +14,15 @@ import {
 import { readManifest } from "../lib/manifest.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 
-const removedBinaries = ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"];
+const removedBinaries = ["qdm-cmr-cli", "qdm-sql-cli", "cas-cli"];
 const removedEnvironmentVariables = [
   "QDM_CMR_CLI",
-  "QDM_INDICATORS_CLI",
   "QDM_SQL_CLI",
   "QDM_CAS_CLI",
   "QDM_CAS_CONFIG_DIR"
 ];
 const removedYamlKeys = [
   "qdm_cmr_cli",
-  "qdm_indicators_cli",
   "qdm_sql_cli",
   "qdm_cas_cli"
 ];
@@ -35,6 +34,15 @@ function existsExecutable(file) {
   } catch {
     return false;
   }
+}
+
+function executableLaunches(file, args) {
+  if (!existsExecutable(file)) return false;
+  const result = spawnSync(file, args, {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return !result.error && !result.signal && Number.isInteger(result.status);
 }
 
 function agentOk(workspace, name) {
@@ -53,7 +61,7 @@ function yamlCliPath(content, name) {
   return String(match?.[1] || "").replace(/^["']|["']$/g, "");
 }
 
-function configPathsValid(workspace) {
+function configPathsValid(workspace, profile) {
   const envFile = path.join(workspace, "config", "qdm-cli-paths.env");
   const harnessFile = path.join(workspace, "config", "harness-config.yaml");
   if (!fs.existsSync(envFile) || !fs.existsSync(harnessFile)) return false;
@@ -64,11 +72,13 @@ function configPathsValid(workspace) {
     [...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)]
       .map((match) => [match[1], match[2]])
   );
-  const expected = path.resolve(workspace, "bin", binaryName("qdm-metric-cli"));
+  const expected = profile === lumiRequiredProfile
+    ? path.resolve(workspace, "bin", binaryName("qdm-metric-cli"))
+    : path.join("bin", binaryName("qdm-metric-cli")).replaceAll("\\", "/");
   return values.size === 1 &&
-    path.resolve(values.get("QDM_METRIC_CLI") || "") === expected &&
-    path.resolve(yamlCliPath(harnessContent, "qdm_metric_cli")) === expected &&
-    existsExecutable(expected) &&
+    values.get("QDM_METRIC_CLI") === expected &&
+    yamlCliPath(harnessContent, "qdm_metric_cli") === expected &&
+    existsExecutable(path.join(workspace, "bin", binaryName("qdm-metric-cli"))) &&
     removedEnvironmentVariables.every((name) => !values.has(name)) &&
     removedYamlKeys.every((name) => !yamlCliPath(harnessContent, name));
 }
@@ -127,7 +137,10 @@ export async function collectDoctor(workspace, options = {}) {
   }
 
   for (const binary of qdmCliBinariesForProfile(effectiveProfile)) {
-    add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
+    const file = path.join(workspace, "bin", binaryName(binary));
+    add(`bin/${binary}`, existsExecutable(file));
+    const probeArgs = binary === "qdm-metric-cli" ? ["version"] : ["wikis"];
+    add(`bin/${binary} runnable`, executableLaunches(file, probeArgs));
   }
   for (const binary of removedBinaries) {
     add(`bin/${binary} absent`, !fs.existsSync(path.join(workspace, "bin", binaryName(binary))));
@@ -135,22 +148,34 @@ export async function collectDoctor(workspace, options = {}) {
   add("legacy auth directory absent", !fs.existsSync(path.join(workspace, ".qdm-auth")));
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
-  add("config CLI paths", configPathsValid(workspace));
+  add("config CLI paths", configPathsValid(workspace, effectiveProfile));
 
   const installedNames = new Set([
     ...Object.keys(state.tools || {}),
     ...Object.keys(state.localTools || {})
   ]);
-  add("installer tool set", installedNames.size === 2 &&
-    installedNames.has("data-harness-cli") &&
-    installedNames.has("qdm-metric-cli"));
-  add("legacy CLI state absent", removedBinaries.every((name) => !installedNames.has(name)) &&
-    !installedNames.has("qdm-indicators-facade") &&
-    !installedNames.has("qdm-indicators-cli-real"));
+  const expectedTools = effectiveProfile === lumiRequiredProfile
+    ? ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]
+    : ["data-harness-cli", "qdm-metric-cli"];
+  add("installer tool set", installedNames.size === expectedTools.length &&
+    expectedTools.every((name) => installedNames.has(name)));
+  add("legacy CLI state absent", removedBinaries.every((name) => !installedNames.has(name)));
 
   if (effectiveProfile === lumiRequiredProfile) {
-    add(`Agent hook .${state.agent}`, agentOk(workspace, state.agent), `agents/${state.agent}`);
-    for (const name of concreteAgentNames.filter((name) => name !== state.agent)) {
+    add("authorization config path", state.authzConfigPath === "/etc/harness-data/authz.json");
+    add("Metric authorization catalog", fs.existsSync("/etc/harness-data/approved-metrics-v1.json"));
+    add("private qdm-metric-cli", Boolean(state.tools?.["qdm-metric-cli-real"]?.destination) &&
+      existsExecutable(state.tools["qdm-metric-cli-real"].destination));
+    let selectedAgents = [];
+    try {
+      selectedAgents = agentNamesForChoice(state.agent);
+    } catch {
+      selectedAgents = [];
+    }
+    for (const name of selectedAgents) {
+      add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
+    }
+    for (const name of concreteAgentNames.filter((name) => !selectedAgents.includes(name))) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));
     }
   } else {

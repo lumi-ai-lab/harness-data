@@ -118,16 +118,18 @@ func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse
 		b.WriteString(plan.Reason)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n必须先读取以下 contextFiles：\n")
-	for _, ref := range response.ContextFiles {
-		b.WriteString("- ")
-		b.WriteString(ref.Path)
-		if ref.Reason != "" {
-			b.WriteString(" (")
-			b.WriteString(ref.Reason)
-			b.WriteString(")")
+	if len(response.ContextFiles) > 0 {
+		b.WriteString("\n必须先读取以下 contextFiles：\n")
+		for _, ref := range response.ContextFiles {
+			b.WriteString("- ")
+			b.WriteString(ref.Path)
+			if ref.Reason != "" {
+				b.WriteString(" (")
+				b.WriteString(ref.Reason)
+				b.WriteString(")")
+			}
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 	b.WriteString("\nInstruction: ")
 	b.WriteString(response.Instruction)

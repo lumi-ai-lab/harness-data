@@ -13,4 +13,7 @@ Read `README.md` before running QDM data commands.
 - Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default.
 - Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file.
 - Do not read or use template files directly unless `bin/data-harness-cli inject-template` has been requested by the harness flow and the hook injects the template.
-- If CMR or Indicators token is invalid, use the configured `qdm-metric-cli` credential flow; do not start QR login from an automated hook.
+- Use only commands exposed by the installed `qdm-metric-cli --help` and its subcommand help.
+- Do not call legacy data CLIs or run credential/token setup. In
+  `lumi-mvp-required`, requester authorization is supplied automatically by
+  the installed Hook and enforced by `qdm-metric-cli`.

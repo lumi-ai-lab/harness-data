@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lumi-ai-lab/harness-data/blob/master/bootstrap/authz-config-v1.schema.json",
+  "title": "Harness Data Lumi authorization configuration V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "mode",
+    "piVersion",
+    "requesterContextDir",
+    "maxEnvelopeBytes",
+    "maxEnvelopeTtlSeconds",
+    "clockSkewSeconds",
+    "realMetricCli",
+    "approvedMetricCatalog",
+    "killSwitch",
+    "limits"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "mode": {
+      "enum": ["lumi-mvp-required", "disabled-deny"]
+    },
+    "piVersion": { "const": "0.81.1" },
+    "requesterContextDir": { "$ref": "#/$defs/absolutePath" },
+    "maxEnvelopeBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216
+    },
+    "maxEnvelopeTtlSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1800
+    },
+    "clockSkewSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1800
+    },
+    "realMetricCli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version", "artifactSha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/absolutePath" },
+        "version": { "const": "0.1.0" },
+        "artifactSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "approvedMetricCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/absolutePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "killSwitch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controlPath", "pollMilliseconds"],
+      "properties": {
+        "controlPath": { "$ref": "#/$defs/absolutePath" },
+        "pollMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxDateRangeDays",
+        "maxMetrics",
+        "maxDimensions",
+        "defaultPageSize",
+        "maxPageSize",
+        "defaultMetadataLimit",
+        "maxMetadataLimit",
+        "timeoutSeconds",
+        "maxOutputBytes"
+      ],
+      "properties": {
+        "maxDateRangeDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3660
+        },
+        "maxMetrics": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maxDimensions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "defaultPageSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maxPageSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "defaultMetadataLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maxMetadataLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/[^\\u0000]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

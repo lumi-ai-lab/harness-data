@@ -3,6 +3,7 @@ package context
 import (
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,6 +14,10 @@ import (
 )
 
 const multiSingleCandidateLimit = 20
+
+var metricCLIDiagnosticPattern = regexp.MustCompile(`(?i)\bqdm-metric-cli(?:\.exe)?[[:space:]]+(?:的[[:space:]]+)?(?:version|--version|-v|help|--help|-h)\b`)
+
+const shellExitCaptureInstruction = " When capturing a zsh command exit code, use rc=$?; do not assign to the read-only zsh parameter status. Treat the data CLI invocation and the surrounding output-capture wrapper as separate operations: if the CLI already executed, do not rerun it solely because later output formatting or wrapper logic failed."
 
 var constraints = []string{
 	"values_must_come_from_cli",
@@ -111,6 +116,16 @@ func pathsConfigFromIndex(paths map[string]string) (harness.PathsConfig, bool) {
 }
 
 func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.RuntimeIndex, question string) (harness.ContextResponse, WikiPlan) {
+	if metricCLIDiagnosticPattern.MatchString(question) {
+		plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "metric_cli_diagnostic"}
+		return harness.ContextResponse{
+			Question:     question,
+			ContextFiles: nil,
+			Instruction:  instructionForPlan(plan),
+			Constraints:  constraints,
+		}, plan
+	}
+
 	byPath := index.DocsByPath
 	var refs []harness.FileRef
 	seen := map[string]bool{}
@@ -767,7 +782,10 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running qdm-metric-cli. Numeric values must come from qdm-metric-cli; do not estimate or invent. Use only qdm-metric-cli for data queries. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file."
+	if plan.Mode == sessionstate.ModeFree && plan.Reason == "metric_cli_diagnostic" {
+		return "Harness mode: free. reason=metric_cli_diagnostic. This is a qdm-metric-cli metadata diagnostic request. Do not read context files, specs, playbooks, templates, source code, or other CLIs. Execute only the exact public qdm-metric-cli version/help command requested by the user and return its actual stdout, stderr, and exit status." + shellExitCaptureInstruction
+	}
+	common := "All modes: read all contextFiles before running qdm-metric-cli. Numeric values must come from qdm-metric-cli; do not estimate or invent. Use only qdm-metric-cli for data queries. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file." + shellExitCaptureInstruction
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."

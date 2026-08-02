@@ -26,21 +26,87 @@ function contentDigest(content) {
   return createHash("sha256").update(serialized ?? "").digest("hex").slice(0, 20);
 }
 
+function normalizedQuoteText(value) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function quotedAssistantReplyPrompt(messages, userIndex, prompt) {
+  const newline = prompt.indexOf("\n");
+  if (newline < 0) return prompt;
+
+  const firstLine = prompt.slice(0, newline).trim();
+  const quoted = prompt.slice(newline + 1).trim();
+  if (!/^@\S+\s+\S/.test(firstLine) || quoted.length < 120) return prompt;
+
+  let previousUserIndex = -1;
+  for (let index = userIndex - 1; index >= 0; index -= 1) {
+    if (isObject(messages[index]) && messages[index].role === "user") {
+      previousUserIndex = index;
+      break;
+    }
+  }
+
+  const previousAssistantText = messages
+    .slice(previousUserIndex + 1, userIndex)
+    .filter((message) => isObject(message) && message.role === "assistant")
+    .map((message) => contentText(message.content))
+    .filter(Boolean)
+    .join("\n");
+  if (!previousAssistantText) return prompt;
+
+  const normalizedQuoted = normalizedQuoteText(quoted);
+  const normalizedAssistant = normalizedQuoteText(previousAssistantText);
+  const sampleLength = Math.min(80, normalizedQuoted.length, normalizedAssistant.length);
+  const sample = normalizedQuoted.slice(0, sampleLength);
+  if (sample.length < 40 || !normalizedAssistant.includes(sample)) return prompt;
+  return firstLine;
+}
+
 export function latestUserMessage(messages) {
   if (!Array.isArray(messages)) return null;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!isObject(message) || message.role !== "user") continue;
-    const prompt = contentText(message.content).trim();
-    if (!prompt) continue;
+    const rawPrompt = contentText(message.content).trim();
+    if (!rawPrompt) continue;
+    const prompt = quotedAssistantReplyPrompt(messages, index, rawPrompt);
     const timestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
     return {
       index,
       prompt,
-      key: `${timestamp}:${index}:${contentDigest(message.content)}`,
+      rawPrompt,
+      key: `${timestamp}:${index}:${contentDigest(prompt)}`,
     };
   }
   return null;
+}
+
+export function replaceUserPrompt(messages, targetIndex, prompt) {
+  if (!Array.isArray(messages) || !prompt?.trim()) return messages;
+  const message = messages[targetIndex];
+  if (!isObject(message) || message.role !== "user") return messages;
+
+  const nextMessages = messages.slice();
+  const nextMessage = { ...message };
+  if (typeof message.content === "string") {
+    nextMessage.content = prompt;
+  } else if (Array.isArray(message.content)) {
+    let replaced = false;
+    nextMessage.content = message.content.flatMap((part) => {
+      if (!isObject(part) || typeof part.text !== "string") return [part];
+      if (replaced) return [];
+      replaced = true;
+      return [{ ...part, text: prompt }];
+    });
+    if (!replaced) nextMessage.content = [{ type: "text", text: prompt }, ...nextMessage.content];
+  } else {
+    nextMessage.content = [{ type: "text", text: prompt }];
+  }
+  nextMessages[targetIndex] = nextMessage;
+  return nextMessages;
 }
 
 function contextBlock(context) {

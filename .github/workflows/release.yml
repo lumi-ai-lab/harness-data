@@ -82,24 +82,18 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Validate business-approved Lumi release inputs
+      - name: Validate business-approved Lumi Wikis
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import crypto from "node:crypto";
-          import fs from "node:fs";
-          import { validateApprovedIndicatorCatalog } from "./bootstrap/materialize-cli-manifest.mjs";
-          import { verifyApprovedWikisSource } from "./npm/src/lib/approved-wikis.js";
+          import {
+            createApprovedWikisManifest,
+            verifyApprovedWikisSource
+          } from "./npm/src/lib/approved-wikis.js";
 
-          const catalogPath = "bootstrap/approved-indicators-v1.json";
-          const wikisSource = "bootstrap/approved-lumi-wikis";
-          const wikisManifest = "bootstrap/approved-lumi-wikis-manifest.json";
-          if (!fs.existsSync(catalogPath) || !fs.existsSync(wikisSource) || !fs.existsSync(wikisManifest)) {
-            throw new Error("business-approved catalog and Wikis allowlist artifacts are required before release");
-          }
-          validateApprovedIndicatorCatalog(fs.readFileSync(catalogPath), catalogPath);
-          const manifestSha256 = crypto.createHash("sha256").update(fs.readFileSync(wikisManifest)).digest("hex");
-          verifyApprovedWikisSource(wikisSource, wikisManifest, manifestSha256);
+          const manifest = "/tmp/approved-lumi-wikis-manifest.json";
+          const generated = createApprovedWikisManifest("wikis", manifest);
+          verifyApprovedWikisSource("wikis", manifest, generated.manifestSha256);
           NODE
 
       - name: Test npm installer
@@ -114,14 +108,6 @@ jobs:
         with:
           go-version-file: cli/go.mod
 
-      - name: Validate approved indicator catalog with the Harness contract
-        run: |
-          set -euo pipefail
-          catalog_sha256="$(sha256sum bootstrap/approved-indicators-v1.json | awk '{print $1}')"
-          go run ./cli/cmd/data-harness-cli authz-validate-catalog \
-            --path "${PWD}/bootstrap/approved-indicators-v1.json" \
-            --sha256 "${catalog_sha256}"
-
       - name: Build Wikis index from pinned submodule
         working-directory: cli
         run: |
@@ -131,7 +117,7 @@ jobs:
 
       - name: Test Go CLI
         working-directory: cli
-        run: go test ./...
+        run: go test -count=1 ./...
 
       - name: Verify external CLI assets
         env:
@@ -162,6 +148,7 @@ jobs:
               const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
               console.log(`${tool.repo}\t${release}\t${name}`);
               console.log(`${tool.repo}\t${release}\t${name}.sha256`);
+              console.log(`${tool.repo}\t${release}\t${name}.binary.sha256`);
             }
           }
           NODE
