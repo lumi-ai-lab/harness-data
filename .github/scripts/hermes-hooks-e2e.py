@@ -44,7 +44,7 @@ def main() -> None:
     if "QDM_FINAL_OUTPUT_CONTRACT" not in str(posttool.get("context", "")):
         raise AssertionError(f"Hermes post-tool Hook did not run the native CLI: {posttool!r}")
 
-    print(f"Hermes native Hook E2E passed: {executable}")
+    print("Hermes native Hook E2E passed")
 
 
 if __name__ == "__main__":
