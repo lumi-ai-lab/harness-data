@@ -42,7 +42,7 @@ func TestMemberRepurchaseContext(t *testing.T) {
 }
 
 func TestStoreProfitDoesNotReturnMemberSpec(t *testing.T) {
-	response, err := dhcontext.Build(currentRootWithIndex(t), "门店毛利额最近表现")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "门店净利润最近表现")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestNoRecallUsesStructuredDefaultIndexes(t *testing.T) {
 }
 
 func TestMultiDomainContextRecall(t *testing.T) {
-	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店毛利额最近为什么下降？")
+	response, err := dhcontext.Build(currentRootWithIndex(t), "会员复购和门店净利润最近为什么下降？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,8 @@ func TestMultiDomainContextRecall(t *testing.T) {
 	}
 	for _, want := range []string{
 		"wikis/metrics/会员复购次数/spec.md",
-		"wikis/metrics/门店毛利额/spec.md",
-		"wikis/metrics/门店毛利额/playbook.md",
+		"wikis/metrics/门店净利润/spec.md",
+		"wikis/metrics/门店净利润/playbook.md",
 	} {
 		if !got[want] {
 			if want == "wikis/metrics/会员复购次数/spec.md" && got["wikis/metrics/会员复购次数/playbook.md"] {
@@ -251,8 +251,8 @@ func TestClaudeHookResetsStateForNewPrompt(t *testing.T) {
 	}
 }
 
-func TestClaudeHookMemberBusinessQuestionUsesBusinessReport(t *testing.T) {
-	sessionID := "go-context-member-business-report"
+func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
+	sessionID := "go-context-free-analysis"
 	root := currentRootWithIndex(t)
 	path := filepath.Join(root, ".harness", "state", "business-report", sessionID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -274,23 +274,15 @@ func TestClaudeHookMemberBusinessQuestionUsesBusinessReport(t *testing.T) {
 	}
 	context := output.HookSpecificOutput.AdditionalContext
 	for _, want := range []string{
-		"Harness mode: report",
-		"selectedPlaybook: reports/经营综合分析报告/playbook.md",
-		"selectedTemplate: reports/经营综合分析报告/template.md",
+		"Harness mode: free",
+		"Do not run bin/data-harness-cli inject-template",
 		"wikis/reports/经营综合分析报告/index.md",
 		"wikis/reports/经营综合分析报告/spec.md",
-	} {
-		if !bytes.Contains([]byte(context), []byte(want)) {
-			t.Fatalf("missing %s in %s", want, context)
-		}
-	}
-	for _, unwanted := range []string{
-		"Harness mode: free",
 		"wikis/reports/用户分析报告/index.md",
 		"wikis/reports/用户分析报告/spec.md",
 	} {
-		if bytes.Contains([]byte(context), []byte(unwanted)) {
-			t.Fatalf("unexpected %s in %s", unwanted, context)
+		if !bytes.Contains([]byte(context), []byte(want)) {
+			t.Fatalf("missing %s in %s", want, context)
 		}
 	}
 
@@ -302,14 +294,17 @@ func TestClaudeHookMemberBusinessQuestionUsesBusinessReport(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state["mode"] != "report" {
+	if state["mode"] != "free" {
 		t.Fatalf("mode = %#v in %s", state["mode"], string(data))
 	}
-	if state["selected_playbook"] != "reports/经营综合分析报告/playbook.md" {
+	if state["selected_playbook"] != nil {
 		t.Fatalf("selected_playbook = %#v", state["selected_playbook"])
 	}
-	if state["selected_template"] != "reports/经营综合分析报告/template.md" {
+	if state["selected_template"] != nil {
 		t.Fatalf("selected_template = %#v", state["selected_template"])
+	}
+	if state["reason"] != "concept_only" {
+		t.Fatalf("reason = %#v", state["reason"])
 	}
 }
 
