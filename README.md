@@ -46,9 +46,27 @@ Hermes-Agent 使用 `.hermes` 加载项目上下文、skill 和 hook：
 npx @lumi-ai-lab/harness-data install
 ```
 
-安装器访问 GitHub 私有仓库时默认使用 `--git-protocol auto`：先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，如果本机没有可用 GitHub SSH key 或无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
+`local-unrestricted` 运行时只安装 `data-harness-cli` 和真实的
+`qdm-metric-cli`。未传 `--metric-cli-path` 时，安装器会从
+`pengmide/qdm-metric-cli` 的最新 GitHub Release 下载当前平台归档，要求
+Release 同时提供对应的 `.sha256`，校验通过后安装到
+`bin/qdm-metric-cli`，并删除 `.bootstrap-cache` 中的 Metric CLI 归档。
+下载公共 Release asset 时优先复用 `gh auth login` 或 `GITHUB_TOKEN`，
+鉴权下载不可用时再回退到 GitHub 公共下载。
 
-`qdm-cmr-cli`、`qdm-indicators-cli`、`qdm-sql-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-cmr-cli`、`pengmide/qdm-indicators-cli`、`pengmide/qdm-sql-cli`、`pengmide/qdm-cas-cli`。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
+使用本地真实 Metric CLI 覆盖 GitHub Release：
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --profile local-unrestricted \
+  --metric-cli-path /absolute/path/to/qdm-metric-cli
+```
+
+安装器访问 `harness-data` 和 `harness-data-wikis` 时默认使用
+`--git-protocol auto`：先尝试 SSH，如果本机没有可用 GitHub SSH key 或
+无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS
+需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过
+token 环境变量提供访问权限。
 
 强制使用 SSH：
 
@@ -68,43 +86,44 @@ npx @lumi-ai-lab/harness-data install --git-protocol https
 npx @lumi-ai-lab/harness-data install --dir ~/harness-data
 ```
 
-非交互安装需要显式选择 Agent，并指向已经通过 `cas-cli config set-credentials` 配置好的 CAS credential 目录：
+非交互安装必须显式选择 `local-unrestricted` profile。`--yes` 未传
+`--agent` 时保持原有行为，静默安装全部 Agent：
 
 ```bash
-npx @lumi-ai-lab/harness-data install \
-  --yes \
-  --agent codex \
-  --cas-config-dir /secure/path/to/cas
+GITHUB_TOKEN="$(gh auth token)" \
+node npm/bin/harness-data.js install \
+  --dir "$HOME/qdm/qdm-data-agent-test-metric" \
+  --profile local-unrestricted \
+  --yes
 ```
 
-CI 或非交互环境可用 token 环境变量完成 HTTPS 访问；同一个 token 也会用于下载私有 qdm CLI Release asset。token 不会写入 remote URL、安装状态或项目配置。
+只安装 Codex Agent：
 
 ```bash
-GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
+GITHUB_TOKEN="$(gh auth token)" \
+node npm/bin/harness-data.js install \
+  --dir "$HOME/qdm/qdm-data-agent-test-metric" \
+  --profile local-unrestricted \
   --yes \
-  --agent codex \
-  --git-protocol https \
-  --github-token-env GITHUB_TOKEN \
-  --cas-config-dir /secure/path/to/cas
+  --agent codex
 ```
+
+token 不会写入 remote URL、安装状态或项目配置。
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 5 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators/SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`。
+安装器会下载或复用 runtime bundle，安装 Helper 与 Metric CLI，同步
+Wikis，生成与旧版 `data-harness-cli v0.0.27` 兼容的本地配置，构建
+`wikis-index.json` 和 `wikis-runtime-index.json`，并把所选
+`.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` /
+`.openclaw` / `.hermes`。本地 profile 不创建 `.qdm-auth`，也不安装或
+保留 `qdm-cmr-cli`、`qdm-indicators-cli`、`qdm-sql-cli`、`cas-cli`。
 
 更新工作目录：
 
 ```bash
 npx @lumi-ai-lab/harness-data update --dir ~/harness-data
 ```
-
-CAS 账号或密码发生变化，或者本地 `.qdm-auth` 被删除后，重新配置认证：
-
-```bash
-npx @lumi-ai-lab/harness-data auth --dir ~/harness-data
-```
-
-该命令会自动重建 `.qdm-auth/cas`、加密保存新的 CAS 凭证，并重新签发和校验 CMR、Indicators、SQL Token；不会更新 runtime、CLI、Wikis 或 Agent Hook。
 
 仅检查可用更新：
 

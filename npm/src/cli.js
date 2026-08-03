@@ -50,6 +50,7 @@ Install and auth options:
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --wikis-source PATH                Approved Wikis source (required for lumi-mvp-required)
   --github-token TOKEN               GitHub token for private Release assets
+  --metric-cli-path PATH             Optional local qdm-metric-cli executable override
   --cas-username USERNAME            CAS username (skip interactive prompt)
   --cas-password PASSWORD            CAS password (skip interactive prompt)`);
   if (unknown) process.exitCode = 1;

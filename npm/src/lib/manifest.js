@@ -271,11 +271,6 @@ async function downloadAsset(tool, asset, file, options = {}) {
     fs.copyFileSync(source, file);
     return;
   }
-  if (!tool.private && !githubToken(options)) {
-    await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
-    return;
-  }
-
   if (!tool.private) {
     try {
       if (await downloadPrivateWithGh(asset, file, options)) return;
@@ -301,12 +296,15 @@ async function downloadAsset(tool, asset, file, options = {}) {
 
 async function expectedSha256(tool, asset, options = {}) {
   if (asset.sha256) return asset.sha256;
+  const dir = fs.mkdtempSync(path.join(process.cwd(), ".bootstrap-cache-sha-"));
   try {
-    const tmp = path.join(fs.mkdtempSync(path.join(process.cwd(), ".bootstrap-cache-sha-")), "asset.sha256");
+    const tmp = path.join(dir, "asset.sha256");
     await downloadAsset(tool, { ...asset, url: `${asset.url}.sha256` }, tmp, { ...options, log: false, progress: false, progressWriter: null });
     return fs.readFileSync(tmp, "utf8").trim().split(/\s+/)[0];
   } catch {
     return "";
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -400,7 +398,8 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     if (!tool?.name || !tool?.binary) throw new Error("manifest tool requires name and binary");
     const asset = tool.platforms?.[key];
     if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
-    if ((tool.tracking === "fixed" || tool.requireAssetSha256) && !/^[a-f0-9]{64}$/.test(String(asset.sha256 || ""))) {
+    if ((tool.tracking === "fixed" || (tool.requireAssetSha256 && tool.tracking !== "latest")) &&
+        !/^[a-f0-9]{64}$/.test(String(asset.sha256 || ""))) {
       throw new Error(`manifest missing fixed sha256 for ${tool.name} ${key}`);
     }
     if (tool.requireBinarySha256 && !/^[a-f0-9]{64}$/.test(String(asset.binarySha256 || ""))) {
@@ -420,6 +419,7 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     const reusable = !options.force ? reusableInstalledTool(workspace, tool, asset, options) : null;
     if (reusable) {
       if (options.log !== false) skip(`${tool.name} 已是最新 ${tool.version}`);
+      if (tool.cleanupArchive) fs.rmSync(path.join(cacheDir, assetName(asset)), { force: true });
       installedTools[tool.name] = reusable;
       continue;
     }
@@ -427,6 +427,9 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
     await downloadAsset(tool, asset, archive, options);
     const sha = await expectedSha256(tool, asset, options);
+    if (tool.requireAssetSha256 && !/^[a-f0-9]{64}$/.test(String(sha || ""))) {
+      throw new Error(`${tool.name} required sha256 is unavailable`);
+    }
     const actualSha = fileSha256(archive);
     if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
     if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
@@ -443,6 +446,7 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
       assetSha256: sha || actualSha,
       destination: binary
     };
+    if (tool.cleanupArchive) fs.rmSync(archive, { force: true });
   }
   Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
   return manifest;

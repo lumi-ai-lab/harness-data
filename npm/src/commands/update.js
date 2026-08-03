@@ -9,25 +9,30 @@ import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
-import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
+import {
+  buildAndCheck,
+  installRuntimeBundle,
+  localUnrestrictedReleaseManifest,
+  printDoctorSummary,
+  removeLegacyLocalTools
+} from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
+import {
+  hasAnyAgentHook,
+  linkAgents,
+  migrateLegacyLocalAgentInstructions,
+  writeLocalConfig
+} from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import {
   installerStateSchemaVersion,
-  localUnrestrictedProfile,
   lumiRequiredProfile,
-  profileFromState,
-  selectManifestProfile
+  profileFromState
 } from "../lib/profile.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
-    check.name.startsWith("Agent hook .") ||
-    check.name === "CAS credentials file" ||
-    check.name === "CMR token" ||
-    check.name === "Indicators token" ||
-    check.name === "SQL token";
+    check.name.startsWith("Agent hook .");
 }
 
 async function npmLatest() {
@@ -148,13 +153,18 @@ export async function updateCommand(options = {}) {
     `平台：${key}`
   ]);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
-  const manifest = selectManifestProfile(readManifest(manifestPath), localUnrestrictedProfile);
+  const manifest = localUnrestrictedReleaseManifest(readManifest(manifestPath), {
+    metricCliPath: state.localTools?.["qdm-metric-cli"]?.source
+  });
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
-  const nextTools = { ...(state.tools || {}) };
+  const expectedToolNames = new Set((manifest.tools || []).map((tool) => tool.name));
+  const nextTools = Object.fromEntries(
+    Object.entries(state.tools || {}).filter(([name]) => expectedToolNames.has(name))
+  );
   const applied = [];
   const skipped = [];
-  const trackingOptions = { ...options, skippedUpdates: skipped };
+  const trackingOptions = { ...options, skippedUpdates: skipped, state };
 
   step(1, 7, "检查 installer");
   const latestInstaller = await npmLatest();
@@ -173,6 +183,9 @@ export async function updateCommand(options = {}) {
     if (await confirm("是否更新 runtime bundle？")) {
       const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true, profile });
       runtimeTag = bundle.tag || runtimeRelease.tag_name;
+      for (const file of migrateLegacyLocalAgentInstructions(runtimeDir)) {
+        action(`更新旧版 Agent 指令：${file}`);
+      }
       changed = true;
       applied.push(`runtime bundle ${runtimeTag}`);
     } else {
@@ -186,7 +199,7 @@ export async function updateCommand(options = {}) {
 
   step(3, 7, "检查 CLI 工具");
   for (const tool of manifest.tools || []) {
-    if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
+    if (state.localTools?.[tool.name]) {
       skip(`${tool.name} 为本地路径模式，请手动检查`);
       continue;
     }
@@ -212,8 +225,34 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(6, 7, "构建 Wikis 索引");
+  const configDir = path.join(runtimeDir, "config");
+  const harnessPath = path.join(configDir, "harness-config.yaml");
+  const envPath = path.join(configDir, "qdm-cli-paths.env");
+  const previousConfig = [
+    fs.existsSync(harnessPath) ? fs.readFileSync(harnessPath, "utf8") : "",
+    fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : ""
+  ];
+  writeLocalConfig(runtimeDir, { overwrite: true, profile });
+  const currentConfig = [
+    fs.readFileSync(harnessPath, "utf8"),
+    fs.readFileSync(envPath, "utf8")
+  ];
+  const removedTools = removeLegacyLocalTools(runtimeDir);
+  const migratedAgents = migrateLegacyLocalAgentInstructions(runtimeDir);
+  const hadLegacyAuth = fs.existsSync(path.join(runtimeDir, ".qdm-auth"));
+  fs.rmSync(path.join(runtimeDir, ".qdm-auth"), { recursive: true, force: true });
+  if (previousConfig.some((content, index) => content !== currentConfig[index]) ||
+      removedTools.length ||
+      migratedAgents.length ||
+      hadLegacyAuth) {
+    changed = true;
+    applied.push("本地兼容配置");
+  }
+  ok("本地配置已刷新");
+  for (const name of removedTools) action(`移除旧版 CLI：${name}`);
+  for (const file of migratedAgents) action(`更新旧版 Agent 指令：${file}`);
   if (changed) {
-    await buildAndCheck(runtimeDir, trackingOptions);
+    await buildAndCheck(runtimeDir, { ...trackingOptions, requiredIndexes: true });
   } else {
     skip("没有组件更新");
   }
@@ -221,8 +260,6 @@ export async function updateCommand(options = {}) {
 
   step(7, 7, "安装校验");
   if (changed) {
-    writeLocalConfig(runtimeDir, { overwrite: true, profile });
-    ok("本地配置已刷新");
     const doctor = await collectDoctor(runtimeDir, trackingOptions);
     printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });
     if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");
