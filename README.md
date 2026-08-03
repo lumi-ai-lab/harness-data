@@ -58,6 +58,10 @@ fragment is:
 
 Angle-bracket values are deployment placeholders; UID/GID values must be
 replaced with unquoted JSON integers in the generated configuration.
+The complete [authorization configuration example](config/authz-config-v1.json.example)
+contains non-production numeric identities and zero digests. Deployment must
+replace every identity, Workspace value, path, and digest before readiness can
+pass.
 
 `agentUid` is the effective UID of Pi and the public CLI client.
 `requesterContextOwnerUid` is a different, trusted Lumi publisher UID. The
@@ -74,6 +78,69 @@ The base64url/JCS binding is intentionally not a signature. Re-encoding it or
 invoking `authz-bind` does not grant authority because both `authz-bind` and
 the root broker re-open the owner-validated envelope, and the broker also
 authenticates the caller UID.
+
+Lumi must launch Pi with the same deployment-resolved identity and reader
+group. For example, when Harness uses `agentUid=2001` and
+`requesterContextReaderGid=2003`, the corresponding Lumi fragment is:
+
+```json
+{
+  "agents": [
+    {
+      "id": "pi",
+      "command": "npx",
+      "args": ["-y", "pi-acp@0.0.33"],
+      "runAsUid": 2001,
+      "runAsGid": 2002,
+      "supplementaryGids": [2003]
+    }
+  ]
+}
+```
+
+The Lumi service must also set both
+`LUMI_REQUESTER_CONTEXT_ROOT=/run/lumi/requester-context` and
+`LUMI_REQUESTER_CONTEXT_READER_GID=2003`. The publisher must have permission
+to set the configured UID, GID, and supplementary groups. A secured Pi process
+is bound to one Workspace and must be restarted before switching Workspaces.
+
+## Requester Authorization Contract
+
+Harness accepts File Envelope v1 containing RequesterContext v2. The context
+must include the exact `qdm.metric.query` capability and a Harness-owned
+`authorization.claims["qdm.scope"]` object with `schemaVersion: 1`:
+
+```json
+{
+  "schemaVersion": 1,
+  "manageAreaIds": ["CN07"],
+  "dcManageAreaIds": ["DC07"],
+  "categoryLevel1Ids": ["12"]
+}
+```
+
+The broker maps protected query dimensions to claims as follows:
+
+| Query dimension | Authorized claim |
+| --- | --- |
+| `manageAreaId` | `manageAreaIds` |
+| `dcManageAreaId`, `sapArea2Id` | `dcManageAreaIds` |
+| `categoryLevel1Id` | `categoryLevel1Ids` |
+
+The same mapping is applied to ordinary CLI flags, `--other-filter`, and
+structured analysis JSON. When a supported protected filter is absent, the
+broker injects an applicable authorized scope. A request is rejected when no
+authorized protected scope applies to every selected metric. Protected
+dimension value enumeration is unavailable through `dim values`, because
+Metric CLI v0.1.0 cannot constrain that metadata call by requester scope.
+
+All fields declared under `limits` are enforced before or during private CLI
+execution. Date limits count both endpoints; metric and dimension counts are
+capped; missing page sizes and metadata limits receive configured defaults;
+explicit values cannot exceed their maxima. `timeoutSeconds` and
+`maxOutputBytes` bound the child process, while `killSwitch.pollMilliseconds`
+controls in-flight revalidation and cancels a running query when the protected
+control file becomes disabled or unreadable.
 
 The `local-unrestricted` profile downloads the latest real `qdm-metric-cli`
 release from GitHub, verifies its published archive checksum, and installs it
@@ -175,5 +242,7 @@ fall back to another CLI or direct SQL.
 ```bash
 go test ./cli/...
 npm test --prefix npm -- --test-concurrency=1
-node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
+npm install --prefix /tmp/pi-runtime @earendil-works/pi-coding-agent@0.81.1
+QDM_PI_RUNTIME_MODULE=/tmp/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js \
+  node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
 ```

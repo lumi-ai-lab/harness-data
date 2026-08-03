@@ -54,6 +54,15 @@ inputs are ready. The configured requester-context path must end with
 must use exact mode `0710`, and envelope files exact mode `0640`, with the
 configured publisher owner and reader group.
 
+The accepted producer contract is Envelope v1 / RequesterContext v2 with the
+exact `qdm.metric.query` capability and the Harness-owned
+`authorization.claims["qdm.scope"]` schema v1. Harness enforces
+`manageAreaIds`, `dcManageAreaIds`, and `categoryLevel1Ids` in flags and
+structured analysis payloads. It also enforces every configured date, metric,
+dimension, pagination, metadata, timeout, output, and kill-switch limit. See
+the root README and `config/authz-config-v1.json.example` for the full
+deployment contract.
+
 Supported local Agent templates are Claude Code, Codex, Pi, OpenClaw, and
 Hermes. Non-Pi templates use only the ordinary Harness context and posttool
 hooks and are not accepted by `lumi-mvp-required`.

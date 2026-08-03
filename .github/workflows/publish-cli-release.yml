@@ -205,6 +205,7 @@ jobs:
           done
 
           cp -R .agents/pi runtime/agents/pi
+          cp config/authz-config-v1.json.example runtime/config/authz-config-v1.json.example
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
           cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
@@ -492,6 +493,7 @@ jobs:
           for agent in claude codex pi openclaw hermes; do
             cp -R ".agents/${agent}" "runtime/agents/${agent}"
           done
+          cp config/authz-config-v1.json.example runtime/config/authz-config-v1.json.example
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
           cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
