@@ -7,7 +7,7 @@ import https from "node:https";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { binaryName, platformKey } from "../src/lib/platform.js";
 import { defaultWorkspaceDir, installerStateDocument, installerStatePath, readInstallerState, userStatePath } from "../src/lib/paths.js";
@@ -62,6 +62,25 @@ import {
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const originalConsole = {
+  error: console.error,
+  log: console.log,
+  warn: console.warn
+};
+
+// Node 22.23.1 can corrupt the test protocol when non-ASCII application logs
+// share the file worker's stdout pipe. Tests that assert logs install their own capture.
+before(() => {
+  console.error = () => {};
+  console.log = () => {};
+  console.warn = () => {};
+});
+
+after(() => {
+  console.error = originalConsole.error;
+  console.log = originalConsole.log;
+  console.warn = originalConsole.warn;
+});
 
 function runConfirm(input, optionsSource = "{}") {
   const result = spawnSync(process.execPath, [
