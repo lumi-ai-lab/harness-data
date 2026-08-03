@@ -9,7 +9,10 @@ import (
 
 const maxConfigBytes int64 = 1 << 20
 
-var lowercaseSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	lowercaseSHA256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	metricCLIVersionPattern = regexp.MustCompile(`^0\.1\.[0-9]+$`)
+)
 
 // LoadConfig reads and strictly validates an authorization config. An empty
 // path selects DefaultConfigPath.
@@ -42,31 +45,58 @@ func (config Config) Validate() error {
 	if config.Version != CurrentVersion {
 		return invalid("authorization config version must be 1")
 	}
-	if config.Mode != ModeLumiMVPRequired && config.Mode != ModeDisabledDeny {
+	if config.Mode != ModePiRequesterAuthorized && config.Mode != ModeDisabledDeny {
 		return invalid("authorization config mode is unsupported")
 	}
 	if config.PiVersion != RequiredPiVersion {
 		return invalid("authorization config Pi version is unsupported")
 	}
 	for name, value := range map[string]string{
-		"requesterContextDir":           config.RequesterContextDir,
-		"realIndicatorsCli.path":        config.RealIndicatorsCLI.Path,
-		"realIndicatorsCli.configDir":   config.RealIndicatorsCLI.ConfigDir,
-		"approvedIndicatorCatalog.path": config.ApprovedIndicatorCatalog.Path,
-		"killSwitch.controlPath":        config.KillSwitch.ControlPath,
+		"requesterContextDir":        config.RequesterContextDir,
+		"realMetricCli.path":         config.RealMetricCLI.Path,
+		"approvedMetricCatalog.path": config.ApprovedMetricCatalog.Path,
+		"killSwitch.controlPath":     config.KillSwitch.ControlPath,
 	} {
 		if err := validateAbsoluteCleanPath(value); err != nil {
 			return invalid(fmt.Sprintf("authorization config %s is invalid", name))
 		}
 	}
-	if config.RealIndicatorsCLI.Version != "0.0.4" {
-		return invalid("real Indicators CLI version must be 0.0.4")
+	if config.AgentUID == nil {
+		return invalid("authorization config agentUid is required")
 	}
-	if !lowercaseSHA256Pattern.MatchString(config.RealIndicatorsCLI.ArtifactSHA256) {
-		return invalid("real Indicators CLI artifactSha256 is invalid")
+	if config.RequesterContextOwnerUID == nil {
+		return invalid("authorization config requesterContextOwnerUid is required")
 	}
-	if !lowercaseSHA256Pattern.MatchString(config.ApprovedIndicatorCatalog.SHA256) {
-		return invalid("approved indicator catalog sha256 is invalid")
+	if config.RequesterContextReaderGID == nil {
+		return invalid("authorization config requesterContextReaderGid is required")
+	}
+	if *config.RequesterContextReaderGID == 0 {
+		return invalid("authorization config requesterContextReaderGid must not be root")
+	}
+	if err := validateRequesterContextPathSegment(config.RequesterContextWorkspaceID); err != nil {
+		return invalid("authorization config requesterContextWorkspaceId is invalid")
+	}
+	if config.RequesterContextAgentID != "pi" {
+		return invalid("authorization config requesterContextAgentId must be pi")
+	}
+	if filepath.Base(config.RequesterContextDir) != config.RequesterContextAgentID ||
+		filepath.Base(filepath.Dir(config.RequesterContextDir)) != config.RequesterContextWorkspaceID {
+		return invalid("authorization config requesterContextDir must end with requesterContextWorkspaceId/requesterContextAgentId")
+	}
+	if *config.AgentUID == 0 {
+		return invalid("authorization config agentUid must not be root")
+	}
+	if *config.AgentUID == *config.RequesterContextOwnerUID {
+		return invalid("authorization config Agent and requester context owner UIDs must differ")
+	}
+	if !metricCLIVersionPattern.MatchString(config.RealMetricCLI.Version) {
+		return invalid("real Metric CLI version must remain compatible with 0.1.x")
+	}
+	if !lowercaseSHA256Pattern.MatchString(config.RealMetricCLI.ArtifactSHA256) {
+		return invalid("real Metric CLI artifactSha256 is invalid")
+	}
+	if !lowercaseSHA256Pattern.MatchString(config.ApprovedMetricCatalog.SHA256) {
+		return invalid("approved metric catalog sha256 is invalid")
 	}
 	if config.MaxEnvelopeBytes <= 0 || config.MaxEnvelopeBytes > 16<<20 {
 		return invalid("maxEnvelopeBytes is outside the supported range")
@@ -83,7 +113,7 @@ func (config Config) Validate() error {
 	limits := config.Limits
 	positive := map[string]int64{
 		"limits.maxDateRangeDays":     limits.MaxDateRangeDays,
-		"limits.maxIndicators":        limits.MaxIndicators,
+		"limits.maxMetrics":           limits.MaxMetrics,
 		"limits.maxDimensions":        limits.MaxDimensions,
 		"limits.defaultPageSize":      limits.DefaultPageSize,
 		"limits.maxPageSize":          limits.MaxPageSize,
@@ -103,7 +133,7 @@ func (config Config) Validate() error {
 	if limits.DefaultMetadataLimit > limits.MaxMetadataLimit {
 		return invalid("limits.defaultMetadataLimit exceeds maxMetadataLimit")
 	}
-	if limits.MaxDateRangeDays > 3660 || limits.MaxIndicators > 1000 || limits.MaxDimensions > 1000 ||
+	if limits.MaxDateRangeDays > 3660 || limits.MaxMetrics > 1000 || limits.MaxDimensions > 1000 ||
 		limits.MaxPageSize > 1_000_000 || limits.MaxMetadataLimit > 1_000_000 ||
 		limits.TimeoutSeconds > 3600 || limits.MaxOutputBytes > 1<<30 {
 		return invalid("authorization execution limits exceed supported safety bounds")
@@ -116,7 +146,7 @@ func (config Config) RequireEnforcing() error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if config.Mode != ModeLumiMVPRequired {
+	if config.Mode != ModePiRequesterAuthorized {
 		return authzError(CodeKillSwitchActive, "authorization is disabled", nil)
 	}
 	return nil
@@ -128,6 +158,16 @@ func validateAbsoluteCleanPath(value string) error {
 	}
 	if filepath.Clean(value) != value {
 		return fmt.Errorf("path must already be clean")
+	}
+	return nil
+}
+
+func validateRequesterContextPathSegment(value string) error {
+	if err := validateRequiredWireString(value); err != nil {
+		return err
+	}
+	if value == "." || value == ".." || strings.ContainsAny(value, "/\\") || filepath.Base(value) != value {
+		return fmt.Errorf("value must be one safe path segment")
 	}
 	return nil
 }

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import { encodeBindingBase64url } from "../authz-state.mjs";
@@ -45,7 +45,7 @@ function createProject(t, options = {}) {
       join(root, ".harness", "installer-state.json"),
       JSON.stringify({
         schemaVersion: 3,
-        profile: options.profile ?? "lumi-mvp-required",
+        profile: options.profile ?? "pi-requester-authorized",
         agent: "pi",
       }),
     );
@@ -142,7 +142,7 @@ function fakePiRuntime(executions) {
             env: {
               BASE_ENV: "1",
               HARNESS_AUTHZ_BINDING_V1: "stale-parent-binding",
-              QDM_INDICATORS_CLI: "/tmp/raw-qdm-indicators-cli",
+              QDM_METRIC_CLI: "/tmp/raw-qdm-metric-cli",
               QDM_CMR_CLI: "/tmp/qdm-cmr-cli",
               QDM_SQL_CLI: "/tmp/qdm-sql-cli",
               QDM_CAS_CLI: "/tmp/cas-cli",
@@ -298,7 +298,7 @@ test("context refreshes authz on every event while caching wiki context per user
   assert.equal(calls.filter((call) => call.command === "context").length, 2);
 });
 
-test("authorized Pi Bash pins the public Facade and removes forbidden inherited CLI variables", async (t) => {
+test("authorized Pi Bash pins the public Metric CLI and removes forbidden inherited CLI variables", async (t) => {
   const { root } = createProject(t);
   const loaded = await loadExtension(root, {
     bindAuthorization: async () => authzCandidate(),
@@ -309,7 +309,8 @@ test("authorized Pi Bash pins the public Facade and removes forbidden inherited 
   const event = { toolCallId: "tool-clean-env", toolName: "bash", input: { command: "env" } };
   await executeCaptured(loaded, ctx, event);
   const environment = loaded.executions.at(-1).spawn.env;
-  assert.equal(environment.QDM_INDICATORS_CLI, join(root, "bin", "qdm-indicators-cli"));
+  assert.equal(environment.QDM_METRIC_CLI, join(root, "bin", "qdm-metric-cli"));
+  assert.equal(environment.PATH.split(delimiter)[0], join(root, "bin"));
   for (const name of ["QDM_CMR_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI", "QDM_CAS_CONFIG_DIR"]) {
     assert.equal(Object.hasOwn(environment, name), false, name);
   }

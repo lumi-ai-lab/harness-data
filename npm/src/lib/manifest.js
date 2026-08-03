@@ -262,15 +262,27 @@ async function downloadAsset(tool, asset, file, options = {}) {
     try {
       info = fs.lstatSync(source);
     } catch {
-      throw new Error(`local release asset is missing: ${source}`);
+      if (!tool.private) {
+        throw new Error(`local release asset is missing: ${source}`);
+      }
     }
-    if (!info.isFile() || info.isSymbolicLink()) {
+    if (info && (!info.isFile() || info.isSymbolicLink())) {
       throw new Error(`local release asset is not a regular file: ${source}`);
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.copyFileSync(source, file);
+    if (info) {
+      if (tool.private) {
+        throw new Error(`private release assets cannot be loaded from --asset-dir: ${source}`);
+      }
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.copyFileSync(source, file);
+      return;
+    }
+  }
+  if (!tool.private && !githubToken(options)) {
+    await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
   }
+
   if (!tool.private) {
     try {
       if (await downloadPrivateWithGh(asset, file, options)) return;
@@ -362,7 +374,33 @@ function optionsStateTool(options, name) {
   return options?.state?.tools?.[name] || null;
 }
 
-async function extractArchiveBinary(workspace, cacheDir, archive, tool) {
+function replaceInstalledBinary(extracted, destination) {
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.install-${process.pid}-${crypto.randomBytes(6).toString("hex")}`
+  );
+  let backup = "";
+  try {
+    fs.renameSync(extracted, temporary);
+    if (process.platform === "win32" && fs.existsSync(destination)) {
+      backup = `${destination}.backup-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+      fs.renameSync(destination, backup);
+    }
+    fs.renameSync(temporary, destination);
+    if (backup) fs.rmSync(backup, { force: true });
+  } catch (error) {
+    if (backup && !fs.existsSync(destination) && fs.existsSync(backup)) {
+      fs.renameSync(backup, destination);
+      backup = "";
+    }
+    throw error;
+  } finally {
+    fs.rmSync(temporary, { force: true });
+    if (backup) fs.rmSync(backup, { force: true });
+  }
+}
+
+async function extractArchiveBinary(workspace, cacheDir, archive, tool, expectedBinarySha256 = "") {
   const extractDir = fs.mkdtempSync(path.join(cacheDir, `${tool.name}-extract-`));
   try {
     if (archive.endsWith(".zip")) {
@@ -371,13 +409,25 @@ async function extractArchiveBinary(workspace, cacheDir, archive, tool) {
       await run("tar", ["-xzf", path.relative(workspace, archive), "-C", path.relative(workspace, extractDir)], { cwd: workspace });
     }
     const extracted = path.join(extractDir, binaryName(tool.binary));
-    if (!fs.existsSync(extracted)) throw new Error(`${tool.binary} was not extracted to archive root`);
-    fs.chmodSync(extracted, 0o755);
+    let extractedInfo;
+    try {
+      extractedInfo = fs.lstatSync(extracted);
+    } catch {
+      throw new Error(`${tool.binary} was not extracted to archive root`);
+    }
+    if (!extractedInfo.isFile() || extractedInfo.isSymbolicLink()) {
+      throw new Error(`${tool.binary} extracted artifact is not a regular file`);
+    }
+    fs.chmodSync(extracted, tool.private ? 0o500 : 0o755);
+    const binarySha256 = fileSha256(extracted);
+    if (expectedBinarySha256 && binarySha256 !== expectedBinarySha256) {
+      throw new Error(`${tool.name} binary sha256 mismatch`);
+    }
     const destination = toolDestination(workspace, tool);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.rmSync(destination, { force: true });
-    fs.renameSync(extracted, destination);
-    return destination;
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: tool.private ? 0o700 : 0o755 });
+    if (tool.private) fs.chmodSync(path.dirname(destination), 0o700);
+    replaceInstalledBinary(extracted, destination);
+    return { binary: destination, binarySha256 };
   } finally {
     fs.rmSync(extractDir, { recursive: true, force: true });
   }
@@ -423,30 +473,48 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
       installedTools[tool.name] = reusable;
       continue;
     }
-    const archive = path.join(cacheDir, assetName(asset));
-    if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
-    await downloadAsset(tool, asset, archive, options);
-    const sha = await expectedSha256(tool, asset, options);
-    if (tool.requireAssetSha256 && !/^[a-f0-9]{64}$/.test(String(sha || ""))) {
-      throw new Error(`${tool.name} required sha256 is unavailable`);
+    const privateDestinationRoot = tool.private
+      ? path.dirname(toolDestination(workspace, tool))
+      : "";
+    if (privateDestinationRoot) {
+      fs.mkdirSync(privateDestinationRoot, { recursive: true, mode: 0o700 });
+      fs.chmodSync(privateDestinationRoot, 0o700);
     }
-    const actualSha = fileSha256(archive);
-    if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
-    if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
-    const binary = await extractArchiveBinary(workspace, cacheDir, archive, tool);
-    const binarySha = fileSha256(binary);
-    if (asset.binarySha256 && binarySha !== asset.binarySha256) {
-      fs.rmSync(binary, { force: true });
-      throw new Error(`${tool.name} binary sha256 mismatch`);
+    const privateCache = tool.private
+      ? fs.mkdtempSync(path.join(privateDestinationRoot, ".private-install-"))
+      : "";
+    if (privateCache) fs.chmodSync(privateCache, 0o700);
+    const toolCache = privateCache || cacheDir;
+    const archive = path.join(toolCache, assetName(asset));
+    try {
+      if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
+      await downloadAsset(tool, asset, archive, options);
+      if (tool.private) fs.chmodSync(archive, 0o600);
+      const sha = await expectedSha256(tool, asset, options);
+      if (tool.requireAssetSha256 && !/^[a-f0-9]{64}$/.test(String(sha || ""))) {
+        throw new Error(`${tool.name} required sha256 is unavailable`);
+      }
+      const actualSha = fileSha256(archive);
+      if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
+      if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
+      const extracted = await extractArchiveBinary(
+        workspace,
+        toolCache,
+        archive,
+        tool,
+        asset.binarySha256
+      );
+      installedTools[tool.name] = {
+        version: tool.version || "",
+        asset: assetName(asset),
+        sha256: extracted.binarySha256,
+        assetSha256: sha || actualSha,
+        destination: extracted.binary
+      };
+    } finally {
+      if (privateCache) fs.rmSync(privateCache, { recursive: true, force: true });
+      else if (tool.cleanupArchive) fs.rmSync(archive, { force: true });
     }
-    installedTools[tool.name] = {
-      version: tool.version || "",
-      asset: assetName(asset),
-      sha256: binarySha,
-      assetSha256: sha || actualSha,
-      destination: binary
-    };
-    if (tool.cleanupArchive) fs.rmSync(archive, { force: true });
   }
   Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
   return manifest;

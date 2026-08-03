@@ -2,9 +2,8 @@ import { installCommand } from "./commands/install.js";
 import { updateCommand } from "./commands/update.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { versionCommand } from "./commands/version.js";
-import { authCommand } from "./commands/auth.js";
 
-const commands = new Set(["install", "update", "auth", "doctor", "version"]);
+const commands = new Set(["install", "update", "doctor", "version"]);
 
 function parse(argv) {
   const args = argv.slice(2);
@@ -32,26 +31,23 @@ export async function main(argv) {
   const { command, options, unknown } = parse(argv);
   if (command === "install") return installCommand(options);
   if (command === "update") return updateCommand(options);
-  if (command === "auth") return authCommand(options);
   if (command === "doctor") return doctorCommand(options);
   if (command === "version") return versionCommand(options);
-  console.log(`Usage: harness-data <install|update|auth|doctor|version> [options]
+  console.log(`Usage: harness-data <install|update|doctor|version> [options]
 
 Commands:
   install  Install a Harness Data runtime in the current directory
   update   Interactively check and apply runtime, CLI, and wikis updates
-  auth     Configure CAS credentials and refresh access tokens
-  doctor   Diagnose workspace CLI, config, auth, index, and Agent hooks
+  doctor   Diagnose workspace CLI, config, index, and Agent hooks
   version  Print installer, repository, wikis, and manifest versions
 
-Install and auth options:
+Install options:
   --dir PATH                         Runtime directory (default: current directory)
-  --profile NAME                     local-unrestricted or lumi-mvp-required (interactive installs default local)
+  --profile NAME                     local-unrestricted or pi-requester-authorized (default: local-unrestricted)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
-  --wikis-source PATH                Approved Wikis source (required for lumi-mvp-required)
-  --github-token TOKEN               GitHub token for private Release assets
+  --wikis-source PATH                Local Wikis source override (local-unrestricted only)
+  --github-token TOKEN               GitHub token for runtime Release assets
   --metric-cli-path PATH             Optional local qdm-metric-cli executable override
-  --cas-username USERNAME            CAS username (skip interactive prompt)
-  --cas-password PASSWORD            CAS password (skip interactive prompt)`);
+  --sandbox-cli-dir PATH             Linux sandbox CLI directory for cross-platform local installs`);
   if (unknown) process.exitCode = 1;
 }

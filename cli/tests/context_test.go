@@ -364,6 +364,28 @@ func TestClaudeHookMultiMetricDefaultsToMultiSingleMode(t *testing.T) {
 	}
 }
 
+func TestCodexHookMetricCLIDiagnosticHasNoContextReadInstruction(t *testing.T) {
+	root := currentRootWithIndex(t)
+	payload := bytes.NewBufferString(`{"session_id":"diagnostic-version","prompt":"请执行公开 qdm-metric-cli 的 version 命令，并返回实际执行结果和退出状态。不要读取任何文件"}`)
+	ok, output, err := dhcontext.RunClaudeHook(root, payload.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected hook output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, forbidden := range []string{"必须先读取以下 contextFiles", "read all contextFiles", "selectedPlaybooks:"} {
+		if strings.Contains(context, forbidden) {
+			t.Fatalf("diagnostic context contains %q: %s", forbidden, context)
+		}
+	}
+	if !strings.Contains(context, "reason: metric_cli_diagnostic") ||
+		!strings.Contains(context, "Do not read context files") {
+		t.Fatalf("unexpected diagnostic context: %s", context)
+	}
+}
+
 func TestBusinessBrandProductEffectivenessContextSelectsDrillPlaybook(t *testing.T) {
 	t.Skip("legacy business layout assertion; covered by wikis path resolver tests")
 	response, err := dhcontext.Build(currentRootWithIndex(t), "查看昨天的品效情况")

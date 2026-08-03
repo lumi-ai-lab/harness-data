@@ -1,29 +1,56 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/lumi-ai-lab/harness-data/blob/master/bootstrap/authz-config-v1.schema.json",
-  "title": "Harness Data Lumi authorization configuration V1",
+  "title": "Harness Data Pi requester authorization configuration V1",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "version",
     "mode",
     "piVersion",
+    "agentUid",
     "requesterContextDir",
+    "requesterContextWorkspaceId",
+    "requesterContextAgentId",
+    "requesterContextOwnerUid",
+    "requesterContextReaderGid",
     "maxEnvelopeBytes",
     "maxEnvelopeTtlSeconds",
     "clockSkewSeconds",
-    "realIndicatorsCli",
-    "approvedIndicatorCatalog",
+    "realMetricCli",
+    "approvedMetricCatalog",
     "killSwitch",
     "limits"
   ],
   "properties": {
     "version": { "const": 1 },
     "mode": {
-      "enum": ["lumi-mvp-required", "disabled-deny"]
+      "enum": ["pi-requester-authorized", "disabled-deny"]
     },
     "piVersion": { "const": "0.81.1" },
+    "agentUid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
     "requesterContextDir": { "$ref": "#/$defs/absolutePath" },
+    "requesterContextWorkspaceId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\\\u0000]+$",
+      "not": { "enum": [".", ".."] }
+    },
+    "requesterContextAgentId": { "const": "pi" },
+    "requesterContextOwnerUid": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "requesterContextReaderGid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
     "maxEnvelopeBytes": {
       "type": "integer",
       "minimum": 1,
@@ -39,18 +66,17 @@
       "minimum": 0,
       "maximum": 1800
     },
-    "realIndicatorsCli": {
+    "realMetricCli": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "version", "artifactSha256", "configDir"],
+      "required": ["path", "version", "artifactSha256"],
       "properties": {
         "path": { "$ref": "#/$defs/absolutePath" },
-        "version": { "const": "0.0.4" },
-        "artifactSha256": { "$ref": "#/$defs/sha256" },
-        "configDir": { "$ref": "#/$defs/absolutePath" }
+        "version": { "type": "string", "pattern": "^0\\.1\\.[0-9]+$" },
+        "artifactSha256": { "$ref": "#/$defs/sha256" }
       }
     },
-    "approvedIndicatorCatalog": {
+    "approvedMetricCatalog": {
       "type": "object",
       "additionalProperties": false,
       "required": ["path", "sha256"],
@@ -77,7 +103,7 @@
       "additionalProperties": false,
       "required": [
         "maxDateRangeDays",
-        "maxIndicators",
+        "maxMetrics",
         "maxDimensions",
         "defaultPageSize",
         "maxPageSize",
@@ -92,7 +118,7 @@
           "minimum": 1,
           "maximum": 3660
         },
-        "maxIndicators": {
+        "maxMetrics": {
           "type": "integer",
           "minimum": 1,
           "maximum": 1000

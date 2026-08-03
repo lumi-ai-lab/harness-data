@@ -1,0 +1,68 @@
+name: Verify Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character commit SHA to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-release-candidate-${{ inputs.commit_sha }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    name: Approve exact candidate
+    environment: release-candidate
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.candidate.outputs.commit_sha }}
+      version_tag: ${{ steps.candidate.outputs.version_tag }}
+
+    steps:
+      - name: Validate exact commit SHA
+        id: candidate
+        env:
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::commit_sha must be an exact lowercase 40-character Git commit SHA"
+            exit 1
+          fi
+          echo "commit_sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=v0.0.${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.candidate.outputs.commit_sha }}
+          fetch-depth: 1
+
+      - name: Verify checkout identity
+        env:
+          COMMIT_SHA: ${{ steps.candidate.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "${actual}" != "${COMMIT_SHA}" ]]; then
+            echo "::error::candidate checkout mismatch: ${actual} != ${COMMIT_SHA}"
+            exit 1
+          fi
+
+  verify:
+    name: Package and smoke-test candidate
+    needs: approve
+    uses: ./.github/workflows/publish-cli-release.yml
+    with:
+      ref: ${{ needs.approve.outputs.commit_sha }}
+      version_tag: ${{ needs.approve.outputs.version_tag }}
+      verify: true
+      publish: false
+    secrets:
+      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}

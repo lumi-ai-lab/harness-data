@@ -1,0 +1,3146 @@
+{
+  "version": 1,
+  "generatedFrom": "qdm-metric-cli-v0.1.0-contract",
+  "metrics": {
+    "af19CustNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "af19PerCustAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "af19SaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "af19SaleQty": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "af19SaleWeight": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "afcouponProfitAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "afcouponProfitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "afcouponSaleAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "allowanceAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "categoryId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "allowanceProfitAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "articleCenterPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgNogiftOutstockPrice": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgNogiftOutstockPriceNotax": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgOriginalSalePrice": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgOutStockPrice": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgOutStockPriceNotax": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgSalePrice": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "avgStoreReturnPrice": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "balancePayAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "purchaseArticleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19BuyAgainMemberNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19CustNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19OfflineSaleQty": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19PerCustAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19SaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19SalePiece": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "manageAreaId",
+        "storeId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19SaleQty": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19SaleRate": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "bf19SaleWeight": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "buyMemberNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "centralVenderBearGiftAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "centralVenderBearGiftQty": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "cityOperationPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "cityVenderBearGiftAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "cityVenderBearGiftQty": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "companyCostRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "companyPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "comparePriceNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "manageAreaId",
+        "purchaseArticleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "costAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "creditPayAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "purchaseArticleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "custNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "customerPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "customerStoreReturnAmtShop": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "customerStoreReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "customerStoreReturnShopRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "cutTimeReturnAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "purchaseArticleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "discountAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "discountRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "ecOperaeHomePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "ecOperaeStorePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "ecPurchasePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "expectOutToStoreStockAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "fullLinkStoreProfitAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "fullLinkStoreProfitAmtNotax": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "fullLinkStoreProfitNotaxRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "fullLinkStoreProfitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "giftOutStockCostNotax": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "giftOutStockQty": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "giftOutstockWeight": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "highPriceNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "manageAreaId",
+        "purchaseArticleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "hourDiscountAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "hourDiscountRate": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "innovatePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "knowLostAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "knowLostQty": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "knowLostRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "knowLostWeight": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "liveOperationPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "lostAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "lostRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "marketBearCost": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "memberCustNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "newretailDevePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "nonquantityStoreReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "categoryId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "nothingStoreReturnNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "offlineCustNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "offlineHourDiscountRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "offlineMemberCustNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "offlineOriginalPriceSaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "warehouseId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "offlineSaleAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "onlineBearCost": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "onlineMemberCustNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "onlineSaleRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingAf19CustNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingAf19SaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingAf19SaleWeight": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingBf19CustNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingBf19SaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingBf19SalePiece": {
+      "supportedDimensions": [
+        "bizDate",
+        "manageAreaId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingBf19SaleWeight": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingHourDiscountAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingOriginalPriceSaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingPreProfitAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingProfitAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "zoneManagerId",
+        "groupManagerId",
+        "cityId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId",
+        "warehouseId",
+        "dcCityId",
+        "dcManageAreaId",
+        "dcSapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingSaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "spuId",
+        "warehouseId",
+        "dcCityId",
+        "dcManageAreaId",
+        "dcSapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "operatingSaleCostAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "orderArticleNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "orderStoreNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "orderStoreRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "originalPriceSaleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "otherStoreReturnAmtShop": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "otherStoreReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "otherStoreReturnShopRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "outStockArticleNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "outStockCopies": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "outStockCopiesWms": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "outStockStores": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "platformPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "prePriceProfitAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "prePriceProfitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "preProfitAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "preProfitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "premiumAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "purchaseArticleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "priceIndexDenominator": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "manageAreaId",
+        "purchaseArticleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "priceIndexNumerator": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "manageAreaId",
+        "purchaseArticleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "privateLabelPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "privateOperationPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "profitAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "sapAreaId",
+        "sapArea2Id",
+        "spuId",
+        "warehouseId",
+        "zoneManagerId",
+        "dcCityId",
+        "dcManageAreaId",
+        "dcSapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "profitLostAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "manageAreaId",
+        "storeId",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "profitLostRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "profitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "dcCityId",
+        "dcManageAreaId",
+        "dcSapArea2Id",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "promotionAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "promotionDiscountRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "promotionRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "qualityStoreReturnAmtShop": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "qualityStoreReturnShopRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "quantityStoreReturnAmtShop": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "quantityStoreReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "quantityStoreReturnShopRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "quatityStoreReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "receiveAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "sapAreaId",
+        "sapArea2Id",
+        "spuId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "returnArticleNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "returnCustNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "saleAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "sapAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId",
+        "dcCityId",
+        "dcManageAreaId",
+        "dcSapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "saleCostAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "warehouseId"
+      ],
+      "dictionaryRefs": []
+    },
+    "saleModeReturnRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "saleModeSaleDays": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "saleReturnCustomNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "articleId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "sapAreaId",
+        "manageAreaId",
+        "sapArea2Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "salesOperatingStoreDayCount": {
+      "supportedDimensions": [
+        "bizDate",
+        "storeId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "zoneManagerId",
+        "groupManagerId",
+        "cityId",
+        "articleId",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "satisfiedAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "satisfiedNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "satisfiedQty": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmNogiftPromotionRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmPromotionGiftRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmPromotionTotalRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmStoreProfitAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmStoreProfitNotaxRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmStoreProfitProportion": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "scmStoreProfitRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "servicePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "spellinPromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeBearCost": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeCanOrderNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeExamineReturnQty": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeOrderArticleNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeOrderCopies": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeOrderNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeReturnArticleNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeReturnNum": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "categoryId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeReturnRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeReturnShopRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "storeReturnStores": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "stores": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "strategicDevePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "strategicNosalePromoAmt": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "saleMode",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "unknowLostRate": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryId",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "warehouseId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "vendorBearCost": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "categoryLevel1Id",
+        "categoryLevel2Id",
+        "categoryLevel3Id",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "purchaseArticleId",
+        "sapArea2Id",
+        "sapAreaId",
+        "spuId",
+        "storeId",
+        "zoneManagerId"
+      ],
+      "dictionaryRefs": []
+    },
+    "zeroOutStockOrderAmt": {
+      "supportedDimensions": [
+        "bizDate",
+        "warehouseId",
+        "storeId",
+        "articleId",
+        "cityId",
+        "zoneManagerId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapAreaId",
+        "sapArea2Id",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id",
+        "spuId"
+      ],
+      "dictionaryRefs": []
+    },
+    "zeroOutStockOrderNum": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    },
+    "zeroOutStockOrderQty": {
+      "supportedDimensions": [
+        "articleId",
+        "bizDate",
+        "purchaseArticleId",
+        "storeId",
+        "warehouseId",
+        "cityId",
+        "groupManagerId",
+        "manageAreaId",
+        "sapArea2Id",
+        "sapAreaId",
+        "zoneManagerId",
+        "spuId",
+        "categoryId",
+        "categoryLevel3Id",
+        "categoryLevel2Id",
+        "categoryLevel1Id"
+      ],
+      "dictionaryRefs": []
+    }
+  }
+}

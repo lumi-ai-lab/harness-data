@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { binaryName } from "./platform.js";
-import { localUnrestrictedProfile, lumiRequiredProfile, normalizeProfile } from "./profile.js";
+import { localUnrestrictedProfile, normalizeProfile } from "./profile.js";
 
 export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
 export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
@@ -32,9 +32,8 @@ const localMetricInstruction = [
 ].join("\n");
 
 export function qdmCliBinariesForProfile(profile) {
-  return normalizeProfile(profile) === lumiRequiredProfile
-    ? ["data-harness-cli", "qdm-indicators-cli"]
-    : [...qdmCliBinaries];
+  normalizeProfile(profile);
+  return [...qdmCliBinaries];
 }
 
 export function localPathToolNamesForProfile(profile, options = {}) {
@@ -71,15 +70,13 @@ export function writeLocalConfig(workspace, options = {}) {
   if ((fs.existsSync(harness) || fs.existsSync(env)) && !options.overwrite) {
     throw new Error("local config already exists; rerun interactively and confirm overwrite or remove the files");
   }
-  const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
-  if (profile === lumiRequiredProfile) {
-    fs.writeFileSync(harness, `paths:\n  knowledge: wikis\n\ncli:\n  qdm_indicators_cli: ${bin("qdm-indicators-cli")}\n`);
-    fs.writeFileSync(env, `export QDM_INDICATORS_CLI="${bin("qdm-indicators-cli")}"\n`);
-    return;
-  }
-  const metric = path.join("bin", binaryName("qdm-metric-cli")).replaceAll("\\", "/");
-  fs.writeFileSync(harness, "paths:\n  knowledge: wikis\n");
-  fs.writeFileSync(env, `export QDM_METRIC_CLI="${metric}"\n`);
+  const bin = (name) => {
+    const relative = path.join("bin", binaryName(name)).replaceAll("\\", "/");
+    if (profile === "local-unrestricted") return relative;
+    return path.join(workspace, relative).replaceAll("\\", "/");
+  };
+  fs.writeFileSync(harness, `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n`);
+  fs.writeFileSync(env, `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\n`);
 }
 
 export function migrateLegacyLocalAgentInstructions(workspace) {
@@ -149,20 +146,6 @@ export function removeUnselectedAgentLinks(workspace, agent) {
     removed.push(`.${name}`);
   }
   return removed;
-}
-
-export function validateCasConfigDir(dir) {
-  const encrypted = path.join(dir, "credentials.enc");
-  try {
-    if (fs.statSync(encrypted).size > 0) return;
-  } catch {}
-
-  const legacy = path.join(dir, "config.json");
-  try {
-    const config = JSON.parse(fs.readFileSync(legacy, "utf8"));
-    if (config?.cas?.username && config?.cas?.password) return;
-  } catch {}
-  throw new Error(`CAS credentials are missing or invalid in: ${dir}`);
 }
 
 export function linkAgents(workspace, agent) {

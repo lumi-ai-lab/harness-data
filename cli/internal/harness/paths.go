@@ -32,10 +32,7 @@ type PathsConfig struct {
 }
 
 type CLIConfig struct {
-	QDMCmrCLI        string
-	QDMIndicatorsCLI string
-	QDMSQLCLI        string
-	QDMCasCLI        string
+	QDMMetricCLI string
 }
 
 func FindRoot(start string) (string, error) {
@@ -136,14 +133,8 @@ func LoadConfig(root string) (Config, error) {
 			}
 		case "cli":
 			switch key {
-			case "qdm_cmr_cli":
-				cfg.CLI.QDMCmrCLI = value
-			case "qdm_indicators_cli":
-				cfg.CLI.QDMIndicatorsCLI = value
-			case "qdm_sql_cli":
-				cfg.CLI.QDMSQLCLI = value
-			case "qdm_cas_cli":
-				cfg.CLI.QDMCasCLI = value
+			case "qdm_metric_cli":
+				cfg.CLI.QDMMetricCLI = value
 			default:
 				return Config{}, fmt.Errorf("%s: unsupported cli key %q", ConfigRel, key)
 			}

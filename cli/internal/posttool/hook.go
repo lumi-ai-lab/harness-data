@@ -60,7 +60,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return false, Output{}, nil
 	}
-	if payload.ToolName != "Bash" || strings.TrimSpace(payload.ToolInput.Command) == "" {
+	if !isShellTool(payload.ToolName) || strings.TrimSpace(payload.ToolInput.Command) == "" {
 		return false, Output{}, nil
 	}
 	sessionID := payload.SessionID
@@ -81,6 +81,10 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	updated, _ := sessionstate.Load(root, sessionID)
 	recordTemplateDiagnostic(root, sessionID, updated, getReportState(updated, "template"), outcome, templateRel)
 	return true, buildOutput(message), nil
+}
+
+func isShellTool(toolName string) bool {
+	return toolName == "Bash" || toolName == "exec_command"
 }
 
 func InjectTemplate(root, sessionID string) (message, outcome, templateRel string, err error) {
@@ -222,8 +226,8 @@ func isTemplateInjectionCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$|["'])`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$|["'])`).MatchString(normalized)
 }
 
 func isTemplateStageCommand(command string) bool {
@@ -231,8 +235,8 @@ func isTemplateStageCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$|["'])`).MatchString(normalized) ||
+		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$|["'])`).MatchString(normalized)
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {

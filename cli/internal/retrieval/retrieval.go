@@ -122,6 +122,9 @@ func scoreItem(item Item, normalizedQuestion string, queryBigrams, queryTrigrams
 		match.Score = 10000 + float64(termRuneLen*100)
 		return match, true
 	}
+	if isMachineIdentifier(item.Term) {
+		return Match{}, false
+	}
 	if termRuneLen <= 2 {
 		return Match{}, false
 	}
@@ -138,6 +141,28 @@ func scoreItem(item Item, normalizedQuestion string, queryBigrams, queryTrigrams
 	match.MatchType = "fuzzy"
 	match.Score = bigramCoverage*100 + trigramCoverage*80 + float64(len(matchedBigrams))*5 + float64(len(matchedTrigrams))*8 + float64(termRuneLen)
 	return match, true
+}
+
+func isMachineIdentifier(term string) bool {
+	term = strings.TrimSpace(term)
+	if term == "" || strings.ContainsAny(term, " \t\r\n") {
+		return false
+	}
+	hasLetterOrDigit := false
+	for _, r := range term {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLetterOrDigit = true
+		case r >= 'A' && r <= 'Z':
+			hasLetterOrDigit = true
+		case r >= '0' && r <= '9':
+			hasLetterOrDigit = true
+		case r == '_', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return hasLetterOrDigit
 }
 
 func coverage(grams []string, query map[string]bool) ([]string, float64) {

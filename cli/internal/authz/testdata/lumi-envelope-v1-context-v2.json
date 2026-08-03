@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "workspaceId": "sandbox-workspace-demo",
+  "agentId": "pi",
+  "sessionId": "session-demo-001",
+  "issuedAt": "2026-08-03T03:00:00Z",
+  "expiresAt": "2026-08-03T03:30:00Z",
+  "requesterContext": {
+    "version": 2,
+    "requestId": "message-demo-001",
+    "policyRevision": "sha256:56240eb055c533e6a7912d1258a7ed3dd86efdb90f711de7a9d0a860f747321a",
+    "principal": {
+      "channel": "wecom",
+      "botId": "bot-demo-001",
+      "canonicalUserId": "user-demo-allowed",
+      "displayName": "Allowed Demo User"
+    },
+    "audience": {
+      "chatId": "chat-demo-001",
+      "chatType": "group"
+    },
+    "authorization": {
+      "capabilities": [
+        "qdm.metric.query"
+      ],
+      "claims": {
+        "qdm.scope": {
+          "schemaVersion": 1,
+          "manageAreaIds": [
+            "area-demo"
+          ],
+          "dcManageAreaIds": [
+            "dc-area-demo"
+          ],
+          "categoryLevel1Ids": [
+            "category-demo"
+          ]
+        }
+      }
+    }
+  }
+}

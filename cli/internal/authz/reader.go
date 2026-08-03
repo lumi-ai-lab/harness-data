@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +18,8 @@ import (
 var policyRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type readSettings struct {
-	now time.Time
+	now      time.Time
+	agentUID uint32
 }
 
 // ReadOption customizes deterministic time validation in tests and callers.
@@ -32,8 +32,20 @@ func WithNow(now time.Time) ReadOption {
 	}
 }
 
+// WithAgentUID validates the requester-context boundary for the UID that will
+// consume the envelope. Runtime callers normally omit it and use the current
+// effective UID; trusted IPC brokers use the kernel-reported peer UID.
+func WithAgentUID(uid uint32) ReadOption {
+	return func(settings *readSettings) {
+		settings.agentUID = uid
+	}
+}
+
 func resolveReadSettings(options []ReadOption) readSettings {
-	settings := readSettings{now: time.Now().UTC()}
+	settings := readSettings{
+		now:      time.Now().UTC(),
+		agentUID: currentProcessOwnerUID(),
+	}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
@@ -70,21 +82,27 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err != nil {
 		return LoadedEnvelope{}, err
 	}
-	directoryInfo, err := os.Lstat(config.RequesterContextDir)
-	if err != nil || directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
+	settings := resolveReadSettings(options)
+	contextSecurity, err := requesterContextSecurity(config, settings.agentUID)
+	if err != nil {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context trust boundary is unavailable", err)
+	}
+	if err := verifyRequesterContextDirectory(config.RequesterContextDir, contextSecurity, settings.agentUID); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context directory is unavailable", err)
 	}
 	path := filepath.Join(config.RequesterContextDir, filename)
-	data, _, err := readRegularFile(path, config.MaxEnvelopeBytes)
+	data, info, err := readRegularFile(path, config.MaxEnvelopeBytes)
 	if err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file cannot be read safely", err)
+	}
+	if err := verifyRequesterContextFile(info, contextSecurity); err != nil {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file permissions are invalid", err)
 	}
 	var envelope Envelope
 	if err := decodeStrictJSON(data, &envelope); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context envelope is invalid", err)
 	}
-	settings := resolveReadSettings(options)
-	if err := validateEnvelope(config, envelope, sessionID, settings.now); err != nil {
+	if err := validateEnvelope(config, &envelope, sessionID, settings.now); err != nil {
 		return LoadedEnvelope{}, err
 	}
 	fingerprint, err := ContextFingerprint(envelope.RequesterContext)
@@ -98,23 +116,21 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	}, nil
 }
 
-func validateEnvelope(config Config, envelope Envelope, expectedSessionID string, now time.Time) error {
+func validateEnvelope(config Config, envelope *Envelope, expectedSessionID string, now time.Time) error {
 	invalid := func(message string) error {
 		return authzError(CodeRequesterContextInvalid, message, nil)
 	}
-	if envelope.Version != CurrentVersion {
+	if envelope.Version != CurrentEnvelopeVersion {
 		return invalid("requester context envelope version must be 1")
 	}
 	if envelope.SessionID != expectedSessionID {
 		return invalid("requester context session does not match")
 	}
-	for name, value := range map[string]string{
-		"workspaceId": envelope.WorkspaceID,
-		"agentId":     envelope.AgentID,
-	} {
-		if err := validateRequiredWireString(value); err != nil {
-			return invalid("requester context envelope " + name + " is invalid")
-		}
+	if envelope.WorkspaceID != config.RequesterContextWorkspaceID {
+		return invalid("requester context envelope workspaceId does not match")
+	}
+	if envelope.AgentID != config.RequesterContextAgentID {
+		return invalid("requester context envelope agentId does not match")
 	}
 	// sessionId is an opaque ACP identifier. It must be compared and hashed
 	// byte-for-byte; leading or trailing whitespace is data, not normalization.
@@ -139,15 +155,15 @@ func validateEnvelope(config Config, envelope Envelope, expectedSessionID string
 	if !now.Before(envelope.ExpiresAt) {
 		return authzError(CodeRequesterContextExpired, "requester context envelope has expired", nil)
 	}
-	return validateRequesterContext(envelope.RequesterContext)
+	return validateRequesterContext(&envelope.RequesterContext)
 }
 
-func validateRequesterContext(context RequesterContext) error {
+func validateRequesterContext(context *RequesterContext) error {
 	invalid := func(message string) error {
 		return authzError(CodeRequesterContextInvalid, message, nil)
 	}
-	if context.Version != CurrentVersion {
-		return invalid("requester context version must be 1")
+	if context.Version != CurrentRequesterContextVersion {
+		return invalid("requester context version must be 2")
 	}
 	if context.Principal.Channel != "wecom" {
 		return invalid("requester principal channel must be wecom")
@@ -171,7 +187,7 @@ func validateRequesterContext(context RequesterContext) error {
 		}
 	}
 
-	hasIndicatorsCapability := false
+	hasMetricCapability := false
 	seenCapabilities := make(map[string]struct{}, len(context.Authorization.Capabilities))
 	for _, capability := range context.Authorization.Capabilities {
 		if err := validateRequiredWireString(capability); err != nil {
@@ -181,26 +197,45 @@ func validateRequesterContext(context RequesterContext) error {
 			return invalid("requester context contains a duplicate capability")
 		}
 		seenCapabilities[capability] = struct{}{}
-		if capability == CapabilityIndicatorsQuery {
-			hasIndicatorsCapability = true
+		if capability == CapabilityMetricQuery {
+			hasMetricCapability = true
 		}
 	}
-	if !hasIndicatorsCapability {
-		return authzError(CodeCapabilityDenied, "requester lacks Indicators query capability", nil)
+	if !hasMetricCapability {
+		return authzError(CodeCapabilityDenied, "requester lacks Metric query capability", nil)
 	}
-	if err := validateScopeValues(context.Authorization.Scope.ManageAreaIDs); err != nil {
+	claimPayload, ok := context.Authorization.Claims[ClaimNamespaceQDMScope]
+	if !ok {
+		return invalid("requester context qdm.scope claim is missing")
+	}
+	var claim QDMScopeClaim
+	if err := decodeStrictJSON(claimPayload, &claim); err != nil {
+		return authzError(CodeRequesterContextInvalid, "requester context qdm.scope claim is invalid", err)
+	}
+	if claim.SchemaVersion != CurrentQDMScopeSchemaVersion {
+		return invalid("requester context qdm.scope schema version must be 1")
+	}
+	if err := validateScopeValues(claim.ManageAreaIDs); err != nil {
 		return err
 	}
-	if err := validateScopeValues(context.Authorization.Scope.CategoryLevel1IDs); err != nil {
+	if err := validateScopeValues(claim.DCManageAreaIDs); err != nil {
 		return err
+	}
+	if err := validateScopeValues(claim.CategoryLevel1IDs); err != nil {
+		return err
+	}
+	if len(claim.ManageAreaIDs) == 0 && len(claim.DCManageAreaIDs) == 0 && len(claim.CategoryLevel1IDs) == 0 {
+		return authzError(CodeScopeEmpty, "requester authorization scope is empty", nil)
+	}
+	context.Authorization.Scope = Scope{
+		ManageAreaIDs:     append([]string(nil), claim.ManageAreaIDs...),
+		DCManageAreaIDs:   append([]string(nil), claim.DCManageAreaIDs...),
+		CategoryLevel1IDs: append([]string(nil), claim.CategoryLevel1IDs...),
 	}
 	return nil
 }
 
 func validateScopeValues(values []string) error {
-	if len(values) == 0 {
-		return authzError(CodeScopeEmpty, "requester authorization scope is empty", nil)
-	}
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		if err := validateRequiredWireString(value); err != nil || strings.ContainsAny(value, ",*") {
@@ -233,9 +268,9 @@ func validateOptionalWireString(value string) error {
 	return nil
 }
 
-// ContextFingerprint returns SHA-256(JCS(typed RequesterContext V1)).
+// ContextFingerprint returns SHA-256(JCS(typed RequesterContext V2)).
 func ContextFingerprint(context RequesterContext) (string, error) {
-	if err := validateRequesterContext(context); err != nil {
+	if err := validateRequesterContext(&context); err != nil {
 		return "", err
 	}
 	canonical, err := canonicalJSON(context)

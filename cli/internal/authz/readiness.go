@@ -15,17 +15,15 @@ import (
 	"runtime"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"harness-data/cli/internal/harness"
 )
 
 const (
-	maxCredentialConfigBytes int64 = 1 << 20
-	maxInstallerStateBytes   int64 = 1 << 20
-	maxCLIManifestBytes      int64 = 1 << 20
-	maxHarnessConfigBytes    int64 = 1 << 20
+	maxInstallerStateBytes int64 = 1 << 20
+	maxCLIManifestBytes    int64 = 1 << 20
+	maxHarnessConfigBytes  int64 = 1 << 20
+	maxAgentConfigBytes    int64 = 1 << 20
 )
 
 var envExportPattern = regexp.MustCompile(`^export[\t ]+([A-Z0-9_]+)="([^"\r\n]*)"[\t ]*$`)
@@ -56,32 +54,35 @@ type installerTool struct {
 }
 
 type installerReleaseSet struct {
-	Key                   string `json:"key"`
-	Version               string `json:"version"`
-	SHA256                string `json:"sha256"`
-	FacadeVersion         string `json:"facadeVersion"`
-	FacadeSHA256          string `json:"facadeSha256"`
-	RealIndicatorsVersion string `json:"realIndicatorsVersion"`
-	RealIndicatorsSHA256  string `json:"realIndicatorsSha256"`
-	CatalogSHA256         string `json:"catalogSha256"`
-	AuthzSchemaVersion    int    `json:"authzSchemaVersion"`
-	PiVersion             string `json:"piVersion"`
+	Key                 string `json:"key"`
+	Platform            string `json:"platform"`
+	Version             string `json:"version"`
+	SHA256              string `json:"sha256"`
+	PublicMetricVersion string `json:"publicMetricVersion"`
+	PublicMetricSHA256  string `json:"publicMetricSha256"`
+	RealMetricVersion   string `json:"realMetricVersion"`
+	RealMetricSHA256    string `json:"realMetricSha256"`
+	CatalogSHA256       string `json:"catalogSha256"`
+	AuthzSchemaVersion  int    `json:"authzSchemaVersion"`
+	PiVersion           string `json:"piVersion"`
 }
 
 type releaseSetDigestInput struct {
-	Version               string `json:"version"`
-	FacadeVersion         string `json:"facadeVersion"`
-	FacadeSHA256          string `json:"facadeSha256"`
-	RealIndicatorsVersion string `json:"realIndicatorsVersion"`
-	RealIndicatorsSHA256  string `json:"realIndicatorsSha256"`
-	CatalogSHA256         string `json:"catalogSha256"`
-	AuthzSchemaVersion    int    `json:"authzSchemaVersion"`
-	PiVersion             string `json:"piVersion"`
+	Platform            string `json:"platform"`
+	Version             string `json:"version"`
+	PublicMetricVersion string `json:"publicMetricVersion"`
+	PublicMetricSHA256  string `json:"publicMetricSha256"`
+	RealMetricVersion   string `json:"realMetricVersion"`
+	RealMetricSHA256    string `json:"realMetricSha256"`
+	CatalogSHA256       string `json:"catalogSha256"`
+	AuthzSchemaVersion  int    `json:"authzSchemaVersion"`
+	PiVersion           string `json:"piVersion"`
 }
 
-type indicatorsCredentialConfig struct {
-	Token          string `json:"token"`
-	TimeoutSeconds int    `json:"timeoutSeconds"`
+type piAgentSettings struct {
+	EnableSkillCommands bool     `json:"enableSkillCommands"`
+	Extensions          []string `json:"extensions"`
+	Skills              []string `json:"skills"`
 }
 
 // CheckReadiness verifies the complete runtime authorization deployment. Its
@@ -119,6 +120,14 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 		return report, err
 	}
 	security := FileSecurityOptions{ExpectedOwnerUID: options.ExpectedOwnerUID}
+	agentUID := *config.AgentUID
+	if options.AgentUID != nil {
+		agentUID = *options.AgentUID
+	}
+	requesterContextSecurity, err := requesterContextSecurity(config, agentUID)
+	if err != nil {
+		return report, authzError(CodeConfigInvalid, "requester context trust boundary is invalid", err)
+	}
 
 	if err := VerifySecureRegularFile(configPath, security); err != nil {
 		return report, authzError(CodeConfigInvalid, "authorization config ownership or permissions are invalid", err)
@@ -130,73 +139,60 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 	if agentPath == "" {
 		agentPath = os.Getenv("PATH")
 	}
-	if pathListContainsDirectory(agentPath, filepath.Dir(config.RealIndicatorsCLI.Path)) {
-		return report, authzError(CodeConfigInvalid, "private Indicators CLI directory must not be in PATH", nil)
+	if pathListContainsDirectory(agentPath, filepath.Dir(config.RealMetricCLI.Path)) {
+		return report, authzError(CodeConfigInvalid, "private Metric CLI directory must not be in PATH", nil)
 	}
-	state, err := readAndValidateInstallerState(paths.installerState, paths.cliManifest, paths.runtimeRoot, paths.publicFacade, configPath, config, security)
+	state, err := readAndValidateInstallerState(paths.installerState, paths.cliManifest, paths.runtimeRoot, paths.publicMetricCLI, configPath, config, security)
 	if err != nil {
 		return report, err
 	}
-	if err := verifyFacadeAndRuntimeConfig(paths, state, security); err != nil {
+	if err := verifySelectedAgentDeployment(paths.runtimeRoot, state.Agent, security); err != nil {
 		return report, err
 	}
-	if err := VerifySecureDirectory(config.RequesterContextDir, FileSecurityOptions{
+	if err := verifyMetricRuntimeConfig(paths, state, security); err != nil {
+		return report, err
+	}
+	if err := verifyRequesterContextDirectory(config.RequesterContextDir, requesterContextSecurity, agentUID); err != nil {
+		return report, authzError(CodeConfigInvalid, "requester context directory ownership or permissions are invalid", err)
+	}
+	realArtifact, err := VerifyArtifact(config.RealMetricCLI.Path, config.RealMetricCLI.ArtifactSHA256, true)
+	if err != nil {
+		return report, err
+	}
+	if same, err := sameRegularFile(paths.publicMetricCLI, config.RealMetricCLI.Path); err != nil || same {
+		return report, authzError(CodeArtifactIntegrityFailed, "public Metric CLI and real Metric CLI are not safely separated", err)
+	}
+	if err := VerifySecureRegularFile(config.RealMetricCLI.Path, FileSecurityOptions{
+		ExpectedOwnerUID:  options.ExpectedOwnerUID,
+		RequireExecutable: true,
+		Private:           true,
+	}); err != nil {
+		return report, authzError(CodeArtifactIntegrityFailed, "real Metric CLI ownership or permissions are invalid", err)
+	}
+	if err := VerifySecureDirectory(filepath.Dir(config.RealMetricCLI.Path), FileSecurityOptions{
 		ExpectedOwnerUID: options.ExpectedOwnerUID,
 		Private:          true,
 	}); err != nil {
-		return report, authzError(CodeConfigInvalid, "requester context directory ownership or permissions are invalid", err)
+		return report, authzError(CodeArtifactIntegrityFailed, "real Metric CLI directory ownership or permissions are invalid", err)
 	}
-	realArtifact, err := VerifyArtifact(config.RealIndicatorsCLI.Path, config.RealIndicatorsCLI.ArtifactSHA256, true)
-	if err != nil {
+	if _, err := VerifyArtifact(config.ApprovedMetricCatalog.Path, config.ApprovedMetricCatalog.SHA256, false); err != nil {
 		return report, err
 	}
-	if same, err := sameRegularFile(paths.publicFacade, config.RealIndicatorsCLI.Path); err != nil || same {
-		return report, authzError(CodeArtifactIntegrityFailed, "public Facade and real Indicators CLI are not safely separated", err)
-	}
-	if err := VerifySecureRegularFile(config.RealIndicatorsCLI.Path, FileSecurityOptions{
-		ExpectedOwnerUID:  options.ExpectedOwnerUID,
-		RequireExecutable: true,
-	}); err != nil {
-		return report, authzError(CodeArtifactIntegrityFailed, "real Indicators CLI ownership or permissions are invalid", err)
-	}
-	if _, err := VerifyArtifact(config.ApprovedIndicatorCatalog.Path, config.ApprovedIndicatorCatalog.SHA256, false); err != nil {
+	if _, err := LoadMetricCatalog(config.ApprovedMetricCatalog.Path, config.ApprovedMetricCatalog.SHA256); err != nil {
 		return report, err
 	}
-	if _, err := LoadIndicatorCatalog(config.ApprovedIndicatorCatalog.Path, config.ApprovedIndicatorCatalog.SHA256); err != nil {
-		return report, err
+	if err := VerifySecureRegularFile(config.ApprovedMetricCatalog.Path, security); err != nil {
+		return report, authzError(CodeArtifactIntegrityFailed, "approved metric catalog ownership or permissions are invalid", err)
 	}
-	if err := VerifySecureRegularFile(config.ApprovedIndicatorCatalog.Path, security); err != nil {
-		return report, authzError(CodeArtifactIntegrityFailed, "approved indicator catalog ownership or permissions are invalid", err)
-	}
-	if err := validateAgentVisiblePATH(agentPath, paths.publicFacade, config.RealIndicatorsCLI.ArtifactSHA256, realArtifact.Size); err != nil {
+	if err := validateAgentVisiblePATH(agentPath, paths.publicMetricCLI, config.RealMetricCLI.ArtifactSHA256, realArtifact.Size); err != nil {
 		return report, authzError(CodeConfigInvalid, "Agent-visible PATH exposes a forbidden data CLI", err)
 	}
 	agentEnvironment := options.AgentEnvironment
 	if agentEnvironment == nil {
 		agentEnvironment = os.Environ()
 	}
-	if err := validateAgentCLIEnvironment(agentEnvironment, paths.publicFacade); err != nil {
+	if err := validateAgentCLIEnvironment(agentEnvironment, paths.publicMetricCLI); err != nil {
 		return report, authzError(CodeConfigInvalid, "Agent-visible data CLI environment is invalid", err)
-	}
-	if err := VerifySecureDirectory(config.RealIndicatorsCLI.ConfigDir, FileSecurityOptions{
-		ExpectedOwnerUID: options.ExpectedOwnerUID,
-		Private:          true,
-	}); err != nil {
-		return report, authzError(CodeConfigInvalid, "Indicators credential directory ownership or permissions are invalid", err)
-	}
-	credentialPath := filepath.Join(config.RealIndicatorsCLI.ConfigDir, "config.json")
-	credentialData, _, err := readRegularFile(credentialPath, maxCredentialConfigBytes)
-	if err != nil || len(credentialData) == 0 {
-		return report, authzError(CodeConfigInvalid, "Indicators credential config cannot be read safely", err)
-	}
-	if err := validateIndicatorsCredentialConfig(credentialData); err != nil {
-		return report, authzError(CodeConfigInvalid, "Indicators credential config is invalid", err)
-	}
-	if err := VerifySecureRegularFile(credentialPath, FileSecurityOptions{
-		ExpectedOwnerUID: options.ExpectedOwnerUID,
-		Private:          true,
-	}); err != nil {
-		return report, authzError(CodeConfigInvalid, "Indicators credential config ownership or permissions are invalid", err)
 	}
 	if err := VerifySecureDirectory(filepath.Dir(config.KillSwitch.ControlPath), security); err != nil {
 		return report, authzError(CodeKillSwitchActive, "authorization control directory ownership or permissions are invalid", err)
@@ -231,12 +227,12 @@ func pathListContainsDirectory(pathList, target string) bool {
 	return false
 }
 
-func validateAgentVisiblePATH(pathList, publicFacade, realIndicatorsSHA string, realIndicatorsSize int64) error {
+func validateAgentVisiblePATH(pathList, publicMetricCLI, realMetricSHA string, realMetricSize int64) error {
 	if pathList == "" {
 		return fmt.Errorf("PATH is empty")
 	}
 	seenDirectories := make(map[string]struct{})
-	publicFacadeFound := false
+	publicMetricCLIFound := false
 	for _, entry := range filepath.SplitList(pathList) {
 		if entry == "" || !filepath.IsAbs(entry) || filepath.Clean(entry) != entry {
 			return fmt.Errorf("PATH contains an empty, relative, or unclean directory")
@@ -256,6 +252,9 @@ func validateAgentVisiblePATH(pathList, publicFacade, realIndicatorsSHA string, 
 			candidatePath := filepath.Join(entry, candidate.Name())
 			info, err := os.Stat(candidatePath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
 				return fmt.Errorf("cannot inspect PATH entry: %w", err)
 			}
 			if !info.Mode().IsRegular() || !isExecutableMode(info.Mode(), candidate.Name()) {
@@ -268,32 +267,32 @@ func validateAgentVisiblePATH(pathList, publicFacade, realIndicatorsSHA string, 
 			switch name {
 			case "qdm-cmr-cli", "qdm-sql-cli", "cas-cli":
 				return fmt.Errorf("forbidden CLI %q is executable", candidate.Name())
-			case "qdm-indicators-cli":
-				same, sameErr := sameRegularFile(candidatePath, publicFacade)
+			case "qdm-metric-cli":
+				same, sameErr := sameRegularFile(candidatePath, publicMetricCLI)
 				if sameErr != nil || !same {
-					return fmt.Errorf("an Indicators CLI other than the public Facade is executable")
+					return fmt.Errorf("a Metric CLI other than the public Metric CLI is executable")
 				}
-				publicFacadeFound = true
+				publicMetricCLIFound = true
 			}
-			if info.Size() == realIndicatorsSize {
+			if info.Size() == realMetricSize {
 				digest, digestErr := digestVisibleFile(candidatePath)
 				if digestErr != nil {
 					return fmt.Errorf("cannot hash PATH executable: %w", digestErr)
 				}
-				if digest == realIndicatorsSHA {
-					return fmt.Errorf("a copy of the private Indicators CLI is executable from PATH")
+				if digest == realMetricSHA {
+					return fmt.Errorf("a copy of the private Metric CLI is executable from PATH")
 				}
 			}
 		}
 	}
-	if !publicFacadeFound {
-		return fmt.Errorf("the public Indicators Facade is not executable from PATH")
+	if !publicMetricCLIFound {
+		return fmt.Errorf("the public Metric CLI is not executable from PATH")
 	}
 	return nil
 }
 
-func validateAgentCLIEnvironment(environment []string, publicFacade string) error {
-	const facadeVariable = "QDM_INDICATORS_CLI"
+func validateAgentCLIEnvironment(environment []string, publicMetricCLI string) error {
+	const metricCLIEnv = "QDM_METRIC_CLI"
 	forbidden := map[string]struct{}{
 		"QDM_CMR_CLI":        {},
 		"QDM_SQL_CLI":        {},
@@ -303,10 +302,10 @@ func validateAgentCLIEnvironment(environment []string, publicFacade string) erro
 	values := make(map[string]string, len(forbidden)+1)
 	for _, entry := range environment {
 		name, value, ok := strings.Cut(entry, "=")
-		if !ok && entry == facadeVariable {
+		if !ok && entry == metricCLIEnv {
 			name = entry
 		}
-		if name != facadeVariable {
+		if name != metricCLIEnv {
 			if _, tracked := forbidden[name]; !tracked {
 				continue
 			}
@@ -316,8 +315,8 @@ func validateAgentCLIEnvironment(environment []string, publicFacade string) erro
 		}
 		values[name] = value
 	}
-	if values[facadeVariable] != publicFacade {
-		return fmt.Errorf("%s must point to the public Indicators Facade", facadeVariable)
+	if values[metricCLIEnv] != publicMetricCLI {
+		return fmt.Errorf("%s must point to the public Metric CLI", metricCLIEnv)
 	}
 	for name := range forbidden {
 		if values[name] != "" {
@@ -347,32 +346,13 @@ func digestVisibleFile(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func validateIndicatorsCredentialConfig(data []byte) error {
-	var config indicatorsCredentialConfig
-	if err := decodeStrictJSON(data, &config); err != nil {
-		return err
-	}
-	if config.Token == "" || config.Token != strings.TrimSpace(config.Token) || len(config.Token) > 64<<10 || !utf8.ValidString(config.Token) {
-		return fmt.Errorf("credential token is missing or malformed")
-	}
-	for _, r := range config.Token {
-		if r == 0 || unicode.IsControl(r) {
-			return fmt.Errorf("credential token contains a control character")
-		}
-	}
-	if config.TimeoutSeconds < 0 || config.TimeoutSeconds > 3600 {
-		return fmt.Errorf("credential timeout is outside the supported range")
-	}
-	return nil
-}
-
 type readinessPaths struct {
-	runtimeRoot    string
-	installerState string
-	cliManifest    string
-	publicFacade   string
-	harnessConfig  string
-	cliPathsEnv    string
+	runtimeRoot     string
+	installerState  string
+	cliManifest     string
+	publicMetricCLI string
+	harnessConfig   string
+	cliPathsEnv     string
 }
 
 func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
@@ -384,18 +364,18 @@ func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
 		return readinessPaths{}, authzError(CodeConfigInvalid, "Harness runtime root is invalid", err)
 	}
 	resolved := readinessPaths{
-		runtimeRoot:    root,
-		installerState: options.InstallerStatePath,
-		cliManifest:    filepath.Join(root, "bootstrap", "cli-manifest.json"),
-		publicFacade:   options.PublicFacadePath,
-		harnessConfig:  options.HarnessConfigPath,
-		cliPathsEnv:    options.CLIPathsEnvPath,
+		runtimeRoot:     root,
+		installerState:  options.InstallerStatePath,
+		cliManifest:     filepath.Join(root, "bootstrap", "cli-manifest.json"),
+		publicMetricCLI: options.PublicMetricCLIPath,
+		harnessConfig:   options.HarnessConfigPath,
+		cliPathsEnv:     options.CLIPathsEnvPath,
 	}
 	if resolved.installerState == "" {
 		resolved.installerState = filepath.Join(root, ".harness", "installer-state.json")
 	}
-	if resolved.publicFacade == "" {
-		resolved.publicFacade = filepath.Join(root, "bin", "qdm-indicators-cli")
+	if resolved.publicMetricCLI == "" {
+		resolved.publicMetricCLI = filepath.Join(root, "bin", "qdm-metric-cli")
 	}
 	if resolved.harnessConfig == "" {
 		resolved.harnessConfig = filepath.Join(root, harness.ConfigRel)
@@ -403,7 +383,7 @@ func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
 	if resolved.cliPathsEnv == "" {
 		resolved.cliPathsEnv = filepath.Join(root, "config", "qdm-cli-paths.env")
 	}
-	for _, path := range []string{resolved.installerState, resolved.cliManifest, resolved.publicFacade, resolved.harnessConfig, resolved.cliPathsEnv} {
+	for _, path := range []string{resolved.installerState, resolved.cliManifest, resolved.publicMetricCLI, resolved.harnessConfig, resolved.cliPathsEnv} {
 		if err := validateAbsoluteCleanPath(path); err != nil {
 			return readinessPaths{}, authzError(CodeConfigInvalid, "Harness runtime readiness path is invalid", err)
 		}
@@ -420,14 +400,12 @@ func verifyCriticalRuntimeDirectories(paths readinessPaths, configPath string, c
 		filepath.Join(paths.runtimeRoot, "bin"),
 		filepath.Dir(paths.installerState),
 		filepath.Dir(paths.cliManifest),
-		filepath.Dir(paths.publicFacade),
+		filepath.Dir(paths.publicMetricCLI),
 		filepath.Dir(paths.harnessConfig),
 		filepath.Dir(paths.cliPathsEnv),
 		filepath.Dir(configPath),
-		filepath.Dir(config.RealIndicatorsCLI.Path),
-		filepath.Dir(config.ApprovedIndicatorCatalog.Path),
-		config.RealIndicatorsCLI.ConfigDir,
-		config.RequesterContextDir,
+		filepath.Dir(config.RealMetricCLI.Path),
+		filepath.Dir(config.ApprovedMetricCatalog.Path),
 		filepath.Dir(config.KillSwitch.ControlPath),
 	}
 	seen := make(map[string]struct{}, len(directories))
@@ -443,7 +421,7 @@ func verifyCriticalRuntimeDirectories(paths readinessPaths, configPath string, c
 	return nil
 }
 
-func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade, configPath string, config Config, security FileSecurityOptions) (installerState, error) {
+func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetricCLI, configPath string, config Config, security FileSecurityOptions) (installerState, error) {
 	invalid := func(message string, err error) (installerState, error) {
 		return installerState{}, authzError(CodeConfigInvalid, message, err)
 	}
@@ -458,7 +436,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 	if err := decodeInstallerStateJSON(data, &state); err != nil {
 		return invalid("installer state is invalid", err)
 	}
-	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || state.Agent != "pi" {
+	if state.SchemaVersion != 3 || state.Profile != ModePiRequesterAuthorized || state.Agent != "pi" {
 		return invalid("installer state profile is inconsistent", nil)
 	}
 	updatedAt, updatedErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)
@@ -488,13 +466,14 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 	}
 	release := state.ReleaseSet
 	if err := validateRequiredWireString(release.Key); err != nil ||
+		release.Platform != currentPlatformKey() ||
 		validateRequiredWireString(release.Version) != nil ||
-		validateRequiredWireString(release.FacadeVersion) != nil ||
+		validateRequiredWireString(release.PublicMetricVersion) != nil ||
 		!lowercaseSHA256Pattern.MatchString(release.SHA256) ||
-		!lowercaseSHA256Pattern.MatchString(release.FacadeSHA256) ||
-		release.RealIndicatorsVersion != "v0.0.4" ||
-		release.RealIndicatorsSHA256 != config.RealIndicatorsCLI.ArtifactSHA256 ||
-		release.CatalogSHA256 != config.ApprovedIndicatorCatalog.SHA256 ||
+		!lowercaseSHA256Pattern.MatchString(release.PublicMetricSHA256) ||
+		release.RealMetricVersion != "v"+config.RealMetricCLI.Version ||
+		release.RealMetricSHA256 != config.RealMetricCLI.ArtifactSHA256 ||
+		release.CatalogSHA256 != config.ApprovedMetricCatalog.SHA256 ||
 		release.AuthzSchemaVersion != config.Version ||
 		release.PiVersion != config.PiVersion {
 		return invalid("installer release-set is inconsistent", err)
@@ -503,13 +482,13 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 	if err != nil || expectedReleaseDigest != release.SHA256 {
 		return invalid("installer release-set digest is inconsistent", err)
 	}
-	facade, ok := state.Tools["qdm-indicators-facade"]
-	if !ok || !validInstallerTool(facade) || facade.Version != release.FacadeVersion || facade.SHA256 != release.FacadeSHA256 || facade.Destination != publicFacade {
-		return invalid("installed Indicators Facade state is inconsistent", nil)
+	publicMetricTool, ok := state.Tools["qdm-metric-cli"]
+	if !ok || !validInstallerTool(publicMetricTool) || publicMetricTool.Version != release.PublicMetricVersion || publicMetricTool.SHA256 != release.PublicMetricSHA256 || publicMetricTool.Destination != publicMetricCLI {
+		return invalid("installed Metric CLI state is inconsistent", nil)
 	}
-	real, ok := state.Tools["qdm-indicators-cli-real"]
-	if !ok || !validInstallerTool(real) || real.Version != release.RealIndicatorsVersion || real.SHA256 != release.RealIndicatorsSHA256 || real.Destination != config.RealIndicatorsCLI.Path {
-		return invalid("installed real Indicators CLI state is inconsistent", nil)
+	real, ok := state.Tools["qdm-metric-cli-real"]
+	if !ok || !validInstallerTool(real) || real.Version != release.RealMetricVersion || real.SHA256 != release.RealMetricSHA256 || real.Destination != config.RealMetricCLI.Path {
+		return invalid("installed real Metric CLI state is inconsistent", nil)
 	}
 	helper, ok := state.Tools["data-harness-cli"]
 	helperPath := filepath.Join(runtimeRoot, "bin", executableName("data-harness-cli"))
@@ -517,6 +496,60 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicFacade
 		return invalid("installed Harness helper state is inconsistent", nil)
 	}
 	return state, nil
+}
+
+func verifySelectedAgentDeployment(runtimeRoot, agent string, security FileSecurityOptions) error {
+	if agent != "pi" {
+		return authzError(CodeConfigInvalid, "selected Agent deployment is unsupported", nil)
+	}
+	source := filepath.Join(runtimeRoot, "agents", "pi")
+	target := filepath.Join(runtimeRoot, ".pi")
+	if err := VerifySecureDirectory(filepath.Join(runtimeRoot, "agents"), security); err != nil {
+		return authzError(CodeConfigInvalid, "Agent template root ownership or permissions are invalid", err)
+	}
+	if err := VerifySecureDirectory(source, security); err != nil {
+		return authzError(CodeConfigInvalid, "selected Agent template ownership or permissions are invalid", err)
+	}
+	targetInfo, err := os.Lstat(target)
+	if err != nil || targetInfo.Mode()&os.ModeSymlink == 0 {
+		return authzError(CodeConfigInvalid, "selected Agent deployment link is missing or invalid", err)
+	}
+	resolvedSource, sourceErr := filepath.EvalSymlinks(source)
+	resolvedTarget, targetErr := filepath.EvalSymlinks(target)
+	if sourceErr != nil || targetErr != nil || filepath.Clean(resolvedSource) != filepath.Clean(resolvedTarget) {
+		return authzError(
+			CodeConfigInvalid,
+			"selected Agent deployment link does not resolve to its template",
+			firstNonNil(sourceErr, targetErr),
+		)
+	}
+	for _, relative := range []string{"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")} {
+		path := filepath.Join(source, relative)
+		if err := VerifySecureRegularFile(path, security); err != nil {
+			return authzError(CodeConfigInvalid, "selected Agent deployment is incomplete or insecure", err)
+		}
+	}
+	if err := validateSelectedAgentConfig(source); err != nil {
+		return authzError(CodeConfigInvalid, "selected Agent authorization Hook config is invalid", err)
+	}
+	return nil
+}
+
+func validateSelectedAgentConfig(source string) error {
+	data, _, err := readRegularFile(filepath.Join(source, "settings.json"), maxAgentConfigBytes)
+	if err != nil {
+		return err
+	}
+	var settings piAgentSettings
+	if err := decodeStrictJSON(data, &settings); err != nil {
+		return err
+	}
+	if !settings.EnableSkillCommands ||
+		len(settings.Extensions) != 1 || settings.Extensions[0] != ".pi/extensions/qdm-harness/index.ts" ||
+		len(settings.Skills) != 1 || settings.Skills[0] != ".pi/skills" {
+		return fmt.Errorf("Pi extension settings do not match the authorization contract")
+	}
+	return nil
 }
 
 func validInstallerTool(tool installerTool) bool {
@@ -549,14 +582,15 @@ func decodeInstallerStateJSON(data []byte, target *installerState) error {
 
 func installerReleaseSetDigest(release installerReleaseSet) (string, error) {
 	input := releaseSetDigestInput{
-		Version:               release.Version,
-		FacadeVersion:         release.FacadeVersion,
-		FacadeSHA256:          release.FacadeSHA256,
-		RealIndicatorsVersion: release.RealIndicatorsVersion,
-		RealIndicatorsSHA256:  release.RealIndicatorsSHA256,
-		CatalogSHA256:         release.CatalogSHA256,
-		AuthzSchemaVersion:    release.AuthzSchemaVersion,
-		PiVersion:             release.PiVersion,
+		Platform:            release.Platform,
+		Version:             release.Version,
+		PublicMetricVersion: release.PublicMetricVersion,
+		PublicMetricSHA256:  release.PublicMetricSHA256,
+		RealMetricVersion:   release.RealMetricVersion,
+		RealMetricSHA256:    release.RealMetricSHA256,
+		CatalogSHA256:       release.CatalogSHA256,
+		AuthzSchemaVersion:  release.AuthzSchemaVersion,
+		PiVersion:           release.PiVersion,
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {
@@ -566,19 +600,23 @@ func installerReleaseSetDigest(release installerReleaseSet) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func verifyFacadeAndRuntimeConfig(paths readinessPaths, state installerState, security FileSecurityOptions) error {
+func currentPlatformKey() string {
+	return runtime.GOOS + "-" + runtime.GOARCH
+}
+
+func verifyMetricRuntimeConfig(paths readinessPaths, state installerState, security FileSecurityOptions) error {
 	release := state.ReleaseSet
-	if _, err := VerifyArtifact(paths.publicFacade, release.FacadeSHA256, true); err != nil {
+	if _, err := VerifyArtifact(paths.publicMetricCLI, release.PublicMetricSHA256, true); err != nil {
 		return err
 	}
-	if err := VerifySecureRegularFile(paths.publicFacade, FileSecurityOptions{
+	if err := VerifySecureRegularFile(paths.publicMetricCLI, FileSecurityOptions{
 		ExpectedOwnerUID:  security.ExpectedOwnerUID,
 		RequireExecutable: true,
 	}); err != nil {
-		return authzError(CodeArtifactIntegrityFailed, "Indicators Facade ownership or permissions are invalid", err)
+		return authzError(CodeArtifactIntegrityFailed, "Metric CLI ownership or permissions are invalid", err)
 	}
 	for _, directory := range []string{
-		filepath.Dir(paths.publicFacade), filepath.Dir(state.Tools["data-harness-cli"].Destination),
+		filepath.Dir(paths.publicMetricCLI), filepath.Dir(state.Tools["data-harness-cli"].Destination),
 	} {
 		if err := VerifySecureDirectory(directory, security); err != nil {
 			return authzError(CodeConfigInvalid, "Harness executable directory ownership or permissions are invalid", err)
@@ -597,15 +635,14 @@ func verifyFacadeAndRuntimeConfig(paths readinessPaths, state installerState, se
 		return authzError(CodeConfigInvalid, "Harness config ownership or permissions are invalid", err)
 	}
 	rootConfig, err := harness.LoadConfig(paths.runtimeRoot)
-	if err != nil || rootConfig.CLI.QDMIndicatorsCLI != paths.publicFacade ||
-		rootConfig.CLI.QDMCmrCLI != "" || rootConfig.CLI.QDMSQLCLI != "" || rootConfig.CLI.QDMCasCLI != "" {
-		return authzError(CodeConfigInvalid, "Harness CLI config does not select only the public Indicators Facade", err)
+	if err != nil || rootConfig.CLI.QDMMetricCLI != paths.publicMetricCLI {
+		return authzError(CodeConfigInvalid, "Harness CLI config does not select only the public Metric CLI", err)
 	}
 	if err := VerifySecureRegularFile(paths.cliPathsEnv, security); err != nil {
 		return authzError(CodeConfigInvalid, "Harness CLI environment config ownership or permissions are invalid", err)
 	}
-	if err := validateCLIPathsEnv(paths.cliPathsEnv, paths.publicFacade); err != nil {
-		return authzError(CodeConfigInvalid, "Harness CLI environment config does not select only the public Indicators Facade", err)
+	if err := validateCLIPathsEnv(paths.cliPathsEnv, paths.publicMetricCLI); err != nil {
+		return authzError(CodeConfigInvalid, "Harness CLI environment config does not select only the public Metric CLI", err)
 	}
 	for _, name := range []string{"qdm-cmr-cli", "qdm-sql-cli", "cas-cli"} {
 		path := filepath.Join(paths.runtimeRoot, "bin", executableName(name))
@@ -616,7 +653,7 @@ func verifyFacadeAndRuntimeConfig(paths readinessPaths, state installerState, se
 	return nil
 }
 
-func validateCLIPathsEnv(path, expectedFacade string) error {
+func validateCLIPathsEnv(path, expectedMetricCLI string) error {
 	data, _, err := readRegularFile(path, maxHarnessConfigBytes)
 	if err != nil {
 		return err
@@ -640,7 +677,7 @@ func validateCLIPathsEnv(path, expectedFacade string) error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	if len(values) != 1 || values["QDM_INDICATORS_CLI"] != expectedFacade {
+	if len(values) != 1 || values["QDM_METRIC_CLI"] != expectedMetricCLI {
 		return fmt.Errorf("environment config path mismatch")
 	}
 	return nil
@@ -661,6 +698,9 @@ func VerifySecureRegularFile(path string, options FileSecurityOptions) error {
 		return fmt.Errorf("file is not executable")
 	}
 	if err := checkOwner(info, expectedOwnerUID(options.ExpectedOwnerUID)); err != nil {
+		return err
+	}
+	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
 		return err
 	}
 	if info.Mode().Perm()&0o022 != 0 {
@@ -691,6 +731,9 @@ func VerifySecureDirectory(path string, options FileSecurityOptions) error {
 	if err := checkOwner(info, expectedOwnerUID(options.ExpectedOwnerUID)); err != nil {
 		return err
 	}
+	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
+		return err
+	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("directory is group or world writable")
 	}
@@ -711,6 +754,20 @@ func checkOwner(info fs.FileInfo, expected uint32) error {
 	owner, available := fileOwnerUID(info)
 	if available && owner != expected {
 		return fmt.Errorf("owner does not match")
+	}
+	return nil
+}
+
+func checkGroup(info fs.FileInfo, expected *uint32) error {
+	if expected == nil {
+		return nil
+	}
+	group, available := fileGroupGID(info)
+	if !available {
+		return fmt.Errorf("group ownership is unavailable")
+	}
+	if group != *expected {
+		return fmt.Errorf("group does not match")
 	}
 	return nil
 }

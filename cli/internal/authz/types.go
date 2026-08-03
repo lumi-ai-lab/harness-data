@@ -1,21 +1,26 @@
 // Package authz implements the strict Lumi requester-context contract used by
-// Harness authorization adapters and the Indicators facade.
+// Harness authorization adapters and the Metric CLI.
 package authz
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
 
 const (
-	DefaultConfigPath = "/etc/harness-data/authz.json"
-	CurrentVersion    = 1
-	RequiredPiVersion = "0.81.1"
+	DefaultConfigPath              = "/etc/harness-data/authz.json"
+	CurrentVersion                 = 1
+	CurrentEnvelopeVersion         = 1
+	CurrentRequesterContextVersion = 2
+	CurrentQDMScopeSchemaVersion   = 1
+	RequiredPiVersion              = "0.81.1"
+	ClaimNamespaceQDMScope         = "qdm.scope"
 
-	ModeLumiMVPRequired = "lumi-mvp-required"
-	ModeDisabledDeny    = "disabled-deny"
+	ModePiRequesterAuthorized = "pi-requester-authorized"
+	ModeDisabledDeny          = "disabled-deny"
 
-	CapabilityIndicatorsQuery = "qdm.indicators.query"
+	CapabilityMetricQuery = "qdm.metric.query"
 )
 
 // Error codes are stable machine-readable authorization failure categories.
@@ -76,24 +81,28 @@ func ErrorCode(err error) Code {
 
 // Config is the root-owned authorization runtime configuration.
 type Config struct {
-	Version                  int                     `json:"version"`
-	Mode                     string                  `json:"mode"`
-	PiVersion                string                  `json:"piVersion"`
-	RequesterContextDir      string                  `json:"requesterContextDir"`
-	MaxEnvelopeBytes         int64                   `json:"maxEnvelopeBytes"`
-	MaxEnvelopeTTLSeconds    int64                   `json:"maxEnvelopeTtlSeconds"`
-	ClockSkewSeconds         int64                   `json:"clockSkewSeconds"`
-	RealIndicatorsCLI        RealIndicatorsCLIConfig `json:"realIndicatorsCli"`
-	ApprovedIndicatorCatalog ArtifactConfig          `json:"approvedIndicatorCatalog"`
-	KillSwitch               KillSwitchConfig        `json:"killSwitch"`
-	Limits                   LimitsConfig            `json:"limits"`
+	Version                     int                 `json:"version"`
+	Mode                        string              `json:"mode"`
+	PiVersion                   string              `json:"piVersion"`
+	AgentUID                    *uint32             `json:"agentUid"`
+	RequesterContextDir         string              `json:"requesterContextDir"`
+	RequesterContextWorkspaceID string              `json:"requesterContextWorkspaceId"`
+	RequesterContextAgentID     string              `json:"requesterContextAgentId"`
+	RequesterContextOwnerUID    *uint32             `json:"requesterContextOwnerUid"`
+	RequesterContextReaderGID   *uint32             `json:"requesterContextReaderGid"`
+	MaxEnvelopeBytes            int64               `json:"maxEnvelopeBytes"`
+	MaxEnvelopeTTLSeconds       int64               `json:"maxEnvelopeTtlSeconds"`
+	ClockSkewSeconds            int64               `json:"clockSkewSeconds"`
+	RealMetricCLI               RealMetricCLIConfig `json:"realMetricCli"`
+	ApprovedMetricCatalog       ArtifactConfig      `json:"approvedMetricCatalog"`
+	KillSwitch                  KillSwitchConfig    `json:"killSwitch"`
+	Limits                      LimitsConfig        `json:"limits"`
 }
 
-type RealIndicatorsCLIConfig struct {
+type RealMetricCLIConfig struct {
 	Path           string `json:"path"`
 	Version        string `json:"version"`
 	ArtifactSHA256 string `json:"artifactSha256"`
-	ConfigDir      string `json:"configDir"`
 }
 
 type ArtifactConfig struct {
@@ -108,7 +117,7 @@ type KillSwitchConfig struct {
 
 type LimitsConfig struct {
 	MaxDateRangeDays     int64 `json:"maxDateRangeDays"`
-	MaxIndicators        int64 `json:"maxIndicators"`
+	MaxMetrics           int64 `json:"maxMetrics"`
 	MaxDimensions        int64 `json:"maxDimensions"`
 	DefaultPageSize      int64 `json:"defaultPageSize"`
 	MaxPageSize          int64 `json:"maxPageSize"`
@@ -118,7 +127,7 @@ type LimitsConfig struct {
 	MaxOutputBytes       int64 `json:"maxOutputBytes"`
 }
 
-// RequesterContext mirrors Lumi RequesterContext V1 exactly.
+// RequesterContext mirrors Lumi RequesterContext V2 exactly.
 type RequesterContext struct {
 	Version        int           `json:"version"`
 	RequestID      string        `json:"requestId"`
@@ -142,12 +151,44 @@ type Audience struct {
 
 type Authorization struct {
 	Capabilities []string `json:"capabilities"`
-	Scope        Scope    `json:"scope"`
+	Claims       Claims   `json:"claims"`
+	// Scope is the validated Harness-owned qdm.scope projection. It is derived
+	// from Claims during validation and is never part of the Lumi wire format.
+	Scope Scope `json:"-"`
+}
+
+// Claims contains opaque namespace-owned authorization objects. Harness only
+// interprets ClaimNamespaceQDMScope and preserves every other claim as raw JSON.
+type Claims map[string]json.RawMessage
+
+// QDMScopeClaim is the Harness-owned schema stored in claims["qdm.scope"].
+type QDMScopeClaim struct {
+	SchemaVersion     int      `json:"schemaVersion"`
+	ManageAreaIDs     []string `json:"manageAreaIds"`
+	DCManageAreaIDs   []string `json:"dcManageAreaIds"`
+	CategoryLevel1IDs []string `json:"categoryLevel1Ids"`
 }
 
 type Scope struct {
 	ManageAreaIDs     []string `json:"manageAreaIds"`
+	DCManageAreaIDs   []string `json:"dcManageAreaIds"`
 	CategoryLevel1IDs []string `json:"categoryLevel1Ids"`
+}
+
+// NewQDMScopeClaims encodes a domain scope in Lumi's opaque claims envelope.
+// It is primarily used by trusted integration fixtures that publish a Lumi
+// RequesterContext; readers must still strictly validate the encoded claim.
+func NewQDMScopeClaims(scope Scope) Claims {
+	payload, err := json.Marshal(QDMScopeClaim{
+		SchemaVersion:     CurrentQDMScopeSchemaVersion,
+		ManageAreaIDs:     scope.ManageAreaIDs,
+		DCManageAreaIDs:   scope.DCManageAreaIDs,
+		CategoryLevel1IDs: scope.CategoryLevel1IDs,
+	})
+	if err != nil {
+		panic("authz: encode qdm.scope: " + err.Error())
+	}
+	return Claims{ClaimNamespaceQDMScope: payload}
 }
 
 // Envelope is the exact Lumi session file payload.
@@ -170,7 +211,9 @@ type LoadedEnvelope struct {
 	ControlGeneration  uint64
 }
 
-// Binding is HarnessAuthzBinding V1.
+// Binding is HarnessAuthzBinding V1. It is not a signature or credential:
+// integrity comes from re-reading an envelope owned by a UID that the Agent
+// cannot impersonate or modify.
 type Binding struct {
 	Version        int       `json:"version"`
 	SessionID      string    `json:"sessionId"`
@@ -217,12 +260,16 @@ type ArtifactInfo struct {
 type ReadinessOptions struct {
 	// ExpectedOwnerUID defaults to 0 on platforms that expose Unix ownership.
 	// Tests may set it to the current temporary-file owner.
-	ExpectedOwnerUID   *uint32
-	RuntimeRoot        string
-	InstallerStatePath string
-	PublicFacadePath   string
-	HarnessConfigPath  string
-	CLIPathsEnvPath    string
+	ExpectedOwnerUID *uint32
+	// AgentUID overrides the configured Agent UID only for deterministic tests.
+	// Runtime readiness uses Config.AgentUID so a root launcher can validate the
+	// boundary before starting the unprivileged Agent.
+	AgentUID            *uint32
+	RuntimeRoot         string
+	InstallerStatePath  string
+	PublicMetricCLIPath string
+	HarnessConfigPath   string
+	CLIPathsEnvPath     string
 	// AgentPath overrides PATH for deterministic tests. Runtime callers leave
 	// it empty so readiness audits the actual Agent-visible PATH.
 	AgentPath string
@@ -237,6 +284,7 @@ type ReadinessOptions struct {
 // root (UID 0) on platforms that expose Unix ownership.
 type FileSecurityOptions struct {
 	ExpectedOwnerUID  *uint32
+	ExpectedGroupGID  *uint32
 	RequireExecutable bool
 	Private           bool
 }

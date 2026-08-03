@@ -6,6 +6,7 @@ import {
   ContextCache,
   HARNESS_CONTEXT_MARKER,
   latestUserMessage,
+  replaceUserPrompt,
   upsertHarnessContext,
 } from "../context-cache.mjs";
 
@@ -37,6 +38,56 @@ test("latestUserMessage distinguishes equal text with different timestamps", () 
   const second = latestUserMessage([userMessage("same prompt", 101)]);
 
   assert.notEqual(first.key, second.key);
+});
+
+test("latestUserMessage strips a WeCom quoted assistant reply from the intent prompt", () => {
+  const assistantReply =
+    "已解析主管姓名。以下是粤西区按主管拆分的结果。销售额按主管展示，并保留原日期和区域过滤条件。";
+  const messages = [
+    userMessage("@中台数据测试 看看各个主管的", 100),
+    { role: "assistant", content: [{ type: "text", text: assistantReply }], timestamp: 101 },
+    userMessage(`@中台数据测试 华东的呢\n${assistantReply.repeat(3)}`, 200),
+  ];
+
+  const latest = latestUserMessage(messages);
+
+  assert.equal(latest.prompt, "@中台数据测试 华东的呢");
+  assert.match(latest.rawPrompt, /粤西区按主管拆分/);
+});
+
+test("latestUserMessage preserves an unrelated multiline user prompt", () => {
+  const messages = [
+    userMessage("first", 100),
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "上一轮回答与这次补充内容完全无关。" }],
+      timestamp: 101,
+    },
+    userMessage("@中台数据测试 查询销售额\n日期使用 2026-07-30，并按主管拆分。", 200),
+  ];
+
+  const latest = latestUserMessage(messages);
+
+  assert.equal(latest.prompt, "@中台数据测试 查询销售额\n日期使用 2026-07-30，并按主管拆分。");
+});
+
+test("replaceUserPrompt removes quoted text while preserving non-text content", () => {
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "@中台数据测试 华东的呢\nquoted reply" },
+        { type: "image", data: "unchanged" },
+      ],
+      timestamp: 200,
+    },
+  ];
+
+  const replaced = replaceUserPrompt(messages, 0, "@中台数据测试 华东的呢");
+
+  assert.equal(replaced[0].content[0].text, "@中台数据测试 华东的呢");
+  assert.deepEqual(replaced[0].content[1], messages[0].content[1]);
+  assert.match(messages[0].content[0].text, /quoted reply/);
 });
 
 test("ContextCache uses one in-flight loader per message key", async () => {

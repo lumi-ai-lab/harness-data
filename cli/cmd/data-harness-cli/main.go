@@ -57,13 +57,8 @@ func run() error {
 		printUsage()
 		return nil
 	}
-	switch os.Args[1] {
-	case "authz-bind":
-		return runAuthzBind(os.Args[2:], os.Stdout)
-	case "authz-readiness":
-		return runAuthzReadiness(os.Args[2:], os.Stdout)
-	case "authz-validate-catalog":
-		return runAuthzValidateCatalog(os.Args[2:], os.Stdout)
+	if handled, err := runRootIndependentAuthzCommand(os.Args[1], os.Args[2:], os.Stdout); handled {
+		return err
 	}
 	root, err := harness.FindRoot(rootStart())
 	if err != nil {

@@ -72,6 +72,35 @@ func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	}
 }
 
+func TestRunClaudeHookAcceptsCodexShellTool(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "codex-template"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeReport,
+		SelectedPlaybook: "reports/商品中心经营数据/playbook.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	body, err := json.Marshal(map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "exec_command",
+		"tool_input": map[string]any{
+			"command": "bin/data-harness-cli stage template",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := RunClaudeHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "销售额模板") {
+		t.Fatalf("expected Codex template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
+	}
+}
+
 func TestRunClaudeHookDoesNotRequireTemplateInFreeMode(t *testing.T) {
 	root := testInjectRoot(t)
 	sessionID := "free-data"

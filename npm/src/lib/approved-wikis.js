@@ -61,11 +61,11 @@ export function parseApprovedWikisManifest(raw) {
 
 function listSourceFiles(root, directory = root, files = []) {
   for (const name of fs.readdirSync(directory).sort()) {
+    if (name === ".git") continue;
     const absolute = path.join(directory, name);
     const info = fs.lstatSync(absolute);
     if (info.isSymbolicLink()) throw new Error(`approved Wikis content contains a symlink: ${absolute}`);
     if (info.isDirectory()) {
-      if (name === ".git") throw new Error("approved Wikis content must not include Git metadata");
       listSourceFiles(root, absolute, files);
       continue;
     }
@@ -75,6 +75,26 @@ function listSourceFiles(root, directory = root, files = []) {
     files.push(path.relative(root, absolute).split(path.sep).join("/"));
   }
   return files;
+}
+
+export function createApprovedWikisManifest(source, output) {
+  const root = path.resolve(source);
+  const files = listSourceFiles(root)
+    .sort(compareCodeUnits)
+    .map((file) => ({
+      path: file,
+      sha256: sha256(fs.readFileSync(path.join(root, ...file.split("/"))))
+    }));
+  const document = { version: 1, files };
+  parseApprovedWikisManifest(JSON.stringify(document));
+  const destination = path.resolve(output);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, `${JSON.stringify(document, null, 2)}\n`);
+  return {
+    manifest: document,
+    manifestSha256: sha256(fs.readFileSync(destination)),
+    source: root
+  };
 }
 
 export function verifyApprovedWikisSource(source, manifestFile, expectedManifestSha256) {
