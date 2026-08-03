@@ -1,7 +1,7 @@
 {
   "version": 1,
   "mode": "pi-requester-authorized",
-  "piVersion": "0.81.1",
+  "piVersion": "0.83.0",
   "agentUid": 2001,
   "requesterContextDir": "/run/lumi/requester-context/workspace-id/pi",
   "requesterContextWorkspaceId": "workspace-id",

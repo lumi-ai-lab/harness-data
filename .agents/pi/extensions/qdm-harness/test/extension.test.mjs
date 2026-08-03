@@ -128,7 +128,7 @@ function readCalls(callsFile) {
 
 function fakePiRuntime(executions) {
   return {
-    VERSION: "0.81.1",
+    VERSION: "0.83.0",
     createBashTool(cwd, options = {}) {
       return {
         name: "bash",
@@ -231,7 +231,7 @@ function assistantMessage(timestamp, toolCalls = []) {
 }
 
 function prebindToolCall(loaded, ctx, event, timestamp = loaded.nextAssistantTimestamp++) {
-  // Pi 0.81.1 deliberately emits different objects for message_start and
+  // Pi 0.83.0 deliberately emits different objects for message_start and
   // message_end, while preserving the assistant timestamp across the stream.
   loaded.handlers.get("message_start")({ message: assistantMessage(timestamp) }, ctx);
   loaded.handlers.get("message_end")({ message: assistantMessage(timestamp, [event]) }, ctx);

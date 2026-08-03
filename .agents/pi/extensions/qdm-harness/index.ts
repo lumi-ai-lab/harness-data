@@ -78,7 +78,7 @@ const DEFAULT_CONTEXT_TIMEOUT_MS = 5_000;
 const MIN_CONTEXT_TIMEOUT_MS = 1_000;
 const MAX_CONTEXT_TIMEOUT_MS = 30_000;
 const CONTEXT_CACHE_LIMIT = 64;
-const EXPECTED_PI_VERSION = "0.81.1";
+const EXPECTED_PI_VERSION = "0.83.0";
 const PI_REQUESTER_AUTHORIZATION_PROFILE = "pi-requester-authorized";
 
 const STATIC_SYSTEM_GUIDANCE = [
@@ -452,7 +452,7 @@ export async function installQdmHarnessExtension(
       | undefined;
     if (!snapshot) return;
 
-    // Pi 0.81.1 emits a shallow copy at message_start and the finalized object
+    // Pi 0.83.0 emits a shallow copy at message_start and the finalized object
     // at message_end, so object identity alone cannot correlate a streamed
     // assistant message. Its required timestamp is stable across that stream.
     const timestamp = assistantTimestamp(message);

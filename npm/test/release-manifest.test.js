@@ -69,8 +69,8 @@ test("release-set digest matches the cross-language canonical vector", () => {
     realMetricSha256: "b".repeat(64),
     catalogSha256: "c".repeat(64),
     authzSchemaVersion: 1,
-    piVersion: "0.81.1"
-  }), "143590d13fd20b776d7cd1403349b28403feb7a796d791fd55fad122f5a5bdb5");
+    piVersion: "0.83.0"
+  }), "8c05b7474431c534f54b6d6e68d0c53fda1e8ac70b273033c11010097c5b67b1");
 });
 
 test("release manifest materializer fixes both runtime CLIs", () => {

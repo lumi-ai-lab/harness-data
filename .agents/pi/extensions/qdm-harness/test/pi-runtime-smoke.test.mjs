@@ -32,11 +32,11 @@ function candidate() {
 }
 
 test(
-  "Pi 0.81.1 runtime smoke: real createBashTool preserves binding and sanitizes CLI environment",
-  { skip: runtimeModule ? false : "set QDM_PI_RUNTIME_MODULE to Pi 0.81.1 dist/index.js" },
+  "Pi 0.83.0 runtime smoke: real createBashTool preserves binding and sanitizes CLI environment",
+  { skip: runtimeModule ? false : "set QDM_PI_RUNTIME_MODULE to Pi 0.83.0 dist/index.js" },
   async (t) => {
     const runtime = await import(runtimeUrl(runtimeModule));
-    assert.equal(runtime.VERSION, "0.81.1");
+    assert.equal(runtime.VERSION, "0.83.0");
     assert.equal(typeof runtime.createBashTool, "function");
 
     const cwd = mkdtempSync(join(tmpdir(), "qdm-pi-runtime-smoke-"));

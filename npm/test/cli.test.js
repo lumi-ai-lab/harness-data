@@ -64,7 +64,7 @@ function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
     realMetricSha256: "b".repeat(64),
     catalogSha256: "c".repeat(64),
     authzSchemaVersion: 1,
-    piVersion: "0.81.1"
+    piVersion: "0.83.0"
   };
   releaseSet.sha256 = piRequesterReleaseSetDigest(releaseSet);
   return {

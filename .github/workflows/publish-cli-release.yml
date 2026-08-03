@@ -62,8 +62,8 @@ jobs:
           --no-audit
           --no-fund
           --no-package-lock
-          @earendil-works/pi-coding-agent@0.81.1
-      - name: Test Pi extension against Pi 0.81.1
+          @earendil-works/pi-coding-agent@0.83.0
+      - name: Test Pi extension against Pi 0.83.0
         env:
           QDM_PI_RUNTIME_MODULE: ${{ runner.temp }}/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js
         run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs

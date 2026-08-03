@@ -36,7 +36,7 @@
       "realMetricVersion": "",
       "catalogSha256": "",
       "authzSchemaVersion": 1,
-      "piVersion": "0.81.1",
+      "piVersion": "0.83.0",
       "platforms": {
         "darwin-arm64": {
           "sha256": "",
