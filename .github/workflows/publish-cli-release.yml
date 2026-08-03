@@ -289,20 +289,20 @@ jobs:
               --asset-dir "${smoke_assets}" \
               --wikis-source "${CONTRACT_APPROVED_WIKIS}"
           real_metric_path="$(
-            node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
+            sudo node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
           )"
-          test -f "${real_metric_path}"
-          test "$(stat -c '%a' "${real_metric_path}")" = "500"
-          test "$(stat -c '%u' "${real_metric_path}")" = "0"
+          sudo test -f "${real_metric_path}"
+          test "$(sudo stat -c '%a' "${real_metric_path}")" = "500"
+          test "$(sudo stat -c '%u' "${real_metric_path}")" = "0"
           test -f /etc/harness-data/approved-metrics-v1.json
           test -f /etc/systemd/system/harness-data-metric-broker.service
           sudo systemd-analyze verify /etc/systemd/system/harness-data-metric-broker.service
 
           protected_broker_path="/opt/harness-data/broker/qdm-metric-cli"
-          test "$(stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
-          test "$(stat -c '%a' "${protected_broker_path}")" = "500"
-          test "$(stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
-          test "$(stat -c '%u' "${protected_broker_path}")" = "0"
+          test "$(sudo stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
+          test "$(sudo stat -c '%a' "${protected_broker_path}")" = "500"
+          test "$(sudo stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
+          test "$(sudo stat -c '%u' "${protected_broker_path}")" = "0"
           grep -Fq "ExecStart=\"${protected_broker_path}\" broker-serve" \
             /etc/systemd/system/harness-data-metric-broker.service
           if sudo -u nobody test -r "${real_metric_path}" ||
@@ -511,18 +511,18 @@ jobs:
               --asset-dir "${smoke_assets}" \
               --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
           real_metric_path="$(
-            node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
+            sudo node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
           )"
-          test "$(stat -c '%a' "$(dirname "${real_metric_path}")")" = "700"
-          test "$(stat -c '%a' "${real_metric_path}")" = "500"
-          test "$(stat -c '%u' "$(dirname "${real_metric_path}")")" = "0"
-          test "$(stat -c '%u' "${real_metric_path}")" = "0"
+          test "$(sudo stat -c '%a' "$(dirname "${real_metric_path}")")" = "700"
+          test "$(sudo stat -c '%a' "${real_metric_path}")" = "500"
+          test "$(sudo stat -c '%u' "$(dirname "${real_metric_path}")")" = "0"
+          test "$(sudo stat -c '%u' "${real_metric_path}")" = "0"
           test -f /etc/systemd/system/harness-data-metric-broker.service
           protected_broker_path="/opt/harness-data/broker/qdm-metric-cli"
-          test "$(stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
-          test "$(stat -c '%a' "${protected_broker_path}")" = "500"
-          test "$(stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
-          test "$(stat -c '%u' "${protected_broker_path}")" = "0"
+          test "$(sudo stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
+          test "$(sudo stat -c '%a' "${protected_broker_path}")" = "500"
+          test "$(sudo stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
+          test "$(sudo stat -c '%u' "${protected_broker_path}")" = "0"
           grep -Fq "ExecStart=\"${protected_broker_path}\" broker-serve" \
             /etc/systemd/system/harness-data-metric-broker.service
           sudo systemd-analyze verify /etc/systemd/system/harness-data-metric-broker.service
