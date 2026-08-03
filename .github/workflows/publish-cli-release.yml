@@ -122,16 +122,15 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
       - name: Checkout runtime templates
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-          clean: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - uses: actions/setup-node@v4
         with:
@@ -377,18 +376,17 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
       - name: Checkout runtime templates and pinned Wikis
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
           token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
           submodules: recursive
-          clean: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - uses: actions/setup-node@v4
         with:
