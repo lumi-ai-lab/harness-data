@@ -42,20 +42,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          submodules: recursive
       - uses: actions/setup-go@v5
         with:
           go-version-file: cli/go.mod
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Run Go tests without the private Wikis snapshot
-        run: |
-          go list ./cli/... \
-            | grep -v '^harness-data/cli/tests$' \
-            | xargs go test -count=1
+      - name: Run full Go test suite with pinned Wikis
+        run: go test -count=1 ./cli/...
       - working-directory: npm
         run: npm test -- --test-concurrency=1
-      - run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
+      - name: Install pinned Pi runtime
+        run: >-
+          npm install
+          --prefix "${RUNNER_TEMP}/pi-runtime"
+          --ignore-scripts
+          --no-audit
+          --no-fund
+          --no-package-lock
+          @earendil-works/pi-coding-agent@0.81.1
+      - name: Test Pi extension against Pi 0.81.1
+        env:
+          QDM_PI_RUNTIME_MODULE: ${{ runner.temp }}/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js
+        run: node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
 
   build:
     needs: test
