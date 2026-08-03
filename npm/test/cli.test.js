@@ -230,7 +230,7 @@ test("sandbox platform install dispatches host and Linux CLIs", () => {
   }
 });
 
-test("all supported Agents retain ordinary hook templates", () => {
+test("non-Pi Agents retain their existing ordinary hook capabilities", () => {
   assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-agents-"));
   fs.cpSync(path.join(repository, ".agents"), path.join(workspace, "agents"), { recursive: true });
@@ -245,16 +245,26 @@ test("all supported Agents retain ordinary hook templates", () => {
   });
   assert.doesNotMatch(hookText, /authz-hook|Binding requester authorization|Authorizing Bash command/);
 
-  const instructionText = [
+  const nonPiInstructionPaths = [
     ".agents/codex/AGENTS.md",
+    ".agents/hermes/.hermes.md",
     ".agents/hermes/skills/qdm-harness/SKILL.md",
     ".agents/openclaw/AGENTS.md",
-    ".agents/openclaw/skills/qdm-harness/SKILL.md",
-    ".agents/pi/skills/qdm-harness/SKILL.md"
-  ].map((file) => fs.readFileSync(path.join(repository, file), "utf8")).join("\n");
-  assert.match(instructionText, /qdm-metric-cli --help/);
-  assert.doesNotMatch(instructionText, /requester authorization is supplied automatically by\s+the installed Hook/);
-  assert.doesNotMatch(instructionText, /CMR or Indicators token|credential flow|QR login|Credentials are deployment-owned/);
+    ".agents/openclaw/skills/qdm-harness/SKILL.md"
+  ];
+  for (const file of nonPiInstructionPaths) {
+    const instructionText = fs.readFileSync(path.join(repository, file), "utf8");
+    assert.match(instructionText, /CMR or Indicators token is invalid/);
+    assert.match(instructionText, /cas-cli.*credential flow/);
+    assert.doesNotMatch(instructionText, /qdm-metric-cli|requester authorization/);
+  }
+
+  const piInstructionText = fs.readFileSync(
+    path.join(repository, ".agents/pi/skills/qdm-harness/SKILL.md"),
+    "utf8"
+  );
+  assert.match(piInstructionText, /qdm-metric-cli --help/);
+  assert.match(piInstructionText, /requester authorization is supplied automatically by\s+the installed Pi extension/);
 });
 
 test("linkAgents replaces a dangling hook after a runtime directory move", () => {
