@@ -18,7 +18,8 @@ import (
 var policyRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type readSettings struct {
-	now time.Time
+	now      time.Time
+	agentUID uint32
 }
 
 // ReadOption customizes deterministic time validation in tests and callers.
@@ -31,8 +32,20 @@ func WithNow(now time.Time) ReadOption {
 	}
 }
 
+// WithAgentUID validates the requester-context boundary for the UID that will
+// consume the envelope. Runtime callers normally omit it and use the current
+// effective UID; trusted IPC brokers use the kernel-reported peer UID.
+func WithAgentUID(uid uint32) ReadOption {
+	return func(settings *readSettings) {
+		settings.agentUID = uid
+	}
+}
+
 func resolveReadSettings(options []ReadOption) readSettings {
-	settings := readSettings{now: time.Now().UTC()}
+	settings := readSettings{
+		now:      time.Now().UTC(),
+		agentUID: currentProcessOwnerUID(),
+	}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
@@ -69,9 +82,12 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err != nil {
 		return LoadedEnvelope{}, err
 	}
-	owner := currentProcessOwnerUID()
-	privateRuntimeFile := FileSecurityOptions{ExpectedOwnerUID: &owner, Private: true}
-	if err := VerifySecureDirectory(config.RequesterContextDir, privateRuntimeFile); err != nil {
+	settings := resolveReadSettings(options)
+	contextSecurity, err := requesterContextSecurity(config, settings.agentUID)
+	if err != nil {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context trust boundary is unavailable", err)
+	}
+	if err := verifyRequesterContextDirectory(config.RequesterContextDir, contextSecurity, settings.agentUID); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context directory is unavailable", err)
 	}
 	path := filepath.Join(config.RequesterContextDir, filename)
@@ -79,14 +95,13 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file cannot be read safely", err)
 	}
-	if err := VerifySecureRegularFile(path, privateRuntimeFile); err != nil {
+	if err := verifyRequesterContextFile(path, contextSecurity); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file permissions are invalid", err)
 	}
 	var envelope Envelope
 	if err := decodeStrictJSON(data, &envelope); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context envelope is invalid", err)
 	}
-	settings := resolveReadSettings(options)
 	if err := validateEnvelope(config, envelope, sessionID, settings.now); err != nil {
 		return LoadedEnvelope{}, err
 	}

@@ -13,7 +13,7 @@ import (
 
 func TestUsageListsAuthorizationCommands(t *testing.T) {
 	usage := usageText()
-	for _, command := range []string{"authz-bind", "authz-readiness", "authz-validate-catalog", "authz-hook"} {
+	for _, command := range []string{"authz-bind", "authz-readiness", "authz-validate-catalog"} {
 		if !strings.Contains(usage, command) {
 			t.Fatalf("usage missing %s: %s", command, usage)
 		}
@@ -41,14 +41,6 @@ func TestRootIndependentAuthorizationCommandDispatch(t *testing.T) {
 	handled, err = runRootIndependentAuthzCommand("wikis", nil, &output)
 	if handled || err != nil {
 		t.Fatalf("non-authz command handled=%v err=%v", handled, err)
-	}
-}
-
-func TestAuthorizationHookCommandRejectsInvalidArguments(t *testing.T) {
-	err := runAuthzHook(t.TempDir(), nil, bytes.NewReader(nil), &bytes.Buffer{})
-	var exitErr exitCodeError
-	if !asExitCodeError(err, &exitErr) || exitErr.Code != 2 || exitErr.Silent {
-		t.Fatalf("unexpected authz-hook error: %#v", err)
 	}
 }
 

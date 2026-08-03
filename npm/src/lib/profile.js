@@ -1,16 +1,11 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { platformKey } from "./platform.js";
 
 export const installerStateSchemaVersion = 3;
 export const localUnrestrictedProfile = "local-unrestricted";
 export const lumiRequiredProfile = "lumi-mvp-required";
 export const installProfiles = [localUnrestrictedProfile, lumiRequiredProfile];
-export const lumiAuthorizedAgents = ["pi", "claude", "codex", "qwen"];
-export const lumiAuthorizedAgentChoices = [...lumiAuthorizedAgents, "lumi"];
-
-export function lumiAgentSupportedOnPlatform() {
-  return true;
-}
 
 export function normalizeProfile(value, options = {}) {
   const fallback = options.defaultLocal === false ? "" : localUnrestrictedProfile;
@@ -33,16 +28,28 @@ function validSha256(value) {
   return /^[a-f0-9]{64}$/.test(String(value || ""));
 }
 
+function compatibleRealMetricVersion(value) {
+  return /^v0\.1\.\d+$/.test(String(value || ""));
+}
+
 function validLumiReleaseState(state) {
   const release = state.releaseSet;
+  let currentPlatform;
+  try {
+    currentPlatform = platformKey();
+  } catch {
+    return false;
+  }
   return plainRecord(release) &&
-    ["version", "publicMetricVersion", "publicMetricSha256", "realMetricVersion",
+    ["key", "platform", "version", "publicMetricVersion", "publicMetricSha256", "realMetricVersion",
       "realMetricSha256", "catalogSha256", "piVersion", "sha256"]
       .every((field) => nonEmptyText(release[field])) &&
     ["publicMetricSha256", "realMetricSha256", "catalogSha256", "sha256"]
       .every((field) => validSha256(release[field])) &&
+    release.platform === currentPlatform &&
     release.authzSchemaVersion === 1 &&
-    release.realMetricVersion === "v0.1.0" &&
+    compatibleRealMetricVersion(release.realMetricVersion) &&
+    release.sha256 === lumiReleaseSetDigest(release) &&
     state.authzConfigPath === "/etc/harness-data/authz.json";
 }
 
@@ -77,7 +84,7 @@ export function profileFromState(state, options = {}) {
       if (state.releaseSet != null || String(state.authzConfigPath || "") !== "") return "";
       return profile;
     }
-    if (!lumiAuthorizedAgentChoices.includes(state.agent) || state.installMode !== "github-token" ||
+    if (state.agent !== "pi" || state.installMode !== "github-token" ||
         !state.runtimeTag || Object.keys(state.localTools).length !== 0 ||
         !validLumiReleaseState(state)) {
       return "";
@@ -103,13 +110,8 @@ export function manifestProfile(manifest, profile) {
   if (!entry || !Array.isArray(entry.tools) || entry.tools.length === 0) {
     throw new Error(`manifest profile ${profile} must declare a non-empty tools list`);
   }
-  if (profile === lumiRequiredProfile) {
-    const agents = Array.isArray(entry.agents) ? entry.agents : [];
-    if (agents.length !== lumiAuthorizedAgents.length ||
-        new Set(agents).size !== agents.length ||
-        !lumiAuthorizedAgents.every((agent) => agents.includes(agent))) {
-      throw new Error(`manifest profile ${profile} must declare authorized agents: ${lumiAuthorizedAgents.join(", ")}`);
-    }
+  if (profile === lumiRequiredProfile && entry.agent !== "pi") {
+    throw new Error("lumi-mvp-required manifest must declare agent pi");
   }
   return entry;
 }
@@ -129,6 +131,7 @@ function sha256JSON(value) {
 
 export function lumiReleaseSetDigest(releaseSet) {
   return sha256JSON({
+    platform: releaseSet?.platform,
     version: releaseSet?.version,
     publicMetricVersion: releaseSet?.publicMetricVersion,
     publicMetricSha256: releaseSet?.publicMetricSha256,
@@ -140,32 +143,56 @@ export function lumiReleaseSetDigest(releaseSet) {
   });
 }
 
-export function lumiReleaseSet(manifest) {
+export function lumiReleaseSet(manifest, platform = platformKey()) {
   const profile = manifestProfile(manifest, lumiRequiredProfile);
   const key = String(profile.releaseSet || "");
   const releaseSet = key ? manifest.releaseSets?.[key] : null;
   if (!releaseSet) throw new Error("lumi-mvp-required manifest is missing its release-set");
   const required = [
-    "version", "publicMetricVersion", "publicMetricSha256",
-    "realMetricVersion", "realMetricSha256", "catalogSha256",
-    "authzSchemaVersion", "piVersion"
+    "version", "publicMetricVersion", "realMetricVersion",
+    "catalogSha256", "authzSchemaVersion", "piVersion"
   ];
   const missing = required.filter((field) => !String(releaseSet[field] || "").trim());
   if (missing.length) throw new Error(`lumi-mvp-required release-set is incomplete: ${missing.join(", ")}`);
-  for (const field of ["publicMetricSha256", "realMetricSha256", "catalogSha256"]) {
-    if (!validSha256(releaseSet[field])) throw new Error(`lumi-mvp-required release-set has invalid ${field}`);
+  if (!plainRecord(releaseSet.platforms)) {
+    throw new Error("lumi-mvp-required release-set must declare per-platform artifacts");
   }
-  if (releaseSet.realMetricVersion !== "v0.1.0") {
-    throw new Error("lumi-mvp-required release-set must pin realMetricVersion to v0.1.0");
+  const platformReleaseSet = releaseSet.platforms[platform];
+  if (!plainRecord(platformReleaseSet)) {
+    throw new Error(`lumi-mvp-required release-set does not support ${platform}`);
+  }
+  for (const field of ["publicMetricSha256", "realMetricSha256", "sha256"]) {
+    if (!validSha256(platformReleaseSet[field])) {
+      throw new Error(`lumi-mvp-required release-set has invalid ${field} for ${platform}`);
+    }
+  }
+  if (!validSha256(releaseSet.catalogSha256)) {
+    throw new Error("lumi-mvp-required release-set has invalid catalogSha256");
+  }
+  if (!compatibleRealMetricVersion(releaseSet.realMetricVersion)) {
+    throw new Error("lumi-mvp-required release-set must pin a compatible realMetricVersion in v0.1.x");
   }
   if (!Number.isInteger(releaseSet.authzSchemaVersion) || releaseSet.authzSchemaVersion < 1) {
     throw new Error("lumi-mvp-required release-set has invalid authzSchemaVersion");
   }
-  const expected = lumiReleaseSetDigest(releaseSet);
-  if (!validSha256(releaseSet.sha256) || releaseSet.sha256 !== expected) {
-    throw new Error("lumi-mvp-required release-set sha256 is missing or does not match its canonical fields");
+  const selected = {
+    key,
+    platform,
+    version: releaseSet.version,
+    publicMetricVersion: releaseSet.publicMetricVersion,
+    publicMetricSha256: platformReleaseSet.publicMetricSha256,
+    realMetricVersion: releaseSet.realMetricVersion,
+    realMetricSha256: platformReleaseSet.realMetricSha256,
+    catalogSha256: releaseSet.catalogSha256,
+    authzSchemaVersion: releaseSet.authzSchemaVersion,
+    piVersion: releaseSet.piVersion,
+    sha256: platformReleaseSet.sha256
+  };
+  const expected = lumiReleaseSetDigest(selected);
+  if (selected.sha256 !== expected) {
+    throw new Error(`lumi-mvp-required release-set sha256 does not match ${platform}`);
   }
-  return { key, ...releaseSet };
+  return selected;
 }
 
 export function lumiMetricCatalogArtifact(manifest) {
@@ -200,12 +227,9 @@ export function lumiApprovedWikisArtifact(manifest) {
   return { ...approved };
 }
 
-export function validateProfileAgent(profile, agent, options = {}) {
-  if (profile === lumiRequiredProfile && !lumiAuthorizedAgentChoices.includes(agent)) {
-    throw new Error(`lumi-mvp-required profile requires --agent ${lumiAuthorizedAgentChoices.join(", ")}`);
-  }
-  if (profile === lumiRequiredProfile && !lumiAgentSupportedOnPlatform(agent, options.platform)) {
-    throw new Error("selected Agent is not supported on this platform");
+export function validateProfileAgent(profile, agent) {
+  if (profile === lumiRequiredProfile && agent !== "pi") {
+    throw new Error("lumi-mvp-required profile requires --agent pi");
   }
 }
 

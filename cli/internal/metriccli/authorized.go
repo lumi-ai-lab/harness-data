@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,7 +18,6 @@ import (
 
 const (
 	bindingEnvironment = "HARNESS_AUTHZ_BINDING_V1"
-	metricEnvironment  = "QDM_METRIC_CLI"
 	maxPayloadBytes    = 16 << 20
 )
 
@@ -53,19 +51,33 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 // deployment wrappers that keep the authorization config outside the default
 // system path.
 func RunWithConfig(configPath string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return runAuthorized(configPath, strings.TrimSpace(os.Getenv(bindingEnvironment)), nil, args, stdin, stdout, stderr)
+}
+
+func runAuthorized(
+	configPath string,
+	encodedBinding string,
+	agentUID *uint32,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
 	config, err := authz.LoadConfig(configPath)
 	if err != nil {
 		return deny(err)
 	}
-	encoded := strings.TrimSpace(os.Getenv(bindingEnvironment))
-	if encoded == "" {
+	if encodedBinding == "" {
 		return denyCode(authz.CodeBindingMissing, "qdm-metric-cli requires a Harness authorization binding")
 	}
-	binding, err := authz.DecodeBinding(encoded)
+	binding, err := authz.DecodeBinding(encodedBinding)
 	if err != nil {
 		return deny(err)
 	}
-	loaded, err := authz.ValidateCurrent(config, binding)
+	validateOptions := []authz.ReadOption{}
+	if agentUID != nil {
+		validateOptions = append(validateOptions, authz.WithAgentUID(*agentUID))
+	}
+	loaded, err := authz.ValidateCurrent(config, binding, validateOptions...)
 	if err != nil {
 		return deny(err)
 	}
@@ -115,10 +127,17 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 	command := exec.CommandContext(ctx, config.RealMetricCLI.Path, args...)
 	command.Stdin = stdin
 	command.Env = metricEnvironmentForChild()
-	var output bytes.Buffer
+	output := newBoundedCapture(config.Limits.MaxOutputBytes)
+	errorOutput := newBoundedCapture(config.Limits.MaxOutputBytes)
 	command.Stdout = &output
-	command.Stderr = stderr
+	command.Stderr = &errorOutput
 	if err := command.Run(); err != nil {
+		if _, writeErr := stderr.Write(errorOutput.Bytes()); writeErr != nil {
+			return writeErr
+		}
+		if output.Overflowed() || errorOutput.Overflowed() {
+			return &ExitError{Code: 77, Err: errors.New("qdm-metric-cli output exceeds the authorization limit")}
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return &ExitError{Code: 124, Err: errors.New("qdm-metric-cli authorization execution timed out")}
 		}
@@ -128,27 +147,61 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 		}
 		return err
 	}
-	if int64(output.Len()) > config.Limits.MaxOutputBytes {
+	if _, err := stderr.Write(errorOutput.Bytes()); err != nil {
+		return err
+	}
+	if output.Overflowed() || errorOutput.Overflowed() {
 		return &ExitError{Code: 77, Err: errors.New("qdm-metric-cli output exceeds the authorization limit")}
 	}
 	_, err := stdout.Write(output.Bytes())
 	return err
 }
 
-func metricEnvironmentForChild() []string {
-	environment := make([]string, 0, len(os.Environ())+2)
-	for _, entry := range os.Environ() {
-		name, _, ok := strings.Cut(entry, "=")
-		if name == metricEnvironment || name == "QDM_CMR_CLI" || name == "QDM_SQL_CLI" ||
-			name == "QDM_CAS_CLI" || name == "QDM_CAS_CONFIG_DIR" {
-			continue
-		}
-		if ok {
-			environment = append(environment, entry)
-		}
+type boundedCapture struct {
+	buffer     bytes.Buffer
+	limit      int64
+	overflowed bool
+}
+
+func newBoundedCapture(limit int64) boundedCapture {
+	return boundedCapture{limit: limit}
+}
+
+func (capture *boundedCapture) Write(data []byte) (int, error) {
+	if capture.limit <= 0 {
+		capture.overflowed = len(data) > 0
+		return len(data), nil
 	}
-	environment = append(environment, bindingEnvironment+"="+os.Getenv(bindingEnvironment))
-	return environment
+	remaining := capture.limit - int64(capture.buffer.Len())
+	if remaining > 0 {
+		stored := int64(len(data))
+		if stored > remaining {
+			stored = remaining
+		}
+		_, _ = capture.buffer.Write(data[:stored])
+	}
+	if int64(len(data)) > remaining {
+		capture.overflowed = true
+	}
+	return len(data), nil
+}
+
+func (capture *boundedCapture) Bytes() []byte {
+	return capture.buffer.Bytes()
+}
+
+func (capture *boundedCapture) Overflowed() bool {
+	return capture.overflowed
+}
+
+func metricEnvironmentForChild() []string {
+	return []string{
+		"HOME=/nonexistent",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"PATH=/usr/bin:/bin",
+		"TZ=UTC",
+	}
 }
 
 type authorizationScope struct {
@@ -213,6 +266,9 @@ func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, cata
 	if err := requireDoubleHyphenFlags(args[1:]); err != nil {
 		return nil, err
 	}
+	if err := rejectRuntimeEndpointOverrides(args[1:]); err != nil {
+		return nil, err
+	}
 	authorizationScope := authorizationScope{
 		ManageAreaIDs:     append([]string(nil), scope.ManageAreaIDs...),
 		CategoryLevel1IDs: append([]string(nil), scope.CategoryLevel1IDs...),
@@ -236,6 +292,29 @@ func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, cata
 	}
 }
 
+func rejectRuntimeEndpointOverrides(args []string) error {
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		switch {
+		case argument == "--payload" || strings.HasPrefix(argument, "--payload="):
+			return errors.New("--payload file input is unavailable through the trusted broker; use --payload-json")
+		case argument == "--socket":
+			if index+1 >= len(args) {
+				return errors.New("--socket requires a value")
+			}
+			if args[index+1] != "" {
+				return errors.New("qdm-metric-cli socket overrides are not available to an Agent")
+			}
+			index++
+		case strings.HasPrefix(argument, "--socket="):
+			if strings.TrimPrefix(argument, "--socket=") != "" {
+				return errors.New("qdm-metric-cli socket overrides are not available to an Agent")
+			}
+		}
+	}
+	return nil
+}
+
 func authorizeWikis(args []string, catalog authz.MetricCatalog) ([]string, error) {
 	parsed, err := parseWikisArgumentsV010(args[1:])
 	if errors.Is(err, flag.ErrHelp) {
@@ -243,6 +322,9 @@ func authorizeWikis(args []string, catalog authz.MetricCatalog) ([]string, error
 	}
 	if err != nil {
 		return nil, err
+	}
+	if parsed.Output != "data" && parsed.Output != "envelope" {
+		return nil, errors.New("wikis --output must be data or envelope")
 	}
 	code := strings.TrimSpace(parsed.Code)
 	if code != "" {
@@ -260,6 +342,12 @@ func authorizeDimensionSearch(args []string, catalog authz.MetricCatalog) ([]str
 	}
 	if err != nil {
 		return nil, err
+	}
+	if parsed.Format != "json" && parsed.Format != "jsonl" {
+		return nil, errors.New("dim search --format must be json or jsonl")
+	}
+	if parsed.Output != "data" && parsed.Output != "envelope" {
+		return nil, errors.New("dim search --output must be data or envelope")
 	}
 	metric := strings.TrimSpace(parsed.Metric)
 	if metric != "" {
@@ -286,6 +374,12 @@ func authorizeAnalysis(args []string, scope authorizationScope, maxMetrics int64
 	}
 	if err != nil {
 		return nil, err
+	}
+	if parsed.Format != "json" && parsed.Format != "jsonl" {
+		return nil, errors.New("analysis --format must be json or jsonl")
+	}
+	if parsed.Output != "data" && parsed.Output != "envelope" {
+		return nil, errors.New("analysis --output must be data or envelope")
 	}
 	payloadMode := parsed.Payload != "" || parsed.PayloadJSON != ""
 	if payloadMode {
@@ -318,20 +412,7 @@ func authorizeAnalysisPayload(
 			return nil, fmt.Errorf("payload input cannot be combined with --%s", name)
 		}
 	}
-	if parsed.Payload != "" && parsed.PayloadJSON != "" {
-		return nil, errors.New("analysis payload input cannot be combined")
-	}
-
-	var raw []byte
-	if parsed.Payload != "" {
-		var err error
-		raw, err = os.ReadFile(filepath.Clean(parsed.Payload))
-		if err != nil {
-			return nil, fmt.Errorf("analysis payload cannot be read: %w", err)
-		}
-	} else {
-		raw = []byte(parsed.PayloadJSON)
-	}
+	raw := []byte(parsed.PayloadJSON)
 	if len(raw) == 0 || len(raw) > maxPayloadBytes {
 		return nil, errors.New("analysis payload is empty or too large")
 	}

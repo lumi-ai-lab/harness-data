@@ -56,14 +56,28 @@ function fixedReleaseURL(repo, version, name) {
   return `https://github.com/${repo}/releases/download/${version}/${name}`;
 }
 
+function releaseSetDigest(releaseSet) {
+  return sha256(JSON.stringify({
+    platform: releaseSet.platform,
+    version: releaseSet.version,
+    publicMetricVersion: releaseSet.publicMetricVersion,
+    publicMetricSha256: releaseSet.publicMetricSha256,
+    realMetricVersion: releaseSet.realMetricVersion,
+    realMetricSha256: releaseSet.realMetricSha256,
+    catalogSha256: releaseSet.catalogSha256,
+    authzSchemaVersion: releaseSet.authzSchemaVersion,
+    piVersion: releaseSet.piVersion
+  }));
+}
+
 export function materializeReleaseManifest(options) {
   const version = String(options.version || "").trim();
   if (!/^v\d+\.\d+\.\d+$/.test(version)) {
     throw new Error(`release version must match vMAJOR.MINOR.PATCH: ${version || "missing"}`);
   }
   const qdmMetricVersion = String(options.qdmMetricVersion || "").trim();
-  if (!/^v\d+\.\d+\.\d+$/.test(qdmMetricVersion)) {
-    throw new Error(`qdm-metric-cli version must match vMAJOR.MINOR.PATCH: ${qdmMetricVersion || "missing"}`);
+  if (!/^v0\.1\.\d+$/.test(qdmMetricVersion)) {
+    throw new Error(`qdm-metric-cli latest release must remain compatible with v0.1.x: ${qdmMetricVersion || "missing"}`);
   }
   if (!options.approvedWikisSource || !options.approvedWikisManifest) {
     throw new Error("business-approved Wikis source and allowlist manifest are required for release");
@@ -96,6 +110,9 @@ export function materializeReleaseManifest(options) {
   }
   const profile = manifest.profiles?.["lumi-mvp-required"];
   if (!profile) throw new Error("release manifest template is missing lumi-mvp-required");
+  if (profile.agent !== "pi") {
+    throw new Error("release manifest lumi-mvp-required profile must declare agent pi");
+  }
 
   const helper = requireTool(manifest, "data-harness-cli");
   helper.tracking = "fixed";
@@ -129,6 +146,7 @@ export function materializeReleaseManifest(options) {
   const realMetric = requireTool(manifest, "qdm-metric-cli-real");
   realMetric.tracking = "fixed";
   realMetric.version = qdmMetricVersion;
+  realMetric.destination = `/opt/harness-data/private/qdm-metric-cli-${qdmMetricVersion}`;
   realMetric.requireAssetSha256 = true;
   realMetric.requireBinarySha256 = true;
   for (const platform of Object.keys(realMetric.platforms || {})) {
@@ -145,20 +163,42 @@ export function materializeReleaseManifest(options) {
   if (!releaseSet) throw new Error("release manifest template is missing lumi-mvp-v1 release-set");
   releaseSet.version = version;
   releaseSet.publicMetricVersion = version;
-  releaseSet.publicMetricSha256 = publicMetric.platforms[Object.keys(publicMetric.platforms)[0]].binarySha256;
-  releaseSet.realMetricVersion = qdmMetricVersion;
-  releaseSet.realMetricSha256 = realMetric.platforms[Object.keys(realMetric.platforms)[0]].binarySha256;
+  releaseSet.realMetricVersion = realMetric.version;
   releaseSet.catalogSha256 = approvedMetricCatalogSha256;
-  releaseSet.sha256 = sha256(JSON.stringify({
-    version: releaseSet.version,
-    publicMetricVersion: releaseSet.publicMetricVersion,
-    publicMetricSha256: releaseSet.publicMetricSha256,
-    realMetricVersion: releaseSet.realMetricVersion,
-    realMetricSha256: releaseSet.realMetricSha256,
-    catalogSha256: releaseSet.catalogSha256,
-    authzSchemaVersion: releaseSet.authzSchemaVersion,
-    piVersion: releaseSet.piVersion
-  }));
+  const releasePlatforms = Object.keys(releaseSet.platforms || {});
+  if (releasePlatforms.length === 0) {
+    throw new Error("lumi-mvp-v1 release-set must declare per-platform artifacts");
+  }
+  for (const tool of [publicMetric, realMetric]) {
+    for (const platform of Object.keys(tool.platforms || {})) {
+      if (!releaseSet.platforms[platform]) {
+        throw new Error(`lumi-mvp-v1 release-set does not declare ${platform}`);
+      }
+    }
+  }
+  for (const platform of releasePlatforms) {
+    const publicMetricSha256 = publicMetric.platforms?.[platform]?.binarySha256;
+    const realMetricSha256 = realMetric.platforms?.[platform]?.binarySha256;
+    if (!validSha256(publicMetricSha256) || !validSha256(realMetricSha256)) {
+      throw new Error(`lumi-mvp-v1 release-set artifacts are incomplete for ${platform}`);
+    }
+    const platformReleaseSet = {
+      platform,
+      version: releaseSet.version,
+      publicMetricVersion: releaseSet.publicMetricVersion,
+      publicMetricSha256,
+      realMetricVersion: releaseSet.realMetricVersion,
+      realMetricSha256,
+      catalogSha256: releaseSet.catalogSha256,
+      authzSchemaVersion: releaseSet.authzSchemaVersion,
+      piVersion: releaseSet.piVersion
+    };
+    releaseSet.platforms[platform] = {
+      sha256: releaseSetDigest(platformReleaseSet),
+      publicMetricSha256,
+      realMetricSha256
+    };
+  }
 
   profile.approvedWikis = {
     source: "bootstrap/approved-lumi-wikis",

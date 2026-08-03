@@ -23,6 +23,8 @@ type wrapperFixture struct {
 	catalogPath string
 	sessionID   string
 	now         time.Time
+	ownerUID    uint32
+	agentUID    uint32
 	config      authz.Config
 }
 
@@ -40,6 +42,10 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(root, "requester-context"), 0o711); err != nil {
+		t.Fatal(err)
+	}
+	ownerUID := currentTestUID()
 
 	fixture := &wrapperFixture{
 		root:        root,
@@ -50,6 +56,8 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 		catalogPath: filepath.Join(root, "approved-metrics-v1.json"),
 		sessionID:   "acp-session-metric-cli",
 		now:         time.Now().UTC().Truncate(time.Second),
+		ownerUID:    ownerUID,
+		agentUID:    distinctWrapperTestUID(ownerUID),
 	}
 	fixture.writeRealCLI(t, "#!/bin/sh\nprintf 'argc=%s\\n' \"$#\"\nfor arg in \"$@\"; do printf 'arg=%s\\n' \"$arg\"; done\n")
 	catalog := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId","categoryLevel1Id"],"dictionaryRefs":[]}}}`)
@@ -60,13 +68,15 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 	}, 0o600)
 
 	fixture.config = authz.Config{
-		Version:               authz.CurrentVersion,
-		Mode:                  authz.ModeLumiMVPRequired,
-		PiVersion:             authz.RequiredPiVersion,
-		RequesterContextDir:   fixture.contextDir,
-		MaxEnvelopeBytes:      64 << 10,
-		MaxEnvelopeTTLSeconds: 1800,
-		ClockSkewSeconds:      30,
+		Version:                  authz.CurrentVersion,
+		Mode:                     authz.ModeLumiMVPRequired,
+		PiVersion:                authz.RequiredPiVersion,
+		AgentUID:                 &fixture.agentUID,
+		RequesterContextDir:      fixture.contextDir,
+		RequesterContextOwnerUID: &fixture.ownerUID,
+		MaxEnvelopeBytes:         64 << 10,
+		MaxEnvelopeTTLSeconds:    1800,
+		ClockSkewSeconds:         30,
 		RealMetricCLI: authz.RealMetricCLIConfig{
 			Path:           fixture.realCLIPath,
 			Version:        "0.1.0",
@@ -130,12 +140,17 @@ func (fixture *wrapperFixture) writeEnvelope(t *testing.T, expiresAt time.Time, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(fixture.contextDir, name), envelope, 0o600)
+	writeJSON(t, filepath.Join(fixture.contextDir, name), envelope, 0o644)
 }
 
 func (fixture *wrapperFixture) binding(t *testing.T) string {
 	t.Helper()
-	result, err := authz.Bind(fixture.config, fixture.sessionID, authz.WithNow(fixture.now))
+	result, err := authz.Bind(
+		fixture.config,
+		fixture.sessionID,
+		authz.WithNow(fixture.now),
+		authz.WithAgentUID(fixture.agentUID),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +172,23 @@ func (fixture *wrapperFixture) catalog(t *testing.T) authz.MetricCatalog {
 func (fixture *wrapperFixture) run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var output strings.Builder
-	err := RunWithConfig(fixture.configPath, args, strings.NewReader(""), &output, &output)
+	err := runAuthorized(
+		fixture.configPath,
+		strings.TrimSpace(os.Getenv(bindingEnvironment)),
+		&fixture.agentUID,
+		args,
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
 	return output.String(), err
+}
+
+func distinctWrapperTestUID(owner uint32) uint32 {
+	if owner == ^uint32(0) {
+		return owner - 1
+	}
+	return owner + 1
 }
 
 func writeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
@@ -270,6 +300,49 @@ func TestRunRequiresAndValidatesBinding(t *testing.T) {
 	}
 }
 
+func TestRunAuthorizedRequiresConfiguredAgentPeerUID(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	binding := fixture.binding(t)
+
+	for name, peerUID := range map[string]uint32{
+		"requester context writer": fixture.ownerUID,
+		"unrelated local user":     distinctWrapperTestUID(fixture.agentUID),
+		"root":                     0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output strings.Builder
+			err := runAuthorized(
+				fixture.configPath,
+				binding,
+				&peerUID,
+				[]string{"version"},
+				strings.NewReader(""),
+				&output,
+				&output,
+			)
+			if err == nil || !strings.Contains(err.Error(), string(authz.CodeRequesterContextInvalid)) {
+				t.Fatalf("expected requester-context denial for peer UID %d, got %v", peerUID, err)
+			}
+		})
+	}
+}
+
+func TestDirectAuthorizedRuntimeCannotReplaceBrokerPeerAuthentication(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	t.Setenv(bindingEnvironment, fixture.binding(t))
+	var output strings.Builder
+	err := RunWithConfig(
+		fixture.configPath,
+		[]string{"version"},
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
+	if err == nil || !strings.Contains(err.Error(), string(authz.CodeRequesterContextInvalid)) {
+		t.Fatalf("expected direct runtime caller to be rejected, got %v", err)
+	}
+}
+
 func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 	fixture := newWrapperFixture(t)
 	scope := authorizationScope{
@@ -297,20 +370,17 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("reads payload equals file form", func(t *testing.T) {
+	t.Run("rejects payload file form before the root broker reads it", func(t *testing.T) {
 		payloadPath := filepath.Join(fixture.root, "request.json")
 		writeFile(t, payloadPath, []byte(`{"metrics":["saleAmt"]}`), 0o600)
-		args, err := authorizeArguments(
+		_, err := authorizeArguments(
 			[]string{"analysis", "validate", "--payload=" + payloadPath},
 			authzScope,
 			10,
 			catalog,
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if args[2] != "--payload-json" || !strings.Contains(args[3], `"manageAreaId":["CN07","CN08"]`) {
-			t.Fatalf("payload file was not normalized: %v", args)
+		if err == nil || !strings.Contains(err.Error(), "--payload file input is unavailable") {
+			t.Fatalf("payload file input was accepted: %v", err)
 		}
 	})
 
@@ -654,7 +724,6 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 			"--end-date", "2026-08-01",
 			"--metric", "saleAmt",
 			"--request-id=-filter=manageAreaId=CN07",
-			"--socket=-filter=categoryLevel1Id=12",
 		}, scope, 10, catalog)
 		if err != nil {
 			t.Fatal(err)
@@ -666,8 +735,7 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 		filters := parseFilterArgumentsForTest(t, parsed.Filters)
 		assertFilterValuesForTest(t, filters, "manageAreaId", []string{"CN07", "CN08"})
 		assertFilterValuesForTest(t, filters, "categoryLevel1Id", []string{"12", "13"})
-		if parsed.RequestID != "-filter=manageAreaId=CN07" ||
-			parsed.Socket != "-filter=categoryLevel1Id=12" {
+		if parsed.RequestID != "-filter=manageAreaId=CN07" {
 			t.Fatalf("ordinary flag values changed unexpectedly: %+v", parsed)
 		}
 	})
@@ -728,33 +796,31 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 		})
 	}
 
-	t.Run("uses the final repeated payload file", func(t *testing.T) {
+	t.Run("rejects repeated payload files", func(t *testing.T) {
 		first := filepath.Join(fixture.root, "first.json")
 		second := filepath.Join(fixture.root, "second.json")
 		writeFile(t, first, []byte(`{"metrics":["saleCnt"]}`), 0o600)
 		writeFile(t, second, []byte(`{"metrics":["saleAmt"]}`), 0o600)
 
-		args, err := authorizeArguments([]string{
+		_, err := authorizeArguments([]string{
 			"analysis", "validate",
 			"--payload", first,
 			"--payload", second,
 		}, scope, 10, catalog)
-		if err != nil {
-			t.Fatalf("final approved payload file was rejected: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "--payload file input is unavailable") {
+			t.Fatalf("payload file input was accepted: %v", err)
 		}
-		assertCanonicalPayloadArgumentsForTest(t, args, scope)
 	})
 
-	t.Run("uses payload JSON when the payload file value is empty", func(t *testing.T) {
-		args, err := authorizeArguments([]string{
+	t.Run("rejects an empty payload file flag combined with payload JSON", func(t *testing.T) {
+		_, err := authorizeArguments([]string{
 			"analysis", "validate",
 			"--payload=",
 			"--payload-json", `{"metrics":["saleAmt"]}`,
 		}, scope, 10, catalog)
-		if err != nil {
-			t.Fatalf("effective payload JSON was rejected: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "--payload file input is unavailable") {
+			t.Fatalf("payload file flag was accepted: %v", err)
 		}
-		assertCanonicalPayloadArgumentsForTest(t, args, scope)
 	})
 
 	t.Run("preserves allowed payload flags by their final values", func(t *testing.T) {
@@ -762,7 +828,6 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 			"analysis", "execute",
 			"--payload-json", `{"metrics":["saleAmt"]}`,
 			"--request-id=-metric=saleCnt",
-			"--socket=-filter=manageAreaId=CN99",
 			"--timeout", "5s",
 			"--single-page=false",
 			"--yoy=false",
@@ -779,7 +844,6 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 			t.Fatalf("canonical payload arguments do not parse: %v", err)
 		}
 		if parsed.RequestID != "-metric=saleCnt" ||
-			parsed.Socket != "-filter=manageAreaId=CN99" ||
 			parsed.Timeout != 5*time.Second ||
 			parsed.SinglePage ||
 			parsed.YOY ||
@@ -790,7 +854,7 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 			t.Fatalf("allowed payload flags changed: %+v", parsed)
 		}
 		for _, name := range []string{
-			"request-id", "socket", "timeout", "single-page",
+			"request-id", "timeout", "single-page",
 			"yoy", "mom", "biz-thresh", "format", "output",
 		} {
 			if !parsed.Visited[name] {
@@ -800,7 +864,23 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 		assertCanonicalPayloadArgumentsForTest(t, args, scope)
 	})
 
-	t.Run("rejects two effective payload sources", func(t *testing.T) {
+	t.Run("rejects runtime socket overrides for every command family", func(t *testing.T) {
+		for name, args := range map[string][]string{
+			"metric":    {"metric", "search", "--socket=/tmp/agent.sock"},
+			"wikis":     {"wikis", "--socket", "/tmp/agent.sock"},
+			"dimension": {"dim", "search", "--socket=/tmp/agent.sock"},
+			"analysis":  {"analysis", "execute", "--socket", "/tmp/agent.sock"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, err := authorizeArguments(args, scope, 10, catalog)
+				if err == nil || !strings.Contains(err.Error(), "socket overrides") {
+					t.Fatalf("runtime socket override was accepted: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("rejects payload files even when payload JSON is also present", func(t *testing.T) {
 		payloadPath := filepath.Join(fixture.root, "request.json")
 		writeFile(t, payloadPath, []byte(`{"metrics":["saleAmt"]}`), 0o600)
 		_, err := authorizeArguments([]string{
@@ -808,10 +888,33 @@ func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
 			"--payload", payloadPath,
 			"--payload-json", `{"metrics":["saleAmt"]}`,
 		}, scope, 10, catalog)
-		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
-			t.Fatalf("two effective payload sources were accepted: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "--payload file input is unavailable") {
+			t.Fatalf("payload file input was accepted: %v", err)
 		}
 	})
+}
+
+func TestMetricChildEnvironmentIsFixedAndCredentialFree(t *testing.T) {
+	t.Setenv(bindingEnvironment, "binding-secret")
+	t.Setenv("QDM_CAS_CONFIG_DIR", "/root/secret")
+	t.Setenv("HTTPS_PROXY", "http://root-proxy")
+
+	got := metricEnvironmentForChild()
+	want := []string{
+		"HOME=/nonexistent",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"PATH=/usr/bin:/bin",
+		"TZ=UTC",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("child environment = %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("child environment = %v, want %v", got, want)
+		}
+	}
 }
 
 func parseFilterArgumentsForTest(t *testing.T, arguments []string) map[string][]string {
@@ -890,7 +993,7 @@ func TestRunRejectsAdministrativeCommandsAndPreservesChildStatus(t *testing.T) {
 }
 
 func TestRunEnforcesOutputLimitAndTimeout(t *testing.T) {
-	t.Run("output", func(t *testing.T) {
+	t.Run("stdout", func(t *testing.T) {
 		fixture := newWrapperFixture(t)
 		t.Setenv(bindingEnvironment, fixture.binding(t))
 		fixture.config.Limits.MaxOutputBytes = 1
@@ -900,6 +1003,24 @@ func TestRunEnforcesOutputLimitAndTimeout(t *testing.T) {
 		if !errors.As(err, &exitErr) || exitErr.Code != 77 ||
 			!strings.Contains(err.Error(), "output exceeds") {
 			t.Fatalf("expected output limit failure, got %v", err)
+		}
+	})
+
+	t.Run("stderr", func(t *testing.T) {
+		fixture := newWrapperFixture(t)
+		fixture.writeRealCLI(t, "#!/bin/sh\nprintf 'xx' >&2\n")
+		fixture.config.RealMetricCLI.ArtifactSHA256 = fileSHA256(fixture.realCLIPath)
+		fixture.config.Limits.MaxOutputBytes = 1
+		fixture.writeConfig(t)
+		t.Setenv(bindingEnvironment, fixture.binding(t))
+		output, err := fixture.run(t, "version")
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 77 ||
+			!strings.Contains(err.Error(), "output exceeds") {
+			t.Fatalf("expected stderr limit failure, got output=%q err=%v", output, err)
+		}
+		if output != "x" {
+			t.Fatalf("bounded stderr output = %q, want %q", output, "x")
 		}
 	})
 

@@ -10,7 +10,9 @@ import { collectDoctor } from "../src/commands/doctor.js";
 import {
   installCommand,
   installModeFor,
-  installSandboxPlatformTools
+  installSandboxPlatformTools,
+  renderLumiMetricBrokerService,
+  verifyLumiInstalledReleaseSet
 } from "../src/commands/install.js";
 import {
   agentChoices,
@@ -25,13 +27,14 @@ import { readManifest } from "../src/lib/manifest.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
+  lumiReleaseSetDigest,
   lumiRequiredProfile,
   normalizeProfile,
   profileFromState,
   selectManifestProfile,
   validateProfileAgent
 } from "../src/lib/profile.js";
-import { binaryName } from "../src/lib/platform.js";
+import { binaryName, platformKey } from "../src/lib/platform.js";
 import { installerStatePath, readInstallerState, writeState } from "../src/lib/paths.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,6 +48,19 @@ function executable(file, content = "#!/bin/sh\nexit 0\n") {
 
 function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
   const local = profile !== lumiRequiredProfile;
+  const releaseSet = {
+    key: "lumi-mvp-v1",
+    platform: platformKey(),
+    version: "v0.0.27",
+    publicMetricVersion: "v0.0.27",
+    publicMetricSha256: "a".repeat(64),
+    realMetricVersion: "v0.1.7",
+    realMetricSha256: "b".repeat(64),
+    catalogSha256: "c".repeat(64),
+    authzSchemaVersion: 1,
+    piVersion: "0.81.1"
+  };
+  releaseSet.sha256 = lumiReleaseSetDigest(releaseSet);
   return {
     schemaVersion: installerStateSchemaVersion,
     profile,
@@ -63,17 +79,7 @@ function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
     manifestSha256: "b".repeat(64),
     packageVersion: "0.0.27",
     ...(local ? {} : {
-      releaseSet: {
-        version: "v0.0.27",
-        publicMetricVersion: "v0.0.27",
-        publicMetricSha256: "a".repeat(64),
-        realMetricVersion: "v0.1.0",
-        realMetricSha256: "b".repeat(64),
-        catalogSha256: "c".repeat(64),
-        authzSchemaVersion: 1,
-        piVersion: "0.81.1",
-        sha256: "d".repeat(64)
-      },
+      releaseSet,
       authzConfigPath: "/etc/harness-data/authz.json"
     }),
     ...overrides
@@ -194,30 +200,19 @@ test("sandbox platform install dispatches host and Linux CLIs", () => {
 });
 
 test("all supported Agents retain ordinary hook templates", () => {
-  assert.deepEqual(agentChoices, ["claude", "codex", "qwen", "pi", "lumi", "openclaw", "hermes", "both", "all"]);
+  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-agents-"));
   fs.cpSync(path.join(repository, ".agents"), path.join(workspace, "agents"), { recursive: true });
   const links = linkAgents(workspace, "all");
-  assert.equal(links.length, 6);
-  for (const name of ["claude", "codex", "qwen", "pi", "openclaw", "hermes"]) {
+  assert.equal(links.length, 5);
+  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
     assert.equal(fs.realpathSync(path.join(workspace, `.${name}`)), fs.realpathSync(path.join(workspace, "agents", name)));
-  }
-  const lumiWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lumi-agents-"));
-  fs.cpSync(path.join(repository, ".agents"), path.join(lumiWorkspace, "agents"), { recursive: true });
-  const lumiLinks = linkAgents(lumiWorkspace, "lumi");
-  assert.equal(lumiLinks.length, 3);
-  for (const name of ["pi", "claude", "codex"]) {
-    assert.equal(fs.realpathSync(path.join(lumiWorkspace, `.${name}`)), fs.realpathSync(path.join(lumiWorkspace, "agents", name)));
-  }
-  for (const name of ["qwen", "openclaw", "hermes"]) {
-    assert.equal(fs.existsSync(path.join(lumiWorkspace, `.${name}`)), false);
   }
   const hookText = JSON.stringify({
     claude: JSON.parse(fs.readFileSync(path.join(repository, ".agents/claude/settings.json"), "utf8")),
-    codex: JSON.parse(fs.readFileSync(path.join(repository, ".agents/codex/hooks.json"), "utf8")),
-    qwen: JSON.parse(fs.readFileSync(path.join(repository, ".agents/qwen/settings.json"), "utf8"))
+    codex: JSON.parse(fs.readFileSync(path.join(repository, ".agents/codex/hooks.json"), "utf8"))
   });
-  assert.match(hookText, /authz-hook|PreToolUse|Binding requester authorization/);
+  assert.doesNotMatch(hookText, /authz-hook|Binding requester authorization|Authorizing Bash command/);
 
   const instructionText = [
     ".agents/codex/AGENTS.md",
@@ -227,7 +222,7 @@ test("all supported Agents retain ordinary hook templates", () => {
     ".agents/pi/skills/qdm-harness/SKILL.md"
   ].map((file) => fs.readFileSync(path.join(repository, file), "utf8")).join("\n");
   assert.match(instructionText, /qdm-metric-cli --help/);
-  assert.match(instructionText, /requester authorization is supplied automatically/);
+  assert.doesNotMatch(instructionText, /requester authorization is supplied automatically by\s+the installed Hook/);
   assert.doesNotMatch(instructionText, /CMR or Indicators token|credential flow|QR login|Credentials are deployment-owned/);
 });
 
@@ -248,11 +243,55 @@ test("linkAgents replaces a dangling hook after a runtime directory move", () =>
 
 test("release workflow pins qdm-metric-cli and builds the runtime bundle", () => {
   const workflow = fs.readFileSync(path.join(repository, ".github/workflows/publish-cli-release.yml"), "utf8");
-  assert.match(workflow, /repo="pengmide\/qdm-metric-cli"/);
-  assert.match(workflow, /qdm-metric-cli-\$\{version\}-\$\{platform\}/);
-  assert.match(workflow, /qdm-metric-dist \/tmp\/qdm-metric-release/);
+  const releaseWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/release.yml"), "utf8");
+  const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
+  const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
+  assert.equal(realMetric.private, true);
+  assert.equal(realMetric.tracking, "latest");
+  assert.equal(realMetric.version, "");
+  assert.equal(realMetric.platforms["linux-amd64"].url, "");
+  assert.match(workflow, /github\.event_name == 'pull_request'/);
+  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(workflow, /version="\$\{VERSION_TAG:-v0\.0\.\$\{GITHUB_RUN_ID\}\}"/);
+  assert.match(workflow, /Resolve latest compatible qdm-metric-cli release/);
+  assert.match(workflow, /gh release view --repo "\$\{repo\}" --json tagName --jq \.tagName/);
+  assert.match(workflow, /\^v0\\\.1\\\.\[0-9\]\+\$/);
+  assert.match(workflow, /--pattern "\$\{asset\}\.sha256"/);
+  assert.doesNotMatch(workflow, /--pattern "\$\{asset\}\.binary\.sha256"/);
+  assert.match(workflow, /expected_archive_sha=.*awk/);
+  assert.match(workflow, /archive checksum is invalid/);
+  assert.match(workflow, /\^\[a-f0-9\]\{64\}\$/);
+  assert.match(workflow, /actual_archive_sha=.*sha256sum/);
+  assert.match(workflow, /archive checksum mismatch/);
+  assert.match(workflow, /> "\/tmp\/qdm-metric-release\/\$\{asset\}\.binary\.sha256"/);
+  assert.match(workflow, /--qdm-metric-version "\$\{QDM_METRIC_VERSION\}"/);
+  assert.match(workflow, /--qdm-metric-dist \/tmp\/qdm-metric-release/);
   assert.match(workflow, /harness-data-runtime-\$\{VERSION_TAG\}\.tar\.gz/);
+  assert.match(workflow, /release-contract-smoke:/);
+  assert.match(workflow, /name: Release contract smoke/);
+  assert.match(workflow, /if: github\.event_name == 'pull_request'/);
+  assert.match(workflow, /Build secretless release fixtures/);
+  assert.match(workflow, /QDM_METRIC_CONTRACT_ASSETS/);
+  assert.match(workflow, /Exercise privileged install and fail-closed wrapper/);
   assert.match(workflow, /Smoke test released installation/);
+  assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.RELEASE_GH_TOKEN \|\| github\.token \}\}/);
+  assert.match(workflow, /--github-token "\$\{GH_TOKEN\}"/);
+  assert.match(workflow, /sudo env "PATH=\$\{PATH\}" "HOME=\$\{smoke_root\}\/home"/);
+  assert.match(workflow, /--agent pi/);
+  assert.doesNotMatch(workflow, /for agent in pi claude codex qwen/);
+  assert.match(workflow, /real_metric_path/);
+  assert.match(workflow, /stat -c '%a'/);
+  assert.match(workflow, /sudo -u nobody test -r "\$\{real_metric_path\}"/);
+  assert.match(workflow, /sudo -u nobody test -x "\$\{real_metric_path\}"/);
+  assert.match(workflow, /sudo -u nobody "\$\{real_metric_path\}" version/);
+  assert.match(workflow, /Agent UID can read or execute the private qdm-metric-cli/);
+  assert.match(workflow, /protected_broker_path="\/opt\/harness-data\/broker\/qdm-metric-cli"/);
+  assert.match(workflow, /Agent UID can read or execute the protected Metric broker/);
+  assert.match(workflow, /harness-data-metric-broker\.service/);
+  assert.match(workflow, /wrapper_status/);
+  assert.match(workflow, /\[\[ "\$\{wrapper_status\}" -ne 77 \]\]/);
+  assert.match(workflow, /if: inputs\.publish \|\| startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  assert.doesNotMatch(releaseWorkflow, /console\.log\(`\$\{tool\.repo\}.*\.binary\.sha256/);
   assert.match(workflow, /authz|qdm-metric-cli-real/i);
   assert.doesNotMatch(workflow, /qdm-indicators|qdm-cmr|qdm-sql|cas-cli/i);
 
@@ -265,11 +304,83 @@ test("profile state accepts both profiles without auth release state", () => {
   assert.equal(normalizeProfile(""), localUnrestrictedProfile);
   assert.equal(profileFromState(stateFixture()), localUnrestrictedProfile);
   assert.equal(profileFromState(stateFixture(lumiRequiredProfile)), lumiRequiredProfile);
+  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+    releaseSet: {
+      ...stateFixture(lumiRequiredProfile).releaseSet,
+      realMetricVersion: "v0.2.0"
+    }
+  })), "");
+  const wrongPlatformReleaseSet = {
+    ...stateFixture(lumiRequiredProfile).releaseSet,
+    platform: platformKey() === "linux-amd64" ? "darwin-arm64" : "linux-amd64"
+  };
+  wrongPlatformReleaseSet.sha256 = lumiReleaseSetDigest(wrongPlatformReleaseSet);
+  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+    releaseSet: wrongPlatformReleaseSet
+  })), "");
+  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+    releaseSet: {
+      ...stateFixture(lumiRequiredProfile).releaseSet,
+      sha256: "d".repeat(64)
+    }
+  })), "");
   assert.equal(profileFromState(stateFixture(lumiRequiredProfile, { releaseSet: {} })), "");
   assert.equal(profileFromState(stateFixture(lumiRequiredProfile, { authzConfigPath: "/etc/authz.json" })), "");
-  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "qwen"));
-  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "lumi"));
+  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "pi"));
+  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "qwen"), /requires --agent pi/);
+  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "codex"), /requires --agent pi/);
   assert.throws(() => validateProfileAgent(lumiRequiredProfile, "hermes"), /requires --agent/);
+});
+
+test("Lumi installation verifies both platform-specific Metric CLI digests", () => {
+  const releaseSet = stateFixture(lumiRequiredProfile).releaseSet;
+  const installedTools = {
+    "qdm-metric-cli": {
+      version: releaseSet.publicMetricVersion,
+      sha256: releaseSet.publicMetricSha256
+    },
+    "qdm-metric-cli-real": {
+      version: releaseSet.realMetricVersion,
+      sha256: releaseSet.realMetricSha256
+    }
+  };
+  assert.doesNotThrow(() => verifyLumiInstalledReleaseSet(installedTools, releaseSet));
+  assert.throws(() => verifyLumiInstalledReleaseSet({
+    ...installedTools,
+    "qdm-metric-cli": {
+      ...installedTools["qdm-metric-cli"],
+      sha256: "d".repeat(64)
+    }
+  }, releaseSet), /do not match the release-set/);
+  assert.throws(() => verifyLumiInstalledReleaseSet({
+    ...installedTools,
+    "qdm-metric-cli-real": {
+      ...installedTools["qdm-metric-cli-real"],
+      sha256: "d".repeat(64)
+    }
+  }, releaseSet), /do not match the release-set/);
+});
+
+test("Lumi broker service executes only the root-protected broker copy", () => {
+  const service = renderLumiMetricBrokerService();
+  assert.match(service, /^ExecStart="\/opt\/harness-data\/broker\/qdm-metric-cli" broker-serve$/m);
+  assert.doesNotMatch(service, /ExecStart=.*\/runtime\/bin\/qdm-metric-cli/m);
+  assert.match(service, /^User=root$/m);
+  assert.match(service, /^RuntimeDirectory=harness-data$/m);
+  for (const directive of [
+    "NoNewPrivileges=true",
+    "PrivateTmp=true",
+    "PrivateDevices=true",
+    "ProtectSystem=strict",
+    "ProtectHome=true",
+    "ProtectKernelTunables=true",
+    "ProtectKernelModules=true",
+    "ProtectControlGroups=true",
+    "RestrictNamespaces=true",
+    "RestrictSUIDSGID=true"
+  ]) {
+    assert.match(service, new RegExp(`^${directive}$`, "m"));
+  }
 });
 
 test("Lumi installer state preserves authorization fields through write/read", () => {
@@ -332,6 +443,10 @@ test("doctor validates the two-CLI runtime and rejects legacy artifacts", async 
   executable(path.join(workspace, "bin", binaryName("qdm-sql-cli")));
   const legacyReport = await collectDoctor(workspace);
   assert.equal(legacyReport.checks.find((check) => check.name === "bin/qdm-sql-cli absent").ok, false);
+
+  executable(path.join(workspace, "bin", binaryName("qdm-metric-cli")), "#!/bin/sh\nexit 7\n");
+  const failedMetricReport = await collectDoctor(workspace);
+  assert.equal(failedMetricReport.checks.find((check) => check.name === "bin/qdm-metric-cli runnable").ok, false);
 });
 
 test("doctor rejects an executable CLI that is killed during startup", async () => {

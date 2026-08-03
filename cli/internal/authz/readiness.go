@@ -55,6 +55,7 @@ type installerTool struct {
 
 type installerReleaseSet struct {
 	Key                 string `json:"key"`
+	Platform            string `json:"platform"`
 	Version             string `json:"version"`
 	SHA256              string `json:"sha256"`
 	PublicMetricVersion string `json:"publicMetricVersion"`
@@ -67,6 +68,7 @@ type installerReleaseSet struct {
 }
 
 type releaseSetDigestInput struct {
+	Platform            string `json:"platform"`
 	Version             string `json:"version"`
 	PublicMetricVersion string `json:"publicMetricVersion"`
 	PublicMetricSHA256  string `json:"publicMetricSha256"`
@@ -75,21 +77,6 @@ type releaseSetDigestInput struct {
 	CatalogSHA256       string `json:"catalogSha256"`
 	AuthzSchemaVersion  int    `json:"authzSchemaVersion"`
 	PiVersion           string `json:"piVersion"`
-}
-
-type agentHookConfig struct {
-	Hooks map[string][]agentHookGroup `json:"hooks"`
-}
-
-type agentHookGroup struct {
-	Matcher string             `json:"matcher,omitempty"`
-	Hooks   []agentCommandHook `json:"hooks"`
-}
-
-type agentCommandHook struct {
-	Type          string `json:"type"`
-	Command       string `json:"command"`
-	StatusMessage string `json:"statusMessage,omitempty"`
 }
 
 type piAgentSettings struct {
@@ -133,14 +120,13 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 		return report, err
 	}
 	security := FileSecurityOptions{ExpectedOwnerUID: options.ExpectedOwnerUID}
-	requesterContextOwnerUID := options.RequesterContextOwnerUID
-	if requesterContextOwnerUID == nil {
-		owner := currentProcessOwnerUID()
-		requesterContextOwnerUID = &owner
+	agentUID := *config.AgentUID
+	if options.AgentUID != nil {
+		agentUID = *options.AgentUID
 	}
-	requesterContextSecurity := FileSecurityOptions{
-		ExpectedOwnerUID: requesterContextOwnerUID,
-		Private:          true,
+	requesterContextSecurity, err := requesterContextSecurity(config, agentUID)
+	if err != nil {
+		return report, authzError(CodeConfigInvalid, "requester context trust boundary is invalid", err)
 	}
 
 	if err := VerifySecureRegularFile(configPath, security); err != nil {
@@ -166,7 +152,7 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 	if err := verifyMetricRuntimeConfig(paths, state, security); err != nil {
 		return report, err
 	}
-	if err := VerifySecureDirectory(config.RequesterContextDir, requesterContextSecurity); err != nil {
+	if err := verifyRequesterContextDirectory(config.RequesterContextDir, requesterContextSecurity, agentUID); err != nil {
 		return report, authzError(CodeConfigInvalid, "requester context directory ownership or permissions are invalid", err)
 	}
 	realArtifact, err := VerifyArtifact(config.RealMetricCLI.Path, config.RealMetricCLI.ArtifactSHA256, true)
@@ -179,8 +165,15 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 	if err := VerifySecureRegularFile(config.RealMetricCLI.Path, FileSecurityOptions{
 		ExpectedOwnerUID:  options.ExpectedOwnerUID,
 		RequireExecutable: true,
+		Private:           true,
 	}); err != nil {
 		return report, authzError(CodeArtifactIntegrityFailed, "real Metric CLI ownership or permissions are invalid", err)
+	}
+	if err := VerifySecureDirectory(filepath.Dir(config.RealMetricCLI.Path), FileSecurityOptions{
+		ExpectedOwnerUID: options.ExpectedOwnerUID,
+		Private:          true,
+	}); err != nil {
+		return report, authzError(CodeArtifactIntegrityFailed, "real Metric CLI directory ownership or permissions are invalid", err)
 	}
 	if _, err := VerifyArtifact(config.ApprovedMetricCatalog.Path, config.ApprovedMetricCatalog.SHA256, false); err != nil {
 		return report, err
@@ -443,7 +436,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 	if err := decodeInstallerStateJSON(data, &state); err != nil {
 		return invalid("installer state is invalid", err)
 	}
-	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || !authorizedAgent(state.Agent) {
+	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || state.Agent != "pi" {
 		return invalid("installer state profile is inconsistent", nil)
 	}
 	updatedAt, updatedErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)
@@ -473,11 +466,12 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 	}
 	release := state.ReleaseSet
 	if err := validateRequiredWireString(release.Key); err != nil ||
+		release.Platform != currentPlatformKey() ||
 		validateRequiredWireString(release.Version) != nil ||
 		validateRequiredWireString(release.PublicMetricVersion) != nil ||
 		!lowercaseSHA256Pattern.MatchString(release.SHA256) ||
 		!lowercaseSHA256Pattern.MatchString(release.PublicMetricSHA256) ||
-		release.RealMetricVersion != "v0.1.0" ||
+		release.RealMetricVersion != "v"+config.RealMetricCLI.Version ||
 		release.RealMetricSHA256 != config.RealMetricCLI.ArtifactSHA256 ||
 		release.CatalogSHA256 != config.ApprovedMetricCatalog.SHA256 ||
 		release.AuthzSchemaVersion != config.Version ||
@@ -504,21 +498,12 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 	return state, nil
 }
 
-func authorizedAgent(agent string) bool {
-	if runtime.GOOS == "windows" {
-		return agent == "pi"
-	}
-	switch agent {
-	case "pi", "claude", "codex", "qwen":
-		return true
-	default:
-		return false
-	}
-}
-
 func verifySelectedAgentDeployment(runtimeRoot, agent string, security FileSecurityOptions) error {
-	source := filepath.Join(runtimeRoot, "agents", agent)
-	target := filepath.Join(runtimeRoot, "."+agent)
+	if agent != "pi" {
+		return authzError(CodeConfigInvalid, "selected Agent deployment is unsupported", nil)
+	}
+	source := filepath.Join(runtimeRoot, "agents", "pi")
+	target := filepath.Join(runtimeRoot, ".pi")
 	if err := VerifySecureDirectory(filepath.Join(runtimeRoot, "agents"), security); err != nil {
 		return authzError(CodeConfigInvalid, "Agent template root ownership or permissions are invalid", err)
 	}
@@ -538,89 +523,33 @@ func verifySelectedAgentDeployment(runtimeRoot, agent string, security FileSecur
 			firstNonNil(sourceErr, targetErr),
 		)
 	}
-	requiredFiles := map[string][]string{
-		"pi":     {"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")},
-		"claude": {"settings.json"},
-		"codex":  {"hooks.json", "config.toml"},
-		"qwen":   {"settings.json"},
-	}[agent]
-	if len(requiredFiles) == 0 {
-		return authzError(CodeConfigInvalid, "selected Agent deployment is unsupported", nil)
-	}
-	for _, relative := range requiredFiles {
+	for _, relative := range []string{"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")} {
 		path := filepath.Join(source, relative)
 		if err := VerifySecureRegularFile(path, security); err != nil {
 			return authzError(CodeConfigInvalid, "selected Agent deployment is incomplete or insecure", err)
 		}
 	}
-	if err := validateSelectedAgentConfig(source, agent); err != nil {
+	if err := validateSelectedAgentConfig(source); err != nil {
 		return authzError(CodeConfigInvalid, "selected Agent authorization Hook config is invalid", err)
 	}
 	return nil
 }
 
-func validateSelectedAgentConfig(source, agent string) error {
-	if agent == "pi" {
-		data, _, err := readRegularFile(filepath.Join(source, "settings.json"), maxAgentConfigBytes)
-		if err != nil {
-			return err
-		}
-		var settings piAgentSettings
-		if err := decodeStrictJSON(data, &settings); err != nil {
-			return err
-		}
-		if !settings.EnableSkillCommands ||
-			len(settings.Extensions) != 1 || settings.Extensions[0] != ".pi/extensions/qdm-harness/index.ts" ||
-			len(settings.Skills) != 1 || settings.Skills[0] != ".pi/skills" {
-			return fmt.Errorf("Pi extension settings do not match the authorization contract")
-		}
-		return nil
-	}
-
-	configName := "settings.json"
-	if agent == "codex" {
-		configName = "hooks.json"
-		features, _, err := readRegularFile(filepath.Join(source, "config.toml"), maxAgentConfigBytes)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(string(features)) != "[features]\nhooks = true" {
-			return fmt.Errorf("Codex Hooks feature is not enabled")
-		}
-	}
-	data, _, err := readRegularFile(filepath.Join(source, configName), maxAgentConfigBytes)
+func validateSelectedAgentConfig(source string) error {
+	data, _, err := readRegularFile(filepath.Join(source, "settings.json"), maxAgentConfigBytes)
 	if err != nil {
 		return err
 	}
-	var config agentHookConfig
-	if err := decodeStrictJSON(data, &config); err != nil {
+	var settings piAgentSettings
+	if err := decodeStrictJSON(data, &settings); err != nil {
 		return err
 	}
-	expectedMatcher := "Bash"
-	if agent == "qwen" {
-		expectedMatcher = "^run_shell_command$"
-	}
-	if !hasAuthorizationHook(config.Hooks["UserPromptSubmit"], "", agent) ||
-		!hasAuthorizationHook(config.Hooks["PreToolUse"], expectedMatcher, agent) {
-		return fmt.Errorf("required authorization Hook event or matcher is missing")
+	if !settings.EnableSkillCommands ||
+		len(settings.Extensions) != 1 || settings.Extensions[0] != ".pi/extensions/qdm-harness/index.ts" ||
+		len(settings.Skills) != 1 || settings.Skills[0] != ".pi/skills" {
+		return fmt.Errorf("Pi extension settings do not match the authorization contract")
 	}
 	return nil
-}
-
-func hasAuthorizationHook(groups []agentHookGroup, matcher, agent string) bool {
-	for _, group := range groups {
-		if group.Matcher != matcher {
-			continue
-		}
-		for _, hook := range group.Hooks {
-			if hook.Type == "command" &&
-				strings.Contains(hook.Command, "authz-hook --agent "+agent) &&
-				strings.Contains(hook.Command, "exit 2") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func validInstallerTool(tool installerTool) bool {
@@ -653,6 +582,7 @@ func decodeInstallerStateJSON(data []byte, target *installerState) error {
 
 func installerReleaseSetDigest(release installerReleaseSet) (string, error) {
 	input := releaseSetDigestInput{
+		Platform:            release.Platform,
 		Version:             release.Version,
 		PublicMetricVersion: release.PublicMetricVersion,
 		PublicMetricSHA256:  release.PublicMetricSHA256,
@@ -668,6 +598,10 @@ func installerReleaseSetDigest(release installerReleaseSet) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func currentPlatformKey() string {
+	return runtime.GOOS + "-" + runtime.GOARCH
 }
 
 func verifyMetricRuntimeConfig(paths readinessPaths, state installerState, security FileSecurityOptions) error {

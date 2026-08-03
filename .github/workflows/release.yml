@@ -148,7 +148,6 @@ jobs:
               const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
               console.log(`${tool.repo}\t${release}\t${name}`);
               console.log(`${tool.repo}\t${release}\t${name}.sha256`);
-              console.log(`${tool.repo}\t${release}\t${name}.binary.sha256`);
             }
           }
           NODE

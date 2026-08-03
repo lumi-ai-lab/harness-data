@@ -9,7 +9,10 @@ import (
 
 const maxConfigBytes int64 = 1 << 20
 
-var lowercaseSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	lowercaseSHA256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	metricCLIVersionPattern = regexp.MustCompile(`^0\.1\.[0-9]+$`)
+)
 
 // LoadConfig reads and strictly validates an authorization config. An empty
 // path selects DefaultConfigPath.
@@ -58,8 +61,20 @@ func (config Config) Validate() error {
 			return invalid(fmt.Sprintf("authorization config %s is invalid", name))
 		}
 	}
-	if config.RealMetricCLI.Version != "0.1.0" {
-		return invalid("real Metric CLI version must be 0.1.0")
+	if config.AgentUID == nil {
+		return invalid("authorization config agentUid is required")
+	}
+	if config.RequesterContextOwnerUID == nil {
+		return invalid("authorization config requesterContextOwnerUid is required")
+	}
+	if *config.AgentUID == 0 {
+		return invalid("authorization config agentUid must not be root")
+	}
+	if *config.AgentUID == *config.RequesterContextOwnerUID {
+		return invalid("authorization config Agent and requester context owner UIDs must differ")
+	}
+	if !metricCLIVersionPattern.MatchString(config.RealMetricCLI.Version) {
+		return invalid("real Metric CLI version must remain compatible with 0.1.x")
 	}
 	if !lowercaseSHA256Pattern.MatchString(config.RealMetricCLI.ArtifactSHA256) {
 		return invalid("real Metric CLI artifactSha256 is invalid")

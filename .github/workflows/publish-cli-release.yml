@@ -80,7 +80,7 @@ jobs:
           VERSION_TAG: ${{ inputs.version_tag || '' }}
         run: |
           set -euo pipefail
-          version="${VERSION_TAG:-ci-${GITHUB_RUN_ID}}"
+          version="${VERSION_TAG:-v0.0.${GITHUB_RUN_ID}}"
           mkdir -p build dist
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "build/${BINARY}" ./cli/cmd/data-harness-cli
           metric_binary="qdm-metric-cli"
@@ -107,11 +107,199 @@ jobs:
           name: harness-cli-${{ matrix.target }}
           path: dist/*
 
+  release-contract-smoke:
+    name: Release contract smoke
+    needs:
+      - build
+      - test
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checkout runtime templates
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          clean: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build secretless release fixtures
+        env:
+          VERSION_TAG: v0.0.${{ github.run_id }}
+          QDM_METRIC_VERSION: v0.1.0
+        run: |
+          set -euo pipefail
+          contract_root="/tmp/harness-release-contract-${GITHUB_RUN_ID}"
+          approved_wikis="${contract_root}/approved-wikis"
+          metric_assets="${contract_root}/qdm-metric-release"
+          fake_bin="${contract_root}/bin"
+          mkdir -p \
+            "${approved_wikis}/metrics" \
+            "${approved_wikis}/reports" \
+            "${approved_wikis}/dims" \
+            "${approved_wikis}/rules" \
+            "${metric_assets}" \
+            "${fake_bin}" \
+            runtime/agents \
+            runtime/config \
+            runtime/bootstrap
+          printf '# Contract Wikis\n' > "${approved_wikis}/index.md"
+          printf '# Metrics\n' > "${approved_wikis}/metrics/index.md"
+          printf '# Reports\n' > "${approved_wikis}/reports/index.md"
+          printf '# Dimensions\n' > "${approved_wikis}/dims/index.md"
+          printf '# Rules\n' > "${approved_wikis}/rules/index.md"
+
+          for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
+            extension="tar.gz"
+            binary="qdm-metric-cli"
+            if [[ "${platform}" == windows-* ]]; then
+              extension="zip"
+              binary="${binary}.exe"
+            fi
+            asset="qdm-metric-cli-${QDM_METRIC_VERSION}-${platform}.${extension}"
+            build_dir="${contract_root}/metric-build-${platform}"
+            mkdir -p "${build_dir}"
+            printf '#!/bin/sh\nexit 0\n' > "${build_dir}/${binary}"
+            chmod 755 "${build_dir}/${binary}"
+            if [[ "${extension}" == "zip" ]]; then
+              (cd "${build_dir}" && zip -q "${metric_assets}/${asset}" "${binary}")
+            else
+              tar -C "${build_dir}" -czf "${metric_assets}/${asset}" "${binary}"
+            fi
+            sha256sum "${metric_assets}/${asset}" > "${metric_assets}/${asset}.sha256"
+            sha256sum "${build_dir}/${binary}" > "${metric_assets}/${asset}.binary.sha256"
+          done
+
+          cp -R .agents/pi runtime/agents/pi
+          cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
+          cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
+          cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
+          APPROVED_WIKIS="${approved_wikis}" node --input-type=module <<'NODE'
+          import { createApprovedWikisManifest } from "./npm/src/lib/approved-wikis.js";
+          createApprovedWikisManifest(
+            process.env.APPROVED_WIKIS,
+            "/tmp/approved-lumi-wikis-contract-manifest.json"
+          );
+          NODE
+          node bootstrap/materialize-cli-manifest.mjs \
+            --manifest bootstrap/cli-manifest.json \
+            --output runtime/bootstrap/cli-manifest.json \
+            --version "${VERSION_TAG}" \
+            --dist dist \
+            --qdm-metric-version "${QDM_METRIC_VERSION}" \
+            --qdm-metric-dist "${metric_assets}" \
+            --approved-wikis-source "${approved_wikis}" \
+            --approved-wikis-manifest /tmp/approved-lumi-wikis-contract-manifest.json
+          tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
+          (
+            cd dist
+            sha256sum "harness-data-runtime-${VERSION_TAG}.tar.gz" \
+              > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256"
+          )
+
+          cat > "${fake_bin}/gh" <<'SH'
+          #!/bin/sh
+          set -eu
+          if [ "${1-}" = "auth" ] && [ "${2-}" = "status" ]; then
+            exit 0
+          fi
+          if [ "${1-}" = "auth" ] && [ "${2-}" = "token" ]; then
+            exit 1
+          fi
+          if [ "${1-}" = "release" ] && [ "${2-}" = "download" ]; then
+            pattern=""
+            destination=""
+            shift 2
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --pattern)
+                  pattern="$2"
+                  shift 2
+                  ;;
+                --dir)
+                  destination="$2"
+                  shift 2
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
+            test -n "${pattern}"
+            test -n "${destination}"
+            mkdir -p "${destination}"
+            cp "${QDM_METRIC_CONTRACT_ASSETS}/${pattern}" "${destination}/${pattern}"
+            exit 0
+          fi
+          echo "unsupported gh contract invocation: $*" >&2
+          exit 2
+          SH
+          chmod 755 "${fake_bin}/gh"
+
+          {
+            echo "CONTRACT_ROOT=${contract_root}"
+            echo "CONTRACT_APPROVED_WIKIS=${approved_wikis}"
+            echo "CONTRACT_METRIC_ASSETS=${metric_assets}"
+            echo "CONTRACT_FAKE_BIN=${fake_bin}"
+            echo "CONTRACT_VERSION_TAG=${VERSION_TAG}"
+          } >> "$GITHUB_ENV"
+
+      - name: Exercise privileged install and fail-closed wrapper
+        run: |
+          set -euo pipefail
+          runtime="${CONTRACT_ROOT}/runtime"
+          smoke_assets="${CONTRACT_ROOT}/public-assets"
+          mkdir -p "${smoke_assets}"
+          cp dist/data-harness-cli-* "${smoke_assets}/"
+          cp dist/qdm-metric-cli-* "${smoke_assets}/"
+          sudo env \
+            "PATH=${CONTRACT_FAKE_BIN}:${PATH}" \
+            "HOME=${CONTRACT_ROOT}/home" \
+            "QDM_METRIC_CONTRACT_ASSETS=${CONTRACT_METRIC_ASSETS}" \
+            node npm/bin/harness-data.js install \
+              --dir "${runtime}" \
+              --profile lumi-mvp-required \
+              --agent pi \
+              --yes \
+              --runtime-bundle "${PWD}/dist/harness-data-runtime-${CONTRACT_VERSION_TAG}.tar.gz" \
+              --runtime-tag "${CONTRACT_VERSION_TAG}" \
+              --asset-dir "${smoke_assets}" \
+              --wikis-source "${CONTRACT_APPROVED_WIKIS}"
+          real_metric_path="$(
+            node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
+          )"
+          test -f "${real_metric_path}"
+          test "$(stat -c '%a' "${real_metric_path}")" = "500"
+          test "$(stat -c '%u' "${real_metric_path}")" = "0"
+          test -f /etc/harness-data/approved-metrics-v1.json
+          test -f /etc/systemd/system/harness-data-metric-broker.service
+          set +e
+          env -u HARNESS_AUTHZ_BINDING_V1 "${runtime}/bin/qdm-metric-cli" version
+          wrapper_status="$?"
+          set -e
+          if [[ "${wrapper_status}" -ne 77 ]]; then
+            echo "::error::qdm-metric-cli without deployment authorization must exit 77, got ${wrapper_status}"
+            exit 1
+          fi
+
   release:
     needs:
       - build
       - test
-    if: inputs.publish || startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      inputs.publish ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -131,7 +319,16 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Download and verify qdm-metric-cli release
+      - name: Resolve runtime version
+        id: runtime
+        env:
+          VERSION_TAG: ${{ inputs.version_tag || '' }}
+        run: |
+          set -euo pipefail
+          version="${VERSION_TAG:-v0.0.${GITHUB_RUN_ID}}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve latest compatible qdm-metric-cli release
         id: metric
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
@@ -139,10 +336,11 @@ jobs:
           set -euo pipefail
           repo="pengmide/qdm-metric-cli"
           version="$(gh release view --repo "${repo}" --json tagName --jq .tagName)"
-          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::qdm-metric-cli release tag must match vMAJOR.MINOR.PATCH: ${version}"
+          if [[ ! "${version}" =~ ^v0\.1\.[0-9]+$ ]]; then
+            echo "::error::qdm-metric-cli latest release must remain compatible with v0.1.x: ${version}"
             exit 1
           fi
+          rm -rf /tmp/qdm-metric-release
           mkdir -p /tmp/qdm-metric-release
           for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
             extension="tar.gz"
@@ -156,13 +354,19 @@ jobs:
               --repo "${repo}" \
               --pattern "${asset}" \
               --pattern "${asset}.sha256" \
-              --pattern "${asset}.binary.sha256" \
               --dir /tmp/qdm-metric-release
-            (
-              cd /tmp/qdm-metric-release
-              sha256sum -c "${asset}.sha256"
-            )
+            expected_archive_sha="$(awk '{print $1}' "/tmp/qdm-metric-release/${asset}.sha256")"
+            if [[ ! "${expected_archive_sha}" =~ ^[a-f0-9]{64}$ ]]; then
+              echo "::error::qdm-metric-cli archive checksum is invalid: ${asset}.sha256"
+              exit 1
+            fi
+            actual_archive_sha="$(sha256sum "/tmp/qdm-metric-release/${asset}" | awk '{print $1}')"
+            if [[ "${actual_archive_sha}" != "${expected_archive_sha}" ]]; then
+              echo "::error::qdm-metric-cli archive checksum mismatch: ${asset}"
+              exit 1
+            fi
             extract_dir="/tmp/qdm-metric-extract-${platform}"
+            rm -rf "${extract_dir}"
             mkdir -p "${extract_dir}"
             if [[ "${extension}" == "zip" ]]; then
               unzip -q "/tmp/qdm-metric-release/${asset}" -d "${extract_dir}"
@@ -170,20 +374,19 @@ jobs:
               tar -xzf "/tmp/qdm-metric-release/${asset}" -C "${extract_dir}"
             fi
             test -f "${extract_dir}/${binary}"
-            expected_binary_sha="$(awk '{print $1}' "/tmp/qdm-metric-release/${asset}.binary.sha256")"
-            actual_binary_sha="$(sha256sum "${extract_dir}/${binary}" | awk '{print $1}')"
-            test "${actual_binary_sha}" = "${expected_binary_sha}"
+            sha256sum "${extract_dir}/${binary}" \
+              > "/tmp/qdm-metric-release/${asset}.binary.sha256"
           done
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Package immutable runtime bundle
         env:
-          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+          VERSION_TAG: ${{ steps.runtime.outputs.version }}
           QDM_METRIC_VERSION: ${{ steps.metric.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p runtime/agents runtime/config runtime/bootstrap
-          for agent in claude codex qwen pi openclaw hermes; do
+          for agent in claude codex pi openclaw hermes; do
             cp -R ".agents/${agent}" "runtime/agents/${agent}"
           done
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
@@ -202,7 +405,7 @@ jobs:
             --qdm-metric-dist /tmp/qdm-metric-release \
             --approved-wikis-source wikis \
             --approved-wikis-manifest /tmp/approved-lumi-wikis-manifest.json
-          for agent in claude codex qwen pi openclaw hermes; do
+          for agent in claude codex pi openclaw hermes; do
             ln -s "agents/${agent}" "runtime/.${agent}"
           done
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
@@ -214,7 +417,8 @@ jobs:
 
       - name: Smoke test released installation
         env:
-          VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+          VERSION_TAG: ${{ steps.runtime.outputs.version }}
+          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
         run: |
           set -euo pipefail
           smoke_root="/tmp/harness-release-smoke-${GITHUB_RUN_ID}"
@@ -222,26 +426,57 @@ jobs:
           mkdir -p "${smoke_assets}"
           cp dist/data-harness-cli-* "${smoke_assets}/"
           cp dist/qdm-metric-cli-* "${smoke_assets}/"
-          cp /tmp/qdm-metric-release/qdm-metric-cli-* "${smoke_assets}/"
-          for agent in pi claude codex qwen; do
-            env "HOME=${smoke_root}/home-${agent}" \
-              node npm/bin/harness-data.js install \
-                --dir "${smoke_root}/runtime-${agent}" \
-                --profile lumi-mvp-required \
-                --agent "${agent}" \
-                --yes \
-                --github-token local-release-smoke \
-                --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
-                --runtime-tag "${VERSION_TAG}" \
-                --asset-dir "${smoke_assets}" \
-                --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
-            "${smoke_root}/runtime-${agent}/bin/qdm-metric-cli" version
-            node npm/bin/harness-data.js doctor --dir "${smoke_root}/runtime-${agent}"
-          done
-
+          runtime="${smoke_root}/runtime"
+          sudo env "PATH=${PATH}" "HOME=${smoke_root}/home" \
+            node npm/bin/harness-data.js install \
+              --dir "${runtime}" \
+              --profile lumi-mvp-required \
+              --agent pi \
+              --yes \
+              --github-token "${GH_TOKEN}" \
+              --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
+              --runtime-tag "${VERSION_TAG}" \
+              --asset-dir "${smoke_assets}" \
+              --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
+          real_metric_path="$(
+            node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
+          )"
+          test "$(stat -c '%a' "$(dirname "${real_metric_path}")")" = "700"
+          test "$(stat -c '%a' "${real_metric_path}")" = "500"
+          test "$(stat -c '%u' "$(dirname "${real_metric_path}")")" = "0"
+          test "$(stat -c '%u' "${real_metric_path}")" = "0"
+          test -f /etc/systemd/system/harness-data-metric-broker.service
+          protected_broker_path="/opt/harness-data/broker/qdm-metric-cli"
+          test "$(stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
+          test "$(stat -c '%a' "${protected_broker_path}")" = "500"
+          test "$(stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
+          test "$(stat -c '%u' "${protected_broker_path}")" = "0"
+          grep -Fq "ExecStart=\"${protected_broker_path}\" broker-serve" \
+            /etc/systemd/system/harness-data-metric-broker.service
+          if sudo -u nobody test -r "${real_metric_path}" ||
+             sudo -u nobody test -x "${real_metric_path}" ||
+             sudo -u nobody "${real_metric_path}" version; then
+            echo "::error::Agent UID can read or execute the private qdm-metric-cli"
+            exit 1
+          fi
+          if sudo -u nobody test -r "${protected_broker_path}" ||
+             sudo -u nobody test -x "${protected_broker_path}" ||
+             sudo -u nobody "${protected_broker_path}" broker-health; then
+            echo "::error::Agent UID can read or execute the protected Metric broker"
+            exit 1
+          fi
+          set +e
+          env -u HARNESS_AUTHZ_BINDING_V1 "${runtime}/bin/qdm-metric-cli" version
+          wrapper_status="$?"
+          set -e
+          if [[ "${wrapper_status}" -ne 77 ]]; then
+            echo "::error::qdm-metric-cli without deployment authorization must exit 77, got ${wrapper_status}"
+            exit 1
+          fi
       - name: Publish GitHub Release assets
+        if: inputs.publish || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version_tag || github.ref_name }}
+          tag_name: ${{ steps.runtime.outputs.version }}
           files: dist/*
           generate_release_notes: true

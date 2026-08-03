@@ -8,7 +8,9 @@
     "version",
     "mode",
     "piVersion",
+    "agentUid",
     "requesterContextDir",
+    "requesterContextOwnerUid",
     "maxEnvelopeBytes",
     "maxEnvelopeTtlSeconds",
     "clockSkewSeconds",
@@ -23,7 +25,17 @@
       "enum": ["lumi-mvp-required", "disabled-deny"]
     },
     "piVersion": { "const": "0.81.1" },
+    "agentUid": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
     "requesterContextDir": { "$ref": "#/$defs/absolutePath" },
+    "requesterContextOwnerUid": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
     "maxEnvelopeBytes": {
       "type": "integer",
       "minimum": 1,
@@ -45,7 +57,7 @@
       "required": ["path", "version", "artifactSha256"],
       "properties": {
         "path": { "$ref": "#/$defs/absolutePath" },
-        "version": { "const": "0.1.0" },
+        "version": { "type": "string", "pattern": "^0\\.1\\.[0-9]+$" },
         "artifactSha256": { "$ref": "#/$defs/sha256" }
       }
     },

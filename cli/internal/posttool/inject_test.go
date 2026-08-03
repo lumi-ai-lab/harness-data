@@ -72,9 +72,9 @@ func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	}
 }
 
-func TestRunClaudeHookInjectsTemplateAfterAuthorizedCodexStageTemplate(t *testing.T) {
+func TestRunClaudeHookAcceptsCodexShellTool(t *testing.T) {
 	root := testInjectRoot(t)
-	sessionID := "codex-authorized-template"
+	sessionID := "codex-template"
 	writeInjectState(t, root, sessionID, sessionstate.File{
 		SessionID:        sessionID,
 		Mode:             sessionstate.ModeReport,
@@ -86,11 +86,7 @@ func TestRunClaudeHookInjectsTemplateAfterAuthorizedCodexStageTemplate(t *testin
 		"session_id": sessionID,
 		"tool_name":  "exec_command",
 		"tool_input": map[string]any{
-			"command": "unset QDM_CMR_CLI QDM_SQL_CLI QDM_CAS_CLI QDM_CAS_CONFIG_DIR && " +
-				"export PATH='/workspace/bin':\"${PATH:-}\" && " +
-				"export QDM_METRIC_CLI='/workspace/bin/qdm-metric-cli' && " +
-				"export HARNESS_AUTHZ_BINDING_V1='<redacted>' && " +
-				"eval 'bin/data-harness-cli stage template'",
+			"command": "bin/data-harness-cli stage template",
 		},
 	})
 	if err != nil {
@@ -101,36 +97,7 @@ func TestRunClaudeHookInjectsTemplateAfterAuthorizedCodexStageTemplate(t *testin
 		t.Fatal(err)
 	}
 	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "销售额模板") {
-		t.Fatalf("expected authorized Codex template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
-	}
-}
-
-func TestRunClaudeHookAcceptsQwenShellTool(t *testing.T) {
-	root := testInjectRoot(t)
-	sessionID := "qwen-template"
-	writeInjectState(t, root, sessionID, sessionstate.File{
-		SessionID:        sessionID,
-		Mode:             sessionstate.ModeSingle,
-		SelectedPlaybook: "playbooks/idx/business/s-sale-amt.md",
-		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
-		Reports:          map[string]*sessionstate.Report{},
-	})
-	body, err := json.Marshal(map[string]any{
-		"session_id": sessionID,
-		"tool_name":  "run_shell_command",
-		"tool_input": map[string]any{
-			"command": `bin/data-harness-cli stage template`,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ok, output, err := RunClaudeHook(root, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "销售额模板") {
-		t.Fatalf("expected Qwen template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
+		t.Fatalf("expected Codex template hook output, ok=%v output=%q", ok, output.HookSpecificOutput.AdditionalContext)
 	}
 }
 

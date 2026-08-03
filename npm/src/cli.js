@@ -44,7 +44,7 @@ Commands:
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --profile NAME                     local-unrestricted or lumi-mvp-required (interactive installs default local)
-  --agent NAME                       claude, codex, qwen, pi, lumi, openclaw, hermes, both, or all
+  --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --wikis-source PATH                Approved Wikis source (required for lumi-mvp-required)
   --github-token TOKEN               GitHub token for runtime Release assets
   --metric-cli-path PATH             Real qdm-metric-cli executable (required for local-unrestricted)

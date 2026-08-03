@@ -84,7 +84,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 }
 
 func isShellTool(toolName string) bool {
-	return toolName == "Bash" || toolName == "exec_command" || toolName == "run_shell_command"
+	return toolName == "Bash" || toolName == "exec_command"
 }
 
 func InjectTemplate(root, sessionID string) (message, outcome, templateRel string, err error) {

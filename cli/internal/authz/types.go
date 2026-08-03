@@ -76,17 +76,19 @@ func ErrorCode(err error) Code {
 
 // Config is the root-owned authorization runtime configuration.
 type Config struct {
-	Version               int                 `json:"version"`
-	Mode                  string              `json:"mode"`
-	PiVersion             string              `json:"piVersion"`
-	RequesterContextDir   string              `json:"requesterContextDir"`
-	MaxEnvelopeBytes      int64               `json:"maxEnvelopeBytes"`
-	MaxEnvelopeTTLSeconds int64               `json:"maxEnvelopeTtlSeconds"`
-	ClockSkewSeconds      int64               `json:"clockSkewSeconds"`
-	RealMetricCLI         RealMetricCLIConfig `json:"realMetricCli"`
-	ApprovedMetricCatalog ArtifactConfig      `json:"approvedMetricCatalog"`
-	KillSwitch            KillSwitchConfig    `json:"killSwitch"`
-	Limits                LimitsConfig        `json:"limits"`
+	Version                  int                 `json:"version"`
+	Mode                     string              `json:"mode"`
+	PiVersion                string              `json:"piVersion"`
+	AgentUID                 *uint32             `json:"agentUid"`
+	RequesterContextDir      string              `json:"requesterContextDir"`
+	RequesterContextOwnerUID *uint32             `json:"requesterContextOwnerUid"`
+	MaxEnvelopeBytes         int64               `json:"maxEnvelopeBytes"`
+	MaxEnvelopeTTLSeconds    int64               `json:"maxEnvelopeTtlSeconds"`
+	ClockSkewSeconds         int64               `json:"clockSkewSeconds"`
+	RealMetricCLI            RealMetricCLIConfig `json:"realMetricCli"`
+	ApprovedMetricCatalog    ArtifactConfig      `json:"approvedMetricCatalog"`
+	KillSwitch               KillSwitchConfig    `json:"killSwitch"`
+	Limits                   LimitsConfig        `json:"limits"`
 }
 
 type RealMetricCLIConfig struct {
@@ -170,7 +172,9 @@ type LoadedEnvelope struct {
 	ControlGeneration  uint64
 }
 
-// Binding is HarnessAuthzBinding V1.
+// Binding is HarnessAuthzBinding V1. It is not a signature or credential:
+// integrity comes from re-reading an envelope owned by a UID that the Agent
+// cannot impersonate or modify.
 type Binding struct {
 	Version        int       `json:"version"`
 	SessionID      string    `json:"sessionId"`
@@ -218,14 +222,15 @@ type ReadinessOptions struct {
 	// ExpectedOwnerUID defaults to 0 on platforms that expose Unix ownership.
 	// Tests may set it to the current temporary-file owner.
 	ExpectedOwnerUID *uint32
-	// RequesterContextOwnerUID defaults to the current process owner because
-	// Lumi creates and refreshes requester envelopes as its unprivileged user.
-	RequesterContextOwnerUID *uint32
-	RuntimeRoot              string
-	InstallerStatePath       string
-	PublicMetricCLIPath      string
-	HarnessConfigPath        string
-	CLIPathsEnvPath          string
+	// AgentUID overrides the configured Agent UID only for deterministic tests.
+	// Runtime readiness uses Config.AgentUID so a root launcher can validate the
+	// boundary before starting the unprivileged Agent.
+	AgentUID            *uint32
+	RuntimeRoot         string
+	InstallerStatePath  string
+	PublicMetricCLIPath string
+	HarnessConfigPath   string
+	CLIPathsEnvPath     string
 	// AgentPath overrides PATH for deterministic tests. Runtime callers leave
 	// it empty so readiness audits the actual Agent-visible PATH.
 	AgentPath string

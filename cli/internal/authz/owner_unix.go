@@ -19,3 +19,5 @@ func fileOwnerUID(info fs.FileInfo) (uint32, bool) {
 func currentProcessOwnerUID() uint32 {
 	return uint32(os.Geteuid())
 }
+
+func fileOwnershipSupported() bool { return true }

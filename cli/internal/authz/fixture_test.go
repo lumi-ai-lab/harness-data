@@ -24,6 +24,7 @@ type authzFixture struct {
 	config             Config
 	now                time.Time
 	ownerUID           uint32
+	agentUID           uint32
 	sessionID          string
 	installerAgent     string
 	envelope           Envelope
@@ -54,6 +55,9 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Chmod(filepath.Join(root, "requester-context"), 0o711); err != nil {
+		t.Fatal(err)
+	}
 	rootInfo, err := os.Stat(root)
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +82,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		cliPathsEnvPath:    filepath.Join(root, "config", "qdm-cli-paths.env"),
 		now:                time.Date(2026, 7, 30, 4, 0, 0, 0, time.UTC),
 		ownerUID:           ownerUID,
+		agentUID:           distinctTestUID(ownerUID),
 		sessionID:          "acp-session-原始值",
 		installerAgent:     "pi",
 	}
@@ -93,16 +98,18 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	}, 0o600)
 
 	fixture.config = Config{
-		Version:               CurrentVersion,
-		Mode:                  ModeLumiMVPRequired,
-		PiVersion:             RequiredPiVersion,
-		RequesterContextDir:   fixture.contextDir,
-		MaxEnvelopeBytes:      64 << 10,
-		MaxEnvelopeTTLSeconds: 1800,
-		ClockSkewSeconds:      30,
+		Version:                  CurrentVersion,
+		Mode:                     ModeLumiMVPRequired,
+		PiVersion:                RequiredPiVersion,
+		AgentUID:                 &fixture.agentUID,
+		RequesterContextDir:      fixture.contextDir,
+		RequesterContextOwnerUID: &fixture.ownerUID,
+		MaxEnvelopeBytes:         64 << 10,
+		MaxEnvelopeTTLSeconds:    1800,
+		ClockSkewSeconds:         30,
 		RealMetricCLI: RealMetricCLIConfig{
 			Path:           fixture.realCLIPath,
-			Version:        "0.1.0",
+			Version:        "0.1.7",
 			ArtifactSHA256: sha256Hex([]byte("#!/bin/sh\nexit 0\n")),
 		},
 		ApprovedMetricCatalog: ArtifactConfig{
@@ -157,8 +164,10 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 
 func (fixture *authzFixture) readinessOptions() ReadinessOptions {
 	owner := fixture.ownerUID
+	agent := fixture.agentUID
 	return ReadinessOptions{
 		ExpectedOwnerUID: &owner,
+		AgentUID:         &agent,
 		RuntimeRoot:      fixture.root,
 		AgentPath:        filepath.Join(fixture.root, "bin"),
 		AgentEnvironment: []string{"QDM_METRIC_CLI=" + fixture.publicMetricPath},
@@ -173,8 +182,19 @@ func (fixture *authzFixture) writeEnvelope(t *testing.T, envelope Envelope) stri
 		t.Fatal(err)
 	}
 	path := filepath.Join(fixture.contextDir, name)
-	writeTestJSON(t, path, envelope, 0o600)
+	writeTestJSON(t, path, envelope, 0o644)
 	return path
+}
+
+func (fixture *authzFixture) readOptions() []ReadOption {
+	return []ReadOption{WithNow(fixture.now), WithAgentUID(fixture.agentUID)}
+}
+
+func distinctTestUID(owner uint32) uint32 {
+	if owner == ^uint32(0) {
+		return owner - 1
+	}
+	return owner + 1
 }
 
 func (fixture *authzFixture) writeInstallerState(t *testing.T) {
@@ -186,10 +206,11 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 	}
 	release := installerReleaseSet{
 		Key:                 "lumi-mvp-v1",
+		Platform:            currentPlatformKey(),
 		Version:             "lumi-mvp-v1",
 		PublicMetricVersion: "1.0.0",
 		PublicMetricSHA256:  sha256Hex([]byte("#!/bin/sh\nexit 17\n")),
-		RealMetricVersion:   "v0.1.0",
+		RealMetricVersion:   "v" + fixture.config.RealMetricCLI.Version,
 		RealMetricSHA256:    fixture.config.RealMetricCLI.ArtifactSHA256,
 		CatalogSHA256:       fixture.config.ApprovedMetricCatalog.SHA256,
 		AuthzSchemaVersion:  CurrentVersion,
@@ -234,58 +255,22 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 
 func (fixture *authzFixture) writeAgentDeployment(t *testing.T) {
 	t.Helper()
-	for _, agent := range []string{"pi", "claude", "codex", "qwen", "openclaw"} {
+	for _, agent := range []string{"pi", "claude", "codex", "openclaw"} {
 		if err := os.RemoveAll(filepath.Join(fixture.root, "."+agent)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	source := filepath.Join(fixture.root, "agents", fixture.installerAgent)
+	source := filepath.Join(fixture.root, "agents", "pi")
 	if err := os.MkdirAll(source, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	requiredFiles := map[string][]string{
-		"pi":       {"settings.json", filepath.Join("extensions", "qdm-harness", "index.ts")},
-		"claude":   {"settings.json"},
-		"codex":    {"hooks.json", "config.toml"},
-		"qwen":     {"settings.json"},
-		"openclaw": {"config.json"},
-	}[fixture.installerAgent]
-	for _, relative := range requiredFiles {
-		writeTestFile(t, filepath.Join(source, relative), []byte("{}\n"), 0o600)
-	}
-	switch fixture.installerAgent {
-	case "pi":
-		writeTestJSON(t, filepath.Join(source, "settings.json"), piAgentSettings{
-			EnableSkillCommands: true,
-			Extensions:          []string{".pi/extensions/qdm-harness/index.ts"},
-			Skills:              []string{".pi/skills"},
-		}, 0o600)
-	case "claude", "codex", "qwen":
-		matcher := "Bash"
-		if fixture.installerAgent == "qwen" {
-			matcher = "^run_shell_command$"
-		}
-		config := agentHookConfig{Hooks: map[string][]agentHookGroup{
-			"UserPromptSubmit": {{
-				Hooks: []agentCommandHook{{
-					Type: "command", Command: "data-harness-cli authz-hook --agent " + fixture.installerAgent + " || exit 2",
-				}},
-			}},
-			"PreToolUse": {{
-				Matcher: matcher,
-				Hooks: []agentCommandHook{{
-					Type: "command", Command: "data-harness-cli authz-hook --agent " + fixture.installerAgent + " || exit 2",
-				}},
-			}},
-		}}
-		configName := "settings.json"
-		if fixture.installerAgent == "codex" {
-			configName = "hooks.json"
-			writeTestFile(t, filepath.Join(source, "config.toml"), []byte("[features]\nhooks = true\n"), 0o600)
-		}
-		writeTestJSON(t, filepath.Join(source, configName), config, 0o600)
-	}
-	if err := os.Symlink(filepath.Join("agents", fixture.installerAgent), filepath.Join(fixture.root, "."+fixture.installerAgent)); err != nil {
+	writeTestJSON(t, filepath.Join(source, "settings.json"), piAgentSettings{
+		EnableSkillCommands: true,
+		Extensions:          []string{".pi/extensions/qdm-harness/index.ts"},
+		Skills:              []string{".pi/skills"},
+	}, 0o600)
+	writeTestFile(t, filepath.Join(source, "extensions", "qdm-harness", "index.ts"), []byte("export {};\n"), 0o600)
+	if err := os.Symlink(filepath.Join("agents", "pi"), filepath.Join(fixture.root, ".pi")); err != nil {
 		t.Fatal(err)
 	}
 }

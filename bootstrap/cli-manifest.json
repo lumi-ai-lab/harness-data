@@ -9,12 +9,7 @@
       ]
     },
     "lumi-mvp-required": {
-      "agents": [
-        "pi",
-        "claude",
-        "codex",
-        "qwen"
-      ],
+      "agent": "pi",
       "approvedWikis": {
         "source": "bootstrap/approved-lumi-wikis",
         "manifest": "bootstrap/approved-lumi-wikis-manifest.json",
@@ -37,14 +32,33 @@
   "releaseSets": {
     "lumi-mvp-v1": {
       "version": "",
-      "sha256": "",
       "publicMetricVersion": "",
-      "publicMetricSha256": "",
-      "realMetricVersion": "v0.1.0",
-      "realMetricSha256": "",
+      "realMetricVersion": "",
       "catalogSha256": "",
       "authzSchemaVersion": 1,
-      "piVersion": "0.81.1"
+      "piVersion": "0.81.1",
+      "platforms": {
+        "darwin-arm64": {
+          "sha256": "",
+          "publicMetricSha256": "",
+          "realMetricSha256": ""
+        },
+        "darwin-amd64": {
+          "sha256": "",
+          "publicMetricSha256": "",
+          "realMetricSha256": ""
+        },
+        "linux-amd64": {
+          "sha256": "",
+          "publicMetricSha256": "",
+          "realMetricSha256": ""
+        },
+        "windows-amd64": {
+          "sha256": "",
+          "publicMetricSha256": "",
+          "realMetricSha256": ""
+        }
+      }
     }
   },
   "tools": [
@@ -81,9 +95,9 @@
       "binary": "qdm-metric-cli",
       "repo": "pengmide/qdm-metric-cli",
       "private": true,
-      "destination": "/opt/harness-data/private/qdm-metric-cli-v0.1.0",
-      "tracking": "fixed",
-      "version": "v0.1.0",
+      "destination": "/opt/harness-data/private/qdm-metric-cli",
+      "tracking": "latest",
+      "version": "",
       "requireAssetSha256": true,
       "requireBinarySha256": true,
       "platforms": {
