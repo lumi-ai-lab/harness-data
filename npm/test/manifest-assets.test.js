@@ -284,3 +284,33 @@ exit 1
   );
   assert.equal(fs.existsSync(path.join(workspace, "bin", binaryName("fixture-cli"))), false);
 });
+
+test("binary checksum failure preserves an existing installed CLI", async () => {
+  if (process.platform === "win32") return;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "harness-existing-binary-"));
+  const assetDir = path.join(fixture, "assets");
+  const assetName = `fixture-cli-v0.1.0-${platformKey()}.tar.gz`;
+  fs.mkdirSync(assetDir, { recursive: true });
+  const asset = createArchive(assetDir, assetName, "#!/bin/sh\necho replacement\n");
+  const workspace = path.join(fixture, "runtime");
+  const destination = path.join(workspace, "bin", binaryName("fixture-cli"));
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, "#!/bin/sh\necho existing\n", { mode: 0o755 });
+  const manifest = manifestFor(asset);
+  manifest.tools[0].platforms[platformKey()].binarySha256 = "f".repeat(64);
+
+  await assert.rejects(
+    () => installToolsFromManifest(workspace, "", {
+      manifestOverride: manifest,
+      assetDir,
+      log: false
+    }),
+    /binary sha256 mismatch/
+  );
+
+  assert.equal(
+    fs.readFileSync(destination, "utf8"),
+    "#!/bin/sh\necho existing\n"
+  );
+  assert.equal(fs.statSync(destination).mode & 0o777, 0o755);
+});

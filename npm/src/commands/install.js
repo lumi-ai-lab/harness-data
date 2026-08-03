@@ -430,7 +430,7 @@ export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet)
   if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
       path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
       path.dirname(realDestination) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v0\.1\.\d+$/.test(path.basename(realDestination))) {
+      path.basename(realDestination) !== "qdm-metric-cli-v0.1.0") {
     throw new Error("Lumi authorization artifact destinations are invalid");
   }
 }

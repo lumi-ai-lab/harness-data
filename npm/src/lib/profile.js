@@ -28,8 +28,8 @@ function validSha256(value) {
   return /^[a-f0-9]{64}$/.test(String(value || ""));
 }
 
-function compatibleRealMetricVersion(value) {
-  return /^v0\.1\.\d+$/.test(String(value || ""));
+function supportedRealMetricVersion(value) {
+  return String(value || "") === "v0.1.0";
 }
 
 function validLumiReleaseState(state) {
@@ -48,7 +48,7 @@ function validLumiReleaseState(state) {
       .every((field) => validSha256(release[field])) &&
     release.platform === currentPlatform &&
     release.authzSchemaVersion === 1 &&
-    compatibleRealMetricVersion(release.realMetricVersion) &&
+    supportedRealMetricVersion(release.realMetricVersion) &&
     release.sha256 === lumiReleaseSetDigest(release) &&
     state.authzConfigPath === "/etc/harness-data/authz.json";
 }
@@ -169,8 +169,8 @@ export function lumiReleaseSet(manifest, platform = platformKey()) {
   if (!validSha256(releaseSet.catalogSha256)) {
     throw new Error("lumi-mvp-required release-set has invalid catalogSha256");
   }
-  if (!compatibleRealMetricVersion(releaseSet.realMetricVersion)) {
-    throw new Error("lumi-mvp-required release-set must pin a compatible realMetricVersion in v0.1.x");
+  if (!supportedRealMetricVersion(releaseSet.realMetricVersion)) {
+    throw new Error("lumi-mvp-required release-set must pin realMetricVersion v0.1.0");
   }
   if (!Number.isInteger(releaseSet.authzSchemaVersion) || releaseSet.authzSchemaVersion < 1) {
     throw new Error("lumi-mvp-required release-set has invalid authzSchemaVersion");

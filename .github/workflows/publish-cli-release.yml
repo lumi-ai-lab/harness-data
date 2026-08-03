@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      verify:
+        description: Package and smoke-test a trusted candidate without publishing
+        required: false
+        default: false
+        type: boolean
     secrets:
       RELEASE_GH_TOKEN:
         description: Token with read access to the private qdm-metric-cli release
@@ -131,6 +136,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
 
       - name: Build secretless release fixtures
         env:
@@ -168,7 +176,14 @@ jobs:
             asset="qdm-metric-cli-${QDM_METRIC_VERSION}-${platform}.${extension}"
             build_dir="${contract_root}/metric-build-${platform}"
             mkdir -p "${build_dir}"
-            printf '#!/bin/sh\nexit 0\n' > "${build_dir}/${binary}"
+            cat > "${build_dir}/${binary}" <<'SH'
+          #!/bin/sh
+          if [ "$#" -eq 1 ] && [ "$1" = "version" ]; then
+            printf "qdm-metric-cli v0.1.0-contract\n"
+            exit 0
+          fi
+          exit 64
+          SH
             chmod 755 "${build_dir}/${binary}"
             if [[ "${extension}" == "zip" ]]; then
               (cd "${build_dir}" && zip -q "${metric_assets}/${asset}" "${binary}")
@@ -253,7 +268,7 @@ jobs:
             echo "CONTRACT_VERSION_TAG=${VERSION_TAG}"
           } >> "$GITHUB_ENV"
 
-      - name: Exercise privileged install and fail-closed wrapper
+      - name: Exercise privileged install and broker authorization
         run: |
           set -euo pipefail
           runtime="${CONTRACT_ROOT}/runtime"
@@ -282,14 +297,73 @@ jobs:
           test "$(stat -c '%u' "${real_metric_path}")" = "0"
           test -f /etc/harness-data/approved-metrics-v1.json
           test -f /etc/systemd/system/harness-data-metric-broker.service
+          sudo systemd-analyze verify /etc/systemd/system/harness-data-metric-broker.service
+
+          protected_broker_path="/opt/harness-data/broker/qdm-metric-cli"
+          test "$(stat -c '%a' "$(dirname "${protected_broker_path}")")" = "700"
+          test "$(stat -c '%a' "${protected_broker_path}")" = "500"
+          test "$(stat -c '%u' "$(dirname "${protected_broker_path}")")" = "0"
+          test "$(stat -c '%u' "${protected_broker_path}")" = "0"
+          grep -Fq "ExecStart=\"${protected_broker_path}\" broker-serve" \
+            /etc/systemd/system/harness-data-metric-broker.service
+          if sudo -u nobody test -r "${real_metric_path}" ||
+             sudo -u nobody test -x "${real_metric_path}" ||
+             sudo -u nobody "${real_metric_path}" version; then
+            echo "::error::Agent UID can read or execute the private qdm-metric-cli"
+            exit 1
+          fi
+          if sudo -u nobody test -r "${protected_broker_path}" ||
+             sudo -u nobody test -x "${protected_broker_path}" ||
+             sudo -u nobody "${protected_broker_path}" broker-health; then
+            echo "::error::Agent UID can read or execute the protected Metric broker"
+            exit 1
+          fi
+
+          go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
+          sudo /tmp/release-smoke-fixture \
+            --runtime "${runtime}" \
+            --agent-uid "$(id -u nobody)" |
+            tee "${CONTRACT_ROOT}/binding.json" >/dev/null
+          binding="$(jq -er '.bindingBase64url' "${CONTRACT_ROOT}/binding.json")"
+
+          broker_pid=""
+          cleanup_broker() {
+            if [[ -n "${broker_pid}" ]]; then
+              sudo kill "${broker_pid}" >/dev/null 2>&1 || true
+              wait "${broker_pid}" >/dev/null 2>&1 || true
+            fi
+            sudo rm -f /run/harness-data/qdm-metric-cli.sock
+          }
+          trap cleanup_broker EXIT
+          sudo sh -c 'exec "$1" broker-serve >"$2" 2>&1' \
+            sh "${protected_broker_path}" "${CONTRACT_ROOT}/broker.log" &
+          broker_pid="$!"
+          for attempt in {1..50}; do
+            if sudo -u nobody "${runtime}/bin/qdm-metric-cli" broker-health; then
+              break
+            fi
+            if [[ "${attempt}" == "50" ]]; then
+              cat "${CONTRACT_ROOT}/broker.log"
+              echo "::error::trusted Metric broker did not become ready"
+              exit 1
+            fi
+            sleep 0.1
+          done
+
           set +e
-          env -u HARNESS_AUTHZ_BINDING_V1 "${runtime}/bin/qdm-metric-cli" version
+          sudo -u nobody env -u HARNESS_AUTHZ_BINDING_V1 \
+            "${runtime}/bin/qdm-metric-cli" version
           wrapper_status="$?"
           set -e
           if [[ "${wrapper_status}" -ne 77 ]]; then
             echo "::error::qdm-metric-cli without deployment authorization must exit 77, got ${wrapper_status}"
             exit 1
           fi
+          authorized_output="$(
+            sudo -u nobody env "HARNESS_AUTHZ_BINDING_V1=${binding}" \
+              "${runtime}/bin/qdm-metric-cli" version
+          )"
+          test "${authorized_output}" = "qdm-metric-cli v0.1.0-contract"
 
   release:
     needs:
@@ -297,6 +371,7 @@ jobs:
       - test
     if: >-
       inputs.publish ||
+      inputs.verify ||
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
@@ -318,6 +393,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
 
       - name: Resolve runtime version
         id: runtime
@@ -328,18 +406,14 @@ jobs:
           version="${VERSION_TAG:-v0.0.${GITHUB_RUN_ID}}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve latest compatible qdm-metric-cli release
+      - name: Resolve pinned qdm-metric-cli release
         id: metric
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
         run: |
           set -euo pipefail
           repo="pengmide/qdm-metric-cli"
-          version="$(gh release view --repo "${repo}" --json tagName --jq .tagName)"
-          if [[ ! "${version}" =~ ^v0\.1\.[0-9]+$ ]]; then
-            echo "::error::qdm-metric-cli latest release must remain compatible with v0.1.x: ${version}"
-            exit 1
-          fi
+          version="v0.1.0"
           rm -rf /tmp/qdm-metric-release
           mkdir -p /tmp/qdm-metric-release
           for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
@@ -453,6 +527,7 @@ jobs:
           test "$(stat -c '%u' "${protected_broker_path}")" = "0"
           grep -Fq "ExecStart=\"${protected_broker_path}\" broker-serve" \
             /etc/systemd/system/harness-data-metric-broker.service
+          sudo systemd-analyze verify /etc/systemd/system/harness-data-metric-broker.service
           if sudo -u nobody test -r "${real_metric_path}" ||
              sudo -u nobody test -x "${real_metric_path}" ||
              sudo -u nobody "${real_metric_path}" version; then
@@ -465,14 +540,52 @@ jobs:
             echo "::error::Agent UID can read or execute the protected Metric broker"
             exit 1
           fi
+
+          go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
+          sudo /tmp/release-smoke-fixture \
+            --runtime "${runtime}" \
+            --agent-uid "$(id -u nobody)" |
+            tee "${smoke_root}/binding.json" >/dev/null
+          binding="$(jq -er '.bindingBase64url' "${smoke_root}/binding.json")"
+
+          broker_pid=""
+          cleanup_broker() {
+            if [[ -n "${broker_pid}" ]]; then
+              sudo kill "${broker_pid}" >/dev/null 2>&1 || true
+              wait "${broker_pid}" >/dev/null 2>&1 || true
+            fi
+            sudo rm -f /run/harness-data/qdm-metric-cli.sock
+          }
+          trap cleanup_broker EXIT
+          sudo sh -c 'exec "$1" broker-serve >"$2" 2>&1' \
+            sh "${protected_broker_path}" "${smoke_root}/broker.log" &
+          broker_pid="$!"
+          for attempt in {1..50}; do
+            if sudo -u nobody "${runtime}/bin/qdm-metric-cli" broker-health; then
+              break
+            fi
+            if [[ "${attempt}" == "50" ]]; then
+              cat "${smoke_root}/broker.log"
+              echo "::error::trusted Metric broker did not become ready"
+              exit 1
+            fi
+            sleep 0.1
+          done
+
           set +e
-          env -u HARNESS_AUTHZ_BINDING_V1 "${runtime}/bin/qdm-metric-cli" version
+          sudo -u nobody env -u HARNESS_AUTHZ_BINDING_V1 \
+            "${runtime}/bin/qdm-metric-cli" version
           wrapper_status="$?"
           set -e
           if [[ "${wrapper_status}" -ne 77 ]]; then
             echo "::error::qdm-metric-cli without deployment authorization must exit 77, got ${wrapper_status}"
             exit 1
           fi
+          authorized_output="$(
+            sudo -u nobody env "HARNESS_AUTHZ_BINDING_V1=${binding}" \
+              "${runtime}/bin/qdm-metric-cli" version
+          )"
+          test -n "${authorized_output}"
       - name: Publish GitHub Release assets
         if: inputs.publish || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

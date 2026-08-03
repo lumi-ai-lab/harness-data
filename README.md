@@ -102,8 +102,8 @@ qdm-metric-cli-vX.Y.Z-windows-amd64.zip
 ```
 
 Every upstream archive must also publish a matching `.sha256` file. Each
-Harness release resolves the latest compatible `v0.1.x` private Metric CLI,
-computes its extracted binary SHA256, and pins the resolved version, release
+Harness release downloads the authorization-reviewed `v0.1.0` private Metric
+CLI, computes its extracted binary SHA256, and pins the exact version, release
 URLs, archive SHA256 values, and binary SHA256 values in the immutable runtime
 manifest. Release-set binary digests are stored per platform under
 `releaseSets.<key>.platforms.<platform>`; the platform identifier is included

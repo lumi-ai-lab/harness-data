@@ -54,7 +54,7 @@ function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
     version: "v0.0.27",
     publicMetricVersion: "v0.0.27",
     publicMetricSha256: "a".repeat(64),
-    realMetricVersion: "v0.1.7",
+    realMetricVersion: "v0.1.0",
     realMetricSha256: "b".repeat(64),
     catalogSha256: "c".repeat(64),
     authzSchemaVersion: 1,
@@ -244,6 +244,10 @@ test("linkAgents replaces a dangling hook after a runtime directory move", () =>
 test("release workflow pins qdm-metric-cli and builds the runtime bundle", () => {
   const workflow = fs.readFileSync(path.join(repository, ".github/workflows/publish-cli-release.yml"), "utf8");
   const releaseWorkflow = fs.readFileSync(path.join(repository, ".github/workflows/release.yml"), "utf8");
+  const candidateWorkflow = fs.readFileSync(
+    path.join(repository, ".github/workflows/verify-release-candidate.yml"),
+    "utf8"
+  );
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
   const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
   assert.equal(realMetric.private, true);
@@ -253,9 +257,9 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /github\.event_name == 'pull_request'/);
   assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
   assert.match(workflow, /version="\$\{VERSION_TAG:-v0\.0\.\$\{GITHUB_RUN_ID\}\}"/);
-  assert.match(workflow, /Resolve latest compatible qdm-metric-cli release/);
-  assert.match(workflow, /gh release view --repo "\$\{repo\}" --json tagName --jq \.tagName/);
-  assert.match(workflow, /\^v0\\\.1\\\.\[0-9\]\+\$/);
+  assert.match(workflow, /Resolve pinned qdm-metric-cli release/);
+  assert.match(workflow, /version="v0\.1\.0"/);
+  assert.doesNotMatch(workflow, /gh release view/);
   assert.match(workflow, /--pattern "\$\{asset\}\.sha256"/);
   assert.doesNotMatch(workflow, /--pattern "\$\{asset\}\.binary\.sha256"/);
   assert.match(workflow, /expected_archive_sha=.*awk/);
@@ -272,7 +276,7 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /if: github\.event_name == 'pull_request'/);
   assert.match(workflow, /Build secretless release fixtures/);
   assert.match(workflow, /QDM_METRIC_CONTRACT_ASSETS/);
-  assert.match(workflow, /Exercise privileged install and fail-closed wrapper/);
+  assert.match(workflow, /Exercise privileged install and broker authorization/);
   assert.match(workflow, /Smoke test released installation/);
   assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.RELEASE_GH_TOKEN \|\| github\.token \}\}/);
   assert.match(workflow, /--github-token "\$\{GH_TOKEN\}"/);
@@ -288,12 +292,25 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /protected_broker_path="\/opt\/harness-data\/broker\/qdm-metric-cli"/);
   assert.match(workflow, /Agent UID can read or execute the protected Metric broker/);
   assert.match(workflow, /harness-data-metric-broker\.service/);
+  assert.match(workflow, /systemd-analyze verify/);
+  assert.match(workflow, /cli\/tests\/cmd\/release-smoke-fixture/);
+  assert.match(workflow, /\.bindingBase64url/);
+  assert.match(workflow, /broker-health/);
+  assert.match(workflow, /HARNESS_AUTHZ_BINDING_V1=\$\{binding\}/);
+  assert.match(workflow, /qdm-metric-cli v0\.1\.0-contract/);
   assert.match(workflow, /wrapper_status/);
   assert.match(workflow, /\[\[ "\$\{wrapper_status\}" -ne 77 \]\]/);
   assert.match(workflow, /if: inputs\.publish \|\| startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  assert.match(workflow, /inputs\.verify/);
   assert.doesNotMatch(releaseWorkflow, /console\.log\(`\$\{tool\.repo\}.*\.binary\.sha256/);
   assert.match(workflow, /authz|qdm-metric-cli-real/i);
   assert.doesNotMatch(workflow, /qdm-indicators|qdm-cmr|qdm-sql|cas-cli/i);
+  assert.match(candidateWorkflow, /environment: release-candidate/);
+  assert.match(candidateWorkflow, /\^\[0-9a-f\]\{40\}\$/);
+  assert.match(candidateWorkflow, /git rev-parse HEAD/);
+  assert.match(candidateWorkflow, /uses: \.\/\.github\/workflows\/publish-cli-release\.yml/);
+  assert.match(candidateWorkflow, /verify: true/);
+  assert.match(candidateWorkflow, /publish: false/);
 
   const gitmodules = fs.readFileSync(path.join(repository, ".gitmodules"), "utf8");
   assert.match(gitmodules, /url\s*=\s*\.\.\/harness-data-wikis/);
@@ -307,7 +324,7 @@ test("profile state accepts both profiles without auth release state", () => {
   assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
     releaseSet: {
       ...stateFixture(lumiRequiredProfile).releaseSet,
-      realMetricVersion: "v0.2.0"
+      realMetricVersion: "v0.1.1"
     }
   })), "");
   const wrongPlatformReleaseSet = {

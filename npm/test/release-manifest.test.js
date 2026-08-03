@@ -65,12 +65,12 @@ test("release-set digest matches the cross-language canonical vector", () => {
     version: "v1.2.3",
     publicMetricVersion: "v1.2.3",
     publicMetricSha256: "a".repeat(64),
-    realMetricVersion: "v0.1.7",
+    realMetricVersion: "v0.1.0",
     realMetricSha256: "b".repeat(64),
     catalogSha256: "c".repeat(64),
     authzSchemaVersion: 1,
     piVersion: "0.81.1"
-  }), "724d71cb0d685a84b82b72f4ea3b5af780a1c308f61aab2efc36dc62b6c1e0cc");
+  }), "143590d13fd20b776d7cd1403349b28403feb7a796d791fd55fad122f5a5bdb5");
 });
 
 test("release manifest materializer fixes both runtime CLIs", () => {
@@ -79,7 +79,7 @@ test("release manifest materializer fixes both runtime CLIs", () => {
   const qdmMetricDist = path.join(fixture, "qdm-metric-dist");
   const output = path.join(fixture, "runtime", "bootstrap", "cli-manifest.json");
   const version = "v1.2.3";
-  const qdmMetricVersion = "v0.1.7";
+  const qdmMetricVersion = "v0.1.0";
   fs.mkdirSync(dist, { recursive: true });
   fs.mkdirSync(qdmMetricDist, { recursive: true });
   const approvedWikis = writeApprovedWikisFixture(fixture);
@@ -120,7 +120,7 @@ test("release manifest materializer fixes both runtime CLIs", () => {
   assert.equal(manifest.tools[2].destination, `/opt/harness-data/private/qdm-metric-cli-${qdmMetricVersion}`);
   assert.match(
     manifest.tools[2].platforms["linux-amd64"].url,
-    /pengmide\/qdm-metric-cli\/releases\/download\/v0\.1\.7\/qdm-metric-cli-v0\.1\.7-linux-amd64\.tar\.gz$/
+    /pengmide\/qdm-metric-cli\/releases\/download\/v0\.1\.0\/qdm-metric-cli-v0\.1\.0-linux-amd64\.tar\.gz$/
   );
   const releaseSet = manifest.releaseSets["lumi-mvp-v1"];
   assert.equal(releaseSet.sha256, undefined);
@@ -168,7 +168,7 @@ test("release manifest rejects missing and extra release-set platforms", () => {
     const qdmMetricDist = path.join(fixture, "qdm-metric-dist");
     const template = path.join(fixture, "cli-manifest.json");
     const version = "v1.2.3";
-    const qdmMetricVersion = "v0.1.7";
+    const qdmMetricVersion = "v0.1.0";
     fs.mkdirSync(dist, { recursive: true });
     fs.mkdirSync(qdmMetricDist, { recursive: true });
     const approvedWikis = writeApprovedWikisFixture(fixture);
@@ -193,11 +193,11 @@ test("release manifest rejects missing and extra release-set platforms", () => {
   }
 });
 
-test("release manifest rejects a latest Metric CLI outside v0.1.x", () => {
+test("release manifest rejects a Metric CLI other than v0.1.0", () => {
   assert.throws(() => materializeReleaseManifest({
     version: "v1.2.3",
-    qdmMetricVersion: "v0.2.0"
-  }), /must remain compatible with v0\.1\.x/);
+    qdmMetricVersion: "v0.1.1"
+  }), /must be pinned to v0\.1\.0/);
 });
 
 test("release manifest materialization requires approved Wikis", () => {
@@ -207,7 +207,7 @@ test("release manifest materialization requires approved Wikis", () => {
     output: path.join(fixture, "output.json"),
     version: "v1.2.3",
     dist: fixture,
-    qdmMetricVersion: "v0.1.7",
+    qdmMetricVersion: "v0.1.0",
     qdmMetricDist: fixture
   }), /approved Wikis/);
 });

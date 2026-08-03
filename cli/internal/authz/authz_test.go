@@ -217,7 +217,7 @@ func TestInstallerReleaseSetDigestMatchesCanonicalContract(t *testing.T) {
 		Version:             "v1.2.3",
 		PublicMetricVersion: "v1.2.3",
 		PublicMetricSHA256:  repeatTestString("a", 64),
-		RealMetricVersion:   "v0.1.7",
+		RealMetricVersion:   "v0.1.0",
 		RealMetricSHA256:    repeatTestString("b", 64),
 		CatalogSHA256:       repeatTestString("c", 64),
 		AuthzSchemaVersion:  1,
@@ -226,7 +226,7 @@ func TestInstallerReleaseSetDigestMatchesCanonicalContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "724d71cb0d685a84b82b72f4ea3b5af780a1c308f61aab2efc36dc62b6c1e0cc"
+	const expected = "143590d13fd20b776d7cd1403349b28403feb7a796d791fd55fad122f5a5bdb5"
 	if digest != expected {
 		t.Fatalf("release-set digest = %s, want %s", digest, expected)
 	}
