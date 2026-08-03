@@ -52,6 +52,8 @@ const lumiStateFields = [
   "tools",
   "manifestSha256",
   "packageVersion",
+  "releaseSet",
+  "authzConfigPath",
   "lastCheckAt"
 ];
 

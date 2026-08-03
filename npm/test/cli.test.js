@@ -32,7 +32,7 @@ import {
   validateProfileAgent
 } from "../src/lib/profile.js";
 import { binaryName } from "../src/lib/platform.js";
-import { installerStatePath } from "../src/lib/paths.js";
+import { installerStatePath, readInstallerState, writeState } from "../src/lib/paths.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -270,6 +270,36 @@ test("profile state accepts both profiles without auth release state", () => {
   assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "qwen"));
   assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "lumi"));
   assert.throws(() => validateProfileAgent(lumiRequiredProfile, "hermes"), /requires --agent/);
+});
+
+test("Lumi installer state preserves authorization fields through write/read", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lumi-state-"));
+  const workspace = path.join(temporary, "runtime");
+  const previousEnvironment = {
+    HOME: process.env.HOME,
+    XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+    LOCALAPPDATA: process.env.LOCALAPPDATA
+  };
+  process.env.HOME = path.join(temporary, "home");
+  process.env.XDG_STATE_HOME = path.join(temporary, "state");
+  process.env.LOCALAPPDATA = path.join(temporary, "local-app-data");
+
+  try {
+    const expected = stateFixture(lumiRequiredProfile);
+    const written = writeState(workspace, expected);
+    const state = readInstallerState(workspace);
+
+    assert.deepEqual(state, written);
+    assert.deepEqual(state.releaseSet, expected.releaseSet);
+    assert.equal(state.authzConfigPath, "/etc/harness-data/authz.json");
+    assert.equal(profileFromState(state), lumiRequiredProfile);
+  } finally {
+    for (const [name, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("doctor validates the two-CLI runtime and rejects legacy artifacts", async () => {
