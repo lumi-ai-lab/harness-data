@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { installerStateSchemaVersion, lumiRequiredProfile } from "./profile.js";
+import { installerStateSchemaVersion, piRequesterAuthorizedProfile } from "./profile.js";
 
 const stateDir = path.join("lumi-ai-lab", "harness-data-installer");
 
@@ -42,7 +42,7 @@ export function readInstallerState(workspace) {
   }
 }
 
-const lumiStateFields = [
+const piRequesterStateFields = [
   "schemaVersion",
   "profile",
   "agent",
@@ -59,12 +59,12 @@ const lumiStateFields = [
 
 export function installerStateDocument(workspace, patch, options = {}) {
   const updatedAt = options.updatedAt || new Date().toISOString();
-  if (patch?.profile === lumiRequiredProfile) {
+  if (patch?.profile === piRequesterAuthorizedProfile) {
     if (patch.schemaVersion !== installerStateSchemaVersion) {
-      throw new Error("lumi-mvp-required installer state must be a fresh schemaVersion 3 document");
+      throw new Error("pi-requester-authorized installer state must be a fresh schemaVersion 3 document");
     }
     const state = { lastInstallDir: workspace, updatedAt };
-    for (const field of lumiStateFields) {
+    for (const field of piRequesterStateFields) {
       if (patch[field] !== undefined) state[field] = patch[field];
     }
     return state;

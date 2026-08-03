@@ -16,5 +16,5 @@ Read `README.md` before running QDM data commands.
 - Do not read or use template files directly unless `bin/data-harness-cli inject-template` has been requested by the harness flow and the hook injects the template.
 - Use only commands exposed by the installed `qdm-metric-cli --help` and its subcommand help.
 - Do not call legacy data CLIs or run credential/token setup. In
-  `lumi-mvp-required`, requester authorization is supplied automatically by
+  `pi-requester-authorized`, requester authorization is supplied automatically by
   the installed Pi extension and enforced by `qdm-metric-cli`.

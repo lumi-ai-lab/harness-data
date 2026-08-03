@@ -95,7 +95,7 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 
 	fixture.config = authz.Config{
 		Version:                     authz.CurrentVersion,
-		Mode:                        authz.ModeLumiMVPRequired,
+		Mode:                        authz.ModePiRequesterAuthorized,
 		PiVersion:                   authz.RequiredPiVersion,
 		AgentUID:                    &fixture.agentUID,
 		RequesterContextDir:         fixture.contextDir,

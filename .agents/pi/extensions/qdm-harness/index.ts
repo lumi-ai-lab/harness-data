@@ -79,7 +79,7 @@ const MIN_CONTEXT_TIMEOUT_MS = 1_000;
 const MAX_CONTEXT_TIMEOUT_MS = 30_000;
 const CONTEXT_CACHE_LIMIT = 64;
 const EXPECTED_PI_VERSION = "0.81.1";
-const LUMI_AUTHORIZATION_PROFILE = "lumi-mvp-required";
+const PI_REQUESTER_AUTHORIZATION_PROFILE = "pi-requester-authorized";
 
 const STATIC_SYSTEM_GUIDANCE = [
   "QDM Harness context is attached to the active user turn before each model request.",
@@ -150,19 +150,19 @@ function findProjectRoot(startDir: string): string {
   }
 }
 
-function usesLumiAuthorizationProfile(projectRoot: string): boolean {
+function usesPiRequesterAuthorizationProfile(projectRoot: string): boolean {
   const statePath = join(projectRoot, ".harness", "installer-state.json");
   try {
     const state = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
     return (
       isObject(state) &&
       state.schemaVersion === 3 &&
-      state.profile === LUMI_AUTHORIZATION_PROFILE &&
+      state.profile === PI_REQUESTER_AUTHORIZATION_PROFILE &&
       state.agent === "pi"
     );
   } catch {
     // Authorization is activated only by an explicit, valid immutable-image
-    // profile. Lumi readiness rejects missing or malformed installer state;
+    // profile. Authorization readiness rejects missing or malformed installer state;
     // legacy and local workspaces retain their unrestricted behavior here.
     return false;
   }
@@ -383,7 +383,7 @@ export async function installQdmHarnessExtension(
   dependencies: ExtensionDependencies = {},
 ): Promise<void> {
   let projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
-  const authorizationEnabled = usesLumiAuthorizationProfile(projectRoot);
+  const authorizationEnabled = usesPiRequesterAuthorizationProfile(projectRoot);
   const contextCache = new ContextCache(CONTEXT_CACHE_LIMIT);
   const authorizationState = authorizationEnabled ? new AuthorizationStateStore() : undefined;
   const assistantMessageBindings = new WeakMap<object, AuthorizationBindingSnapshot>();

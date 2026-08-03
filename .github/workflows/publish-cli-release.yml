@@ -273,7 +273,6 @@ jobs:
 
           {
             echo "CONTRACT_ROOT=${contract_root}"
-            echo "CONTRACT_APPROVED_WIKIS=${approved_wikis}"
             echo "CONTRACT_METRIC_ASSETS=${metric_assets}"
             echo "CONTRACT_FAKE_BIN=${fake_bin}"
             echo "CONTRACT_VERSION_TAG=${VERSION_TAG}"
@@ -293,13 +292,12 @@ jobs:
             "QDM_METRIC_CONTRACT_ASSETS=${CONTRACT_METRIC_ASSETS}" \
             node npm/bin/harness-data.js install \
               --dir "${runtime}" \
-              --profile lumi-mvp-required \
+              --profile pi-requester-authorized \
               --agent pi \
               --yes \
               --runtime-bundle "${PWD}/dist/harness-data-runtime-${CONTRACT_VERSION_TAG}.tar.gz" \
               --runtime-tag "${CONTRACT_VERSION_TAG}" \
-              --asset-dir "${smoke_assets}" \
-              --wikis-source "${CONTRACT_APPROVED_WIKIS}"
+              --asset-dir "${smoke_assets}"
           real_metric_path="$(
             sudo node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
           )"
@@ -535,14 +533,13 @@ jobs:
           sudo env "PATH=${PATH}" "HOME=${smoke_root}/home" \
             node npm/bin/harness-data.js install \
               --dir "${runtime}" \
-              --profile lumi-mvp-required \
+              --profile pi-requester-authorized \
               --agent pi \
               --yes \
               --github-token "${GH_TOKEN}" \
               --runtime-bundle "${PWD}/dist/harness-data-runtime-${VERSION_TAG}.tar.gz" \
               --runtime-tag "${VERSION_TAG}" \
-              --asset-dir "${smoke_assets}" \
-              --wikis-source "${PWD}/runtime/bootstrap/approved-lumi-wikis"
+              --asset-dir "${smoke_assets}"
           real_metric_path="$(
             sudo node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
           )"

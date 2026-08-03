@@ -17,8 +17,8 @@ const (
 	RequiredPiVersion              = "0.81.1"
 	ClaimNamespaceQDMScope         = "qdm.scope"
 
-	ModeLumiMVPRequired = "lumi-mvp-required"
-	ModeDisabledDeny    = "disabled-deny"
+	ModePiRequesterAuthorized = "pi-requester-authorized"
+	ModeDisabledDeny          = "disabled-deny"
 
 	CapabilityMetricQuery = "qdm.metric.query"
 )

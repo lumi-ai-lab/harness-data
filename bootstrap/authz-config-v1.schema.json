@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/lumi-ai-lab/harness-data/blob/master/bootstrap/authz-config-v1.schema.json",
-  "title": "Harness Data Lumi authorization configuration V1",
+  "title": "Harness Data Pi requester authorization configuration V1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,7 +25,7 @@
   "properties": {
     "version": { "const": 1 },
     "mode": {
-      "enum": ["lumi-mvp-required", "disabled-deny"]
+      "enum": ["pi-requester-authorized", "disabled-deny"]
     },
     "piVersion": { "const": "0.81.1" },
     "agentUid": {

@@ -43,9 +43,9 @@ Commands:
 
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
-  --profile NAME                     local-unrestricted or lumi-mvp-required (interactive installs default local)
+  --profile NAME                     local-unrestricted or pi-requester-authorized (interactive installs default local)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
-  --wikis-source PATH                Release-pinned Wikis source (required for lumi-mvp-required)
+  --wikis-source PATH                Local Wikis source override (local-unrestricted only)
   --github-token TOKEN               GitHub token for runtime Release assets
   --metric-cli-path PATH             Optional local qdm-metric-cli executable override
   --sandbox-cli-dir PATH             Linux sandbox CLI directory for cross-platform local installs`);

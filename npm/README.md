@@ -38,7 +38,7 @@ export QDM_METRIC_CLI="/absolute/runtime/path/bin/qdm-metric-cli"
 ```
 
 The local-unrestricted profile does not configure credentials or requester
-authorization. The `lumi-mvp-required` profile requires `--agent pi`; the Pi
+authorization. The `pi-requester-authorized` profile requires `--agent pi`; the Pi
 extension binds each session to the current Lumi requester context. The public
 CLI reaches the private runtime only through
 `/run/harness-data/qdm-metric-cli.sock`; the broker authenticates the caller
@@ -71,7 +71,7 @@ consistency; it does not independently grant business approval.
 
 Supported local Agent templates are Claude Code, Codex, Pi, OpenClaw, and
 Hermes. Non-Pi templates use only the ordinary Harness context and posttool
-hooks and are not accepted by `lumi-mvp-required`.
+hooks and are not accepted by `pi-requester-authorized`.
 
 Commands:
 

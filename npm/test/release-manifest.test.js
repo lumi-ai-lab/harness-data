@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { materializeReleaseManifest } from "../../bootstrap/materialize-cli-manifest.mjs";
-import { lumiReleaseSet, lumiReleaseSetDigest } from "../src/lib/profile.js";
+import { piRequesterReleaseSet, piRequesterReleaseSetDigest } from "../src/lib/profile.js";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const releasePlatforms = [
@@ -60,7 +60,7 @@ function writeReleaseAssets(dist, qdmMetricDist, version, qdmMetricVersion) {
 }
 
 test("release-set digest matches the cross-language canonical vector", () => {
-  assert.equal(lumiReleaseSetDigest({
+  assert.equal(piRequesterReleaseSetDigest({
     platform: "darwin-arm64",
     version: "v1.2.3",
     publicMetricVersion: "v1.2.3",
@@ -99,8 +99,8 @@ test("release manifest materializer fixes both runtime CLIs", () => {
 
   assert.deepEqual(manifest.tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   assert.deepEqual(manifest.profiles["local-unrestricted"].tools, ["data-harness-cli", "qdm-metric-cli"]);
-  assert.equal(manifest.profiles["lumi-mvp-required"].agent, "pi");
-  assert.deepEqual(manifest.profiles["lumi-mvp-required"].tools, ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
+  assert.equal(manifest.profiles["pi-requester-authorized"].agent, "pi");
+  assert.deepEqual(manifest.profiles["pi-requester-authorized"].tools, ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   assert.equal(manifest.tools[0].tracking, "fixed");
   assert.equal(manifest.tools[0].version, version);
   assert.match(
@@ -122,7 +122,7 @@ test("release manifest materializer fixes both runtime CLIs", () => {
     manifest.tools[2].platforms["linux-amd64"].url,
     /pengmide\/qdm-metric-cli\/releases\/download\/v0\.1\.0\/qdm-metric-cli-v0\.1\.0-linux-amd64\.tar\.gz$/
   );
-  const releaseSet = manifest.releaseSets["lumi-mvp-v1"];
+  const releaseSet = manifest.releaseSets["pi-requester-v1"];
   assert.equal(releaseSet.sha256, undefined);
   assert.equal(releaseSet.publicMetricSha256, undefined);
   assert.equal(releaseSet.realMetricSha256, undefined);
@@ -132,12 +132,12 @@ test("release manifest materializer fixes both runtime CLIs", () => {
     const platformReleaseSet = releaseSet.platforms[platform];
     assert.equal(platformReleaseSet.publicMetricSha256, sha256(`authorized-metric:${platform}`));
     assert.equal(platformReleaseSet.realMetricSha256, sha256(`metric:${platform}`));
-    const selected = lumiReleaseSet(manifest, platform);
-    assert.equal(selected.key, "lumi-mvp-v1");
+    const selected = piRequesterReleaseSet(manifest, platform);
+    assert.equal(selected.key, "pi-requester-v1");
     assert.equal(selected.platform, platform);
     assert.equal(selected.publicMetricSha256, platformReleaseSet.publicMetricSha256);
     assert.equal(selected.realMetricSha256, platformReleaseSet.realMetricSha256);
-    assert.equal(selected.sha256, lumiReleaseSetDigest(selected));
+    assert.equal(selected.sha256, piRequesterReleaseSetDigest(selected));
     platformDigests.add(selected.sha256);
   }
   assert.equal(platformDigests.size, Object.keys(releaseSet.platforms).length);
@@ -148,13 +148,13 @@ test("release manifest rejects missing and extra release-set platforms", () => {
   for (const [name, mutate, pattern] of [
     [
       "missing platform",
-      (manifest) => delete manifest.releaseSets["lumi-mvp-v1"].platforms["linux-amd64"],
+      (manifest) => delete manifest.releaseSets["pi-requester-v1"].platforms["linux-amd64"],
       /does not declare linux-amd64/
     ],
     [
       "extra platform",
       (manifest) => {
-        manifest.releaseSets["lumi-mvp-v1"].platforms["linux-arm64"] = {
+        manifest.releaseSets["pi-requester-v1"].platforms["linux-arm64"] = {
           sha256: "",
           publicMetricSha256: "",
           realMetricSha256: ""

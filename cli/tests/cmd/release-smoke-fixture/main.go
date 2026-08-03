@@ -65,7 +65,7 @@ func buildFixture(runtimeRoot string, agentUID, readerGID uint32, now time.Time)
 	if err := decodeInstallerState(statePath, &state); err != nil {
 		return authz.BindResult{}, fmt.Errorf("read installer state: %w", err)
 	}
-	if state.Profile != authz.ModeLumiMVPRequired {
+	if state.Profile != authz.ModePiRequesterAuthorized {
 		return authz.BindResult{}, fmt.Errorf("unexpected installer profile %q", state.Profile)
 	}
 	realMetric, ok := state.Tools["qdm-metric-cli-real"]
@@ -119,7 +119,7 @@ func buildFixture(runtimeRoot string, agentUID, readerGID uint32, now time.Time)
 
 	config := authz.Config{
 		Version:                     authz.CurrentVersion,
-		Mode:                        authz.ModeLumiMVPRequired,
+		Mode:                        authz.ModePiRequesterAuthorized,
 		PiVersion:                   authz.RequiredPiVersion,
 		AgentUID:                    &agentUID,
 		RequesterContextDir:         contextDir,

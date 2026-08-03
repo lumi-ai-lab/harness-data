@@ -45,7 +45,7 @@ function createProject(t, options = {}) {
       join(root, ".harness", "installer-state.json"),
       JSON.stringify({
         schemaVersion: 3,
-        profile: options.profile ?? "lumi-mvp-required",
+        profile: options.profile ?? "pi-requester-authorized",
         agent: "pi",
       }),
     );

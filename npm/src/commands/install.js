@@ -24,11 +24,11 @@ import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import {
   authzConfigPathFor,
   installerStateSchemaVersion,
-  lumiMetricCatalogArtifact,
-  lumiApprovedWikisArtifact,
-  lumiReleaseSet,
+  piRequesterMetricCatalogArtifact,
+  piRequesterApprovedWikisArtifact,
+  piRequesterReleaseSet,
   localUnrestrictedProfile,
-  lumiRequiredProfile,
+  piRequesterAuthorizedProfile,
   normalizeProfile,
   profileFromState,
   selectManifestProfile,
@@ -139,8 +139,8 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
       const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
       if (!/^[a-f0-9]{64}$/.test(expected)) throw new Error("runtime bundle sha256 is invalid");
       if (actual !== expected) throw new Error("runtime bundle sha256 mismatch");
-    } else if (options.profile === lumiRequiredProfile || options.requireChecksum === true) {
-      throw new Error("lumi-mvp-required runtime bundle checksum is missing");
+    } else if (options.profile === piRequesterAuthorizedProfile || options.requireChecksum === true) {
+      throw new Error("pi-requester-authorized runtime bundle checksum is missing");
     } else {
       warn("runtime bundle 未提供 sha256，已继续安装");
     }
@@ -220,17 +220,20 @@ async function installLocalTools(runtimeDir, profile, options = {}) {
   return installed;
 }
 
-async function installWikis(runtimeDir, profile, manifest, options = {}) {
+export async function installWikis(runtimeDir, profile, manifest, options = {}) {
   const target = path.join(runtimeDir, "wikis");
-  if (profile === lumiRequiredProfile) {
-    if (!options.wikisSource) {
-      throw new Error("lumi-mvp-required installation requires explicit --wikis-source for release-pinned content");
+  if (profile === piRequesterAuthorizedProfile) {
+    if (String(options.wikisSource || "").trim()) {
+      throw new Error("pi-requester-authorized does not accept an external Wikis source");
     }
-    const approved = lumiApprovedWikisArtifact(manifest);
+    const approved = piRequesterApprovedWikisArtifact(manifest);
+    const source = path.resolve(runtimeDir, approved.source);
+    const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-lumi-wikis");
+    if (source !== expectedSource) throw new Error("approved Wikis source escapes the runtime bundle");
     const approvalManifest = path.resolve(runtimeDir, approved.manifest);
     const expectedManifest = path.join(path.resolve(runtimeDir), "bootstrap", "approved-lumi-wikis-manifest.json");
     if (approvalManifest !== expectedManifest) throw new Error("approved Wikis manifest escapes the runtime bundle");
-    const verified = verifyApprovedWikisSource(options.wikisSource, approvalManifest, approved.manifestSha256);
+    const verified = verifyApprovedWikisSource(source, approvalManifest, approved.manifestSha256);
     fs.rmSync(target, { recursive: true, force: true });
     fs.cpSync(verified.source, target, { recursive: true });
     ok(`已安装发布版本固定的 Lumi Wikis 内容 ${approved.manifestSha256.slice(0, 12)}`);
@@ -291,7 +294,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
   if (result.code !== 0) {
     if (options.requiredIndexes) {
-      throw new Error("wikis index build failed for lumi-mvp-required");
+      throw new Error("wikis index build failed for pi-requester-authorized");
     }
     warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
     return { ok: false };
@@ -308,7 +311,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
     }
   });
   if (options.requiredIndexes && missingIndexes.length) {
-    throw new Error(`wikis index build did not produce required Lumi indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
+    throw new Error(`wikis index build did not produce required release indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
   }
   const output = `${result.stdout}\n${result.stderr}`;
   const docs = output.match(/\bdocs=(\d+)/)?.[1];
@@ -397,22 +400,22 @@ export function installSandboxPlatformTools(runtimeDir, profile, options = {}) {
   return installed;
 }
 
-export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
+export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, releaseSet) {
   const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
   const publicMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli");
   const realMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
   if (!helper || !publicMetric || !realMetric) {
-    throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
+    throw new Error("pi-requester-authorized manifest must include all Harness authorization artifacts");
   }
   for (const tool of [helper, publicMetric, realMetric]) {
-    if (tool.tracking !== "fixed") throw new Error("Lumi authorization artifacts must use fixed tracking");
+    if (tool.tracking !== "fixed") throw new Error("Pi requester authorization artifacts must use fixed tracking");
   }
   const platform = platformKey();
   if (!platform.startsWith("linux-")) {
-    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
   }
   if (releaseSet.platform !== platform) {
-    throw new Error(`Lumi release-set platform does not match ${platform}`);
+    throw new Error(`Pi requester release-set platform does not match ${platform}`);
   }
   for (const [name, tool] of [["data-harness-cli", helper], ["qdm-metric-cli", publicMetric], ["qdm-metric-cli-real", realMetric]]) {
     if (!/^[a-f0-9]{64}$/.test(String(tool.platforms?.[platform]?.binarySha256 || ""))) {
@@ -421,11 +424,11 @@ export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet)
   }
   if (publicMetric.version !== releaseSet.publicMetricVersion ||
       realMetric.version !== releaseSet.realMetricVersion) {
-    throw new Error("Metric CLI versions do not match the Lumi release-set");
+    throw new Error("Metric CLI versions do not match the Pi requester release-set");
   }
   if (publicMetric.platforms[platform].binarySha256 !== releaseSet.publicMetricSha256 ||
       realMetric.platforms[platform].binarySha256 !== releaseSet.realMetricSha256) {
-    throw new Error(`Metric CLI artifacts do not match the Lumi release-set for ${platform}`);
+    throw new Error(`Metric CLI artifacts do not match the Pi requester release-set for ${platform}`);
   }
   const publicPath = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
   const realDestination = path.resolve(String(realMetric.destination || ""));
@@ -433,14 +436,14 @@ export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet)
       path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
       path.dirname(realDestination) !== privateMetricRoot ||
       path.basename(realDestination) !== "qdm-metric-cli-v0.1.0") {
-    throw new Error("Lumi authorization artifact destinations are invalid");
+    throw new Error("Pi requester authorization artifact destinations are invalid");
   }
 }
 
-export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
+export function verifyPiRequesterInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
   const publicMetric = installedTools?.["qdm-metric-cli"];
   const realMetric = installedTools?.["qdm-metric-cli-real"];
-  if (!publicMetric || !realMetric) throw new Error("Lumi installation is missing Metric authorization artifacts");
+  if (!publicMetric || !realMetric) throw new Error("Pi requester installation is missing Metric authorization artifacts");
   if (publicMetric.version !== releaseSet.publicMetricVersion ||
       realMetric.version !== releaseSet.realMetricVersion ||
       publicMetric.sha256 !== releaseSet.publicMetricSha256 ||
@@ -457,8 +460,8 @@ export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manife
   }
 }
 
-export function installLumiMetricCatalog(runtimeDir, manifest) {
-  const catalog = lumiMetricCatalogArtifact(manifest);
+export function installPiRequesterMetricCatalog(runtimeDir, manifest) {
+  const catalog = piRequesterMetricCatalogArtifact(manifest);
   const source = path.resolve(runtimeDir, catalog.source);
   const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-metrics-v1.json");
   if (source !== expectedSource || fileSha256(source) !== catalog.sha256) {
@@ -507,7 +510,7 @@ function writeRootOwnedFileAtomic(destination, content, mode) {
   }
 }
 
-export function renderLumiMetricBrokerService() {
+export function renderPiRequesterMetricBrokerService() {
   return `[Unit]
 Description=Harness Data trusted Metric CLI broker
 After=network-online.target
@@ -547,13 +550,13 @@ WantedBy=multi-user.target
 `;
 }
 
-export function prepareLumiMetricBrokerDestination(manifest, options = {}) {
+export function preparePiRequesterMetricBrokerDestination(manifest, options = {}) {
   if (process.platform !== "linux") {
-    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
   }
   const effectiveUID = options.effectiveUID ?? process.getuid?.();
   if (effectiveUID !== 0) {
-    throw new Error("lumi-mvp-required installation must run as root to isolate the private Metric CLI");
+    throw new Error("pi-requester-authorized installation must run as root to isolate the private Metric CLI");
   }
   const realTool = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
   const realPath = path.resolve(String(realTool?.destination || ""));
@@ -574,13 +577,13 @@ export function prepareLumiMetricBrokerDestination(manifest, options = {}) {
   return realPath;
 }
 
-export function installLumiMetricBroker(runtimeDir, installedTools, options = {}) {
+export function installPiRequesterMetricBroker(runtimeDir, installedTools, options = {}) {
   if (process.platform !== "linux") {
-    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
   }
   const effectiveUID = options.effectiveUID ?? process.getuid?.();
   if (effectiveUID !== 0) {
-    throw new Error("lumi-mvp-required installation must run as root to isolate the private Metric CLI");
+    throw new Error("pi-requester-authorized installation must run as root to isolate the private Metric CLI");
   }
 
   const realMetric = installedTools?.["qdm-metric-cli-real"];
@@ -616,7 +619,7 @@ export function installLumiMetricBroker(runtimeDir, installedTools, options = {}
   assertRootOwnedDirectory(protectedMetricBrokerRoot, 0o700);
   writeRootOwnedFileAtomic(protectedMetricBrokerPath, publicMetricBytes, 0o500);
 
-  const service = renderLumiMetricBrokerService();
+  const service = renderPiRequesterMetricBrokerService();
   const servicePath = path.resolve(options.servicePath || metricBrokerServicePath);
   assertRootOwnedDirectory(path.dirname(servicePath), 0o755);
   writeRootOwnedFileAtomic(servicePath, service, 0o644);
@@ -634,8 +637,8 @@ export function printDoctorSummary(doctor, options = {}) {
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
   const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
   if (!failed.length) {
-    if (doctor.profile === lumiRequiredProfile) {
-      ok("lumi-mvp-required profile 与 installer-state v3");
+    if (doctor.profile === piRequesterAuthorizedProfile) {
+      ok("pi-requester-authorized profile 与 installer-state v3");
       ok("2 个运行时 CLI（data-harness-cli 与 qdm-metric-cli）");
       ok("唯一数据入口 qdm-metric-cli");
       ok("无 CAS/token 与其他数据 CLI");
@@ -720,21 +723,21 @@ export function removeLegacyLocalTools(runtimeDir) {
 export async function installCommand(options = {}) {
   const explicitProfile = String(options.profile || "").trim();
   if (!explicitProfile && (options.yes || !process.stdin.isTTY)) {
-    throw new Error("non-interactive installation requires explicit --profile local-unrestricted or lumi-mvp-required");
+    throw new Error("non-interactive installation requires explicit --profile local-unrestricted or pi-requester-authorized");
   }
   const profile = normalizeProfile(options.profile);
-  if (profile === lumiRequiredProfile && String(options.profile || "") !== lumiRequiredProfile) {
-    throw new Error("Lumi installation must explicitly pass --profile lumi-mvp-required");
+  if (profile === piRequesterAuthorizedProfile && String(options.profile || "") !== piRequesterAuthorizedProfile) {
+    throw new Error("Pi requester installation must explicitly pass --profile pi-requester-authorized");
   }
-  if (profile === lumiRequiredProfile && !options.agent) {
-    throw new Error("lumi-mvp-required profile requires explicit --agent pi");
+  if (profile === piRequesterAuthorizedProfile && !options.agent) {
+    throw new Error("pi-requester-authorized profile requires explicit --agent pi");
   }
-  const selectedAgent = profile === lumiRequiredProfile
+  const selectedAgent = profile === piRequesterAuthorizedProfile
     ? String(options.agent).trim().toLowerCase()
     : await chooseAgent(options);
   validateProfileAgent(profile, selectedAgent);
-  if (profile === lumiRequiredProfile && !options.wikisSource) {
-    throw new Error("lumi-mvp-required installation requires explicit --wikis-source for release-pinned content");
+  if (profile === piRequesterAuthorizedProfile && String(options.wikisSource || "").trim()) {
+    throw new Error("pi-requester-authorized uses the release-pinned Wikis in its runtime bundle and does not accept --wikis-source");
   }
   const requestedRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   const existingState = readInstallerState(requestedRuntimeDir);
@@ -746,8 +749,8 @@ export async function installCommand(options = {}) {
     if (existingProfile !== profile) {
       throw new Error(`cannot change installer profile from ${existingProfile} to ${profile}; rebuild the runtime in a fresh directory`);
     }
-    if (profile === lumiRequiredProfile) {
-      throw new Error("lumi-mvp-required runtimes are immutable; rebuild the image in a fresh directory");
+    if (profile === piRequesterAuthorizedProfile) {
+      throw new Error("pi-requester-authorized runtimes are immutable; rebuild the image in a fresh directory");
     }
   }
   const key = platformKey();
@@ -780,7 +783,7 @@ export async function installCommand(options = {}) {
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
   const installMode = installModeFor(profile, options, tokenMode);
-  const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
+  const installState = profile === piRequesterAuthorizedProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
   const sourceManifest = readManifest(manifestPath);
   const selectedManifest = profile === localUnrestrictedProfile
     ? localUnrestrictedReleaseManifest(sourceManifest, options)
@@ -789,24 +792,24 @@ export async function installCommand(options = {}) {
     for (const name of removeLegacyLocalTools(runtimeDir)) action(`移除旧版 CLI：${name}`);
     fs.rmSync(path.join(runtimeDir, ".qdm-auth"), { recursive: true, force: true });
   }
-  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest, key) : null;
+  const releaseSet = profile === piRequesterAuthorizedProfile ? piRequesterReleaseSet(sourceManifest, key) : null;
   const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
-  if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
+  if (profile === piRequesterAuthorizedProfile) validatePiRequesterManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
 
   let manifest;
   let localTools = {};
   let platformTools = {};
-  if (profile === lumiRequiredProfile) {
-    if (!tokenMode) throw new Error("lumi-mvp-required profile requires authenticated access to fixed release artifacts");
-    prepareLumiMetricBrokerDestination(selectedManifest);
+  if (profile === piRequesterAuthorizedProfile) {
+    if (!tokenMode) throw new Error("pi-requester-authorized profile requires authenticated access to fixed release artifacts");
+    preparePiRequesterMetricBrokerDestination(selectedManifest);
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
       ...options,
       state: installState,
       manifestOverride: selectedManifest
     });
-    verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
-    installLumiMetricBroker(runtimeDir, manifest.installedTools);
-    installLumiMetricCatalog(runtimeDir, sourceManifest);
+    verifyPiRequesterInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
+    installPiRequesterMetricBroker(runtimeDir, manifest.installedTools);
+    installPiRequesterMetricCatalog(runtimeDir, sourceManifest);
   } else {
     const releaseToolNames = selectedManifest.tools
       .map((tool) => tool.name)
@@ -866,7 +869,7 @@ export async function installCommand(options = {}) {
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, buildTime: profile === lumiRequiredProfile });
+  const doctor = await collectDoctor(runtimeDir, { ...options, buildTime: profile === piRequesterAuthorizedProfile });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();

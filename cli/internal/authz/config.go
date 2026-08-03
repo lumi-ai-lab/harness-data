@@ -45,7 +45,7 @@ func (config Config) Validate() error {
 	if config.Version != CurrentVersion {
 		return invalid("authorization config version must be 1")
 	}
-	if config.Mode != ModeLumiMVPRequired && config.Mode != ModeDisabledDeny {
+	if config.Mode != ModePiRequesterAuthorized && config.Mode != ModeDisabledDeny {
 		return invalid("authorization config mode is unsupported")
 	}
 	if config.PiVersion != RequiredPiVersion {
@@ -146,7 +146,7 @@ func (config Config) RequireEnforcing() error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if config.Mode != ModeLumiMVPRequired {
+	if config.Mode != ModePiRequesterAuthorized {
 		return authzError(CodeKillSwitchActive, "authorization is disabled", nil)
 	}
 	return nil

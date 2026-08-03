@@ -436,7 +436,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 	if err := decodeInstallerStateJSON(data, &state); err != nil {
 		return invalid("installer state is invalid", err)
 	}
-	if state.SchemaVersion != 3 || state.Profile != ModeLumiMVPRequired || state.Agent != "pi" {
+	if state.SchemaVersion != 3 || state.Profile != ModePiRequesterAuthorized || state.Agent != "pi" {
 		return invalid("installer state profile is inconsistent", nil)
 	}
 	updatedAt, updatedErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)

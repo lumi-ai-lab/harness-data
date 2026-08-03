@@ -7,8 +7,8 @@ import { concreteAgentNames, qdmCliBinariesForProfile } from "../lib/config.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
-  lumiApprovedWikisArtifact,
-  lumiRequiredProfile,
+  piRequesterApprovedWikisArtifact,
+  piRequesterAuthorizedProfile,
   profileFromState
 } from "../lib/profile.js";
 import { readManifest } from "../lib/manifest.js";
@@ -76,7 +76,7 @@ function configPathsValid(workspace, profile) {
     [...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)]
       .map((match) => [match[1], match[2]])
   );
-  const expected = profile === lumiRequiredProfile
+  const expected = profile === piRequesterAuthorizedProfile
     ? path.resolve(workspace, "bin", binaryName("qdm-metric-cli"))
     : path.join("bin", binaryName("qdm-metric-cli")).replaceAll("\\", "/");
   return values.size === 1 &&
@@ -99,7 +99,7 @@ function nonEmptyRegularFile(file) {
 function approvedWikisValid(workspace) {
   try {
     const manifest = readManifest(path.join(workspace, "bootstrap", "cli-manifest.json"));
-    const approved = lumiApprovedWikisArtifact(manifest);
+    const approved = piRequesterApprovedWikisArtifact(manifest);
     const manifestPath = path.resolve(workspace, approved.manifest);
     const expectedManifest = path.join(path.resolve(workspace), "bootstrap", "approved-lumi-wikis-manifest.json");
     if (manifestPath !== expectedManifest) return false;
@@ -149,7 +149,7 @@ export async function collectDoctor(workspace, options = {}) {
   } catch (error) {
     profileError = String(error?.message || error);
   }
-  const effectiveProfile = profile === lumiRequiredProfile ? lumiRequiredProfile : localUnrestrictedProfile;
+  const effectiveProfile = profile === piRequesterAuthorizedProfile ? piRequesterAuthorizedProfile : localUnrestrictedProfile;
   const checks = [];
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
@@ -164,7 +164,7 @@ export async function collectDoctor(workspace, options = {}) {
 
   const wikisIndex = path.join(workspace, ".harness", "index", "wikis-index.json");
   const wikisRuntimeIndex = path.join(workspace, ".harness", "index", "wikis-runtime-index.json");
-  if (effectiveProfile === lumiRequiredProfile) {
+  if (effectiveProfile === piRequesterAuthorizedProfile) {
     add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
     add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);
     add("release-pinned Wikis content", approvedWikisValid(workspace));
@@ -176,7 +176,7 @@ export async function collectDoctor(workspace, options = {}) {
   for (const binary of qdmCliBinariesForProfile(effectiveProfile)) {
     const file = path.join(workspace, "bin", binaryName(binary));
     add(`bin/${binary}`, existsExecutable(file));
-    const brokerProbe = effectiveProfile === lumiRequiredProfile && binary === "qdm-metric-cli";
+    const brokerProbe = effectiveProfile === piRequesterAuthorizedProfile && binary === "qdm-metric-cli";
     const requireBroker = brokerProbe && !options.buildTime;
     const probeArgs = binary === "qdm-metric-cli"
       ? [brokerProbe ? "broker-health" : "version"]
@@ -206,14 +206,14 @@ export async function collectDoctor(workspace, options = {}) {
     ...Object.keys(state.tools || {}),
     ...Object.keys(state.localTools || {})
   ]);
-  const expectedTools = effectiveProfile === lumiRequiredProfile
+  const expectedTools = effectiveProfile === piRequesterAuthorizedProfile
     ? ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]
     : ["data-harness-cli", "qdm-metric-cli"];
   add("installer tool set", installedNames.size === expectedTools.length &&
     expectedTools.every((name) => installedNames.has(name)));
   add("legacy CLI state absent", removedBinaries.every((name) => !installedNames.has(name)));
 
-  if (effectiveProfile === lumiRequiredProfile) {
+  if (effectiveProfile === piRequesterAuthorizedProfile) {
     add("Pi-only profile", state.agent === "pi");
     add("authorization config path", state.authzConfigPath === "/etc/harness-data/authz.json");
     add("Metric authorization catalog", fs.existsSync("/etc/harness-data/approved-metrics-v1.json"));

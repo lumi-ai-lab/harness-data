@@ -8,7 +8,7 @@
         "qdm-metric-cli"
       ]
     },
-    "lumi-mvp-required": {
+    "pi-requester-authorized": {
       "agent": "pi",
       "approvedWikis": {
         "source": "bootstrap/approved-lumi-wikis",
@@ -21,7 +21,7 @@
         "destination": "/etc/harness-data/approved-metrics-v1.json",
         "sha256": ""
       },
-      "releaseSet": "lumi-mvp-v1",
+      "releaseSet": "pi-requester-v1",
       "tools": [
         "data-harness-cli",
         "qdm-metric-cli",
@@ -30,7 +30,7 @@
     }
   },
   "releaseSets": {
-    "lumi-mvp-v1": {
+    "pi-requester-v1": {
       "version": "",
       "publicMetricVersion": "",
       "realMetricVersion": "",

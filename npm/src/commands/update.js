@@ -26,7 +26,7 @@ import {
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import {
   installerStateSchemaVersion,
-  lumiRequiredProfile,
+  piRequesterAuthorizedProfile,
   profileFromState
 } from "../lib/profile.js";
 
@@ -144,8 +144,8 @@ export async function updateCommand(options = {}) {
   const state = readInstallerState(runtimeDir);
   const profile = profileFromState(state);
   if (!profile) throw new Error("installer profile is missing; rebuild the runtime instead of updating in place");
-  if (profile === lumiRequiredProfile) {
-    throw new Error("harness-data update is disabled for immutable lumi-mvp-required runtimes; deploy a new image release-set");
+  if (profile === piRequesterAuthorizedProfile) {
+    throw new Error("harness-data update is disabled for immutable pi-requester-authorized runtimes; deploy a new image release-set");
   }
   const key = platformKey();
   header("Harness Data 更新器", packageVersion(), [

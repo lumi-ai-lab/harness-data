@@ -19,11 +19,11 @@ The installed runtime contains:
   runtime copy as root.
 - `config/harness-config.yaml`: Harness paths and the `qdm_metric_cli` path.
 - `config/qdm-cli-paths.env`: exports only `QDM_METRIC_CLI`.
-- `agents/*`: context/posttool integrations. The Lumi profile uses only the Pi
+- `agents/*`: context/posttool integrations. The Pi requester authorization profile uses only the Pi
   extension for requester authorization binding.
 
 The runtime does not install or configure any legacy data CLI or token flow.
-In `lumi-mvp-required`, the Pi extension binds each ACP session to the current
+In `pi-requester-authorized`, the Pi extension binds each ACP session to the current
 Lumi requester envelope. The public `qdm-metric-cli` sends the invocation over
 the fixed `/run/harness-data/qdm-metric-cli.sock` Unix socket. A root-owned
 broker authenticates the caller with Linux `SO_PEERCRED`, requires the
@@ -36,7 +36,7 @@ runtime and its embedded credential.
 
 ## Install
 
-The `lumi-mvp-required` profile downloads the platform-specific authorized
+The `pi-requester-authorized` profile downloads the platform-specific authorized
 `qdm-metric-cli` and its private `qdm-metric-cli-real` runtime pinned by the
 runtime manifest. This protected profile requires Linux, root installation,
 and the installed `harness-data-metric-broker.service`; deployment must provide
@@ -160,14 +160,13 @@ npx @lumi-ai-lab/harness-data install \
 ```
 
 For non-interactive installation, pass `--profile` and `--agent` explicitly.
-The `lumi-mvp-required` profile requires `--agent pi` and the release-pinned Wikis
-source:
+The `pi-requester-authorized` profile requires `--agent pi` and installs the
+release-pinned Wikis embedded in its runtime bundle:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
-  --profile lumi-mvp-required \
-  --agent pi \
-  --wikis-source /absolute/path/to/release-pinned-wikis
+  --profile pi-requester-authorized \
+  --agent pi
 ```
 
 ## Release Contract
@@ -237,7 +236,7 @@ bin/data-harness-cli posttool --format agent-hook
 
 Pi loads `.pi/extensions/qdm-harness/index.ts` and uses the same context and
 posttool contracts. OpenClaw and Hermes use their project plugin/skill
-templates. Only Pi is supported by `lumi-mvp-required`; Claude Code, Codex,
+templates. Only Pi is supported by `pi-requester-authorized`; Claude Code, Codex,
 OpenClaw, and Hermes remain local-unrestricted context/posttool integrations.
 
 ## Data Queries

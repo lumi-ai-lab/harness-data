@@ -105,7 +105,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	writeTestFile(t, fixture.realCLIPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	writeTestFile(t, fixture.publicMetricPath, []byte("#!/bin/sh\nexit 17\n"), 0o700)
 	writeTestFile(t, fixture.dataHarnessPath, []byte("#!/bin/sh\nexit 23\n"), 0o700)
-	writeTestFile(t, fixture.cliManifestPath, []byte("{\"schemaVersion\":3,\"profile\":\"lumi-mvp-required\"}\n"), 0o600)
+	writeTestFile(t, fixture.cliManifestPath, []byte("{\"schemaVersion\":3,\"profile\":\"pi-requester-authorized\"}\n"), 0o600)
 	catalogData := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId","categoryLevel1Id"],"dictionaryRefs":[]}}}`)
 	writeTestFile(t, fixture.catalogPath, catalogData, 0o600)
 	writeTestJSON(t, fixture.controlPath, ControlState{
@@ -114,7 +114,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 
 	fixture.config = Config{
 		Version:                     CurrentVersion,
-		Mode:                        ModeLumiMVPRequired,
+		Mode:                        ModePiRequesterAuthorized,
 		PiVersion:                   RequiredPiVersion,
 		AgentUID:                    &fixture.agentUID,
 		RequesterContextDir:         fixture.contextDir,
@@ -276,9 +276,9 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 		t.Fatal(err)
 	}
 	release := installerReleaseSet{
-		Key:                 "lumi-mvp-v1",
+		Key:                 "pi-requester-v1",
 		Platform:            currentPlatformKey(),
-		Version:             "lumi-mvp-v1",
+		Version:             "pi-requester-v1",
 		PublicMetricVersion: "1.0.0",
 		PublicMetricSHA256:  sha256Hex([]byte("#!/bin/sh\nexit 17\n")),
 		RealMetricVersion:   "v" + fixture.config.RealMetricCLI.Version,
@@ -296,7 +296,7 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 		LastInstallDir: fixture.root,
 		UpdatedAt:      fixture.now.Add(-time.Minute).Format(time.RFC3339Nano),
 		SchemaVersion:  3,
-		Profile:        ModeLumiMVPRequired,
+		Profile:        ModePiRequesterAuthorized,
 		Agent:          fixture.installerAgent,
 		InstallMode:    "github-token",
 		RuntimeTag:     "v1.0.0",

@@ -157,6 +157,13 @@ func TestConfigAcceptsOnlyCompatibleMetricPatchVersions(t *testing.T) {
 	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
 }
 
+func TestConfigRejectsLegacyLumiMode(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	config := fixture.config
+	config.Mode = strings.Join([]string{"lumi", "mvp", "required"}, "-")
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+}
+
 func TestConfigRequiresSeparatedAgentAndRequesterContextOwners(t *testing.T) {
 	fixture := newAuthzFixture(t)
 

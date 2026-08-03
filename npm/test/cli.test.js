@@ -8,13 +8,16 @@ import { fileURLToPath } from "node:url";
 
 import { collectDoctor } from "../src/commands/doctor.js";
 import {
+  installCommand,
   installModeFor,
   installSandboxPlatformTools,
+  installWikis,
   localUnrestrictedReleaseManifest,
   removeLegacyLocalTools,
-  renderLumiMetricBrokerService,
-  verifyLumiInstalledReleaseSet
+  renderPiRequesterMetricBrokerService,
+  verifyPiRequesterInstalledReleaseSet
 } from "../src/commands/install.js";
+import { createApprovedWikisManifest } from "../src/lib/approved-wikis.js";
 import {
   agentChoices,
   linkAgents,
@@ -30,8 +33,8 @@ import { readManifest } from "../src/lib/manifest.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
-  lumiReleaseSetDigest,
-  lumiRequiredProfile,
+  piRequesterReleaseSetDigest,
+  piRequesterAuthorizedProfile,
   normalizeProfile,
   profileFromState,
   selectManifestProfile,
@@ -50,9 +53,9 @@ function executable(file, content = "#!/bin/sh\nexit 0\n") {
 }
 
 function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
-  const local = profile !== lumiRequiredProfile;
+  const local = profile !== piRequesterAuthorizedProfile;
   const releaseSet = {
-    key: "lumi-mvp-v1",
+    key: "pi-requester-v1",
     platform: platformKey(),
     version: "v0.0.27",
     publicMetricVersion: "v0.0.27",
@@ -63,11 +66,11 @@ function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
     authzSchemaVersion: 1,
     piVersion: "0.81.1"
   };
-  releaseSet.sha256 = lumiReleaseSetDigest(releaseSet);
+  releaseSet.sha256 = piRequesterReleaseSetDigest(releaseSet);
   return {
     schemaVersion: installerStateSchemaVersion,
     profile,
-    agent: profile === lumiRequiredProfile ? "pi" : "codex",
+    agent: profile === piRequesterAuthorizedProfile ? "pi" : "codex",
     installMode: local ? "local-path" : "github-token",
     runtimeTag: "v0.0.27",
     localTools: local ? {
@@ -120,16 +123,62 @@ test("local Wikis keep local-path install mode when GitHub auth is available", (
     "github-token"
   );
   assert.equal(
-    installModeFor(lumiRequiredProfile, { wikisSource: "/tmp/approved-wikis" }, true),
+    installModeFor(piRequesterAuthorizedProfile, {}, true),
     "github-token"
   );
+});
+
+test("pi-requester-authorized rejects an external Wikis source", async () => {
+  await assert.rejects(
+    () => installCommand({
+      profile: piRequesterAuthorizedProfile,
+      agent: "pi",
+      yes: true,
+      wikisSource: "/tmp/external-approved-wikis"
+    }),
+    /does not accept --wikis-source/
+  );
+});
+
+test("pi-requester-authorized installs Wikis from its runtime bundle", async () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "harness-approved-wikis-"));
+  const source = path.join(runtime, "bootstrap", "approved-lumi-wikis");
+  for (const directory of ["metrics", "reports", "dims", "rules"]) {
+    fs.mkdirSync(path.join(source, directory), { recursive: true });
+    fs.writeFileSync(path.join(source, directory, "approved.md"), `# ${directory}\n`);
+  }
+  fs.writeFileSync(path.join(source, "index.md"), "# Approved Wikis\n");
+  const approvalManifest = path.join(runtime, "bootstrap", "approved-lumi-wikis-manifest.json");
+  const approval = createApprovedWikisManifest(source, approvalManifest);
+  const manifest = {
+    schemaVersion: 3,
+    profiles: {
+      [piRequesterAuthorizedProfile]: {
+        agent: "pi",
+        tools: ["qdm-metric-cli"],
+        approvedWikis: {
+          source: "bootstrap/approved-lumi-wikis",
+          manifest: "bootstrap/approved-lumi-wikis-manifest.json",
+          manifestSha256: approval.manifestSha256
+        }
+      }
+    }
+  };
+
+  try {
+    const installed = await installWikis(runtime, piRequesterAuthorizedProfile, manifest);
+    assert.equal(installed.source, source);
+    assert.equal(fs.readFileSync(path.join(runtime, "wikis", "index.md"), "utf8"), "# Approved Wikis\n");
+  } finally {
+    fs.rmSync(runtime, { recursive: true, force: true });
+  }
 });
 
 test("manifest publishes the Harness helper, authorized qdm-metric-cli, and private real CLI", () => {
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
   assert.deepEqual(manifest.tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   assert.deepEqual(selectManifestProfile(manifest, localUnrestrictedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli"]);
-  assert.deepEqual(selectManifestProfile(manifest, lumiRequiredProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
+  assert.deepEqual(selectManifestProfile(manifest, piRequesterAuthorizedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   const metric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli");
   assert.equal(metric.repo, "lumi-ai-lab/harness-data");
   assert.equal(metric.private, undefined);
@@ -145,9 +194,9 @@ test("runtime CLI sets contain only the Harness helper and qdm-metric-cli", () =
   assert.deepEqual(qdmCliBinaries, ["data-harness-cli", "qdm-metric-cli"]);
   assert.deepEqual(localPathToolNames, []);
   assert.deepEqual(qdmCliBinariesForProfile(localUnrestrictedProfile), qdmCliBinaries);
-  assert.deepEqual(qdmCliBinariesForProfile(lumiRequiredProfile), qdmCliBinaries);
-  assert.deepEqual(localPathToolNamesForProfile(lumiRequiredProfile), []);
-  assert.deepEqual(localPathToolNamesForProfile(lumiRequiredProfile, { metricCliPath: "/tmp/qdm-metric-cli" }), []);
+  assert.deepEqual(qdmCliBinariesForProfile(piRequesterAuthorizedProfile), qdmCliBinaries);
+  assert.deepEqual(localPathToolNamesForProfile(piRequesterAuthorizedProfile), []);
+  assert.deepEqual(localPathToolNamesForProfile(piRequesterAuthorizedProfile, { metricCliPath: "/tmp/qdm-metric-cli" }), []);
 });
 
 test("legacy local Agent instructions and managed links are migrated safely", () => {
@@ -360,38 +409,39 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
 
 test("profile state accepts both profiles without auth release state", () => {
   assert.equal(normalizeProfile(""), localUnrestrictedProfile);
+  assert.throws(() => normalizeProfile(["lumi", "mvp", "required"].join("-")), /profile must be/);
   assert.equal(profileFromState(stateFixture()), localUnrestrictedProfile);
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile)), lumiRequiredProfile);
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile)), piRequesterAuthorizedProfile);
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile, {
     releaseSet: {
-      ...stateFixture(lumiRequiredProfile).releaseSet,
+      ...stateFixture(piRequesterAuthorizedProfile).releaseSet,
       realMetricVersion: "v0.1.1"
     }
   })), "");
   const wrongPlatformReleaseSet = {
-    ...stateFixture(lumiRequiredProfile).releaseSet,
+    ...stateFixture(piRequesterAuthorizedProfile).releaseSet,
     platform: platformKey() === "linux-amd64" ? "darwin-arm64" : "linux-amd64"
   };
-  wrongPlatformReleaseSet.sha256 = lumiReleaseSetDigest(wrongPlatformReleaseSet);
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+  wrongPlatformReleaseSet.sha256 = piRequesterReleaseSetDigest(wrongPlatformReleaseSet);
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile, {
     releaseSet: wrongPlatformReleaseSet
   })), "");
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, {
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile, {
     releaseSet: {
-      ...stateFixture(lumiRequiredProfile).releaseSet,
+      ...stateFixture(piRequesterAuthorizedProfile).releaseSet,
       sha256: "d".repeat(64)
     }
   })), "");
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, { releaseSet: {} })), "");
-  assert.equal(profileFromState(stateFixture(lumiRequiredProfile, { authzConfigPath: "/etc/authz.json" })), "");
-  assert.doesNotThrow(() => validateProfileAgent(lumiRequiredProfile, "pi"));
-  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "qwen"), /requires --agent pi/);
-  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "codex"), /requires --agent pi/);
-  assert.throws(() => validateProfileAgent(lumiRequiredProfile, "hermes"), /requires --agent/);
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile, { releaseSet: {} })), "");
+  assert.equal(profileFromState(stateFixture(piRequesterAuthorizedProfile, { authzConfigPath: "/etc/authz.json" })), "");
+  assert.doesNotThrow(() => validateProfileAgent(piRequesterAuthorizedProfile, "pi"));
+  assert.throws(() => validateProfileAgent(piRequesterAuthorizedProfile, "qwen"), /requires --agent pi/);
+  assert.throws(() => validateProfileAgent(piRequesterAuthorizedProfile, "codex"), /requires --agent pi/);
+  assert.throws(() => validateProfileAgent(piRequesterAuthorizedProfile, "hermes"), /requires --agent/);
 });
 
-test("Lumi installation verifies both platform-specific Metric CLI digests", () => {
-  const releaseSet = stateFixture(lumiRequiredProfile).releaseSet;
+test("Pi requester installation verifies both platform-specific Metric CLI digests", () => {
+  const releaseSet = stateFixture(piRequesterAuthorizedProfile).releaseSet;
   const installedTools = {
     "qdm-metric-cli": {
       version: releaseSet.publicMetricVersion,
@@ -402,15 +452,15 @@ test("Lumi installation verifies both platform-specific Metric CLI digests", () 
       sha256: releaseSet.realMetricSha256
     }
   };
-  assert.doesNotThrow(() => verifyLumiInstalledReleaseSet(installedTools, releaseSet));
-  assert.throws(() => verifyLumiInstalledReleaseSet({
+  assert.doesNotThrow(() => verifyPiRequesterInstalledReleaseSet(installedTools, releaseSet));
+  assert.throws(() => verifyPiRequesterInstalledReleaseSet({
     ...installedTools,
     "qdm-metric-cli": {
       ...installedTools["qdm-metric-cli"],
       sha256: "d".repeat(64)
     }
   }, releaseSet), /do not match the release-set/);
-  assert.throws(() => verifyLumiInstalledReleaseSet({
+  assert.throws(() => verifyPiRequesterInstalledReleaseSet({
     ...installedTools,
     "qdm-metric-cli-real": {
       ...installedTools["qdm-metric-cli-real"],
@@ -419,8 +469,8 @@ test("Lumi installation verifies both platform-specific Metric CLI digests", () 
   }, releaseSet), /do not match the release-set/);
 });
 
-test("Lumi broker service executes only the root-protected broker copy", () => {
-  const service = renderLumiMetricBrokerService();
+test("Pi requester broker service executes only the root-protected broker copy", () => {
+  const service = renderPiRequesterMetricBrokerService();
   assert.match(service, /^ExecStart="\/opt\/harness-data\/broker\/qdm-metric-cli" broker-serve$/m);
   assert.doesNotMatch(service, /ExecStart=.*\/runtime\/bin\/qdm-metric-cli/m);
   assert.match(service, /^User=root$/m);
@@ -441,8 +491,8 @@ test("Lumi broker service executes only the root-protected broker copy", () => {
   }
 });
 
-test("Lumi installer state preserves authorization fields through write/read", () => {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lumi-state-"));
+test("Pi requester installer state preserves authorization fields through write/read", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "harness-pi-requester-state-"));
   const workspace = path.join(temporary, "runtime");
   const previousEnvironment = {
     HOME: process.env.HOME,
@@ -454,14 +504,14 @@ test("Lumi installer state preserves authorization fields through write/read", (
   process.env.LOCALAPPDATA = path.join(temporary, "local-app-data");
 
   try {
-    const expected = stateFixture(lumiRequiredProfile);
+    const expected = stateFixture(piRequesterAuthorizedProfile);
     const written = writeState(workspace, expected);
     const state = readInstallerState(workspace);
 
     assert.deepEqual(state, written);
     assert.deepEqual(state.releaseSet, expected.releaseSet);
     assert.equal(state.authzConfigPath, "/etc/harness-data/authz.json");
-    assert.equal(profileFromState(state), lumiRequiredProfile);
+    assert.equal(profileFromState(state), piRequesterAuthorizedProfile);
   } finally {
     for (const [name, value] of Object.entries(previousEnvironment)) {
       if (value === undefined) delete process.env[name];

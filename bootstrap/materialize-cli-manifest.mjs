@@ -108,10 +108,10 @@ export function materializeReleaseManifest(options) {
   if (manifest.schemaVersion !== 3) {
     throw new Error("release manifest template must use schemaVersion 3");
   }
-  const profile = manifest.profiles?.["lumi-mvp-required"];
-  if (!profile) throw new Error("release manifest template is missing lumi-mvp-required");
+  const profile = manifest.profiles?.["pi-requester-authorized"];
+  if (!profile) throw new Error("release manifest template is missing pi-requester-authorized");
   if (profile.agent !== "pi") {
-    throw new Error("release manifest lumi-mvp-required profile must declare agent pi");
+    throw new Error("release manifest pi-requester-authorized profile must declare agent pi");
   }
 
   const helper = requireTool(manifest, "data-harness-cli");
@@ -159,20 +159,20 @@ export function materializeReleaseManifest(options) {
     };
   }
 
-  const releaseSet = manifest.releaseSets?.["lumi-mvp-v1"];
-  if (!releaseSet) throw new Error("release manifest template is missing lumi-mvp-v1 release-set");
+  const releaseSet = manifest.releaseSets?.["pi-requester-v1"];
+  if (!releaseSet) throw new Error("release manifest template is missing pi-requester-v1 release-set");
   releaseSet.version = version;
   releaseSet.publicMetricVersion = version;
   releaseSet.realMetricVersion = realMetric.version;
   releaseSet.catalogSha256 = approvedMetricCatalogSha256;
   const releasePlatforms = Object.keys(releaseSet.platforms || {});
   if (releasePlatforms.length === 0) {
-    throw new Error("lumi-mvp-v1 release-set must declare per-platform artifacts");
+    throw new Error("pi-requester-v1 release-set must declare per-platform artifacts");
   }
   for (const tool of [publicMetric, realMetric]) {
     for (const platform of Object.keys(tool.platforms || {})) {
       if (!releaseSet.platforms[platform]) {
-        throw new Error(`lumi-mvp-v1 release-set does not declare ${platform}`);
+        throw new Error(`pi-requester-v1 release-set does not declare ${platform}`);
       }
     }
   }
@@ -180,7 +180,7 @@ export function materializeReleaseManifest(options) {
     const publicMetricSha256 = publicMetric.platforms?.[platform]?.binarySha256;
     const realMetricSha256 = realMetric.platforms?.[platform]?.binarySha256;
     if (!validSha256(publicMetricSha256) || !validSha256(realMetricSha256)) {
-      throw new Error(`lumi-mvp-v1 release-set artifacts are incomplete for ${platform}`);
+      throw new Error(`pi-requester-v1 release-set artifacts are incomplete for ${platform}`);
     }
     const platformReleaseSet = {
       platform,
