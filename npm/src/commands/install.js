@@ -12,7 +12,7 @@ import {
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestFileDigest, readManifest, toolDestination } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -603,18 +603,28 @@ export function installPiRequesterMetricBroker(runtimeDir, installedTools, optio
   fs.chmodSync(realPath, 0o500);
 
   const publicMetricPath = path.join(path.resolve(runtimeDir), "bin", binaryName("qdm-metric-cli"));
-  const publicMetric = installedTools?.["qdm-metric-cli"];
-  if (path.resolve(String(publicMetric?.destination || "")) !== publicMetricPath ||
-      !/^[a-f0-9]{64}$/.test(String(publicMetric?.sha256 || ""))) {
-    throw new Error("public Metric broker artifact state is invalid");
-  }
-  const publicInfo = fs.lstatSync(publicMetricPath);
-  if (!publicInfo.isFile() || publicInfo.isSymbolicLink()) {
-    throw new Error("public Metric CLI is not a regular file");
-  }
-  const publicMetricBytes = fs.readFileSync(publicMetricPath);
-  if (crypto.createHash("sha256").update(publicMetricBytes).digest("hex") !== publicMetric.sha256) {
-    throw new Error("public Metric broker artifact does not match its installed SHA256");
+  const helperPath = path.join(path.resolve(runtimeDir), "bin", binaryName("data-harness-cli"));
+  let publicMetricBytes;
+  for (const [name, destination] of [
+    ["data-harness-cli", helperPath],
+    ["qdm-metric-cli", publicMetricPath]
+  ]) {
+    const installed = installedTools?.[name];
+    if (path.resolve(String(installed?.destination || "")) !== destination ||
+        !/^[a-f0-9]{64}$/.test(String(installed?.sha256 || ""))) {
+      throw new Error(`${name} public artifact state is invalid`);
+    }
+    const info = fs.lstatSync(destination);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw new Error(`${name} public artifact is not a regular file`);
+    }
+    const bytes = fs.readFileSync(destination);
+    if (crypto.createHash("sha256").update(bytes).digest("hex") !== installed.sha256) {
+      throw new Error(`${name} public artifact does not match its installed SHA256`);
+    }
+    fs.chownSync(destination, 0, 0);
+    fs.chmodSync(destination, 0o755);
+    if (name === "qdm-metric-cli") publicMetricBytes = bytes;
   }
   assertRootOwnedDirectory(protectedMetricBrokerRoot, 0o700);
   writeRootOwnedFileAtomic(protectedMetricBrokerPath, publicMetricBytes, 0o500);
@@ -824,7 +834,7 @@ export async function installCommand(options = {}) {
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已按 ${profile} profile 安装`);
   blank();
-  const installedManifestSha256 = manifestDigest(manifest);
+  const installedManifestSha256 = manifestFileDigest(manifestPath);
 
   // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
   writeState(runtimeDir, {

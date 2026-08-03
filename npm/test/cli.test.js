@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +30,7 @@ import {
   removeUnselectedAgentLinks,
   writeLocalConfig
 } from "../src/lib/config.js";
-import { readManifest } from "../src/lib/manifest.js";
+import { manifestDigest, manifestFileDigest, readManifest } from "../src/lib/manifest.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
@@ -98,6 +99,22 @@ test("CLI help exposes qdm-metric-cli and removes auth", () => {
   assert.match(result.stdout, /--metric-cli-path/);
   assert.doesNotMatch(result.stdout, /\bauth\b/);
   assert.doesNotMatch(result.stdout, /cas-username|cas-password/);
+});
+
+test("installer state records the immutable manifest file digest", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "harness-manifest-digest-"));
+  const manifestPath = path.join(temporary, "cli-manifest.json");
+  const manifest = { schemaVersion: 3, tools: [] };
+  const raw = `${JSON.stringify(manifest, null, 2)}\n`;
+  fs.writeFileSync(manifestPath, raw);
+
+  try {
+    const expected = createHash("sha256").update(raw).digest("hex");
+    assert.equal(manifestFileDigest(manifestPath), expected);
+    assert.notEqual(manifestFileDigest(manifestPath), manifestDigest(manifest));
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("local-unrestricted downloads the real Metric CLI unless a local path overrides it", () => {
@@ -193,9 +210,13 @@ test("pi-requester-authorized installs Wikis from its runtime bundle", async () 
 
 test("manifest publishes the Harness helper, authorized qdm-metric-cli, and private real CLI", () => {
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
+  const authzExample = JSON.parse(
+    fs.readFileSync(path.join(repository, "config", "authz-config-v1.json.example"), "utf8")
+  );
   assert.deepEqual(manifest.tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   assert.deepEqual(selectManifestProfile(manifest, localUnrestrictedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli"]);
   assert.deepEqual(selectManifestProfile(manifest, piRequesterAuthorizedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
+  assert.equal(authzExample.realMetricCli.path, "/opt/harness-data/private/qdm-metric-cli-v0.1.0");
   const metric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli");
   assert.equal(metric.repo, "lumi-ai-lab/harness-data");
   assert.equal(metric.private, undefined);
@@ -406,6 +427,7 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /systemd-analyze verify/);
   assert.match(workflow, /cli\/tests\/cmd\/release-smoke-fixture/);
   assert.match(workflow, /data-harness-cli" authz-bind/);
+  assert.match(workflow, /data-harness-cli" authz-readiness/);
   assert.match(workflow, /sudo -u nobody/);
   assert.match(workflow, /test "\$\(sudo stat -c '%a' "\$\{protected_file\}"\)" = "640"/);
   assert.match(workflow, /authorization control file reader boundary is invalid/);

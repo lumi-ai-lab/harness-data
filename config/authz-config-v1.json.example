@@ -12,7 +12,7 @@
   "maxEnvelopeTtlSeconds": 1800,
   "clockSkewSeconds": 30,
   "realMetricCli": {
-    "path": "/opt/harness-data/private/qdm-metric-cli-v0.1.0/qdm-metric-cli",
+    "path": "/opt/harness-data/private/qdm-metric-cli-v0.1.0",
     "version": "0.1.0",
     "artifactSha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },

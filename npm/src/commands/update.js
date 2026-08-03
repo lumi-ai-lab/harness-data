@@ -3,7 +3,7 @@ import path from "node:path";
 import { chooseAgent, confirm } from "../lib/prompt.js";
 import { findWorkspaceDir, readInstallerState, readUserState, writeState } from "../lib/paths.js";
 import { run } from "../lib/exec.js";
-import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestFileDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { githubToken, latestRelease } from "../lib/github.js";
@@ -269,7 +269,7 @@ export async function updateCommand(options = {}) {
       profile,
       runtimeTag,
       tools: nextTools,
-      manifestSha256: manifestDigest(manifest),
+      manifestSha256: manifestFileDigest(manifestPath),
       ...(restoredAgent ? { agent: restoredAgent.agent } : {}),
       lastCheckAt: new Date().toISOString()
     });

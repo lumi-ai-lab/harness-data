@@ -338,6 +338,8 @@ jobs:
           session_id="$(jq -er '.sessionId' "${CONTRACT_ROOT}/fixture.json")"
           authz_config="/etc/harness-data/authz.json"
           control_file="/var/lib/harness-data/release-smoke/control/authz-state.json"
+          sudo "${runtime}/bin/data-harness-cli" authz-readiness \
+            --config "${authz_config}"
           for protected_file in "${authz_config}" "${control_file}"; do
             test "$(sudo stat -c '%a' "${protected_file}")" = "640"
             test "$(sudo stat -c '%u' "${protected_file}")" = "0"
@@ -602,6 +604,8 @@ jobs:
           session_id="$(jq -er '.sessionId' "${smoke_root}/fixture.json")"
           authz_config="/etc/harness-data/authz.json"
           control_file="/var/lib/harness-data/release-smoke/control/authz-state.json"
+          sudo "${runtime}/bin/data-harness-cli" authz-readiness \
+            --config "${authz_config}"
           for protected_file in "${authz_config}" "${control_file}"; do
             test "$(sudo stat -c '%a' "${protected_file}")" = "640"
             test "$(sudo stat -c '%u' "${protected_file}")" = "0"

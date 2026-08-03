@@ -15,6 +15,10 @@ export function manifestDigest(manifest) {
   return crypto.createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+export function manifestFileDigest(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
 function formatBytes(value) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
