@@ -60,6 +60,11 @@ and the configured reader group; the kill-switch parent directory must be
 root-controlled and reader-group traversable, for example mode `0710`. The
 release smoke runs the installed `data-harness-cli authz-bind` as the real
 non-root Pi identity to enforce this deployment contract.
+Because Pi 0.83.0 does not prompt for project trust in RPC mode, Lumi deployments
+must set `PI_ACP_APPROVE_PROJECT=true` for the configured Pi Agent after the
+fixed Harness Workspace has been reviewed and made non-writable by Pi. This
+explicit opt-in is what permits Pi to load the project-level Harness extension
+and skills; it must not be enabled for an untrusted Workspace.
 
 The accepted producer contract is Envelope v1 / RequesterContext v2 with the
 exact `qdm.metric.query` capability and the Harness-owned

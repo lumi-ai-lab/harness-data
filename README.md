@@ -96,6 +96,9 @@ group. For example, when Harness uses `agentUid=2001` and
       "id": "pi",
       "command": "npx",
       "args": ["-y", "pi-acp@0.0.33"],
+      "env": {
+        "PI_ACP_APPROVE_PROJECT": "true"
+      },
       "runAsUid": 2001,
       "runAsGid": 2002,
       "supplementaryGids": [2003]
@@ -109,6 +112,11 @@ The Lumi service must also set both
 `LUMI_REQUESTER_CONTEXT_READER_GID=2003`. The publisher must have permission
 to set the configured UID, GID, and supplementary groups. A secured Pi process
 is bound to one Workspace and must be restarted before switching Workspaces.
+Pi 0.83.0 does not prompt for project trust in RPC mode, so the explicit
+`PI_ACP_APPROVE_PROJECT=true` opt-in is required for Lumi to load the installed
+project-level Harness extension and skills. Enable it only after verifying the
+fixed Workspace is trusted and not writable by the Pi identity; leaving it
+unset preserves Pi's default trust behavior.
 
 ## Requester Authorization Contract
 
