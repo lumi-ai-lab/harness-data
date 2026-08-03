@@ -1,75 +1,65 @@
-# Harness Data npm installer
+# @lumi-ai-lab/harness-data
 
-Install a Harness Data runtime in the current directory:
+Harness Data runtime installer and updater.
 
-```bash
-npx @lumi-ai-lab/harness-data install
-```
+The runtime contains the Harness helper and the Metric query entry point:
 
-Install into an explicit runtime directory:
+- `data-harness-cli`: builds and serves Harness Wikis context and posttool state.
+- `qdm-metric-cli`: the authorized data-query CLI.
+- private `qdm-metric-cli-real`: the pinned upstream runtime held behind the
+  Linux root-owned Metric broker. Its directory is mode `0700` and executable
+  is mode `0500`, so the Agent UID cannot read or execute its embedded
+  credential.
+- root-only broker executable: a SHA-verified broker copy at
+  `/opt/harness-data/broker/qdm-metric-cli`, also protected by `0700`/`0500`.
+  The systemd service does not execute the Agent-visible runtime binary as
+  root.
 
-```bash
-npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
-```
-
-The `local-unrestricted` profile installs only `data-harness-cli` and the real
-`qdm-metric-cli`. By default, the installer downloads the latest platform
-archive from `pengmide/qdm-metric-cli`, requires and verifies its published
-`.sha256`, installs it as `bin/qdm-metric-cli`, and removes the Metric archive
-from `.bootstrap-cache`.
-
-Authenticated `gh` or `GITHUB_TOKEN` Release downloads are preferred, with an
-unauthenticated fallback for public assets:
-
-```bash
-GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
-  --profile local-unrestricted
-```
-
-Use an existing local executable instead of downloading Metric CLI:
+The `local-unrestricted` profile downloads and verifies the latest real
+`qdm-metric-cli` GitHub Release. `--metric-cli-path` remains available as an
+optional local executable override:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
   --profile local-unrestricted \
+  --agent codex
+
+# Optional local override:
+npx @lumi-ai-lab/harness-data install \
+  --profile local-unrestricted \
+  --agent codex \
   --metric-cli-path /absolute/path/to/qdm-metric-cli
 ```
 
-For non-interactive installation, pass `--profile` explicitly. With `--yes`,
-omitting `--agent` silently selects `all`; use `--agent` to select one
-integration.
-
-Update an existing runtime interactively:
+The installer writes:
 
 ```bash
-npx @lumi-ai-lab/harness-data update
+export QDM_METRIC_CLI="/absolute/runtime/path/bin/qdm-metric-cli"
 ```
 
-Diagnose a runtime:
+The local-unrestricted profile does not configure credentials or requester
+authorization. The `lumi-mvp-required` profile requires `--agent pi`; the Pi
+extension binds each session to the current Lumi requester context. The public
+CLI reaches the private runtime only through
+`/run/harness-data/qdm-metric-cli.sock`; the broker authenticates the caller
+with Linux `SO_PEERCRED`, requires the configured non-root `agentUid`, and
+enforces the Harness scope against requester-context files owned by the
+separate `requesterContextOwnerUid`. This profile requires Linux and a root
+installation. Start `harness-data-metric-broker.service` only after the
+root-owned, Agent-readable, non-writable authorization config and its mounted
+runtime inputs are ready. The requester-context directory must be searchable
+but not listable or writable by the Agent (`0711` or `0710`), and envelope
+files must be readable but not writable by it (`0644` or `0640`).
 
-```bash
-npx @lumi-ai-lab/harness-data doctor
+Supported local Agent templates are Claude Code, Codex, Pi, OpenClaw, and
+Hermes. Non-Pi templates use only the ordinary Harness context and posttool
+hooks and are not accepted by `lumi-mvp-required`.
+
+Commands:
+
+```text
+harness-data install
+harness-data update
+harness-data doctor
+harness-data version
 ```
-
-The immutable Lumi profile must be selected explicitly and accepts only Wikis
-content that exactly matches the business-approved file allowlist shipped in
-the materialized runtime bundle:
-
-```bash
-npx @lumi-ai-lab/harness-data install \
-  --profile lumi-mvp-required \
-  --agent pi \
-  --wikis-source /path/to/approved-lumi-wikis
-```
-
-This profile never falls back to cloning the mutable/full Wikis repository.
-At image build time `doctor` reports runtime-only mounts and credentials as
-pending; at runtime it invokes `data-harness-cli authz-readiness` and fails if
-the complete authorization deployment is not ready.
-
-The runtime is assembled from the `harness-data` runtime bundle,
-platform-specific Helper and Metric CLI Release assets, `harness-data-wikis`,
-generated local config, Wikis indexes, and selected Agent symlinks. The local
-profile does not create `.qdm-auth` or retain the legacy CMR, Indicators, SQL,
-or CAS CLIs.
-
-`--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `both`, and `all`; the default is `all`. `both` installs Claude + Codex, while `all` installs Claude + Codex + Pi + OpenClaw + Hermes.

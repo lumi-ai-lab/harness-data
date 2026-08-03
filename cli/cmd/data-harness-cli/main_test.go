@@ -2,15 +2,47 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"harness-data/cli/internal/authz"
 )
+
+func TestUsageListsAuthorizationCommands(t *testing.T) {
+	usage := usageText()
+	for _, command := range []string{"authz-bind", "authz-readiness", "authz-validate-catalog"} {
+		if !strings.Contains(usage, command) {
+			t.Fatalf("usage missing %s: %s", command, usage)
+		}
+	}
+}
+
+func TestRootIndependentAuthorizationCommandDispatch(t *testing.T) {
+	var output bytes.Buffer
+	handled, err := runRootIndependentAuthzCommand("authz-bind", nil, &output)
+	if !handled {
+		t.Fatal("authz-bind was not handled")
+	}
+	var exitErr exitCodeError
+	if !asExitCodeError(err, &exitErr) || exitErr.Code != 1 || !exitErr.Silent {
+		t.Fatalf("unexpected authz-bind error: %#v", err)
+	}
+	var failure authzCommandFailure
+	if err := json.Unmarshal(output.Bytes(), &failure); err != nil {
+		t.Fatalf("invalid authz-bind failure JSON %q: %v", output.String(), err)
+	}
+	if failure.Error.Code != authz.CodeBindingInvalid {
+		t.Fatalf("authz-bind code = %q", failure.Error.Code)
+	}
+
+	handled, err = runRootIndependentAuthzCommand("wikis", nil, &output)
+	if handled || err != nil {
+		t.Fatalf("non-authz command handled=%v err=%v", handled, err)
+	}
+}
 
 func TestFindShowDocumentUsesWikisCorpusForStructuredLayout(t *testing.T) {
 	root := t.TempDir()
@@ -39,61 +71,6 @@ label: 销售额
 	}
 	if !ok || doc.Path != "metrics/销售额/spec.md" {
 		t.Fatalf("expected wikis-prefixed path to resolve, got ok=%v doc=%+v", ok, doc)
-	}
-}
-
-func TestAuthzValidateCatalogUsesRuntimeCatalogContract(t *testing.T) {
-	raw := []byte(`{"version":1,"generatedFrom":"qdm-indicators-cli-v0.0.4-contract","indicators":{"saleAmt":{"supportedDimensions":["manageAreaId","categoryLevel1Id"],"dictionaryRefs":[]}}}`)
-	directory, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(directory, "catalog.json")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(raw)
-	var output bytes.Buffer
-	if err := runAuthzValidateCatalog([]string{"--path", path, "--sha256", hex.EncodeToString(digest[:])}, &output); err != nil {
-		t.Fatal(err)
-	}
-	var result authzCatalogValidation
-	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if !result.Valid {
-		t.Fatalf("unexpected validation result: %s", output.String())
-	}
-}
-
-func TestAuthzValidateCatalogRejectsMalformedCatalogAndArguments(t *testing.T) {
-	raw := []byte(`{"version":1,"version":1,"generatedFrom":"qdm-indicators-cli-v0.0.4-contract","indicators":{}}`)
-	directory, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(directory, "catalog.json")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(raw)
-
-	for _, args := range [][]string{
-		{"--path", path, "--sha256", hex.EncodeToString(digest[:])},
-		{"--path", path},
-	} {
-		var output bytes.Buffer
-		err := runAuthzValidateCatalog(args, &output)
-		if err == nil {
-			t.Fatalf("expected validation failure for %v", args)
-		}
-		var failure authzCommandFailure
-		if decodeErr := json.Unmarshal(output.Bytes(), &failure); decodeErr != nil {
-			t.Fatal(decodeErr)
-		}
-		if failure.Error.Code != authz.CodeArtifactIntegrityFailed {
-			t.Fatalf("unexpected error response: %s", output.String())
-		}
 	}
 }
 

@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 export const AUTHZ_BINDING_ENV = "HARNESS_AUTHZ_BINDING_V1";
 
@@ -16,7 +16,8 @@ function invocationCwd(ctx, fallback) {
 export function registerAuthzBashOverride(pi, options) {
   const { createBashTool, stateStore } = options;
   const fallbackCwd = options.cwd || process.cwd();
-  const publicFacade = join(options.projectRoot, "bin", "qdm-indicators-cli");
+  const publicBinDir = join(options.projectRoot, "bin");
+  const publicMetricCLI = join(options.projectRoot, "bin", "qdm-metric-cli");
   const prototype = createBashTool(fallbackCwd);
 
   pi.registerTool({
@@ -28,7 +29,11 @@ export function registerAuthzBashOverride(pi, options) {
       const tool = createBashTool(invocationCwd(ctx, fallbackCwd), {
         spawnHook: ({ command, cwd, env }) => {
           const childEnv = { ...env };
-          childEnv.QDM_INDICATORS_CLI = publicFacade;
+          const pathEntries = String(childEnv.PATH || "")
+            .split(delimiter)
+            .filter((entry) => entry && entry !== publicBinDir);
+          childEnv.PATH = [publicBinDir, ...pathEntries].join(delimiter);
+          childEnv.QDM_METRIC_CLI = publicMetricCLI;
           for (const name of FORBIDDEN_QDM_ENV) delete childEnv[name];
           if (bindingBase64url) childEnv[AUTHZ_BINDING_ENV] = bindingBase64url;
           else delete childEnv[AUTHZ_BINDING_ENV];

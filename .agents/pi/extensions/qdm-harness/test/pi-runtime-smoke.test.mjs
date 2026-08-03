@@ -47,7 +47,7 @@ test(
     const bound = candidate();
     stateStore.apply("runtime-session", bound);
     const poisonedEnvironment = {
-      QDM_INDICATORS_CLI: "/tmp/raw-qdm-indicators-cli",
+      QDM_METRIC_CLI: "/tmp/raw-qdm-metric-cli",
       QDM_CMR_CLI: "/tmp/qdm-cmr-cli",
       QDM_SQL_CLI: "/tmp/qdm-sql-cli",
       QDM_CAS_CLI: "/tmp/cas-cli",
@@ -79,7 +79,7 @@ test(
       `(printf 'subshell:%s\\n' "$${AUTHZ_BINDING_ENV}")`,
       `printf 'pipeline:%s\\n' "$${AUTHZ_BINDING_ENV}" | cat`,
       `(printf 'background:%s\\n' "$${AUTHZ_BINDING_ENV}") & wait`,
-      `printf 'facade:%s\\n' "$QDM_INDICATORS_CLI"`,
+      `printf 'metric-cli:%s\\n' "$QDM_METRIC_CLI"`,
       `printf 'cmr:<%s>\\n' "\${QDM_CMR_CLI-unset}"`,
       `printf 'sql:<%s>\\n' "\${QDM_SQL_CLI-unset}"`,
       `printf 'cas:<%s>\\n' "\${QDM_CAS_CLI-unset}"`,
@@ -90,7 +90,7 @@ test(
     for (const label of ["direct", "subshell", "pipeline", "background"]) {
       assert.match(output, new RegExp(`${label}:${bound.bindingBase64url}`));
     }
-    assert.match(output, new RegExp(`facade:${join(cwd, "bin", "qdm-indicators-cli")}`));
+    assert.match(output, new RegExp(`metric-cli:${join(cwd, "bin", "qdm-metric-cli")}`));
     for (const label of ["cmr", "sql", "cas", "cas-config"]) {
       assert.match(output, new RegExp(`${label}:<unset>`));
     }

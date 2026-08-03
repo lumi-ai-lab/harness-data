@@ -4,6 +4,7 @@ package authz
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -14,3 +15,9 @@ func fileOwnerUID(info fs.FileInfo) (uint32, bool) {
 	}
 	return stat.Uid, true
 }
+
+func currentProcessOwnerUID() uint32 {
+	return uint32(os.Geteuid())
+}
+
+func fileOwnershipSupported() bool { return true }

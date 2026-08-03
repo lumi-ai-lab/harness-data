@@ -51,15 +51,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	authorizedRuntime := isLumiMVPRequiredRuntime(root)
-	if authorizedRuntime {
-		response = applyLumiMVPConstraints(response)
-	}
-	var authNotes []string
-	if !authorizedRuntime {
-		authNotes = preflightAuth(root, plan)
-	}
-	additionalContext, err := buildWikiAdditionalContext(tc, response, plan, authNotes)
+	additionalContext, err := buildWikiAdditionalContext(tc, response, plan)
 	if err != nil {
 		return false, Output{}, err
 	}
@@ -80,7 +72,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	}, nil
 }
 
-func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan, authNotes []string) (string, error) {
+func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan) (string, error) {
 	timeJSON, err := json.Marshal(tc)
 	if err != nil {
 		return "", err
@@ -126,27 +118,21 @@ func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse
 		b.WriteString(plan.Reason)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n必须先读取以下 contextFiles：\n")
-	for _, ref := range response.ContextFiles {
-		b.WriteString("- ")
-		b.WriteString(ref.Path)
-		if ref.Reason != "" {
-			b.WriteString(" (")
-			b.WriteString(ref.Reason)
-			b.WriteString(")")
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("\nInstruction: ")
-	b.WriteString(response.Instruction)
-	if len(authNotes) > 0 {
-		b.WriteString("\n\nAuth preflight:\n")
-		for _, note := range authNotes {
+	if len(response.ContextFiles) > 0 {
+		b.WriteString("\n必须先读取以下 contextFiles：\n")
+		for _, ref := range response.ContextFiles {
 			b.WriteString("- ")
-			b.WriteString(note)
+			b.WriteString(ref.Path)
+			if ref.Reason != "" {
+				b.WriteString(" (")
+				b.WriteString(ref.Reason)
+				b.WriteString(")")
+			}
 			b.WriteString("\n")
 		}
 	}
+	b.WriteString("\nInstruction: ")
+	b.WriteString(response.Instruction)
 	b.WriteString("\n\nConstraints:\n")
 	for _, constraint := range response.Constraints {
 		b.WriteString("- ")

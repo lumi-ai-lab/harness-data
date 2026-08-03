@@ -81,7 +81,7 @@ function formatSummary(value) {
     `Requester: ${channel} / ${botId} / ${canonicalUserId}`,
     `Authorized manageAreaIds: ${manageAreaIds.join(", ")}`,
     `Authorized categoryLevel1Ids: ${categoryLevel1Ids.join(", ")}`,
-    "Data rule: use only qdm-indicators-cli; the Facade applies final authorization.",
+    "Data rule: use only qdm-metric-cli; the public Metric CLI applies final authorization.",
   ].join("\n");
   if (summary.length > MAX_SUMMARY_LENGTH) throw new Error("summary exceeds its length limit");
   return summary;

@@ -19,7 +19,7 @@ func TestReadEnvelopeBindingAndCurrentValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := ReadEnvelope(loadedConfig, fixture.sessionID, WithNow(fixture.now))
+	loaded, err := ReadEnvelope(loadedConfig, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +38,14 @@ func TestReadEnvelopeBindingAndCurrentValidation(t *testing.T) {
 	if decoded.SessionID != fixture.sessionID || decoded.RequestID != fixture.envelope.RequesterContext.RequestID {
 		t.Fatalf("unexpected binding: %#v", decoded)
 	}
-	current, err := ValidateCurrent(loadedConfig, decoded, WithNow(fixture.now))
+	current, err := ValidateCurrent(loadedConfig, decoded, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if current.SHA256 != loaded.SHA256 {
 		t.Fatalf("current digest %s != %s", current.SHA256, loaded.SHA256)
 	}
-	bound, err := Bind(loadedConfig, fixture.sessionID, WithNow(fixture.now))
+	bound, err := Bind(loadedConfig, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,13 +58,177 @@ func TestScopeIDsRemainOpaqueAndCaseSensitive(t *testing.T) {
 	fixture := newAuthzFixture(t)
 	fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN 07", "cn07"}
 	fixture.writeEnvelope(t, fixture.envelope)
-	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := loaded.Envelope.RequesterContext.Authorization.Scope.ManageAreaIDs
 	if len(got) != 2 || got[0] != "CN 07" || got[1] != "cn07" {
 		t.Fatalf("scope IDs were normalized: %#v", got)
+	}
+}
+
+func TestMetricCatalogMatchesApprovedIdentifiersExactly(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	raw := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId","categoryLevel1Id"],"dictionaryRefs":[{"queryType":1,"id":"metric-id-1","internalCode":"sale_amt_internal","names":["销售额","Sale Amount"]},{"queryType":2,"id":"metric-id-2","internalCode":"sale_amt_composite","names":["复合销售额"]}]}}}`)
+	writeTestFile(t, fixture.catalogPath, raw, 0o600)
+	catalog, err := LoadMetricCatalog(fixture.catalogPath, sha256Hex(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !catalog.ApproveMetric("saleAmt") || catalog.ApproveMetric("SaleAmt") || catalog.ApproveMetric("saleCnt") {
+		t.Fatal("metric approval was not exact and case-sensitive")
+	}
+	if match, ok := catalog.MatchID("metric-id-1", 1, true); !ok || match.Metric != "saleAmt" {
+		t.Fatalf("approved dictionary ID did not resolve: %#v, %v", match, ok)
+	}
+	if _, ok := catalog.MatchID("metric-id-1", 2, true); ok {
+		t.Fatal("dictionary ID resolved with the wrong required query type")
+	}
+	if match, ok := catalog.MatchID("metric-id-1", 2, false); !ok || match.Ref.QueryType != 1 {
+		t.Fatalf("optional query type unexpectedly changed the match: %#v, %v", match, ok)
+	}
+	if match, ok := catalog.MatchInternal("sale_amt_internal"); !ok || match.Metric != "saleAmt" {
+		t.Fatalf("approved internal code did not resolve: %#v, %v", match, ok)
+	}
+	if _, ok := catalog.MatchInternal("SALE_AMT_INTERNAL"); ok {
+		t.Fatal("internal code matching was not case-sensitive")
+	}
+	if match, ok := catalog.MatchName("销售额", 1); !ok || match.Ref.ID != "metric-id-1" {
+		t.Fatalf("approved name did not resolve: %#v, %v", match, ok)
+	}
+	if _, ok := catalog.MatchName("销售额", 2); ok {
+		t.Fatal("dictionary name resolved with the wrong query type")
+	}
+	if _, ok := catalog.MatchName("sale amount", 1); ok {
+		t.Fatal("dictionary name matching was not exact")
+	}
+	if !catalog.IDMatchesMetric("metric-id-2", "saleAmt", 2) ||
+		catalog.IDMatchesMetric("metric-id-2", "saleCnt", 2) ||
+		catalog.IDMatchesMetric("metric-id-2", "saleAmt", 1) {
+		t.Fatal("dictionary ID to Metric matching was not exact")
+	}
+}
+
+func TestConfigAcceptsOnlyCompatibleMetricPatchVersions(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	config := fixture.config
+	config.RealMetricCLI.Version = "0.1.9"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("expected compatible Metric CLI patch version: %v", err)
+	}
+	config.RealMetricCLI.Version = "0.2.0"
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+}
+
+func TestConfigRequiresSeparatedAgentAndRequesterContextOwners(t *testing.T) {
+	fixture := newAuthzFixture(t)
+
+	config := fixture.config
+	config.AgentUID = nil
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	config.RequesterContextOwnerUID = nil
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	sameUID := fixture.ownerUID
+	config.AgentUID = &sameUID
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	rootUID := uint32(0)
+	config.AgentUID = &rootUID
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+}
+
+func TestRequesterContextTrustBoundaryRejectsAgentControl(t *testing.T) {
+	t.Run("caller UID differs from configured Agent", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		_, err := ReadEnvelope(
+			fixture.config,
+			fixture.sessionID,
+			WithNow(fixture.now),
+			WithAgentUID(fixture.ownerUID),
+		)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
+	})
+
+	t.Run("directory is listable", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		if err := os.Chmod(fixture.contextDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
+	})
+
+	t.Run("envelope is private to its writer", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		name, err := SessionFileName(fixture.sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(fixture.contextDir, name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
+	})
+
+	t.Run("configured writer does not own the envelope", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		otherOwner := distinctTestUID(fixture.agentUID)
+		fixture.config.RequesterContextOwnerUID = &otherOwner
+		_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
+	})
+
+	t.Run("Agent controls a parent directory", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		if err := verifyAncestorsNotControlledByAgent(filepath.Dir(fixture.contextDir), fixture.ownerUID); err == nil {
+			t.Fatal("expected Agent-controlled requester-context ancestor to be rejected")
+		}
+	})
+
+	t.Run("sticky shared ancestor", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Unix sticky directory semantics are required")
+		}
+		fixture := newAuthzFixture(t)
+		sticky := filepath.Join(fixture.root, "sticky")
+		if err := os.Mkdir(sticky, 0o777|os.ModeSticky); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(sticky, 0o777|os.ModeSticky); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyAncestorsNotControlledByAgent(sticky, fixture.agentUID); err != nil {
+			t.Fatalf("sticky shared ancestor was rejected: %v", err)
+		}
+	})
+}
+
+func TestInstallerReleaseSetDigestMatchesCanonicalContract(t *testing.T) {
+	digest, err := installerReleaseSetDigest(installerReleaseSet{
+		Platform:            "darwin-arm64",
+		Version:             "v1.2.3",
+		PublicMetricVersion: "v1.2.3",
+		PublicMetricSHA256:  repeatTestString("a", 64),
+		RealMetricVersion:   "v0.1.0",
+		RealMetricSHA256:    repeatTestString("b", 64),
+		CatalogSHA256:       repeatTestString("c", 64),
+		AuthzSchemaVersion:  1,
+		PiVersion:           "0.81.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "143590d13fd20b776d7cd1403349b28403feb7a796d791fd55fad122f5a5bdb5"
+	if digest != expected {
+		t.Fatalf("release-set digest = %s, want %s", digest, expected)
 	}
 }
 
@@ -84,7 +248,7 @@ func TestSessionFileNameUsesExactRawBytesAndNeverScans(t *testing.T) {
 	rawFixture.sessionID = " session "
 	rawFixture.envelope.SessionID = rawFixture.sessionID
 	rawFixture.writeEnvelope(t, rawFixture.envelope)
-	loaded, err := ReadEnvelope(rawFixture.config, rawFixture.sessionID, WithNow(rawFixture.now))
+	loaded, err := ReadEnvelope(rawFixture.config, rawFixture.sessionID, rawFixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +269,7 @@ func TestSessionFileNameUsesExactRawBytesAndNeverScans(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestJSON(t, filepath.Join(fixture.contextDir, "newest.json"), fixture.envelope, 0o600)
-	_, err = ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	_, err = ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextInvalid)
 }
 
@@ -114,7 +278,7 @@ func TestClockSkewDoesNotExtendEnvelopeExpiry(t *testing.T) {
 	fixture.envelope.IssuedAt = fixture.now.Add(-time.Minute)
 	fixture.envelope.ExpiresAt = fixture.now.Add(-time.Second)
 	fixture.writeEnvelope(t, fixture.envelope)
-	_, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextExpired)
 }
 
@@ -176,12 +340,16 @@ func TestStrictEnvelopeValidationRejectsMalformedAndUnsafeInputs(t *testing.T) {
 			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN07", "CN07"}
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
+		"invalid DC scope": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.RequesterContext.Authorization.Scope.DCManageAreaIDs = []string{"CN07", "*"}
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			fixture := newAuthzFixture(t)
 			mutate(t, fixture)
-			_, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+			_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 			if name == "expired" {
 				assertAuthzCode(t, err, CodeRequesterContextExpired)
 			} else if name == "capability missing" {
@@ -211,7 +379,7 @@ func TestEnvelopeSymlinkAndOversizeFailClosed(t *testing.T) {
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextInvalid)
 
 	if err := os.Remove(path); err != nil {
@@ -219,13 +387,13 @@ func TestEnvelopeSymlinkAndOversizeFailClosed(t *testing.T) {
 	}
 	fixture.config.MaxEnvelopeBytes = 16
 	fixture.writeEnvelope(t, fixture.envelope)
-	_, err = ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	_, err = ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextInvalid)
 }
 
 func TestBindingRejectsNoncanonicalUnknownAndStaleValues(t *testing.T) {
 	fixture := newAuthzFixture(t)
-	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,17 +410,17 @@ func TestBindingRejectsNoncanonicalUnknownAndStaleValues(t *testing.T) {
 	assertAuthzCode(t, err, CodeBindingInvalid)
 
 	binding.RequestID = "another-request"
-	_, err = ValidateCurrent(fixture.config, binding, WithNow(fixture.now))
+	_, err = ValidateCurrent(fixture.config, binding, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeBindingMismatch)
 	binding = NewBinding(loaded)
 	binding.ExpiresAt = fixture.now
-	_, err = ValidateCurrent(fixture.config, binding, WithNow(fixture.now))
+	_, err = ValidateCurrent(fixture.config, binding, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextExpired)
 }
 
 func TestCurrentValidationObservesReplacementCleanupAndKillSwitch(t *testing.T) {
 	fixture := newAuthzFixture(t)
-	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +429,7 @@ func TestCurrentValidationObservesReplacementCleanupAndKillSwitch(t *testing.T) 
 	replacement := fixture.envelope
 	replacement.RequesterContext.RequestID = "request-2"
 	fixture.writeEnvelope(t, replacement)
-	_, err = ValidateCurrent(fixture.config, binding, WithNow(fixture.now))
+	_, err = ValidateCurrent(fixture.config, binding, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeBindingMismatch)
 
 	fixture.writeEnvelope(t, fixture.envelope)
@@ -269,12 +437,12 @@ func TestCurrentValidationObservesReplacementCleanupAndKillSwitch(t *testing.T) 
 	if err := os.Remove(filepath.Join(fixture.contextDir, name)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = ValidateCurrent(fixture.config, binding, WithNow(fixture.now))
+	_, err = ValidateCurrent(fixture.config, binding, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeRequesterContextInvalid)
 
 	fixture.writeEnvelope(t, fixture.envelope)
 	writeTestJSON(t, fixture.controlPath, ControlState{Version: 1, Generation: 8, State: "disabled", UpdatedAt: fixture.now}, 0o600)
-	_, err = ValidateCurrent(fixture.config, binding, WithNow(fixture.now))
+	_, err = ValidateCurrent(fixture.config, binding, fixture.readOptions()...)
 	assertAuthzCode(t, err, CodeKillSwitchActive)
 }
 
@@ -302,16 +470,54 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		t.Fatalf("readiness = %#v, %v", report, err)
 	}
 
-	t.Run("facade digest", func(t *testing.T) {
+	t.Run("rejects non-Pi installer Agent", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
-		writeTestFile(t, fixture.facadePath, []byte("tampered"), 0o700)
+		fixture.installerAgent = "codex"
+		fixture.writeInstallerState(t)
+		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
+	t.Run("selected Agent deployment", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, "agents", "pi", "settings.json")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		if err := os.Remove(filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("agents", "claude"), filepath.Join(fixture.root, ".pi")); err != nil {
+			t.Fatal(err)
+		}
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+
+		fixture = newAuthzFixture(t)
+		writeTestFile(t, filepath.Join(fixture.root, "agents", "pi", "settings.json"), []byte("{}\n"), 0o600)
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
+
+	t.Run("public metric CLI digest", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		writeTestFile(t, fixture.publicMetricPath, []byte("tampered"), 0o700)
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
 		assertAuthzCode(t, err, CodeArtifactIntegrityFailed)
 	})
 	t.Run("forbidden CLI config", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
 		writeTestFile(t, fixture.harnessConfigPath, []byte(
-			"paths:\n  knowledge: wikis\ncli:\n  qdm_indicators_cli: "+fixture.facadePath+"\n  qdm_cmr_cli: /tmp/cmr\n",
+			"paths:\n  knowledge: wikis\ncli:\n  qdm_metric_cli: "+fixture.publicMetricPath+"\n  qdm_cmr_cli: /tmp/cmr\n",
 		), 0o600)
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
 		assertAuthzCode(t, err, CodeConfigInvalid)
@@ -321,6 +527,25 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		raw, _ := os.ReadFile(fixture.installerStatePath)
 		writeTestFile(t, fixture.installerStatePath, append(raw[:len(raw)-1], []byte(`,"unknown":1}`)...), 0o600)
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
+	t.Run("installer release-set platform", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		raw, err := os.ReadFile(fixture.installerStatePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state installerState
+		if err := json.Unmarshal(raw, &state); err != nil {
+			t.Fatal(err)
+		}
+		state.ReleaseSet.Platform = "unsupported-amd64"
+		state.ReleaseSet.SHA256, err = installerReleaseSetDigest(state.ReleaseSet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTestJSON(t, fixture.installerStatePath, state, 0o600)
+		_, err = CheckReadiness(fixture.configPath, fixture.readinessOptions())
 		assertAuthzCode(t, err, CodeConfigInvalid)
 	})
 	t.Run("manifest raw digest", func(t *testing.T) {
@@ -362,6 +587,17 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 			})
 		}
 	})
+	t.Run("requester context directory must remain private", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Unix permission bits are required")
+		}
+		fixture := newAuthzFixture(t)
+		if err := os.Chmod(fixture.contextDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+		assertAuthzCode(t, err, CodeConfigInvalid)
+	})
 	t.Run("security-critical runtime directory symlink", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("symlink creation requires platform privileges")
@@ -378,35 +614,11 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
 		assertAuthzCode(t, err, CodeConfigInvalid)
 	})
-	t.Run("credential mode", func(t *testing.T) {
-		fixture := newAuthzFixture(t)
-		if err := os.Chmod(filepath.Join(fixture.credentialDir, "config.json"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
-		assertAuthzCode(t, err, CodeConfigInvalid)
-	})
-	t.Run("credential schema and token", func(t *testing.T) {
-		for name, raw := range map[string]string{
-			"unknown field":   `{"token":"test-only","extra":true}`,
-			"duplicate token": `{"token":"first","token":"second"}`,
-			"empty token":     `{"token":""}`,
-			"control token":   "{\"token\":\"line\\nfeed\"}",
-			"timeout bound":   `{"token":"test-only","timeoutSeconds":3601}`,
-		} {
-			t.Run(name, func(t *testing.T) {
-				fixture := newAuthzFixture(t)
-				writeTestFile(t, filepath.Join(fixture.credentialDir, "config.json"), []byte(raw), 0o600)
-				_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
-				assertAuthzCode(t, err, CodeConfigInvalid)
-			})
-		}
-	})
 	t.Run("catalog semantics", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
-		raw := []byte(`{"version":1,"generatedFrom":"qdm-indicators-cli-v0.0.4-contract","indicators":{"saleAmt":{"supportedDimensions":["manageAreaId"],"dictionaryRefs":[]}}}`)
+		raw := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId"],"dictionaryRefs":[]}}}`)
 		writeTestFile(t, fixture.catalogPath, raw, 0o600)
-		fixture.config.ApprovedIndicatorCatalog.SHA256 = sha256Hex(raw)
+		fixture.config.ApprovedMetricCatalog.SHA256 = sha256Hex(raw)
 		writeTestJSON(t, fixture.configPath, fixture.config, 0o600)
 		fixture.writeInstallerState(t)
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
@@ -421,7 +633,26 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		_, err := CheckReadiness(fixture.configPath, options)
 		assertAuthzCode(t, err, CodeConfigInvalid)
 	})
-	t.Run("renamed private Indicators copy anywhere in PATH", func(t *testing.T) {
+	t.Run("broken PATH symlink is not executable", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires platform privileges")
+		}
+		fixture := newAuthzFixture(t)
+		visible := filepath.Join(fixture.root, "visible-tools")
+		if err := os.MkdirAll(visible, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(visible, "missing-target"), filepath.Join(visible, "stale-tool")); err != nil {
+			t.Fatal(err)
+		}
+		options := fixture.readinessOptions()
+		options.AgentPath = filepath.Join(fixture.root, "bin") + string(os.PathListSeparator) + visible
+		report, err := CheckReadiness(fixture.configPath, options)
+		if err != nil || !report.Ready {
+			t.Fatalf("readiness with broken PATH symlink = %#v, %v", report, err)
+		}
+	})
+	t.Run("renamed private Metric copy anywhere in PATH", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
 		visible := filepath.Join(fixture.root, "visible-tools")
 		raw, err := os.ReadFile(fixture.realCLIPath)
@@ -434,11 +665,11 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		_, err = CheckReadiness(fixture.configPath, options)
 		assertAuthzCode(t, err, CodeConfigInvalid)
 	})
-	t.Run("actual Agent Indicators CLI environment", func(t *testing.T) {
+	t.Run("actual Agent Metric CLI environment", func(t *testing.T) {
 		for name, environment := range map[string][]string{
 			"missing": nil,
-			"empty":   {"QDM_INDICATORS_CLI="},
-			"wrong":   {"QDM_INDICATORS_CLI=/tmp/raw-qdm-indicators-cli"},
+			"empty":   {"QDM_METRIC_CLI="},
+			"wrong":   {"QDM_METRIC_CLI=/tmp/raw-qdm-metric-cli"},
 		} {
 			t.Run(name, func(t *testing.T) {
 				fixture := newAuthzFixture(t)
@@ -477,7 +708,7 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 	})
 	t.Run("runtime defaults to the process environment", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
-		t.Setenv("QDM_INDICATORS_CLI", fixture.facadePath)
+		t.Setenv("QDM_METRIC_CLI", fixture.publicMetricPath)
 		for _, name := range []string{"QDM_CMR_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI", "QDM_CAS_CONFIG_DIR"} {
 			t.Setenv(name, "")
 		}
@@ -488,6 +719,17 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 			t.Fatalf("readiness with process environment = %#v, %v", report, err)
 		}
 	})
+}
+
+func TestShippedPiConfigMatchesReadinessContract(t *testing.T) {
+	repositoryRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(repositoryRoot, ".agents", "pi")
+	if err := validateSelectedAgentConfig(source); err != nil {
+		t.Fatalf("shipped Pi config is invalid: %v", err)
+	}
 }
 
 func TestParentDirectorySymlinkIsRejected(t *testing.T) {
@@ -515,7 +757,7 @@ func (fixture *authzFixture) writeRawEnvelope(t *testing.T, raw []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(fixture.contextDir, name), raw, 0o600)
+	writeTestFile(t, filepath.Join(fixture.contextDir, name), raw, 0o644)
 }
 
 func assertAuthzCode(t *testing.T, err error, expected Code) {
@@ -531,7 +773,7 @@ func assertAuthzCode(t *testing.T, err error, expected Code) {
 
 func TestCanonicalBindingJSONHasNoAlternateWhitespace(t *testing.T) {
 	fixture := newAuthzFixture(t)
-	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, WithNow(fixture.now))
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
 		t.Fatal(err)
 	}

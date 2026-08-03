@@ -116,7 +116,8 @@ func ValidateCurrent(config Config, binding Binding, options ...ReadOption) (Loa
 	if !control.Enabled() {
 		return LoadedEnvelope{}, authzError(CodeKillSwitchActive, "authorization kill switch is disabled", nil)
 	}
-	loaded, err := ReadEnvelope(config, binding.SessionID, WithNow(settings.now))
+	envelopeOptions := []ReadOption{WithNow(settings.now), WithAgentUID(settings.agentUID)}
+	loaded, err := ReadEnvelope(config, binding.SessionID, envelopeOptions...)
 	if err != nil {
 		return LoadedEnvelope{}, err
 	}

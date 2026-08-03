@@ -53,7 +53,7 @@ test("authz-bind parser verifies exact binding JCS/base64url", () => {
       "Requester: wecom / bot / user-a",
       "Authorized manageAreaIds: CN07, CN08",
       "Authorized categoryLevel1Ids: 12, 13",
-      "Data rule: use only qdm-indicators-cli; the Facade applies final authorization.",
+      "Data rule: use only qdm-metric-cli; the public Metric CLI applies final authorization.",
     ].join("\n"),
   });
   assert.equal(

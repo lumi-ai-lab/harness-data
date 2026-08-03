@@ -15,14 +15,16 @@ import (
 
 const multiSingleCandidateLimit = 20
 
-var selectFromSQLPattern = regexp.MustCompile(`(?is)\bselect\b.+\bfrom\b`)
+var metricCLIDiagnosticPattern = regexp.MustCompile(`(?i)\bqdm-metric-cli(?:\.exe)?[[:space:]]+(?:的[[:space:]]+)?(?:version|--version|-v|help|--help|-h)\b`)
+
+const shellExitCaptureInstruction = " When capturing a zsh command exit code, use rc=$?; do not assign to the read-only zsh parameter status. Treat the data CLI invocation and the surrounding output-capture wrapper as separate operations: if the CLI already executed, do not rerun it solely because later output formatting or wrapper logic failed."
 
 var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"when CMR, Indicators, or SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr, \"$QDM_CAS_CLI\" token --app indicators, or \"$QDM_CAS_CLI\" token --app rtp for SQL, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
+	"use_only_qdm_metric_cli_for_data_queries",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -114,6 +116,16 @@ func pathsConfigFromIndex(paths map[string]string) (harness.PathsConfig, bool) {
 }
 
 func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.RuntimeIndex, question string) (harness.ContextResponse, WikiPlan) {
+	if metricCLIDiagnosticPattern.MatchString(question) {
+		plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "metric_cli_diagnostic"}
+		return harness.ContextResponse{
+			Question:     question,
+			ContextFiles: nil,
+			Instruction:  instructionForPlan(plan),
+			Constraints:  constraints,
+		}, plan
+	}
+
 	byPath := index.DocsByPath
 	var refs []harness.FileRef
 	seen := map[string]bool{}
@@ -133,18 +145,6 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	}
 
 	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
-	if isSQLPassthroughQuestion(question) {
-		plan.Reason = "free_sql_passthrough"
-		add("rules/qdm-sql-cli/spec.md", "free SQL passthrough rule")
-		response := harness.ContextResponse{
-			Question:     question,
-			ContextFiles: refs,
-			Instruction:  instructionForPlan(plan),
-			Constraints:  constraints,
-		}
-		return response, plan
-	}
-
 	matches := RecallMatches(index, question, 0)
 	hits := recallHitsFromMatches(index, matches)
 	ordinarySpecs, conceptSpecs := classifyHits(hits)
@@ -234,14 +234,6 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		Constraints:  constraints,
 	}
 	return response, plan
-}
-
-func isSQLPassthroughQuestion(question string) bool {
-	compact := strings.ToLower(strings.Join(strings.Fields(question), ""))
-	if strings.Contains(compact, "执行sql") {
-		return true
-	}
-	return selectFromSQLPattern.MatchString(question)
 }
 
 func shouldPrioritizeReportConcept(question string, selected selectedReportConcept) bool {
@@ -790,7 +782,10 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If CMR, Indicators, or SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login."
+	if plan.Mode == sessionstate.ModeFree && plan.Reason == "metric_cli_diagnostic" {
+		return "Harness mode: free. reason=metric_cli_diagnostic. This is a qdm-metric-cli metadata diagnostic request. Do not read context files, specs, playbooks, templates, source code, or other CLIs. Execute only the exact public qdm-metric-cli version/help command requested by the user and return its actual stdout, stderr, and exit status." + shellExitCaptureInstruction
+	}
+	common := "All modes: read all contextFiles before running qdm-metric-cli. Numeric values must come from qdm-metric-cli; do not estimate or invent. Use only qdm-metric-cli for data queries. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file." + shellExitCaptureInstruction
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."

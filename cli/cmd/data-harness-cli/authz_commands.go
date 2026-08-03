@@ -25,6 +25,19 @@ type authzCatalogValidation struct {
 	Valid bool `json:"valid"`
 }
 
+func runRootIndependentAuthzCommand(command string, args []string, output io.Writer) (bool, error) {
+	switch command {
+	case "authz-bind":
+		return true, runAuthzBind(args, output)
+	case "authz-readiness":
+		return true, runAuthzReadiness(args, output)
+	case "authz-validate-catalog":
+		return true, runAuthzValidateCatalog(args, output)
+	default:
+		return false, nil
+	}
+}
+
 func runAuthzBind(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("authz-bind", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -69,12 +82,12 @@ func runAuthzReadiness(args []string, output io.Writer) error {
 func runAuthzValidateCatalog(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("authz-validate-catalog", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	catalogPath := flags.String("path", "", "approved indicator catalog path")
-	catalogSHA256 := flags.String("sha256", "", "approved indicator catalog sha256")
+	catalogPath := flags.String("path", "", "approved metric catalog path")
+	catalogSHA256 := flags.String("sha256", "", "approved metric catalog sha256")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *catalogPath == "" || *catalogSHA256 == "" {
 		return writeAuthzCommandFailure(output, nil, authz.CodeArtifactIntegrityFailed, "authz-validate-catalog arguments are invalid")
 	}
-	if _, err := authz.LoadIndicatorCatalog(*catalogPath, *catalogSHA256); err != nil {
+	if _, err := authz.LoadMetricCatalog(*catalogPath, *catalogSHA256); err != nil {
 		return writeAuthzError(output, nil, err)
 	}
 	return writeCommandJSON(output, authzCatalogValidation{Valid: true})

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +18,8 @@ import (
 var policyRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type readSettings struct {
-	now time.Time
+	now      time.Time
+	agentUID uint32
 }
 
 // ReadOption customizes deterministic time validation in tests and callers.
@@ -32,8 +32,20 @@ func WithNow(now time.Time) ReadOption {
 	}
 }
 
+// WithAgentUID validates the requester-context boundary for the UID that will
+// consume the envelope. Runtime callers normally omit it and use the current
+// effective UID; trusted IPC brokers use the kernel-reported peer UID.
+func WithAgentUID(uid uint32) ReadOption {
+	return func(settings *readSettings) {
+		settings.agentUID = uid
+	}
+}
+
 func resolveReadSettings(options []ReadOption) readSettings {
-	settings := readSettings{now: time.Now().UTC()}
+	settings := readSettings{
+		now:      time.Now().UTC(),
+		agentUID: currentProcessOwnerUID(),
+	}
 	for _, option := range options {
 		if option != nil {
 			option(&settings)
@@ -70,8 +82,12 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err != nil {
 		return LoadedEnvelope{}, err
 	}
-	directoryInfo, err := os.Lstat(config.RequesterContextDir)
-	if err != nil || directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
+	settings := resolveReadSettings(options)
+	contextSecurity, err := requesterContextSecurity(config, settings.agentUID)
+	if err != nil {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context trust boundary is unavailable", err)
+	}
+	if err := verifyRequesterContextDirectory(config.RequesterContextDir, contextSecurity, settings.agentUID); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context directory is unavailable", err)
 	}
 	path := filepath.Join(config.RequesterContextDir, filename)
@@ -79,11 +95,13 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file cannot be read safely", err)
 	}
+	if err := verifyRequesterContextFile(path, contextSecurity); err != nil {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file permissions are invalid", err)
+	}
 	var envelope Envelope
 	if err := decodeStrictJSON(data, &envelope); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context envelope is invalid", err)
 	}
-	settings := resolveReadSettings(options)
 	if err := validateEnvelope(config, envelope, sessionID, settings.now); err != nil {
 		return LoadedEnvelope{}, err
 	}
@@ -171,7 +189,7 @@ func validateRequesterContext(context RequesterContext) error {
 		}
 	}
 
-	hasIndicatorsCapability := false
+	hasMetricCapability := false
 	seenCapabilities := make(map[string]struct{}, len(context.Authorization.Capabilities))
 	for _, capability := range context.Authorization.Capabilities {
 		if err := validateRequiredWireString(capability); err != nil {
@@ -181,15 +199,20 @@ func validateRequesterContext(context RequesterContext) error {
 			return invalid("requester context contains a duplicate capability")
 		}
 		seenCapabilities[capability] = struct{}{}
-		if capability == CapabilityIndicatorsQuery {
-			hasIndicatorsCapability = true
+		if capability == CapabilityMetricQuery {
+			hasMetricCapability = true
 		}
 	}
-	if !hasIndicatorsCapability {
-		return authzError(CodeCapabilityDenied, "requester lacks Indicators query capability", nil)
+	if !hasMetricCapability {
+		return authzError(CodeCapabilityDenied, "requester lacks Metric query capability", nil)
 	}
 	if err := validateScopeValues(context.Authorization.Scope.ManageAreaIDs); err != nil {
 		return err
+	}
+	if len(context.Authorization.Scope.DCManageAreaIDs) > 0 {
+		if err := validateScopeValues(context.Authorization.Scope.DCManageAreaIDs); err != nil {
+			return err
+		}
 	}
 	if err := validateScopeValues(context.Authorization.Scope.CategoryLevel1IDs); err != nil {
 		return err

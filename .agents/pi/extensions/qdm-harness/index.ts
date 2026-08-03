@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 import { runAsyncCommand } from "./async-cli.mjs";
 import { registerAuthzBashOverride } from "./authz-bash.mjs";
 import { AuthorizationStateStore, parseAuthzBindOutput } from "./authz-state.mjs";
-import { ContextCache, latestUserMessage, upsertHarnessContext } from "./context-cache.mjs";
+import {
+  ContextCache,
+  latestUserMessage,
+  replaceUserPrompt,
+  upsertHarnessContext,
+} from "./context-cache.mjs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -609,13 +614,17 @@ export async function installQdmHarnessExtension(
     const userMessage = latestUserMessage(messages);
     if (!userMessage) return { messages };
 
+    const effectiveMessages =
+      userMessage.prompt === userMessage.rawPrompt
+        ? messages
+        : replaceUserPrompt(messages, userMessage.index, userMessage.prompt);
     const cacheKey = `${requestedSessionId ?? "missing-session"}:${userMessage.key}`;
     const wikiContext = await contextCache.getOrCreate(cacheKey, () =>
       runHarnessContext(projectRoot, userMessage.prompt, ctx),
     );
     const context = [authorization.summary, wikiContext].filter(Boolean).join("\n\n");
-    if (!context) return { messages };
-    return { messages: upsertHarnessContext(messages, userMessage.index, context) };
+    if (!context) return { messages: effectiveMessages };
+    return { messages: upsertHarnessContext(effectiveMessages, userMessage.index, context) };
   });
 
   pi.on?.("message_start", (event, ctx) => {

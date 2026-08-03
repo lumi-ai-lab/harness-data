@@ -17,20 +17,13 @@ RUN go mod download
 WORKDIR /src
 COPY cli ./cli
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
-    go build -trimpath -ldflags="-s -w" -o /out/data-harness-cli ./cli/cmd/data-harness-cli && \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
-    go build -trimpath -ldflags="-s -w" -o /out/qdm-indicators-facade ./cli/cmd/qdm-indicators-cli
+    go build -trimpath -ldflags="-s -w" -o /out/data-harness-cli ./cli/cmd/data-harness-cli
 
 FROM alpine:3.22
 
 LABEL org.opencontainers.image.source="https://github.com/lumi-ai-lab/harness-data" \
-      org.opencontainers.image.description="Data Harness CLI for QDM runtime constraint data"
+      org.opencontainers.image.description="Data Harness CLI for QDM runtime context"
 
 COPY --from=build /out/data-harness-cli /usr/local/bin/data-harness-cli
-COPY --from=build /out/qdm-indicators-facade /usr/local/bin/qdm-indicators-facade
-# This image contains only the Harness-owned facade. The pinned real CLI and
-# runtime credentials are assembled by the lumi-mvp-required release set and
-# live outside PATH at runtime.
-COPY --from=build /out/qdm-indicators-facade /usr/local/bin/qdm-indicators-cli
 
 ENTRYPOINT ["data-harness-cli"]

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -61,10 +62,21 @@ func rejectSymlinkPathComponents(path string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if allowedDarwinSystemSymlink(current) {
+				continue
+			}
 			return fmt.Errorf("path contains a symbolic link")
 		}
 	}
 	return nil
+}
+
+func allowedDarwinSystemSymlink(path string) bool {
+	if runtime.GOOS != "darwin" || path != "/etc" {
+		return false
+	}
+	target, err := os.Readlink(path)
+	return err == nil && target == "private/etc"
 }
 
 func readRegularFile(path string, maxBytes int64) ([]byte, fs.FileInfo, error) {

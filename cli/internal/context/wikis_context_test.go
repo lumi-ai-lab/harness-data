@@ -45,6 +45,15 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 	if !strings.Contains(response.Instruction, "Harness mode: single") || !strings.Contains(response.Instruction, "Do not run bin/data-harness-cli inject-template") || strings.Contains(response.Instruction, "templates/idx/business/s-sale-amt.md") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
 	}
+	for _, want := range []string{
+		"use rc=$?",
+		"do not assign to the read-only zsh parameter status",
+		"do not rerun it solely because later output formatting or wrapper logic failed",
+	} {
+		if !strings.Contains(response.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, response.Instruction)
+		}
+	}
 }
 
 func TestBuildWithWikisIndexUsesRuntimePathsWhenConfigMissing(t *testing.T) {
@@ -159,32 +168,6 @@ func TestBuildWithWikisIndexMultiSingleModeDefaultsWithoutValueIntent(t *testing
 	}
 	if !strings.Contains(response.Instruction, "default to current-value collection") {
 		t.Fatalf("unexpected instruction: %s", response.Instruction)
-	}
-}
-
-func TestBuildWithWikisIndexSQLPassthroughSkipsMetricRecall(t *testing.T) {
-	root, _ := testStructuredMetricWikiRoot(t, 1)
-	for _, question := range []string{
-		"执行SQL: show tables",
-		"select sum(metric_01) from ads_sale_amt where dt = '2026-07-05'",
-	} {
-		response, plan, err := BuildWithPlan(root, question)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if plan.Mode != sessionstate.ModeFree || plan.Reason != "free_sql_passthrough" || plan.SelectedPlaybook != "" || len(plan.SelectedPlaybooks) != 0 {
-			t.Fatalf("%q unexpected plan: %+v", question, plan)
-		}
-		got := contextPaths(response)
-		want := []string{
-			"wikis/rules/qdm-sql-cli/spec.md",
-		}
-		if strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("%q context paths:\n%s", question, strings.Join(got, "\n"))
-		}
-		if !strings.Contains(response.Instruction, "Harness mode: free") {
-			t.Fatalf("%q unexpected instruction: %s", question, response.Instruction)
-		}
 	}
 }
 
@@ -427,6 +410,87 @@ func TestBuildWithWikisIndexCMRStoreManagerNonDirectQuestionsDoNotUseMultiSingle
 		if plan.Mode == sessionstate.ModeMulti {
 			t.Fatalf("%q should not use multi_single: %+v", question, plan)
 		}
+	}
+}
+
+func TestMetricCLIDiagnosticDoesNotSelectContextFiles(t *testing.T) {
+	root := testContextWikiRoot(t)
+	for _, question := range []string{
+		"qdm-metric-cli version",
+		"请只执行 qdm-metric-cli --help，不要读取任何文件",
+		"AUTHZ-LIVE-CODEX-20260731-06\n\nqdm-metric-cli version",
+		"请执行公开 qdm-metric-cli 的 version 命令，并返回实际执行结果和退出状态。",
+	} {
+		response, plan, err := BuildWithPlan(root, question)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Mode != sessionstate.ModeFree || plan.Reason != "metric_cli_diagnostic" {
+			t.Fatalf("%q unexpected plan: %+v", question, plan)
+		}
+		if len(response.ContextFiles) != 0 {
+			t.Fatalf("%q selected context files: %+v", question, response.ContextFiles)
+		}
+		for _, forbidden := range []string{"read all contextFiles", "selected playbook"} {
+			if strings.Contains(response.Instruction, forbidden) {
+				t.Fatalf("%q instruction contains %q: %s", question, forbidden, response.Instruction)
+			}
+		}
+		if !strings.Contains(response.Instruction, "Execute only the exact public qdm-metric-cli") {
+			t.Fatalf("%q unexpected instruction: %s", question, response.Instruction)
+		}
+		for _, want := range []string{
+			"use rc=$?",
+			"do not assign to the read-only zsh parameter status",
+			"do not rerun it solely because later output formatting or wrapper logic failed",
+		} {
+			if !strings.Contains(response.Instruction, want) {
+				t.Fatalf("%q instruction missing %q: %s", question, want, response.Instruction)
+			}
+		}
+	}
+}
+
+func TestExplicitMetricWithCLIConstraintsStaysSingle(t *testing.T) {
+	root := testContextWikiRoot(t)
+	writeContextFile(t, root, "wikis/spec/idx/business/s-scm-cost.md", `---
+name: metric_scm_cost
+label: 供应链成本
+---
+# 供应链成本
+`)
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-scm-cost.md", "# 供应链成本取数\n")
+	writeContextFile(t, root, "wikis/spec/idx/business/s-receive-amt.md", `---
+name: metric_receive_amt
+label: 进货额
+---
+# 进货额
+`)
+	writeContextFile(t, root, "wikis/playbooks/idx/business/s-receive-amt.md", "# 进货额取数\n")
+	if _, err := wikis.BuildIndex(root, false); err != nil {
+		t.Fatal(err)
+	}
+
+	question := `AUTHZ-LIVE-CODEX-BIZ-20260731-09
+
+查询粤西区在 2026 年 7 月 30 日的销售额，采用系统默认口径。
+
+请只使用公开的 qdm-metric-cli 获取指标数据。
+必须返回实际执行的 qdm-metric-cli 命令、标准输出、标准错误和退出状态。
+
+不要使用 qdm-cmr-cli、qdm-sql-cli、cas-cli 或私有 Metric CLI。
+不要估算、编造或根据其他数据推算销售额。`
+	response, plan, err := BuildWithPlan(root, question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Mode != sessionstate.ModeSingle || plan.SelectedPlaybook != "playbooks/idx/business/s-sale-amt.md" {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	got := contextPaths(response)
+	want := []string{"wikis/playbooks/idx/business/s-sale-amt.md"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("context paths:\n%s", strings.Join(got, "\n"))
 	}
 }
 

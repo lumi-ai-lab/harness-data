@@ -5,11 +5,12 @@ import { commandExists, run } from "../lib/exec.js";
 import {
   localPathToolNamesForProfile,
   migrateLegacyLocalAgentInstructions,
+  qdmCliBinariesForProfile,
   writeLocalConfig,
   linkAgents
 } from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
-import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
+import { ask, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
@@ -23,10 +24,10 @@ import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import {
   authzConfigPathFor,
   installerStateSchemaVersion,
+  lumiMetricCatalogArtifact,
   lumiApprovedWikisArtifact,
-  lumiCatalogArtifact,
-  localUnrestrictedProfile,
   lumiReleaseSet,
+  localUnrestrictedProfile,
   lumiRequiredProfile,
   normalizeProfile,
   profileFromState,
@@ -37,6 +38,10 @@ import {
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
 const localMetricRepo = "pengmide/qdm-metric-cli";
+const privateMetricRoot = "/opt/harness-data/private";
+const protectedMetricBrokerRoot = "/opt/harness-data/broker";
+const protectedMetricBrokerPath = `${protectedMetricBrokerRoot}/qdm-metric-cli`;
+const metricBrokerServicePath = "/etc/systemd/system/harness-data-metric-broker.service";
 
 function readInstallState(runtimeDir) {
   const local = readInstallerState(runtimeDir);
@@ -179,16 +184,19 @@ function executable(file) {
 }
 
 async function promptExecutable(runtimeDir, name, options = {}) {
-  const auto = path.join(runtimeDir, "bin", binaryName(name));
   const explicit = name === "qdm-metric-cli" ? options.metricCliPath : "";
-  if (explicit) {
-    const file = path.resolve(explicit);
-    if (!executable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
-    return file;
-  }
-  if (executable(auto)) {
-    ok(`自动识别 ${name}: ${auto}`);
-    return auto;
+  const candidates = [
+    explicit,
+    path.join(runtimeDir, "bin", binaryName(name)),
+    path.join(runtimeDir, binaryName(name)),
+    path.join(process.cwd(), binaryName(name))
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const file = path.resolve(candidate);
+    if (executable(file)) {
+      ok(`自动识别 ${name}: ${file}`);
+      return file;
+    }
   }
   const value = await ask(`请输入 ${name} 的绝对路径：`, options);
   const file = path.resolve(value);
@@ -277,120 +285,13 @@ export function validateLocalWikisSource(source) {
   }
 }
 
-function casConfigDir(runtimeDir) {
-  return path.join(runtimeDir, ".qdm-auth", "cas");
-}
-
-export async function writeCasCredentials(runtimeDir, options = {}) {
-  const username = options.casUsername || await ask("CAS 用户名：", options);
-  const password = options.casPassword || await askSecret("CAS 密码：", options);
-  if (!username || !password) throw new Error("CAS username and password are required");
-  const dir = options.casConfigDir || casConfigDir(runtimeDir);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const env = { QDM_CAS_CONFIG_DIR: dir };
-  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], {
-    cwd: runtimeDir,
-    env,
-    sensitiveArgs: [5]
-  });
-  ok("CAS 凭证已加密保存");
-  return dir;
-}
-
-function isCasAuthenticationFailure(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid credentials?|bad credentials?|认证.{0,8}(失败|不通过)|账号.{0,8}密码|<!doctype html|<html[\s>]/i.test(message);
-}
-
-function sanitizedCasError(error) {
-  if (isCasAuthenticationFailure(error)) return new Error("CAS 账号或密码验证不通过");
-  const message = String(error?.message || error || "CAS 认证失败");
-  if (/<(!doctype|html)[\s>]/i.test(message)) return new Error("CAS 服务返回了异常页面，请稍后重试");
-  return error instanceof Error ? error : new Error(message);
-}
-
-async function validateCasCredentials(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const command = path.join(runtimeDir, "bin", binaryName("cas-cli"));
-  await run(command, ["token", "--app", "cmr"], { cwd: runtimeDir, env });
-}
-
-function activateCasCredentials(stagedDir, targetDir) {
-  const backupDir = `${targetDir}.backup-${process.pid}-${Date.now()}`;
-  fs.mkdirSync(path.dirname(targetDir), { recursive: true, mode: 0o700 });
-  try {
-    if (fs.existsSync(targetDir)) fs.renameSync(targetDir, backupDir);
-    fs.renameSync(stagedDir, targetDir);
-    fs.rmSync(backupDir, { recursive: true, force: true });
-  } catch (error) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    if (fs.existsSync(backupDir)) fs.renameSync(backupDir, targetDir);
-    throw error;
-  }
-}
-
-export async function configureCasAuthentication(runtimeDir, options = {}) {
-  const targetDir = casConfigDir(runtimeDir);
-  const promptUsername = options.askUsername || ask;
-  const promptPassword = options.askPassword || askSecret;
-  const suppliedCredentials = Boolean(options.casUsername || options.casPassword || options.yes);
-  const maxAttempts = suppliedCredentials ? 1 : Number(options.casMaxAttempts || 3);
-  let previousUsername = String(options.casUsername || "").trim();
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const usernameAnswer = options.casUsername || await promptUsername(previousUsername ? `CAS 用户名 [${previousUsername}]：` : "CAS 用户名：", options);
-    const username = String(usernameAnswer || previousUsername).trim();
-    const password = options.casPassword || await promptPassword("CAS 密码：", options);
-    previousUsername = username;
-    if (!username || !password) {
-      warn("CAS 用户名和密码不能为空");
-      if (attempt < maxAttempts) continue;
-      throw new Error("CAS username and password are required");
-    }
-
-    const stagedDir = fs.mkdtempSync(path.join(runtimeDir, ".cas-auth-"));
-    try {
-      await writeCasCredentials(runtimeDir, { ...options, casUsername: username, casPassword: password, casConfigDir: stagedDir });
-      action("正在验证 CAS 账号……");
-      await validateCasCredentials(runtimeDir, stagedDir);
-      activateCasCredentials(stagedDir, targetDir);
-      ok("CAS 认证成功");
-      return targetDir;
-    } catch (error) {
-      fs.rmSync(stagedDir, { recursive: true, force: true });
-      const cleanError = sanitizedCasError(error);
-      if (!isCasAuthenticationFailure(error) || attempt >= maxAttempts) throw cleanError;
-      warn(`${cleanError.message}，请重新输入`);
-    }
-  }
-
-  throw new Error("CAS 认证失败");
-}
-
-export async function configureTokens(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
-  const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("CMR Token 已配置");
-  const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("Indicators Token 已配置");
-  const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("SQL Token 已配置");
-  await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  await run(bin("qdm-sql-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-}
-
 export async function buildAndCheck(runtimeDir, options = {}) {
   const cli = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
   action("执行：data-harness-cli wikis build-index --skip-checks");
   const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
   if (result.code !== 0) {
     if (options.requiredIndexes) {
-      throw new Error("wikis index build failed");
+      throw new Error("wikis index build failed for lumi-mvp-required");
     }
     warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
     return { ok: false };
@@ -407,7 +308,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
     }
   });
   if (options.requiredIndexes && missingIndexes.length) {
-    throw new Error(`wikis index build did not produce required indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
+    throw new Error(`wikis index build did not produce required Lumi indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
   }
   const output = `${result.stdout}\n${result.stderr}`;
   const docs = output.match(/\bdocs=(\d+)/)?.[1];
@@ -417,6 +318,317 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   return { ok: true, docs, recall, runtimeDocs };
 }
 
+function fileSha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function checkedExecutable(file) {
+  const info = fs.lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink() || !executable(file)) {
+    throw new Error(`sandbox CLI is not a regular executable: ${file}`);
+  }
+  return file;
+}
+
+function platformDispatcher(name) {
+  return `#!/bin/sh
+set -eu
+
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) platform="darwin-arm64" ;;
+  Darwin:x86_64) platform="darwin-amd64" ;;
+  Linux:aarch64|Linux:arm64) platform="linux-arm64" ;;
+  Linux:x86_64|Linux:amd64) platform="linux-amd64" ;;
+  *)
+    echo "unsupported platform for ${name}: $(uname -s) $(uname -m)" >&2
+    exit 126
+    ;;
+esac
+
+runtime_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$runtime_root/.harness/platform-bin/$platform/${name}" "$@"
+`;
+}
+
+function replaceExecutableCopy(source, target) {
+  const temporary = `${target}.install-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+  try {
+    fs.copyFileSync(source, temporary);
+    fs.chmodSync(temporary, 0o755);
+    fs.renameSync(temporary, target);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function installSandboxPlatformTools(runtimeDir, profile, options = {}) {
+  if (!String(options.sandboxCliDir || "").trim()) return {};
+  if (profile !== localUnrestrictedProfile) {
+    throw new Error("--sandbox-cli-dir is supported only for local-unrestricted");
+  }
+
+  const sourceDir = path.resolve(options.sandboxCliDir);
+  const hostPlatform = String(options.hostPlatformKey || platformKey());
+  const sandboxPlatform = String(options.sandboxPlatform || "linux-arm64");
+  if (!["linux-arm64", "linux-amd64"].includes(sandboxPlatform)) {
+    throw new Error(`unsupported sandbox platform: ${sandboxPlatform}`);
+  }
+
+  const platformRoot = path.join(runtimeDir, ".harness", "platform-bin");
+  const installed = {};
+  for (const name of qdmCliBinariesForProfile(profile)) {
+    const active = checkedExecutable(path.join(runtimeDir, "bin", binaryName(name)));
+    const sandboxSource = checkedExecutable(path.join(sourceDir, binaryName(name)));
+    const hostTarget = path.join(platformRoot, hostPlatform, binaryName(name));
+    const sandboxTarget = path.join(platformRoot, sandboxPlatform, binaryName(name));
+    fs.mkdirSync(path.dirname(hostTarget), { recursive: true });
+    fs.mkdirSync(path.dirname(sandboxTarget), { recursive: true });
+    replaceExecutableCopy(active, hostTarget);
+    replaceExecutableCopy(sandboxSource, sandboxTarget);
+    fs.writeFileSync(active, platformDispatcher(binaryName(name)), { mode: 0o755 });
+    installed[name] = {
+      mode: "platform-dispatch",
+      hostPlatform,
+      hostSha256: fileSha256(hostTarget),
+      sandboxPlatform,
+      sandboxSha256: fileSha256(sandboxTarget)
+    };
+  }
+  return installed;
+}
+
+export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
+  const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
+  const publicMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli");
+  const realMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
+  if (!helper || !publicMetric || !realMetric) {
+    throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
+  }
+  for (const tool of [helper, publicMetric, realMetric]) {
+    if (tool.tracking !== "fixed") throw new Error("Lumi authorization artifacts must use fixed tracking");
+  }
+  const platform = platformKey();
+  if (!platform.startsWith("linux-")) {
+    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+  }
+  if (releaseSet.platform !== platform) {
+    throw new Error(`Lumi release-set platform does not match ${platform}`);
+  }
+  for (const [name, tool] of [["data-harness-cli", helper], ["qdm-metric-cli", publicMetric], ["qdm-metric-cli-real", realMetric]]) {
+    if (!/^[a-f0-9]{64}$/.test(String(tool.platforms?.[platform]?.binarySha256 || ""))) {
+      throw new Error(`${name} binary sha256 is not fixed for ${platform}`);
+    }
+  }
+  if (publicMetric.version !== releaseSet.publicMetricVersion ||
+      realMetric.version !== releaseSet.realMetricVersion) {
+    throw new Error("Metric CLI versions do not match the Lumi release-set");
+  }
+  if (publicMetric.platforms[platform].binarySha256 !== releaseSet.publicMetricSha256 ||
+      realMetric.platforms[platform].binarySha256 !== releaseSet.realMetricSha256) {
+    throw new Error(`Metric CLI artifacts do not match the Lumi release-set for ${platform}`);
+  }
+  const publicPath = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
+  const realDestination = path.resolve(String(realMetric.destination || ""));
+  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
+      path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
+      path.dirname(realDestination) !== privateMetricRoot ||
+      path.basename(realDestination) !== "qdm-metric-cli-v0.1.0") {
+    throw new Error("Lumi authorization artifact destinations are invalid");
+  }
+}
+
+export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
+  const publicMetric = installedTools?.["qdm-metric-cli"];
+  const realMetric = installedTools?.["qdm-metric-cli-real"];
+  if (!publicMetric || !realMetric) throw new Error("Lumi installation is missing Metric authorization artifacts");
+  if (publicMetric.version !== releaseSet.publicMetricVersion ||
+      realMetric.version !== releaseSet.realMetricVersion ||
+      publicMetric.sha256 !== releaseSet.publicMetricSha256 ||
+      realMetric.sha256 !== releaseSet.realMetricSha256) {
+    throw new Error("installed Metric CLI artifacts do not match the release-set");
+  }
+  if (manifest) {
+    const platform = platformKey();
+    const publicSha = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli")?.platforms?.[platform]?.binarySha256;
+    const realSha = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real")?.platforms?.[platform]?.binarySha256;
+    if (publicMetric.sha256 !== publicSha || realMetric.sha256 !== realSha) {
+      throw new Error("installed Metric CLI artifacts do not match the manifest");
+    }
+  }
+}
+
+export function installLumiMetricCatalog(runtimeDir, manifest) {
+  const catalog = lumiMetricCatalogArtifact(manifest);
+  const source = path.resolve(runtimeDir, catalog.source);
+  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-metrics-v1.json");
+  if (source !== expectedSource || fileSha256(source) !== catalog.sha256) {
+    throw new Error("approved Metric catalog does not match the release manifest");
+  }
+  const destination = catalog.destination;
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
+  if (fs.existsSync(destination) && fileSha256(destination) !== catalog.sha256) {
+    throw new Error(`approved Metric catalog destination already contains a different artifact: ${destination}`);
+  }
+  if (!fs.existsSync(destination)) fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(destination, 0o644);
+  return destination;
+}
+
+function assertRootOwnedDirectory(directory, mode) {
+  fs.mkdirSync(directory, { recursive: true, mode });
+  const info = fs.lstatSync(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`trusted broker path is not a regular directory: ${directory}`);
+  }
+  if (typeof info.uid === "number" && info.uid !== 0) {
+    throw new Error(`trusted broker path is not root-owned: ${directory}`);
+  }
+  fs.chownSync(directory, 0, 0);
+  fs.chmodSync(directory, mode);
+}
+
+function systemdQuote(value) {
+  if (/[\r\n\0]/.test(value)) throw new Error("trusted broker executable path is invalid");
+  return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
+}
+
+function writeRootOwnedFileAtomic(destination, content, mode) {
+  const temporary = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.install-${process.pid}-${crypto.randomBytes(6).toString("hex")}`
+  );
+  try {
+    fs.writeFileSync(temporary, content, { flag: "wx", mode });
+    fs.chownSync(temporary, 0, 0);
+    fs.chmodSync(temporary, mode);
+    fs.renameSync(temporary, destination);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function renderLumiMetricBrokerService() {
+  return `[Unit]
+Description=Harness Data trusted Metric CLI broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=${systemdQuote(protectedMetricBrokerPath)} broker-serve
+RuntimeDirectory=harness-data
+RuntimeDirectoryMode=0755
+UMask=0077
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
+`;
+}
+
+export function prepareLumiMetricBrokerDestination(manifest, options = {}) {
+  if (process.platform !== "linux") {
+    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+  }
+  const effectiveUID = options.effectiveUID ?? process.getuid?.();
+  if (effectiveUID !== 0) {
+    throw new Error("lumi-mvp-required installation must run as root to isolate the private Metric CLI");
+  }
+  const realTool = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
+  const realPath = path.resolve(String(realTool?.destination || ""));
+  if (path.dirname(realPath) !== privateMetricRoot ||
+      !/^qdm-metric-cli-v0\.1\.\d+$/.test(path.basename(realPath))) {
+    throw new Error("private Metric CLI destination is outside the trusted broker directory");
+  }
+
+  assertRootOwnedDirectory("/opt/harness-data", 0o755);
+  assertRootOwnedDirectory(privateMetricRoot, 0o700);
+  if (fs.existsSync(realPath)) {
+    const info = fs.lstatSync(realPath);
+    if (!info.isFile() || info.isSymbolicLink() ||
+        (typeof info.uid === "number" && info.uid !== 0)) {
+      throw new Error("existing private Metric CLI destination is not a root-owned regular file");
+    }
+  }
+  return realPath;
+}
+
+export function installLumiMetricBroker(runtimeDir, installedTools, options = {}) {
+  if (process.platform !== "linux") {
+    throw new Error("lumi-mvp-required requires Linux trusted broker isolation");
+  }
+  const effectiveUID = options.effectiveUID ?? process.getuid?.();
+  if (effectiveUID !== 0) {
+    throw new Error("lumi-mvp-required installation must run as root to isolate the private Metric CLI");
+  }
+
+  const realMetric = installedTools?.["qdm-metric-cli-real"];
+  const realPath = path.resolve(String(realMetric?.destination || ""));
+  if (path.dirname(realPath) !== privateMetricRoot ||
+      !/^qdm-metric-cli-v0\.1\.\d+$/.test(path.basename(realPath))) {
+    throw new Error("private Metric CLI destination is outside the trusted broker directory");
+  }
+  assertRootOwnedDirectory("/opt/harness-data", 0o755);
+  assertRootOwnedDirectory(privateMetricRoot, 0o700);
+  const realInfo = fs.lstatSync(realPath);
+  if (!realInfo.isFile() || realInfo.isSymbolicLink()) {
+    throw new Error("private Metric CLI is not a regular file");
+  }
+
+  fs.chownSync(realPath, 0, 0);
+  fs.chmodSync(realPath, 0o500);
+
+  const publicMetricPath = path.join(path.resolve(runtimeDir), "bin", binaryName("qdm-metric-cli"));
+  const publicMetric = installedTools?.["qdm-metric-cli"];
+  if (path.resolve(String(publicMetric?.destination || "")) !== publicMetricPath ||
+      !/^[a-f0-9]{64}$/.test(String(publicMetric?.sha256 || ""))) {
+    throw new Error("public Metric broker artifact state is invalid");
+  }
+  const publicInfo = fs.lstatSync(publicMetricPath);
+  if (!publicInfo.isFile() || publicInfo.isSymbolicLink()) {
+    throw new Error("public Metric CLI is not a regular file");
+  }
+  const publicMetricBytes = fs.readFileSync(publicMetricPath);
+  if (crypto.createHash("sha256").update(publicMetricBytes).digest("hex") !== publicMetric.sha256) {
+    throw new Error("public Metric broker artifact does not match its installed SHA256");
+  }
+  assertRootOwnedDirectory(protectedMetricBrokerRoot, 0o700);
+  writeRootOwnedFileAtomic(protectedMetricBrokerPath, publicMetricBytes, 0o500);
+
+  const service = renderLumiMetricBrokerService();
+  const servicePath = path.resolve(options.servicePath || metricBrokerServicePath);
+  assertRootOwnedDirectory(path.dirname(servicePath), 0o755);
+  writeRootOwnedFileAtomic(servicePath, service, 0o644);
+
+  return {
+    servicePath,
+    socketPath: "/run/harness-data/qdm-metric-cli.sock",
+    brokerPath: protectedMetricBrokerPath,
+    realPath
+  };
+}
+
 export function printDoctorSummary(doctor, options = {}) {
   const nonBlocking = options.nonBlocking || (() => false);
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
@@ -424,9 +636,9 @@ export function printDoctorSummary(doctor, options = {}) {
   if (!failed.length) {
     if (doctor.profile === lumiRequiredProfile) {
       ok("lumi-mvp-required profile 与 installer-state v3");
-      ok("2 个 Agent 可见 CLI（data-harness-cli 与 Indicators Facade）");
-      ok("固定真实 Indicators CLI 与 release-set");
-      ok("Lumi 配置（未暴露 CMR/SQL/CAS）");
+      ok("2 个运行时 CLI（data-harness-cli 与 qdm-metric-cli）");
+      ok("唯一数据入口 qdm-metric-cli");
+      ok("无 CAS/token 与其他数据 CLI");
       ok("Pi Agent Hook");
       for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
       return;
@@ -446,130 +658,11 @@ export function printDoctorSummary(doctor, options = {}) {
   for (const check of failed) fail(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
 }
 
-export function validateLumiManifestReleaseSet(runtimeDir, manifest, releaseSet) {
-  const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
-  const facade = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
-  const real = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
-  if (!helper || !facade || !real) throw new Error("lumi-mvp-required manifest must include all Harness authorization artifacts");
-  if (helper.tracking !== "fixed" || facade.tracking !== "fixed" || real.tracking !== "fixed") {
-    throw new Error("lumi-mvp-required authorization artifacts must use fixed tracking");
+export function installModeFor(profile, options = {}, tokenMode = false) {
+  if (profile === localUnrestrictedProfile && String(options.wikisSource || "").trim()) {
+    return "local-path";
   }
-  const helperBinarySha256 = helper.platforms?.[platformKey()]?.binarySha256;
-  if (!String(helper.version || "").trim() || !/^[a-f0-9]{64}$/.test(String(helperBinarySha256 || ""))) {
-    throw new Error("Harness helper version and binary sha256 must be fixed");
-  }
-  if (facade.version !== releaseSet.facadeVersion) {
-    throw new Error(`Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
-  }
-  if (real.version !== releaseSet.realIndicatorsVersion) {
-    throw new Error(`real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
-  }
-  const lumiPlatformKey = platformKey();
-  const facadeBinarySha256 = String(facade.platforms?.[lumiPlatformKey]?.binarySha256 || "");
-  if (!/^[a-f0-9]{64}$/.test(facadeBinarySha256)) {
-    throw new Error(`Facade binary sha256 is not fixed for ${lumiPlatformKey}`);
-  }
-  const realBinarySha256 = String(real.platforms?.[lumiPlatformKey]?.binarySha256 || "");
-  if (!/^[a-f0-9]{64}$/.test(realBinarySha256)) {
-    throw new Error(`real Indicators CLI binary sha256 is not fixed for ${lumiPlatformKey}`);
-  }
-  const publicFacade = path.join(runtimeDir, "bin", binaryName("qdm-indicators-cli"));
-  const publicHelper = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
-  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(publicHelper)) {
-    throw new Error(`Harness helper destination must be ${publicHelper}`);
-  }
-  if (path.resolve(toolDestination(runtimeDir, facade)) !== path.resolve(publicFacade)) {
-    throw new Error(`Facade destination must be ${publicFacade}`);
-  }
-  if (!path.isAbsolute(String(real.destination || ""))) {
-    throw new Error("real Indicators CLI destination must be an absolute private path");
-  }
-}
-
-export function verifyLumiInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
-  const facade = installedTools?.["qdm-indicators-facade"];
-  const real = installedTools?.["qdm-indicators-cli-real"];
-  if (!facade || !real) throw new Error("lumi-mvp-required installation is missing fixed Indicators artifacts");
-  if (facade.version !== releaseSet.facadeVersion) {
-    throw new Error(`installed Facade version ${facade.version || "missing"} does not match release-set ${releaseSet.facadeVersion}`);
-  }
-  if (real.version !== releaseSet.realIndicatorsVersion) {
-    throw new Error(`installed real Indicators CLI version ${real.version || "missing"} does not match release-set ${releaseSet.realIndicatorsVersion}`);
-  }
-  if (manifest) {
-    const key = platformKey();
-    const facadeTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-facade");
-    const realTool = manifest.tools?.find((tool) => tool.name === "qdm-indicators-cli-real");
-    const helperTool = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
-    const helper = installedTools?.["data-harness-cli"];
-    const facadeBinarySha256 = facadeTool?.platforms?.[key]?.binarySha256;
-    const realBinarySha256 = realTool?.platforms?.[key]?.binarySha256;
-    const helperBinarySha256 = helperTool?.platforms?.[key]?.binarySha256;
-    if (!/^[a-f0-9]{64}$/.test(String(facadeBinarySha256 || ""))) {
-      throw new Error(`manifest is missing Facade binary sha256 for ${key}`);
-    }
-    if (!/^[a-f0-9]{64}$/.test(String(realBinarySha256 || ""))) {
-      throw new Error(`manifest is missing real Indicators CLI binary sha256 for ${key}`);
-    }
-    if (facade.sha256 !== facadeBinarySha256) {
-      throw new Error(`installed Facade sha256 does not match manifest for ${key}`);
-    }
-    if (real.sha256 !== realBinarySha256) {
-      throw new Error(`installed real Indicators CLI sha256 does not match manifest for ${key}`);
-    }
-    if (!helper || helper.version !== helperTool?.version || helper.sha256 !== helperBinarySha256) {
-      throw new Error("installed Harness helper does not match its fixed manifest contract");
-    }
-  } else {
-    if (real.sha256 !== releaseSet.realIndicatorsSha256) {
-      throw new Error("installed real Indicators CLI sha256 does not match release-set");
-    }
-    if (facade.sha256 !== releaseSet.facadeSha256) {
-      throw new Error("installed Facade sha256 does not match release-set");
-    }
-  }
-}
-
-function fileSha256(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-export function installLumiCatalog(runtimeDir, manifest) {
-  const catalog = lumiCatalogArtifact(manifest);
-  const source = path.resolve(runtimeDir, catalog.source);
-  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-indicators-v1.json");
-  if (source !== expectedSource) throw new Error("approved indicator catalog source escapes the runtime bundle");
-  let sourceInfo;
-  try {
-    sourceInfo = fs.lstatSync(source);
-  } catch {
-    throw new Error(`business-approved indicator catalog is missing from the runtime bundle: ${source}`);
-  }
-  if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || sourceInfo.size <= 0 || sourceInfo.size > 4 * 1024 * 1024) {
-    throw new Error("business-approved indicator catalog is not a safe regular file");
-  }
-  if (fileSha256(source) !== catalog.sha256) {
-    throw new Error("business-approved indicator catalog sha256 does not match release-set");
-  }
-  const destination = catalog.destination;
-  if (fs.existsSync(destination)) {
-    const destinationInfo = fs.lstatSync(destination);
-    if (!destinationInfo.isFile() || destinationInfo.isSymbolicLink() || fileSha256(destination) !== catalog.sha256) {
-      throw new Error(`approved indicator catalog destination already contains a different artifact: ${destination}`);
-    }
-    fs.chmodSync(destination, 0o644);
-    return destination;
-  }
-  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
-  const staged = `${destination}.install-${process.pid}`;
-  try {
-    fs.copyFileSync(source, staged, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(staged, 0o644);
-    fs.renameSync(staged, destination);
-  } finally {
-    fs.rmSync(staged, { force: true });
-  }
-  return destination;
+  return tokenMode ? "github-token" : "local-path";
 }
 
 function releaseArchiveForPlatform(asset, platform) {
@@ -585,9 +678,8 @@ export function localUnrestrictedReleaseManifest(manifest, options = {}) {
     return { ...selected, tools: [helper] };
   }
 
-  const platformSource = helper.platforms || {};
   const platforms = Object.fromEntries(
-    Object.entries(platformSource).map(([platform, asset]) => [
+    Object.entries(helper.platforms || {}).map(([platform, asset]) => [
       platform,
       { archive: releaseArchiveForPlatform(asset, platform) }
     ])
@@ -687,6 +779,7 @@ export async function installCommand(options = {}) {
   step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
+  const installMode = installModeFor(profile, options, tokenMode);
   const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
   const sourceManifest = readManifest(manifestPath);
   const selectedManifest = profile === localUnrestrictedProfile
@@ -696,43 +789,53 @@ export async function installCommand(options = {}) {
     for (const name of removeLegacyLocalTools(runtimeDir)) action(`移除旧版 CLI：${name}`);
     fs.rmSync(path.join(runtimeDir, ".qdm-auth"), { recursive: true, force: true });
   }
-  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest) : null;
+  const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest, key) : null;
   const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
   if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
 
   let manifest;
   let localTools = {};
+  let platformTools = {};
   if (profile === lumiRequiredProfile) {
     if (!tokenMode) throw new Error("lumi-mvp-required profile requires authenticated access to fixed release artifacts");
+    prepareLumiMetricBrokerDestination(selectedManifest);
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
       ...options,
       state: installState,
       manifestOverride: selectedManifest
     });
     verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
-    installLumiCatalog(runtimeDir, sourceManifest);
+    installLumiMetricBroker(runtimeDir, manifest.installedTools);
+    installLumiMetricCatalog(runtimeDir, sourceManifest);
   } else {
+    const releaseToolNames = selectedManifest.tools
+      .map((tool) => tool.name)
+      .filter((name) => !(name === "qdm-metric-cli" && options.metricCliPath));
     const latestManifest = await resolveLatestManifest(selectedManifest, key, {
       ...options,
-      tools: selectedManifest.tools.map((tool) => tool.name)
+      tools: releaseToolNames
     });
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
+    manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
+      ...options,
+      state: installState,
+      manifestOverride: latestManifest
+    });
     localTools = await installLocalTools(runtimeDir, profile, options);
+    platformTools = installSandboxPlatformTools(runtimeDir, profile, options);
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已按 ${profile} profile 安装`);
   blank();
-  const installedManifestSha256 = profile === lumiRequiredProfile
-    ? fileSha256(manifestPath)
-    : manifestDigest(manifest);
+  const installedManifestSha256 = manifestDigest(manifest);
 
   // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
   writeState(runtimeDir, {
     schemaVersion: installerStateSchemaVersion,
     profile,
     agent: selectedAgent,
-    installMode: tokenMode ? "github-token" : "local-path",
+    installMode,
     runtimeTag: bundle.tag,
     localTools,
+    platformTools,
     tools: manifest.installedTools || {},
     manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
@@ -771,9 +874,10 @@ export async function installCommand(options = {}) {
   writeState(runtimeDir, {
     schemaVersion: installerStateSchemaVersion,
     profile,
-    installMode: tokenMode ? "github-token" : "local-path",
+    installMode,
     runtimeTag: bundle.tag,
     localTools,
+    platformTools,
     tools: manifest.installedTools || {},
     manifestSha256: installedManifestSha256,
     packageVersion: packageVersion(),
