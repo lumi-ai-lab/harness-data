@@ -91,11 +91,11 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context directory is unavailable", err)
 	}
 	path := filepath.Join(config.RequesterContextDir, filename)
-	data, _, err := readRegularFile(path, config.MaxEnvelopeBytes)
+	data, info, err := readRegularFile(path, config.MaxEnvelopeBytes)
 	if err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file cannot be read safely", err)
 	}
-	if err := verifyRequesterContextFile(path, contextSecurity); err != nil {
+	if err := verifyRequesterContextFile(info, contextSecurity); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file permissions are invalid", err)
 	}
 	var envelope Envelope
@@ -126,13 +126,11 @@ func validateEnvelope(config Config, envelope *Envelope, expectedSessionID strin
 	if envelope.SessionID != expectedSessionID {
 		return invalid("requester context session does not match")
 	}
-	for name, value := range map[string]string{
-		"workspaceId": envelope.WorkspaceID,
-		"agentId":     envelope.AgentID,
-	} {
-		if err := validateRequiredWireString(value); err != nil {
-			return invalid("requester context envelope " + name + " is invalid")
-		}
+	if envelope.WorkspaceID != config.RequesterContextWorkspaceID {
+		return invalid("requester context envelope workspaceId does not match")
+	}
+	if envelope.AgentID != config.RequesterContextAgentID {
+		return invalid("requester context envelope agentId does not match")
 	}
 	// sessionId is an opaque ACP identifier. It must be compared and hashed
 	// byte-for-byte; leading or trailing whitespace is data, not normalization.

@@ -67,6 +67,22 @@ func (config Config) Validate() error {
 	if config.RequesterContextOwnerUID == nil {
 		return invalid("authorization config requesterContextOwnerUid is required")
 	}
+	if config.RequesterContextReaderGID == nil {
+		return invalid("authorization config requesterContextReaderGid is required")
+	}
+	if *config.RequesterContextReaderGID == 0 {
+		return invalid("authorization config requesterContextReaderGid must not be root")
+	}
+	if err := validateRequesterContextPathSegment(config.RequesterContextWorkspaceID); err != nil {
+		return invalid("authorization config requesterContextWorkspaceId is invalid")
+	}
+	if config.RequesterContextAgentID != "pi" {
+		return invalid("authorization config requesterContextAgentId must be pi")
+	}
+	if filepath.Base(config.RequesterContextDir) != config.RequesterContextAgentID ||
+		filepath.Base(filepath.Dir(config.RequesterContextDir)) != config.RequesterContextWorkspaceID {
+		return invalid("authorization config requesterContextDir must end with requesterContextWorkspaceId/requesterContextAgentId")
+	}
 	if *config.AgentUID == 0 {
 		return invalid("authorization config agentUid must not be root")
 	}
@@ -142,6 +158,16 @@ func validateAbsoluteCleanPath(value string) error {
 	}
 	if filepath.Clean(value) != value {
 		return fmt.Errorf("path must already be clean")
+	}
+	return nil
+}
+
+func validateRequesterContextPathSegment(value string) error {
+	if err := validateRequiredWireString(value); err != nil {
+		return err
+	}
+	if value == "." || value == ".." || strings.ContainsAny(value, "/\\") || filepath.Base(value) != value {
+		return fmt.Errorf("value must be one safe path segment")
 	}
 	return nil
 }

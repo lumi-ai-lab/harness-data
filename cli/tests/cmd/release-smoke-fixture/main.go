@@ -37,12 +37,13 @@ type installerState struct {
 func main() {
 	runtimeRoot := flag.String("runtime", "", "installed Harness runtime root")
 	agentUIDValue := flag.Uint64("agent-uid", 0, "unprivileged Agent UID")
+	readerGIDValue := flag.Uint64("reader-gid", 0, "requester-context reader group GID")
 	flag.Parse()
 
-	if flag.NArg() != 0 || *runtimeRoot == "" || *agentUIDValue == 0 || *agentUIDValue > math.MaxUint32 {
-		exit(errors.New("--runtime and a nonzero uint32 --agent-uid are required"))
+	if flag.NArg() != 0 || *runtimeRoot == "" || *agentUIDValue == 0 || *agentUIDValue > math.MaxUint32 || *readerGIDValue == 0 || *readerGIDValue > math.MaxUint32 {
+		exit(errors.New("--runtime, a nonzero uint32 --agent-uid, and a nonzero uint32 --reader-gid are required"))
 	}
-	binding, err := buildFixture(filepath.Clean(*runtimeRoot), uint32(*agentUIDValue), time.Now().UTC())
+	binding, err := buildFixture(filepath.Clean(*runtimeRoot), uint32(*agentUIDValue), uint32(*readerGIDValue), time.Now().UTC())
 	if err != nil {
 		exit(err)
 	}
@@ -51,7 +52,7 @@ func main() {
 	}
 }
 
-func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.BindResult, error) {
+func buildFixture(runtimeRoot string, agentUID, readerGID uint32, now time.Time) (authz.BindResult, error) {
 	if !filepath.IsAbs(runtimeRoot) {
 		return authz.BindResult{}, errors.New("runtime path must be absolute")
 	}
@@ -87,7 +88,11 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 		return authz.BindResult{}, fmt.Errorf("digest approved Metric catalog: %w", err)
 	}
 
-	contextDir := filepath.Join(fixtureRoot, "requester-context")
+	const (
+		workspaceID = "release-smoke-workspace"
+		agentID     = "pi"
+	)
+	contextDir := filepath.Join(fixtureRoot, "requester-context", workspaceID, agentID)
 	controlDir := filepath.Join(fixtureRoot, "control")
 	controlPath := filepath.Join(controlDir, "authz-state.json")
 	for _, directory := range []struct {
@@ -95,7 +100,7 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 		mode os.FileMode
 	}{
 		{fixtureRoot, 0o755},
-		{contextDir, 0o711},
+		{contextDir, 0o710},
 		{controlDir, 0o700},
 		{filepath.Dir(authzConfigPath), 0o755},
 	} {
@@ -103,17 +108,28 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 			return authz.BindResult{}, err
 		}
 	}
+	for _, directory := range []string{filepath.Dir(filepath.Dir(contextDir)), filepath.Dir(contextDir), contextDir} {
+		if err := os.Chown(directory, 0, int(readerGID)); err != nil {
+			return authz.BindResult{}, err
+		}
+		if err := os.Chmod(directory, 0o710); err != nil {
+			return authz.BindResult{}, err
+		}
+	}
 
 	config := authz.Config{
-		Version:                  authz.CurrentVersion,
-		Mode:                     authz.ModeLumiMVPRequired,
-		PiVersion:                authz.RequiredPiVersion,
-		AgentUID:                 &agentUID,
-		RequesterContextDir:      contextDir,
-		RequesterContextOwnerUID: rootUID(),
-		MaxEnvelopeBytes:         64 << 10,
-		MaxEnvelopeTTLSeconds:    1800,
-		ClockSkewSeconds:         30,
+		Version:                     authz.CurrentVersion,
+		Mode:                        authz.ModeLumiMVPRequired,
+		PiVersion:                   authz.RequiredPiVersion,
+		AgentUID:                    &agentUID,
+		RequesterContextDir:         contextDir,
+		RequesterContextWorkspaceID: workspaceID,
+		RequesterContextAgentID:     agentID,
+		RequesterContextOwnerUID:    rootUID(),
+		RequesterContextReaderGID:   &readerGID,
+		MaxEnvelopeBytes:            64 << 10,
+		MaxEnvelopeTTLSeconds:       1800,
+		ClockSkewSeconds:            30,
 		RealMetricCLI: authz.RealMetricCLIConfig{
 			Path:           realMetricPath,
 			Version:        strings.TrimPrefix(realMetric.Version, "v"),
@@ -162,8 +178,8 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 	}
 	envelope := authz.Envelope{
 		Version:     authz.CurrentEnvelopeVersion,
-		WorkspaceID: "release-smoke-workspace",
-		AgentID:     "release-smoke-agent",
+		WorkspaceID: workspaceID,
+		AgentID:     agentID,
 		SessionID:   sessionID,
 		IssuedAt:    now.Add(-time.Minute),
 		ExpiresAt:   now.Add(10 * time.Minute),
@@ -192,7 +208,11 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 	if err != nil {
 		return authz.BindResult{}, err
 	}
-	if err := writeRootJSON(filepath.Join(contextDir, envelopeName), envelope, 0o644); err != nil {
+	envelopePath := filepath.Join(contextDir, envelopeName)
+	if err := writeRootJSON(envelopePath, envelope, 0o640); err != nil {
+		return authz.BindResult{}, err
+	}
+	if err := os.Chown(envelopePath, 0, int(readerGID)); err != nil {
 		return authz.BindResult{}, err
 	}
 	return authz.Bind(config, sessionID, authz.WithAgentUID(agentUID), authz.WithNow(now))

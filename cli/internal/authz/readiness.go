@@ -700,6 +700,9 @@ func VerifySecureRegularFile(path string, options FileSecurityOptions) error {
 	if err := checkOwner(info, expectedOwnerUID(options.ExpectedOwnerUID)); err != nil {
 		return err
 	}
+	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
+		return err
+	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("file is group or world writable")
 	}
@@ -728,6 +731,9 @@ func VerifySecureDirectory(path string, options FileSecurityOptions) error {
 	if err := checkOwner(info, expectedOwnerUID(options.ExpectedOwnerUID)); err != nil {
 		return err
 	}
+	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
+		return err
+	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("directory is group or world writable")
 	}
@@ -748,6 +754,20 @@ func checkOwner(info fs.FileInfo, expected uint32) error {
 	owner, available := fileOwnerUID(info)
 	if available && owner != expected {
 		return fmt.Errorf("owner does not match")
+	}
+	return nil
+}
+
+func checkGroup(info fs.FileInfo, expected *uint32) error {
+	if expected == nil {
+		return nil
+	}
+	group, available := fileGroupGID(info)
+	if !available {
+		return fmt.Errorf("group ownership is unavailable")
+	}
+	if group != *expected {
+		return fmt.Errorf("group does not match")
 	}
 	return nil
 }

@@ -28,10 +28,11 @@ Lumi requester envelope. The public `qdm-metric-cli` sends the invocation over
 the fixed `/run/harness-data/qdm-metric-cli.sock` Unix socket. A root-owned
 broker authenticates the caller with Linux `SO_PEERCRED`, requires the
 configured non-root `agentUid`, revalidates requester-context files owned by
-the separate `requesterContextOwnerUid`, applies the Harness scope, and only
-then executes the private Metric runtime. The Agent UID cannot modify requester
-envelopes or traverse, read, or execute the private runtime and its embedded
-credential.
+the separate `requesterContextOwnerUid` and assigned to the configured reader
+group, requires the configured Workspace and `pi` Agent identities, applies the
+Harness scope, and only then executes the private Metric runtime. The Agent UID
+cannot modify requester envelopes or traverse, read, or execute the private
+runtime and its embedded credential.
 
 ## Install
 
@@ -40,25 +41,34 @@ The `lumi-mvp-required` profile downloads the platform-specific authorized
 runtime manifest. This protected profile requires Linux, root installation,
 and the installed `harness-data-metric-broker.service`; deployment must provide
 root-owned, Agent-readable, non-writable `/etc/harness-data/authz.json` with
-explicit `agentUid` and `requesterContextOwnerUid` values, then start the
-service after requester-context and kill-switch paths are mounted:
+deployment-resolved UID/GID values, then start the service after
+requester-context and kill-switch paths are mounted. The relevant config
+fragment is:
 
 ```json
 {
-  "agentUid": 10001,
-  "requesterContextDir": "/run/lumi/requester-context",
-  "requesterContextOwnerUid": 10002
+  "agentUid": "<resolved-pi-uid>",
+  "requesterContextDir": "/run/lumi/requester-context/<workspace-id>/pi",
+  "requesterContextWorkspaceId": "<workspace-id>",
+  "requesterContextAgentId": "pi",
+  "requesterContextOwnerUid": "<resolved-lumi-publisher-uid>",
+  "requesterContextReaderGid": "<resolved-reader-group-gid>"
 }
 ```
 
+Angle-bracket values are deployment placeholders; UID/GID values must be
+replaced with unquoted JSON integers in the generated configuration.
+
 `agentUid` is the effective UID of Pi and the public CLI client.
 `requesterContextOwnerUid` is a different, trusted Lumi publisher UID. The
-Agent must not run as root. Every ancestor of `requesterContextDir` must be
-outside Agent control and must not be group/world writable. The context
-directory must be searchable but not listable or writable by non-owners, for
-example `0711` or `0710`; envelope files must be readable but not writable by
-the Agent, for example `0644` or `0640`. A read-only bind mount or equivalent
-ACL is valid when it preserves those owner and access guarantees.
+Agent must not run as root. `requesterContextReaderGid` is a dedicated group
+granted to Pi; numeric IDs are resolved by deployment and are not baked into
+the binaries. Every ancestor of `requesterContextDir` must be outside Agent
+control and must not be group/world writable. The configured context root,
+Workspace directory, and Agent directory must all be owned by the publisher
+UID and reader GID with exact mode `0710`; envelope files must have the same
+owner/group and exact mode `0640`. The configured path must end with
+`<requesterContextWorkspaceId>/pi`.
 
 The base64url/JCS binding is intentionally not a signature. Re-encoding it or
 invoking `authz-bind` does not grant authority because both `authz-bind` and

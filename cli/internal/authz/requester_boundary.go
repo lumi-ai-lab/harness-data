@@ -22,47 +22,51 @@ func requesterContextSecurity(config Config, agentUID uint32) (FileSecurityOptio
 	if config.RequesterContextOwnerUID == nil {
 		return FileSecurityOptions{}, fmt.Errorf("requester context owner is not configured")
 	}
+	if config.RequesterContextReaderGID == nil {
+		return FileSecurityOptions{}, fmt.Errorf("requester context reader group is not configured")
+	}
 	if *config.RequesterContextOwnerUID == agentUID {
 		return FileSecurityOptions{}, fmt.Errorf("requester context owner must differ from the Agent UID")
 	}
-	return FileSecurityOptions{ExpectedOwnerUID: config.RequesterContextOwnerUID}, nil
+	return FileSecurityOptions{
+		ExpectedOwnerUID: config.RequesterContextOwnerUID,
+		ExpectedGroupGID: config.RequesterContextReaderGID,
+	}, nil
 }
 
 func verifyRequesterContextDirectory(path string, security FileSecurityOptions, agentUID uint32) error {
-	if err := verifyAncestorsNotControlledByAgent(filepath.Dir(path), agentUID); err != nil {
+	workspaceDir := filepath.Dir(path)
+	contextRoot := filepath.Dir(workspaceDir)
+	if err := verifyAncestorsNotControlledByAgent(filepath.Dir(contextRoot), agentUID); err != nil {
 		return err
 	}
-	if err := VerifySecureDirectory(path, security); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	permissions := info.Mode().Perm()
-	if permissions&0o066 != 0 {
-		return fmt.Errorf("requester context directory must not be listable or writable by non-owners")
-	}
-	if permissions&0o011 == 0 {
-		return fmt.Errorf("requester context directory is not searchable by the Agent")
+	for _, directory := range []string{contextRoot, workspaceDir, path} {
+		if err := VerifySecureDirectory(directory, security); err != nil {
+			return err
+		}
+		info, err := os.Lstat(directory)
+		if err != nil {
+			return err
+		}
+		if permissions := info.Mode().Perm(); permissions != 0o710 {
+			return fmt.Errorf("requester context directory %q mode is %04o, want 0710", directory, permissions)
+		}
 	}
 	return nil
 }
 
-func verifyRequesterContextFile(path string, security FileSecurityOptions) error {
-	if err := VerifySecureRegularFile(path, security); err != nil {
+func verifyRequesterContextFile(info os.FileInfo, security FileSecurityOptions) error {
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("requester context file is not regular")
+	}
+	if err := checkOwner(info, expectedOwnerUID(security.ExpectedOwnerUID)); err != nil {
 		return err
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
+	if err := checkGroup(info, security.ExpectedGroupGID); err != nil {
 		return err
 	}
-	permissions := info.Mode().Perm()
-	if permissions&0o044 == 0 {
-		return fmt.Errorf("requester context file is not readable by a non-owner")
-	}
-	if permissions&0o111 != 0 {
-		return fmt.Errorf("requester context file must not be executable")
+	if permissions := info.Mode().Perm(); permissions != 0o640 {
+		return fmt.Errorf("requester context file mode is %04o, want 0640", permissions)
 	}
 	return nil
 }

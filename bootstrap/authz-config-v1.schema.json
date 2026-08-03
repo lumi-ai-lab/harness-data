@@ -10,7 +10,10 @@
     "piVersion",
     "agentUid",
     "requesterContextDir",
+    "requesterContextWorkspaceId",
+    "requesterContextAgentId",
     "requesterContextOwnerUid",
+    "requesterContextReaderGid",
     "maxEnvelopeBytes",
     "maxEnvelopeTtlSeconds",
     "clockSkewSeconds",
@@ -31,9 +34,21 @@
       "maximum": 4294967295
     },
     "requesterContextDir": { "$ref": "#/$defs/absolutePath" },
+    "requesterContextWorkspaceId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\\\u0000]+$",
+      "not": { "enum": [".", ".."] }
+    },
+    "requesterContextAgentId": { "const": "pi" },
     "requesterContextOwnerUid": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 4294967295
+    },
+    "requesterContextReaderGid": {
+      "type": "integer",
+      "minimum": 1,
       "maximum": 4294967295
     },
     "maxEnvelopeBytes": {

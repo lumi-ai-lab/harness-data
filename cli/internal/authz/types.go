@@ -81,19 +81,22 @@ func ErrorCode(err error) Code {
 
 // Config is the root-owned authorization runtime configuration.
 type Config struct {
-	Version                  int                 `json:"version"`
-	Mode                     string              `json:"mode"`
-	PiVersion                string              `json:"piVersion"`
-	AgentUID                 *uint32             `json:"agentUid"`
-	RequesterContextDir      string              `json:"requesterContextDir"`
-	RequesterContextOwnerUID *uint32             `json:"requesterContextOwnerUid"`
-	MaxEnvelopeBytes         int64               `json:"maxEnvelopeBytes"`
-	MaxEnvelopeTTLSeconds    int64               `json:"maxEnvelopeTtlSeconds"`
-	ClockSkewSeconds         int64               `json:"clockSkewSeconds"`
-	RealMetricCLI            RealMetricCLIConfig `json:"realMetricCli"`
-	ApprovedMetricCatalog    ArtifactConfig      `json:"approvedMetricCatalog"`
-	KillSwitch               KillSwitchConfig    `json:"killSwitch"`
-	Limits                   LimitsConfig        `json:"limits"`
+	Version                     int                 `json:"version"`
+	Mode                        string              `json:"mode"`
+	PiVersion                   string              `json:"piVersion"`
+	AgentUID                    *uint32             `json:"agentUid"`
+	RequesterContextDir         string              `json:"requesterContextDir"`
+	RequesterContextWorkspaceID string              `json:"requesterContextWorkspaceId"`
+	RequesterContextAgentID     string              `json:"requesterContextAgentId"`
+	RequesterContextOwnerUID    *uint32             `json:"requesterContextOwnerUid"`
+	RequesterContextReaderGID   *uint32             `json:"requesterContextReaderGid"`
+	MaxEnvelopeBytes            int64               `json:"maxEnvelopeBytes"`
+	MaxEnvelopeTTLSeconds       int64               `json:"maxEnvelopeTtlSeconds"`
+	ClockSkewSeconds            int64               `json:"clockSkewSeconds"`
+	RealMetricCLI               RealMetricCLIConfig `json:"realMetricCli"`
+	ApprovedMetricCatalog       ArtifactConfig      `json:"approvedMetricCatalog"`
+	KillSwitch                  KillSwitchConfig    `json:"killSwitch"`
+	Limits                      LimitsConfig        `json:"limits"`
 }
 
 type RealMetricCLIConfig struct {
@@ -281,6 +284,7 @@ type ReadinessOptions struct {
 // root (UID 0) on platforms that expose Unix ownership.
 type FileSecurityOptions struct {
 	ExpectedOwnerUID  *uint32
+	ExpectedGroupGID  *uint32
 	RequireExecutable bool
 	Private           bool
 }

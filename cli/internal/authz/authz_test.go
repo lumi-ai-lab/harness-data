@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -168,6 +169,23 @@ func TestConfigRequiresSeparatedAgentAndRequesterContextOwners(t *testing.T) {
 	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
 
 	config = fixture.config
+	config.RequesterContextReaderGID = nil
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	rootGID := uint32(0)
+	config.RequesterContextReaderGID = &rootGID
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	config.RequesterContextWorkspaceID = ""
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
+	config.RequesterContextAgentID = "claude"
+	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+
+	config = fixture.config
 	sameUID := fixture.ownerUID
 	config.AgentUID = &sameUID
 	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
@@ -220,6 +238,22 @@ func TestRequesterContextTrustBoundaryRejectsAgentControl(t *testing.T) {
 		assertAuthzCode(t, err, CodeRequesterContextInvalid)
 	})
 
+	t.Run("context directory replacement symlink", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires platform privileges")
+		}
+		fixture := newAuthzFixture(t)
+		replacement := fixture.contextDir + "-replacement"
+		if err := os.Rename(fixture.contextDir, replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(replacement, fixture.contextDir); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
+	})
+
 	t.Run("Agent controls a parent directory", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
 		if err := verifyAncestorsNotControlledByAgent(filepath.Dir(fixture.contextDir), fixture.ownerUID); err == nil {
@@ -242,6 +276,63 @@ func TestRequesterContextTrustBoundaryRejectsAgentControl(t *testing.T) {
 		if err := verifyAncestorsNotControlledByAgent(sticky, fixture.agentUID); err != nil {
 			t.Fatalf("sticky shared ancestor was rejected: %v", err)
 		}
+	})
+}
+
+func TestRequesterContextRequiresExactSharedContractPermissions(t *testing.T) {
+	for _, mode := range []os.FileMode{0o711, 0o750, 0o770} {
+		t.Run(fmt.Sprintf("directory %04o", mode), func(t *testing.T) {
+			fixture := newAuthzFixture(t)
+			if err := os.Chmod(fixture.contextDir, mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+			assertAuthzCode(t, err, CodeRequesterContextInvalid)
+		})
+	}
+
+	for name, selectDirectory := range map[string]func(*authzFixture) string{
+		"context root": func(fixture *authzFixture) string {
+			return filepath.Dir(filepath.Dir(fixture.contextDir))
+		},
+		"workspace": func(fixture *authzFixture) string {
+			return filepath.Dir(fixture.contextDir)
+		},
+	} {
+		t.Run(name+" mode", func(t *testing.T) {
+			fixture := newAuthzFixture(t)
+			if err := os.Chmod(selectDirectory(fixture), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+			assertAuthzCode(t, err, CodeRequesterContextInvalid)
+		})
+	}
+
+	for _, mode := range []os.FileMode{0o600, 0o644, 0o660} {
+		t.Run(fmt.Sprintf("file %04o", mode), func(t *testing.T) {
+			fixture := newAuthzFixture(t)
+			name, err := SessionFileName(fixture.sessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(fixture.contextDir, name), mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err = ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+			assertAuthzCode(t, err, CodeRequesterContextInvalid)
+		})
+	}
+
+	t.Run("wrong reader group", func(t *testing.T) {
+		fixture := newAuthzFixture(t)
+		wrongGID := fixture.readerGID + 1
+		if wrongGID == 0 {
+			wrongGID = fixture.readerGID - 1
+		}
+		fixture.config.RequesterContextReaderGID = &wrongGID
+		_, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+		assertAuthzCode(t, err, CodeRequesterContextInvalid)
 	})
 }
 
@@ -333,6 +424,14 @@ func TestStrictEnvelopeValidationRejectsMalformedAndUnsafeInputs(t *testing.T) {
 		},
 		"session mismatch": func(t *testing.T, fixture *authzFixture) {
 			fixture.envelope.SessionID = "different"
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"workspace mismatch": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.WorkspaceID = "workspace-2"
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"agent mismatch": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.AgentID = "claude"
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"envelope v2": func(t *testing.T, fixture *authzFixture) {
@@ -830,7 +929,9 @@ func (fixture *authzFixture) writeRawEnvelope(t *testing.T, raw []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(fixture.contextDir, name), raw, 0o644)
+	path := filepath.Join(fixture.contextDir, name)
+	writeTestFile(t, path, raw, 0o640)
+	fixture.setContextGroup(t, path)
 }
 
 func assertAuthzCode(t *testing.T, err error, expected Code) {

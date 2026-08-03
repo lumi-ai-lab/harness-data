@@ -24,6 +24,7 @@ type wrapperFixture struct {
 	sessionID   string
 	now         time.Time
 	ownerUID    uint32
+	readerGID   uint32
 	agentUID    uint32
 	config      authz.Config
 }
@@ -36,27 +37,35 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 		t.Fatal(err)
 	}
 	for _, directory := range []string{
-		"control", "requester-context", "private",
+		"control", filepath.Join("requester-context", "workspace-1", "pi"), "private",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(root, "requester-context"), 0o711); err != nil {
-		t.Fatal(err)
+	contextDir := filepath.Join(root, "requester-context", "workspace-1", "pi")
+	for _, directory := range []string{filepath.Join(root, "requester-context"), filepath.Dir(contextDir), contextDir} {
+		if err := os.Chmod(directory, 0o710); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ownerUID := currentTestUID()
+	readerGID := currentTestGID()
+	for _, directory := range []string{filepath.Join(root, "requester-context"), filepath.Dir(contextDir), contextDir} {
+		setTestGroup(t, directory, readerGID)
+	}
 
 	fixture := &wrapperFixture{
 		root:        root,
 		configPath:  filepath.Join(root, "authz.json"),
 		controlPath: filepath.Join(root, "control", "authz-state.json"),
-		contextDir:  filepath.Join(root, "requester-context"),
+		contextDir:  contextDir,
 		realCLIPath: filepath.Join(root, "private", "qdm-metric-cli-v0.1.0"),
 		catalogPath: filepath.Join(root, "approved-metrics-v1.json"),
 		sessionID:   "acp-session-metric-cli",
 		now:         time.Now().UTC().Truncate(time.Second),
 		ownerUID:    ownerUID,
+		readerGID:   readerGID,
 		agentUID:    distinctWrapperTestUID(ownerUID),
 	}
 	fixture.writeRealCLI(t, "#!/bin/sh\nprintf 'argc=%s\\n' \"$#\"\nfor arg in \"$@\"; do printf 'arg=%s\\n' \"$arg\"; done\n")
@@ -68,15 +77,18 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 	}, 0o600)
 
 	fixture.config = authz.Config{
-		Version:                  authz.CurrentVersion,
-		Mode:                     authz.ModeLumiMVPRequired,
-		PiVersion:                authz.RequiredPiVersion,
-		AgentUID:                 &fixture.agentUID,
-		RequesterContextDir:      fixture.contextDir,
-		RequesterContextOwnerUID: &fixture.ownerUID,
-		MaxEnvelopeBytes:         64 << 10,
-		MaxEnvelopeTTLSeconds:    1800,
-		ClockSkewSeconds:         30,
+		Version:                     authz.CurrentVersion,
+		Mode:                        authz.ModeLumiMVPRequired,
+		PiVersion:                   authz.RequiredPiVersion,
+		AgentUID:                    &fixture.agentUID,
+		RequesterContextDir:         fixture.contextDir,
+		RequesterContextWorkspaceID: "workspace-1",
+		RequesterContextAgentID:     "pi",
+		RequesterContextOwnerUID:    &fixture.ownerUID,
+		RequesterContextReaderGID:   &fixture.readerGID,
+		MaxEnvelopeBytes:            64 << 10,
+		MaxEnvelopeTTLSeconds:       1800,
+		ClockSkewSeconds:            30,
 		RealMetricCLI: authz.RealMetricCLIConfig{
 			Path:           fixture.realCLIPath,
 			Version:        "0.1.0",
@@ -119,7 +131,7 @@ func (fixture *wrapperFixture) writeEnvelope(t *testing.T, expiresAt time.Time, 
 	envelope := authz.Envelope{
 		Version:     authz.CurrentEnvelopeVersion,
 		WorkspaceID: "workspace-1",
-		AgentID:     "agent-1",
+		AgentID:     "pi",
 		SessionID:   fixture.sessionID,
 		IssuedAt:    fixture.now.Add(-time.Minute),
 		ExpiresAt:   expiresAt,
@@ -142,7 +154,23 @@ func (fixture *wrapperFixture) writeEnvelope(t *testing.T, expiresAt time.Time, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(fixture.contextDir, name), envelope, 0o644)
+	path := filepath.Join(fixture.contextDir, name)
+	writeJSON(t, path, envelope, 0o640)
+	setTestGroup(t, path, fixture.readerGID)
+}
+
+func setTestGroup(t *testing.T, path string, expected uint32) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentTestFileGID(info) == expected {
+		return
+	}
+	if err := os.Chown(path, -1, int(expected)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (fixture *wrapperFixture) binding(t *testing.T) string {

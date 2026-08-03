@@ -44,12 +44,15 @@ CLI reaches the private runtime only through
 `/run/harness-data/qdm-metric-cli.sock`; the broker authenticates the caller
 with Linux `SO_PEERCRED`, requires the configured non-root `agentUid`, and
 enforces the Harness scope against requester-context files owned by the
-separate `requesterContextOwnerUid`. This profile requires Linux and a root
-installation. Start `harness-data-metric-broker.service` only after the
-root-owned, Agent-readable, non-writable authorization config and its mounted
-runtime inputs are ready. The requester-context directory must be searchable
-but not listable or writable by the Agent (`0711` or `0710`), and envelope
-files must be readable but not writable by it (`0644` or `0640`).
+separate `requesterContextOwnerUid` and assigned to the configured
+`requesterContextReaderGid`. It also requires exact configured Workspace and
+`pi` Agent identities. This profile requires Linux and a root installation.
+Start `harness-data-metric-broker.service` only after the root-owned,
+Agent-readable, non-writable authorization config and its mounted runtime
+inputs are ready. The configured requester-context path must end with
+`<workspace-id>/pi`; its context root, Workspace directory, and Agent directory
+must use exact mode `0710`, and envelope files exact mode `0640`, with the
+configured publisher owner and reader group.
 
 Supported local Agent templates are Claude Code, Codex, Pi, OpenClaw, and
 Hermes. Non-Pi templates use only the ordinary Harness context and posttool

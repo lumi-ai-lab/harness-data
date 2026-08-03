@@ -321,9 +321,24 @@ jobs:
           go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
           sudo /tmp/release-smoke-fixture \
             --runtime "${runtime}" \
-            --agent-uid "$(id -u nobody)" |
+            --agent-uid "$(id -u nobody)" \
+            --reader-gid "$(id -g nobody)" |
             tee "${CONTRACT_ROOT}/binding.json" >/dev/null
           binding="$(jq -er '.bindingBase64url' "${CONTRACT_ROOT}/binding.json")"
+          context_dir="/var/lib/harness-data/release-smoke/requester-context/release-smoke-workspace/pi"
+          context_file="$(sudo find "${context_dir}" -maxdepth 1 -type f -name '*.json' -print -quit)"
+          if [[ -z "${context_file}" ]] || ! sudo -u nobody test -r "${context_file}"; then
+            echo "::error::configured Pi UID cannot read requester context"
+            exit 1
+          fi
+          if sudo -u nobody test -w "${context_file}" || sudo -u nobody test -w "${context_dir}"; then
+            echo "::error::configured Pi UID can modify requester context"
+            exit 1
+          fi
+          if sudo -u daemon test -r "${context_file}"; then
+            echo "::error::unrelated UID can read requester context"
+            exit 1
+          fi
 
           broker_pid=""
           cleanup_broker() {
@@ -348,6 +363,11 @@ jobs:
             fi
             sleep 0.1
           done
+
+          if sudo -u daemon "${runtime}/bin/qdm-metric-cli" broker-health; then
+            echo "::error::unrelated UID can call the Metric broker"
+            exit 1
+          fi
 
           set +e
           sudo -u nobody env -u HARNESS_AUTHZ_BINDING_V1 \
@@ -542,9 +562,24 @@ jobs:
           go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
           sudo /tmp/release-smoke-fixture \
             --runtime "${runtime}" \
-            --agent-uid "$(id -u nobody)" |
+            --agent-uid "$(id -u nobody)" \
+            --reader-gid "$(id -g nobody)" |
             tee "${smoke_root}/binding.json" >/dev/null
           binding="$(jq -er '.bindingBase64url' "${smoke_root}/binding.json")"
+          context_dir="/var/lib/harness-data/release-smoke/requester-context/release-smoke-workspace/pi"
+          context_file="$(sudo find "${context_dir}" -maxdepth 1 -type f -name '*.json' -print -quit)"
+          if [[ -z "${context_file}" ]] || ! sudo -u nobody test -r "${context_file}"; then
+            echo "::error::configured Pi UID cannot read requester context"
+            exit 1
+          fi
+          if sudo -u nobody test -w "${context_file}" || sudo -u nobody test -w "${context_dir}"; then
+            echo "::error::configured Pi UID can modify requester context"
+            exit 1
+          fi
+          if sudo -u daemon test -r "${context_file}"; then
+            echo "::error::unrelated UID can read requester context"
+            exit 1
+          fi
 
           broker_pid=""
           cleanup_broker() {
@@ -569,6 +604,11 @@ jobs:
             fi
             sleep 0.1
           done
+
+          if sudo -u daemon "${runtime}/bin/qdm-metric-cli" broker-health; then
+            echo "::error::unrelated UID can call the Metric broker"
+            exit 1
+          fi
 
           set +e
           sudo -u nobody env -u HARNESS_AUTHZ_BINDING_V1 \

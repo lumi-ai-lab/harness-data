@@ -21,6 +21,7 @@ func TestLumiEnvelopeV1RequesterContextV2ContractFixture(t *testing.T) {
 	fixture := newAuthzFixture(t)
 	fixture.sessionID = "session-demo-001"
 	fixture.now = time.Date(2026, 8, 3, 3, 1, 0, 0, time.UTC)
+	fixture.setRequesterContextScope(t, "sandbox-workspace-demo")
 	fixture.writeRawEnvelope(t, payload)
 
 	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)

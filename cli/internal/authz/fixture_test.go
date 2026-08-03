@@ -24,6 +24,7 @@ type authzFixture struct {
 	config             Config
 	now                time.Time
 	ownerUID           uint32
+	readerGID          uint32
 	agentUID           uint32
 	sessionID          string
 	installerAgent     string
@@ -37,13 +38,15 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	contextRoot := filepath.Join(root, "requester-context")
+	contextDir := filepath.Join(contextRoot, "workspace-1", "pi")
 	for _, directory := range []string{
 		filepath.Join(root, ".harness"),
 		filepath.Join(root, "agents"),
 		filepath.Join(root, "bin"),
 		filepath.Join(root, "bootstrap"),
 		filepath.Join(root, "config"),
-		filepath.Join(root, "requester-context"),
+		contextRoot,
 		filepath.Join(root, "private"),
 		filepath.Join(root, "secrets"),
 		filepath.Join(root, "control"),
@@ -55,8 +58,16 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Chmod(filepath.Join(root, "requester-context"), 0o711); err != nil {
+	if err := os.MkdirAll(contextDir, 0o710); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.Chmod(contextDir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{contextRoot, filepath.Dir(contextDir)} {
+		if err := os.Chmod(directory, 0o710); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rootInfo, err := os.Stat(root)
 	if err != nil {
@@ -72,7 +83,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		configPath:         filepath.Join(root, "authz.json"),
 		installerStatePath: filepath.Join(root, ".harness", "installer-state.json"),
 		cliManifestPath:    filepath.Join(root, "bootstrap", "cli-manifest.json"),
-		contextDir:         filepath.Join(root, "requester-context"),
+		contextDir:         contextDir,
 		controlPath:        filepath.Join(root, "control", "authz-state.json"),
 		realCLIPath:        filepath.Join(root, "private", "qdm-metric-cli-v0.1.0"),
 		publicMetricPath:   filepath.Join(root, "bin", "qdm-metric-cli"),
@@ -82,9 +93,13 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 		cliPathsEnvPath:    filepath.Join(root, "config", "qdm-cli-paths.env"),
 		now:                time.Date(2026, 7, 30, 4, 0, 0, 0, time.UTC),
 		ownerUID:           ownerUID,
+		readerGID:          currentTestGroupGID(rootInfo),
 		agentUID:           distinctTestUID(ownerUID),
 		sessionID:          "acp-session-原始值",
 		installerAgent:     "pi",
+	}
+	for _, directory := range []string{contextRoot, filepath.Dir(fixture.contextDir), fixture.contextDir} {
+		fixture.setContextGroup(t, directory)
 	}
 
 	writeTestFile(t, fixture.realCLIPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
@@ -98,15 +113,18 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	}, 0o600)
 
 	fixture.config = Config{
-		Version:                  CurrentVersion,
-		Mode:                     ModeLumiMVPRequired,
-		PiVersion:                RequiredPiVersion,
-		AgentUID:                 &fixture.agentUID,
-		RequesterContextDir:      fixture.contextDir,
-		RequesterContextOwnerUID: &fixture.ownerUID,
-		MaxEnvelopeBytes:         64 << 10,
-		MaxEnvelopeTTLSeconds:    1800,
-		ClockSkewSeconds:         30,
+		Version:                     CurrentVersion,
+		Mode:                        ModeLumiMVPRequired,
+		PiVersion:                   RequiredPiVersion,
+		AgentUID:                    &fixture.agentUID,
+		RequesterContextDir:         fixture.contextDir,
+		RequesterContextWorkspaceID: "workspace-1",
+		RequesterContextAgentID:     "pi",
+		RequesterContextOwnerUID:    &fixture.ownerUID,
+		RequesterContextReaderGID:   &fixture.readerGID,
+		MaxEnvelopeBytes:            64 << 10,
+		MaxEnvelopeTTLSeconds:       1800,
+		ClockSkewSeconds:            30,
 		RealMetricCLI: RealMetricCLIConfig{
 			Path:           fixture.realCLIPath,
 			Version:        "0.1.7",
@@ -140,7 +158,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	fixture.envelope = Envelope{
 		Version:     CurrentEnvelopeVersion,
 		WorkspaceID: "workspace-1",
-		AgentID:     "agent-1",
+		AgentID:     "pi",
 		SessionID:   fixture.sessionID,
 		IssuedAt:    fixture.now.Add(-time.Minute),
 		ExpiresAt:   fixture.now.Add(29 * time.Minute),
@@ -184,7 +202,8 @@ func (fixture *authzFixture) writeEnvelope(t *testing.T, envelope Envelope) stri
 		t.Fatal(err)
 	}
 	path := filepath.Join(fixture.contextDir, name)
-	writeTestJSON(t, path, envelope, 0o644)
+	writeTestJSON(t, path, envelope, 0o640)
+	fixture.setContextGroup(t, path)
 	return path
 }
 
@@ -202,6 +221,51 @@ func distinctTestUID(owner uint32) uint32 {
 		return owner - 1
 	}
 	return owner + 1
+}
+
+func currentTestGroupGID(info os.FileInfo) uint32 {
+	gid, available := fileGroupGID(info)
+	if !available {
+		return 1
+	}
+	if gid == 0 {
+		return 1
+	}
+	return gid
+}
+
+func (fixture *authzFixture) setContextGroup(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gid, available := fileGroupGID(info); available && gid == fixture.readerGID {
+		return
+	}
+	if err := os.Chown(path, -1, int(fixture.readerGID)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (fixture *authzFixture) setRequesterContextScope(t *testing.T, workspaceID string) {
+	t.Helper()
+	fixture.contextDir = filepath.Join(fixture.root, "requester-context", workspaceID, "pi")
+	if err := os.MkdirAll(fixture.contextDir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(fixture.contextDir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	workspaceDir := filepath.Dir(fixture.contextDir)
+	if err := os.Chmod(workspaceDir, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{filepath.Dir(workspaceDir), workspaceDir, fixture.contextDir} {
+		fixture.setContextGroup(t, directory)
+	}
+	fixture.config.RequesterContextDir = fixture.contextDir
+	fixture.config.RequesterContextWorkspaceID = workspaceID
 }
 
 func (fixture *authzFixture) writeInstallerState(t *testing.T) {
