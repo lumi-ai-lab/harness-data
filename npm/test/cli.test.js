@@ -7,7 +7,7 @@ import https from "node:https";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { binaryName, platformKey } from "../src/lib/platform.js";
 import { defaultWorkspaceDir, installerStateDocument, installerStatePath, readInstallerState, userStatePath } from "../src/lib/paths.js";
@@ -22,8 +22,10 @@ import {
   configureTokens,
   installCommand,
   installLumiCatalog,
+  localUnrestrictedReleaseManifest,
   installRuntimeBundle,
   printDoctorSummary,
+  removeLegacyLocalTools,
   validateLocalWikisSource,
   validateLumiManifestReleaseSet,
   verifyLumiInstalledReleaseSet
@@ -37,10 +39,13 @@ import {
   linkAgents,
   localPathToolNames,
   localPathToolNamesForProfile,
+  migrateLegacyLocalAgentInstructions,
   qdmCliBinaries,
   qdmCliBinariesForProfile,
+  removeUnselectedAgentLinks,
   writeLocalConfig
 } from "../src/lib/config.js";
+import { chooseAgent } from "../src/lib/prompt.js";
 import { run } from "../src/lib/exec.js";
 import {
   installerStateSchemaVersion,
@@ -57,6 +62,25 @@ import {
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const originalConsole = {
+  error: console.error,
+  log: console.log,
+  warn: console.warn
+};
+
+// Node 22.23.1 can corrupt the test protocol when non-ASCII application logs
+// share the file worker's stdout pipe. Tests that assert logs install their own capture.
+before(() => {
+  console.error = () => {};
+  console.log = () => {};
+  console.warn = () => {};
+});
+
+after(() => {
+  console.error = originalConsole.error;
+  console.log = originalConsole.log;
+  console.warn = originalConsole.warn;
+});
 
 function runConfirm(input, optionsSource = "{}") {
   const result = spawnSync(process.execPath, [
@@ -247,6 +271,7 @@ test("prints help", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness-data <install\|update\|auth\|doctor\|version>/);
   assert.match(result.stdout, /auth     Configure CAS credentials and refresh access tokens/);
+  assert.match(result.stdout, /--metric-cli-path PATH/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -314,9 +339,14 @@ test("private qdm cli tools point at their own repositories", () => {
   assert.equal(byName.get("cas-cli").private, true);
 });
 
-test("qdm cli binary lists include sql cli", () => {
-  assert.deepEqual(qdmCliBinaries, ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"]);
-  assert.deepEqual(localPathToolNames, ["cas-cli", "qdm-indicators-cli", "qdm-cmr-cli", "qdm-sql-cli"]);
+test("local runtime uses only the Harness helper and Metric CLI", () => {
+  assert.deepEqual(qdmCliBinaries, ["data-harness-cli", "qdm-metric-cli"]);
+  assert.deepEqual(localPathToolNames, []);
+  assert.deepEqual(localPathToolNamesForProfile(localUnrestrictedProfile), []);
+  assert.deepEqual(
+    localPathToolNamesForProfile(localUnrestrictedProfile, { metricCliPath: "/tmp/qdm-metric-cli" }),
+    ["qdm-metric-cli"]
+  );
 });
 
 test("profiles default locally and require explicit Pi for Lumi", async () => {
@@ -361,7 +391,13 @@ test("tool manifest v3 separates local and fail-closed Lumi profiles", () => {
   assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
   assert.equal(tool.version, undefined);
   assert.equal(tool.platforms["linux-amd64"].url, undefined);
-  assert.deepEqual(localManifest.tools.map((item) => item.name), qdmCliBinaries);
+  assert.deepEqual(localManifest.tools.map((item) => item.name), [
+    "data-harness-cli",
+    "qdm-cmr-cli",
+    "qdm-indicators-cli",
+    "qdm-sql-cli",
+    "cas-cli"
+  ]);
   assert.deepEqual(lumiManifest.tools.map((item) => item.name), [
     "data-harness-cli",
     "qdm-indicators-facade",
@@ -370,6 +406,78 @@ test("tool manifest v3 separates local and fail-closed Lumi profiles", () => {
   assert.equal(lumiManifest.tools.find((item) => item.name === "qdm-indicators-facade").destination, "bin/qdm-indicators-cli");
   assert.equal(lumiManifest.tools.find((item) => item.name === "qdm-indicators-cli-real").tracking, "fixed");
   assert.throws(() => lumiReleaseSet(manifest), /release-set is incomplete/);
+});
+
+test("local-unrestricted downloads the real Metric CLI unless a local path overrides it", () => {
+  const source = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
+  const releaseManifest = localUnrestrictedReleaseManifest(source);
+  assert.deepEqual(releaseManifest.tools.map((tool) => tool.name), [
+    "data-harness-cli",
+    "qdm-metric-cli"
+  ]);
+  const metric = releaseManifest.tools.find((tool) => tool.name === "qdm-metric-cli");
+  assert.equal(metric.repo, "pengmide/qdm-metric-cli");
+  assert.equal(metric.destination, "bin/qdm-metric-cli");
+  assert.equal(metric.tracking, "latest");
+  assert.equal(metric.requireAssetSha256, true);
+  assert.equal(metric.cleanupArchive, true);
+  assert.deepEqual(metric.platforms["darwin-arm64"], { archive: "tar.gz" });
+
+  const localOverride = localUnrestrictedReleaseManifest(source, {
+    metricCliPath: "/tmp/qdm-metric-cli"
+  });
+  assert.deepEqual(localOverride.tools.map((tool) => tool.name), ["data-harness-cli"]);
+});
+
+test("local-unrestricted supports schema 2 manifests and removes legacy data CLIs", () => {
+  const key = platformKey();
+  const legacy = {
+    schemaVersion: 2,
+    tools: [
+      {
+        name: "data-harness-cli",
+        binary: "data-harness-cli",
+        repo: "lumi-ai-lab/harness-data",
+        platforms: { [key]: { archive: "tar.gz" } }
+      },
+      {
+        name: "qdm-cmr-cli",
+        binary: "qdm-cmr-cli",
+        repo: "pengmide/qdm-cmr-cli",
+        platforms: { [key]: { archive: "tar.gz" } }
+      }
+    ]
+  };
+  const releaseManifest = localUnrestrictedReleaseManifest(legacy);
+  assert.deepEqual(releaseManifest.tools.map((tool) => tool.name), [
+    "data-harness-cli",
+    "qdm-metric-cli"
+  ]);
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-legacy-cli-"));
+  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"]) {
+    fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(name)), "", { mode: 0o755 });
+  }
+  assert.deepEqual(removeLegacyLocalTools(workspace).sort(), [
+    "cas-cli",
+    "qdm-cmr-cli",
+    "qdm-indicators-cli",
+    "qdm-sql-cli"
+  ]);
+});
+
+test("an existing runtime bundle preserves its installed release tag", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-existing-runtime-"));
+  fs.mkdirSync(path.join(workspace, "agents"));
+  fs.mkdirSync(path.join(workspace, "config"));
+  fs.mkdirSync(path.join(workspace, "bootstrap"));
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}\n");
+
+  assert.deepEqual(
+    await installRuntimeBundle(workspace, { runtimeTag: "v0.0.27" }),
+    { tag: "v0.0.27", skipped: true }
+  );
 });
 
 test("complete Lumi release-set binds manifest and installed binary versions and digests", () => {
@@ -1567,17 +1675,54 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("data-harn
   assert.equal(writes.filter((line) => line.includes(".sha256")).length, 0);
 });
 
-test("local config exports workspace CAS config dir", () => {
+test("local config exports only the Metric CLI and keeps old Helper YAML compatible", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
 
   writeLocalConfig(workspace, { overwrite: true });
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
-  assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
-  assert.match(env, /export QDM_SQL_CLI=".*qdm-sql-cli"/);
-  assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
+  assert.equal(env, `export QDM_METRIC_CLI="bin/${binaryName("qdm-metric-cli")}"\n`);
+  assert.equal(harnessConfig, "paths:\n  knowledge: wikis\n");
+  assert.doesNotMatch(`${env}\n${harnessConfig}`, /QDM_(CMR|INDICATORS|SQL|CAS)|qdm_(cmr|indicators|sql|cas|metric)_cli/);
+});
+
+test("non-interactive Agent selection defaults to all", async () => {
+  assert.equal(await chooseAgent({ yes: true }), "all");
+  assert.equal(await chooseAgent({ yes: true, agent: "codex" }), "codex");
+});
+
+test("legacy local Agent instructions remove credential fallback guidance", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-agent-migration-"));
+  const codex = path.join(workspace, "agents", "codex", "AGENTS.md");
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  fs.writeFileSync(
+    codex,
+    "# Instructions\n\n- If CMR or Indicators token is invalid, use the configured `cas-cli` credential flow; do not start QR login from an automated hook.\n"
+  );
+
+  assert.deepEqual(migrateLegacyLocalAgentInstructions(workspace), ["agents/codex/AGENTS.md"]);
+  const migrated = fs.readFileSync(codex, "utf8");
+  assert.match(migrated, /bin\/qdm-metric-cli --help/);
+  assert.match(migrated, /do not invoke bare `qdm-metric-cli`/);
+  assert.doesNotMatch(migrated, /CMR or Indicators|cas-cli|QR login/);
+});
+
+test("Agent migration upgrades the earlier bare Metric CLI instruction", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-agent-upgrade-"));
+  const codex = path.join(workspace, "agents", "codex", "AGENTS.md");
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  fs.writeFileSync(
+    codex,
+    "- Use only commands exposed by the installed `qdm-metric-cli --help` and its subcommand help.\n" +
+    "- Do not call legacy data CLIs or run credential/token setup.\n"
+  );
+
+  assert.deepEqual(migrateLegacyLocalAgentInstructions(workspace), ["agents/codex/AGENTS.md"]);
+  const migrated = fs.readFileSync(codex, "utf8");
+  assert.match(migrated, /Run Metric commands through `bin\/qdm-metric-cli`/);
+  assert.doesNotMatch(migrated, /installed `qdm-metric-cli --help`/);
+  assert.equal(migrated.match(/Do not call legacy data CLIs/g)?.length, 1);
 });
 
 test("Lumi config exposes only the public Indicators Facade", () => {
@@ -1799,6 +1944,20 @@ test("links selected agent templates", () => {
   ]);
   assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+});
+
+test("linkAgents removes only stale Harness-managed Agent links", () => {
+  const workspace = createAgentWorkspace();
+  linkAgents(workspace, "all");
+  const custom = path.join(workspace, ".custom-agent");
+  fs.symlinkSync(path.join(workspace, "external-agent"), custom, "junction");
+
+  assert.deepEqual(
+    removeUnselectedAgentLinks(workspace, "codex").sort(),
+    [".claude", ".hermes", ".openclaw", ".pi"]
+  );
+  assert.equal(fs.existsSync(path.join(workspace, ".codex")), true);
+  assert.equal(fs.lstatSync(custom).isSymbolicLink(), true);
 });
 
 function createAgentWorkspace() {
@@ -2029,13 +2188,10 @@ exit 0
   assert.equal(tamperedReport.checks.find((check) => check.name === "private real Indicators CLI").ok, false);
 });
 
-test("update doctor treats missing agent hooks and auth as non-blocking only", async () => {
+test("update doctor treats only missing Agent hooks as non-blocking", async () => {
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook .openclaw" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CAS credentials file" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Indicators token" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "SQL token" }), true);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CAS credentials file" }), false);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
 });
 
@@ -2063,7 +2219,7 @@ test("Lumi index build fails when either required index is missing", async () =>
 
   await assert.rejects(
     buildAndCheck(workspace, { requiredIndexes: true }),
-    /did not produce required Lumi indexes/
+    /did not produce required indexes/
   );
 });
 
@@ -2173,7 +2329,7 @@ test("update wikis discards local commits, tracked changes, and untracked files"
     return result.stdout.trim();
   };
 
-  git(["init", "--bare", remote]);
+  git(["init", "--bare", "--initial-branch=master", remote]);
   git(["clone", remote, seed]);
   git(["config", "user.email", "test@example.com"], seed);
   git(["config", "user.name", "Test"], seed);

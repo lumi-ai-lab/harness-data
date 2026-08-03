@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNamesForProfile, writeLocalConfig, linkAgents } from "../lib/config.js";
+import {
+  localPathToolNamesForProfile,
+  migrateLegacyLocalAgentInstructions,
+  writeLocalConfig,
+  linkAgents
+} from "../lib/config.js";
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
@@ -31,6 +36,7 @@ import {
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
+const localMetricRepo = "pengmide/qdm-metric-cli";
 
 function readInstallState(runtimeDir) {
   const local = readInstallerState(runtimeDir);
@@ -174,6 +180,12 @@ function executable(file) {
 
 async function promptExecutable(runtimeDir, name, options = {}) {
   const auto = path.join(runtimeDir, "bin", binaryName(name));
+  const explicit = name === "qdm-metric-cli" ? options.metricCliPath : "";
+  if (explicit) {
+    const file = path.resolve(explicit);
+    if (!executable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
+    return file;
+  }
   if (executable(auto)) {
     ok(`自动识别 ${name}: ${auto}`);
     return auto;
@@ -188,7 +200,7 @@ async function installLocalTools(runtimeDir, profile, options = {}) {
   const binDir = path.join(runtimeDir, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   const installed = {};
-  for (const name of localPathToolNamesForProfile(profile)) {
+  for (const name of localPathToolNamesForProfile(profile, options)) {
     const source = await promptExecutable(runtimeDir, name, options);
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
@@ -378,7 +390,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
   const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
   if (result.code !== 0) {
     if (options.requiredIndexes) {
-      throw new Error("wikis index build failed for lumi-mvp-required");
+      throw new Error("wikis index build failed");
     }
     warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
     return { ok: false };
@@ -395,7 +407,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
     }
   });
   if (options.requiredIndexes && missingIndexes.length) {
-    throw new Error(`wikis index build did not produce required Lumi indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
+    throw new Error(`wikis index build did not produce required indexes: ${missingIndexes.map((file) => path.basename(file)).join(", ")}`);
   }
   const output = `${result.stdout}\n${result.stderr}`;
   const docs = output.match(/\bdocs=(\d+)/)?.[1];
@@ -424,12 +436,8 @@ export function printDoctorSummary(doctor, options = {}) {
     ok("wikis/reports");
     ok("wikis/dims");
     ok("wikis/rules");
-    ok("5 个 CLI");
+    ok("2 个 CLI");
     ok("本地配置");
-    ok("CAS 凭证");
-    ok("CMR Token");
-    ok("Indicators Token");
-    ok("SQL Token");
     if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
     for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
     return;
@@ -564,6 +572,59 @@ export function installLumiCatalog(runtimeDir, manifest) {
   return destination;
 }
 
+function releaseArchiveForPlatform(asset, platform) {
+  if (String(asset?.archive || "").trim()) return asset.archive;
+  return platform.startsWith("windows-") ? "zip" : "tar.gz";
+}
+
+export function localUnrestrictedReleaseManifest(manifest, options = {}) {
+  const selected = selectManifestProfile(manifest, localUnrestrictedProfile);
+  const helper = selected.tools.find((tool) => tool.name === "data-harness-cli");
+  if (!helper) throw new Error("local-unrestricted manifest is missing data-harness-cli");
+  if (String(options.metricCliPath || "").trim()) {
+    return { ...selected, tools: [helper] };
+  }
+
+  const platformSource = helper.platforms || {};
+  const platforms = Object.fromEntries(
+    Object.entries(platformSource).map(([platform, asset]) => [
+      platform,
+      { archive: releaseArchiveForPlatform(asset, platform) }
+    ])
+  );
+  if (Object.keys(platforms).length === 0) {
+    throw new Error("local-unrestricted manifest does not declare Metric CLI platforms");
+  }
+
+  return {
+    ...selected,
+    tools: [
+      helper,
+      {
+        name: "qdm-metric-cli",
+        binary: "qdm-metric-cli",
+        repo: localMetricRepo,
+        destination: "bin/qdm-metric-cli",
+        tracking: "latest",
+        requireAssetSha256: true,
+        cleanupArchive: true,
+        platforms
+      }
+    ]
+  };
+}
+
+export function removeLegacyLocalTools(runtimeDir) {
+  const removed = [];
+  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"]) {
+    const destination = path.join(runtimeDir, "bin", binaryName(name));
+    if (!fs.existsSync(destination)) continue;
+    fs.rmSync(destination, { force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
 export async function installCommand(options = {}) {
   const explicitProfile = String(options.profile || "").trim();
   if (!explicitProfile && (options.yes || !process.stdin.isTTY)) {
@@ -598,27 +659,43 @@ export async function installCommand(options = {}) {
     }
   }
   const key = platformKey();
+  const installOptions = {
+    ...options,
+    profile,
+    runtimeTag: options.runtimeTag || existingState.runtimeTag || ""
+  };
   header("Harness Data 安装器", packageVersion(), [
     `安装目录：${requestedRuntimeDir}`,
     `平台：${key}`,
     `Profile：${profile}`
   ]);
 
-  step(1, 8, "检查本机依赖");
+  step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
 
-  step(2, 8, "安装 runtime bundle");
+  step(2, 7, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
-  const bundle = await installRuntimeBundle(runtimeDir, { ...options, profile });
+  const bundle = await installRuntimeBundle(runtimeDir, installOptions);
+  if (profile === localUnrestrictedProfile) {
+    for (const file of migrateLegacyLocalAgentInstructions(runtimeDir)) {
+      action(`更新旧版 Agent 指令：${file}`);
+    }
+  }
   blank();
 
-  step(3, 8, "安装 CLI 工具");
+  step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
   const installState = profile === lumiRequiredProfile ? readInstallerState(runtimeDir) : readInstallState(runtimeDir);
   const sourceManifest = readManifest(manifestPath);
-  const selectedManifest = selectManifestProfile(sourceManifest, profile);
+  const selectedManifest = profile === localUnrestrictedProfile
+    ? localUnrestrictedReleaseManifest(sourceManifest, options)
+    : selectManifestProfile(sourceManifest, profile);
+  if (profile === localUnrestrictedProfile) {
+    for (const name of removeLegacyLocalTools(runtimeDir)) action(`移除旧版 CLI：${name}`);
+    fs.rmSync(path.join(runtimeDir, ".qdm-auth"), { recursive: true, force: true });
+  }
   const releaseSet = profile === lumiRequiredProfile ? lumiReleaseSet(sourceManifest) : null;
   const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
   if (profile === lumiRequiredProfile) validateLumiManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
@@ -634,11 +711,11 @@ export async function installCommand(options = {}) {
     });
     verifyLumiInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
     installLumiCatalog(runtimeDir, sourceManifest);
-  } else if (tokenMode) {
-    const latestManifest = await resolveLatestManifest(selectedManifest, key, options);
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
   } else {
-    const latestManifest = await resolveLatestManifest(selectedManifest, key, { ...options, tools: ["data-harness-cli"] });
+    const latestManifest = await resolveLatestManifest(selectedManifest, key, {
+      ...options,
+      tools: selectedManifest.tools.map((tool) => tool.name)
+    });
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
     localTools = await installLocalTools(runtimeDir, profile, options);
   }
@@ -664,31 +741,21 @@ export async function installCommand(options = {}) {
   });
   blank();
 
-  step(4, 8, "同步 Wikis 知识库");
+  step(4, 7, "同步 Wikis 知识库");
   await installWikis(runtimeDir, profile, sourceManifest, options);
   blank();
 
-  step(5, 8, "生成本地配置");
+  step(5, 7, "生成本地配置");
   writeLocalConfig(runtimeDir, { overwrite: true, profile });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
   blank();
 
-  step(6, 8, "配置 CAS 认证");
-  let casDir = "";
-  if (profile === localUnrestrictedProfile) {
-    casDir = await configureCasAuthentication(runtimeDir, options);
-    await configureTokens(runtimeDir, casDir);
-  } else {
-    skip("lumi-mvp-required 由部署系统提供 Indicators 凭证，安装器不配置 CAS/token");
-  }
+  step(6, 7, "构建 Wikis 索引");
+  await buildAndCheck(runtimeDir, { ...options, requiredIndexes: true });
   blank();
 
-  step(7, 8, "构建 Wikis 索引");
-  await buildAndCheck(runtimeDir, { ...options, requiredIndexes: profile === lumiRequiredProfile });
-  blank();
-
-  step(8, 8, "配置 Agent Hook");
+  step(7, 7, "配置 Agent Hook");
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
@@ -696,7 +763,7 @@ export async function installCommand(options = {}) {
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir, buildTime: profile === lumiRequiredProfile });
+  const doctor = await collectDoctor(runtimeDir, { ...options, buildTime: profile === lumiRequiredProfile });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();

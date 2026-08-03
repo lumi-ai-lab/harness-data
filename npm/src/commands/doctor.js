@@ -21,6 +21,22 @@ import {
   selectManifestProfile
 } from "../lib/profile.js";
 
+const removedLocalBinaries = ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"];
+const removedLocalEnvironmentVariables = [
+  "QDM_CMR_CLI",
+  "QDM_INDICATORS_CLI",
+  "QDM_SQL_CLI",
+  "QDM_CAS_CLI",
+  "QDM_CAS_CONFIG_DIR"
+];
+const removedLocalYamlKeys = [
+  "qdm_cmr_cli",
+  "qdm_indicators_cli",
+  "qdm_sql_cli",
+  "qdm_cas_cli",
+  "qdm_metric_cli"
+];
+
 function existsExecutable(file) {
   try {
     fs.accessSync(file, fs.constants.X_OK);
@@ -41,13 +57,6 @@ function agentOk(workspace, name) {
   }
 }
 
-async function tokenCheck(workspace, binary, env) {
-  const file = path.join(workspace, "bin", binaryName(binary));
-  if (!existsExecutable(file)) return false;
-  const result = await run(file, ["config", "check-token"], { cwd: workspace, env, allowFailure: true });
-  return result.code === 0;
-}
-
 function yamlCliPath(content, name) {
   const match = content.match(new RegExp(`^\\s*${name}:\\s*(.+?)\\s*$`, "m"));
   return String(match?.[1] || "").replace(/^["']|["']$/g, "");
@@ -59,12 +68,9 @@ function configPathsValid(workspace, profile) {
   if (!fs.existsSync(envFile) || !fs.existsSync(harnessFile)) return false;
   const envContent = fs.readFileSync(envFile, "utf8");
   const harnessContent = fs.readFileSync(harnessFile, "utf8");
-  const required = profile === lumiRequiredProfile
-    ? ["QDM_INDICATORS_CLI"]
-    : ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
   const values = new Map([...envContent.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
-  if (!required.every((name) => values.has(name) && fs.existsSync(values.get(name)))) return false;
   if (profile === lumiRequiredProfile) {
+    if (!values.has("QDM_INDICATORS_CLI") || !fs.existsSync(values.get("QDM_INDICATORS_CLI"))) return false;
     const forbiddenEnv = ["QDM_CMR_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI", "QDM_CAS_CONFIG_DIR"];
     const forbiddenYaml = ["qdm_cmr_cli", "qdm_sql_cli", "qdm_cas_cli"];
     if (forbiddenEnv.some((name) => values.has(name))) return false;
@@ -73,7 +79,12 @@ function configPathsValid(workspace, profile) {
     return path.resolve(values.get("QDM_INDICATORS_CLI")) === expected &&
       path.resolve(yamlCliPath(harnessContent, "qdm_indicators_cli")) === expected;
   }
-  return true;
+  const expectedMetric = path.join("bin", binaryName("qdm-metric-cli")).replaceAll("\\", "/");
+  return values.size === 1 &&
+    values.get("QDM_METRIC_CLI") === expectedMetric &&
+    existsExecutable(path.join(workspace, expectedMetric)) &&
+    removedLocalEnvironmentVariables.every((name) => !values.has(name)) &&
+    removedLocalYamlKeys.every((name) => !yamlCliPath(harnessContent, name));
 }
 
 function fileSha256(file) {
@@ -183,20 +194,6 @@ function authzConfigMatchesState(file, state, expectedRealDestination, expectedC
   }
 }
 
-function casCredentialsValid(dir) {
-  const encrypted = path.join(dir, "credentials.enc");
-  try {
-    if (fs.statSync(encrypted).size > 0) return true;
-  } catch {}
-
-  try {
-    const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
-    return Boolean(config?.cas?.username && config?.cas?.password);
-  } catch {
-    return false;
-  }
-}
-
 function pathDirectories(options = {}) {
   const value = options.env && Object.hasOwn(options.env, "PATH") ? options.env.PATH : process.env.PATH;
   return String(value || "").split(path.delimiter).filter(Boolean).map((entry) => path.resolve(entry));
@@ -288,8 +285,6 @@ export async function collectDoctor(workspace, options = {}) {
     profileError = String(error?.message || error);
   }
   const effectiveProfile = profile === lumiRequiredProfile ? lumiRequiredProfile : localUnrestrictedProfile;
-  const casConfigDir = options.casConfigDir || path.join(workspace, ".qdm-auth", "cas");
-  const env = { QDM_CAS_CONFIG_DIR: casConfigDir };
   const checks = [];
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
@@ -314,6 +309,9 @@ export async function collectDoctor(workspace, options = {}) {
     add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
     add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);
     add("approved Wikis content", Boolean(lumiContract && !lumiContract.error && approvedWikisValid(workspace, lumiContract.approvedWikis)));
+  } else {
+    add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
+    add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);
   }
   for (const binary of qdmCliBinariesForProfile(effectiveProfile)) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
@@ -397,10 +395,18 @@ export async function collectDoctor(workspace, options = {}) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));
     }
   } else {
-    add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
-    add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
-    add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
-    add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
+    for (const binary of removedLocalBinaries) {
+      add(`bin/${binary} absent`, !fs.existsSync(path.join(workspace, "bin", binaryName(binary))));
+    }
+    add("legacy auth directory absent", !fs.existsSync(path.join(workspace, ".qdm-auth")));
+    const installedNames = new Set([
+      ...Object.keys(state.tools || {}),
+      ...Object.keys(state.localTools || {})
+    ]);
+    add("installer tool set", installedNames.size === 2 &&
+      installedNames.has("data-harness-cli") &&
+      installedNames.has("qdm-metric-cli"));
+    add("legacy CLI state absent", removedLocalBinaries.every((name) => !installedNames.has(name)));
     add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
     for (const name of ["openclaw", "hermes"]) {
       if (fs.existsSync(path.join(workspace, `.${name}`))) {
@@ -408,10 +414,6 @@ export async function collectDoctor(workspace, options = {}) {
       }
     }
   }
-  if (effectiveProfile !== lumiRequiredProfile && !fs.existsSync(wikisIndex) && !fs.existsSync(wikisRuntimeIndex)) {
-    checks.push({ name: "wikis index", ok: true, detail: "missing; run data-harness-cli wikis build-index --skip-checks" });
-  }
-
   return {
     workspace,
     profile,
