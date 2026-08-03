@@ -355,6 +355,10 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
     path.join(repository, ".github/workflows/verify-release-candidate.yml"),
     "utf8"
   );
+  const releaseSmokeFixture = fs.readFileSync(
+    path.join(repository, "cli/tests/cmd/release-smoke-fixture/main.go"),
+    "utf8"
+  );
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
   const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
   assert.equal(realMetric.private, true);
@@ -401,6 +405,10 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /harness-data-metric-broker\.service/);
   assert.match(workflow, /systemd-analyze verify/);
   assert.match(workflow, /cli\/tests\/cmd\/release-smoke-fixture/);
+  assert.match(workflow, /data-harness-cli" authz-bind/);
+  assert.match(workflow, /sudo -u nobody/);
+  assert.match(workflow, /test "\$\(sudo stat -c '%a' "\$\{protected_file\}"\)" = "640"/);
+  assert.match(workflow, /authorization control file reader boundary is invalid/);
   assert.match(workflow, /\.bindingBase64url/);
   assert.match(workflow, /broker-health/);
   assert.match(workflow, /HARNESS_AUTHZ_BINDING_V1=\$\{binding\}/);
@@ -418,6 +426,9 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(candidateWorkflow, /uses: \.\/\.github\/workflows\/publish-cli-release\.yml/);
   assert.match(candidateWorkflow, /verify: true/);
   assert.match(candidateWorkflow, /publish: false/);
+  assert.doesNotMatch(releaseSmokeFixture, /authz\.Bind\(/);
+  assert.match(releaseSmokeFixture, /writeRootJSON\(authzConfigPath, config, 0o640, readerGID\)/);
+  assert.match(releaseSmokeFixture, /writeRootJSON\(controlPath,[\s\S]*0o640, readerGID\)/);
 
   const gitmodules = fs.readFileSync(path.join(repository, ".gitmodules"), "utf8");
   assert.match(gitmodules, /url\s*=\s*\.\.\/harness-data-wikis/);

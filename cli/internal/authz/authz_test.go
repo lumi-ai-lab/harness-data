@@ -649,6 +649,44 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		t.Fatalf("readiness = %#v, %v", report, err)
 	}
 
+	t.Run("authorization config reader mode", func(t *testing.T) {
+		for _, mode := range []os.FileMode{0o600, 0o644} {
+			t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+				fixture := newAuthzFixture(t)
+				if err := os.Chmod(fixture.configPath, mode); err != nil {
+					t.Fatal(err)
+				}
+				_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+				assertAuthzCode(t, err, CodeConfigInvalid)
+			})
+		}
+	})
+	t.Run("kill switch reader boundary", func(t *testing.T) {
+		for name, mutate := range map[string]func(*authzFixture) error{
+			"private file": func(fixture *authzFixture) error {
+				return os.Chmod(fixture.controlPath, 0o600)
+			},
+			"world-readable file": func(fixture *authzFixture) error {
+				return os.Chmod(fixture.controlPath, 0o644)
+			},
+			"private directory": func(fixture *authzFixture) error {
+				return os.Chmod(filepath.Dir(fixture.controlPath), 0o700)
+			},
+			"listable directory": func(fixture *authzFixture) error {
+				return os.Chmod(filepath.Dir(fixture.controlPath), 0o750)
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				fixture := newAuthzFixture(t)
+				if err := mutate(fixture); err != nil {
+					t.Fatal(err)
+				}
+				_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+				assertAuthzCode(t, err, CodeKillSwitchActive)
+			})
+		}
+	})
+
 	t.Run("rejects non-Pi installer Agent", func(t *testing.T) {
 		fixture := newAuthzFixture(t)
 		fixture.installerAgent = "codex"
@@ -798,7 +836,7 @@ func TestReadinessValidatesProfileReleaseSetPathsAndSecrets(t *testing.T) {
 		raw := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId"],"dictionaryRefs":[]}}}`)
 		writeTestFile(t, fixture.catalogPath, raw, 0o600)
 		fixture.config.ApprovedMetricCatalog.SHA256 = sha256Hex(raw)
-		writeTestJSON(t, fixture.configPath, fixture.config, 0o600)
+		fixture.writeConfig(t)
 		fixture.writeInstallerState(t)
 		_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
 		assertAuthzCode(t, err, CodeArtifactIntegrityFailed)

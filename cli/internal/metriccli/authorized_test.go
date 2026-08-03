@@ -54,6 +54,11 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 	for _, directory := range []string{filepath.Join(root, "requester-context"), filepath.Dir(contextDir), contextDir} {
 		setTestGroup(t, directory, readerGID)
 	}
+	controlDirectory := filepath.Join(root, "control")
+	if err := os.Chmod(controlDirectory, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	setTestGroup(t, controlDirectory, readerGID)
 
 	fixture := &wrapperFixture{
 		root:        root,
@@ -91,7 +96,8 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 	writeJSON(t, fixture.controlPath, authz.ControlState{
 		Version: authz.CurrentVersion, Generation: 1, State: "enabled",
 		UpdatedAt: fixture.now.Add(-time.Minute),
-	}, 0o600)
+	}, 0o640)
+	setTestGroup(t, fixture.controlPath, fixture.readerGID)
 
 	fixture.config = authz.Config{
 		Version:                     authz.CurrentVersion,
@@ -131,7 +137,8 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 
 func (fixture *wrapperFixture) writeConfig(t *testing.T) {
 	t.Helper()
-	writeJSON(t, fixture.configPath, fixture.config, 0o600)
+	writeJSON(t, fixture.configPath, fixture.config, 0o640)
+	setTestGroup(t, fixture.configPath, fixture.readerGID)
 }
 
 func (fixture *wrapperFixture) writeRealCLI(t *testing.T, body string) {

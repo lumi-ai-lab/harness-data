@@ -120,6 +120,11 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 		return report, err
 	}
 	security := FileSecurityOptions{ExpectedOwnerUID: options.ExpectedOwnerUID}
+	readerSecurity := FileSecurityOptions{
+		ExpectedOwnerUID: options.ExpectedOwnerUID,
+		ExpectedGroupGID: config.RequesterContextReaderGID,
+		ExpectedMode:     0o640,
+	}
 	agentUID := *config.AgentUID
 	if options.AgentUID != nil {
 		agentUID = *options.AgentUID
@@ -129,7 +134,7 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 		return report, authzError(CodeConfigInvalid, "requester context trust boundary is invalid", err)
 	}
 
-	if err := VerifySecureRegularFile(configPath, security); err != nil {
+	if err := VerifySecureRegularFile(configPath, readerSecurity); err != nil {
 		return report, authzError(CodeConfigInvalid, "authorization config ownership or permissions are invalid", err)
 	}
 	if err := verifyCriticalRuntimeDirectories(paths, configPath, config, security); err != nil {
@@ -194,10 +199,12 @@ func checkReadyConfig(configPath string, config Config, options ReadinessOptions
 	if err := validateAgentCLIEnvironment(agentEnvironment, paths.publicMetricCLI); err != nil {
 		return report, authzError(CodeConfigInvalid, "Agent-visible data CLI environment is invalid", err)
 	}
-	if err := VerifySecureDirectory(filepath.Dir(config.KillSwitch.ControlPath), security); err != nil {
+	controlDirectorySecurity := readerSecurity
+	controlDirectorySecurity.ExpectedMode = 0o710
+	if err := VerifySecureDirectory(filepath.Dir(config.KillSwitch.ControlPath), controlDirectorySecurity); err != nil {
 		return report, authzError(CodeKillSwitchActive, "authorization control directory ownership or permissions are invalid", err)
 	}
-	if err := VerifySecureRegularFile(config.KillSwitch.ControlPath, security); err != nil {
+	if err := VerifySecureRegularFile(config.KillSwitch.ControlPath, readerSecurity); err != nil {
 		return report, authzError(CodeKillSwitchActive, "authorization control ownership or permissions are invalid", err)
 	}
 	control, err := ReadControl(config)
@@ -703,6 +710,9 @@ func VerifySecureRegularFile(path string, options FileSecurityOptions) error {
 	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
 		return err
 	}
+	if options.ExpectedMode != 0 && info.Mode().Perm() != options.ExpectedMode.Perm() {
+		return fmt.Errorf("file mode is %04o, want %04o", info.Mode().Perm(), options.ExpectedMode.Perm())
+	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("file is group or world writable")
 	}
@@ -733,6 +743,9 @@ func VerifySecureDirectory(path string, options FileSecurityOptions) error {
 	}
 	if err := checkGroup(info, options.ExpectedGroupGID); err != nil {
 		return err
+	}
+	if options.ExpectedMode != 0 && info.Mode().Perm() != options.ExpectedMode.Perm() {
+		return fmt.Errorf("directory mode is %04o, want %04o", info.Mode().Perm(), options.ExpectedMode.Perm())
 	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("directory is group or world writable")

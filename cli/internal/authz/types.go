@@ -5,6 +5,7 @@ package authz
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"time"
 )
 
@@ -285,6 +286,7 @@ type ReadinessOptions struct {
 type FileSecurityOptions struct {
 	ExpectedOwnerUID  *uint32
 	ExpectedGroupGID  *uint32
+	ExpectedMode      os.FileMode
 	RequireExecutable bool
 	Private           bool
 }

@@ -126,12 +126,17 @@ func TestBrokerRequestConcurrencyLimit(t *testing.T) {
 	}
 }
 
-func TestVerifyBrokerRuntimeAllowsAgentReadableConfig(t *testing.T) {
+func TestVerifyBrokerRuntimeRequiresReaderScopedConfig(t *testing.T) {
 	fixture := newWrapperFixture(t)
-	if err := os.Chmod(fixture.configPath, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := verifyBrokerRuntime(fixture.configPath, fixture.ownerUID); err != nil {
-		t.Fatalf("Agent-readable root-owned config was rejected: %v", err)
+		t.Fatalf("reader-scoped config was rejected: %v", err)
+	}
+	for _, mode := range []os.FileMode{0o600, 0o644} {
+		if err := os.Chmod(fixture.configPath, mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyBrokerRuntime(fixture.configPath, fixture.ownerUID); err == nil {
+			t.Fatalf("config mode %04o was accepted", mode)
+		}
 	}
 }

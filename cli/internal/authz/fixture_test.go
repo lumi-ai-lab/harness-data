@@ -101,6 +101,11 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	for _, directory := range []string{contextRoot, filepath.Dir(fixture.contextDir), fixture.contextDir} {
 		fixture.setContextGroup(t, directory)
 	}
+	controlDirectory := filepath.Dir(fixture.controlPath)
+	if err := os.Chmod(controlDirectory, 0o710); err != nil {
+		t.Fatal(err)
+	}
+	fixture.setContextGroup(t, controlDirectory)
 
 	writeTestFile(t, fixture.realCLIPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	writeTestFile(t, fixture.publicMetricPath, []byte("#!/bin/sh\nexit 17\n"), 0o700)
@@ -110,7 +115,8 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	writeTestFile(t, fixture.catalogPath, catalogData, 0o600)
 	writeTestJSON(t, fixture.controlPath, ControlState{
 		Version: CurrentVersion, Generation: 7, State: "enabled", UpdatedAt: fixture.now.Add(-time.Minute),
-	}, 0o600)
+	}, 0o640)
+	fixture.setContextGroup(t, fixture.controlPath)
 
 	fixture.config = Config{
 		Version:                     CurrentVersion,
@@ -141,7 +147,7 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 			TimeoutSeconds: 120, MaxOutputBytes: 2 << 20,
 		},
 	}
-	writeTestJSON(t, fixture.configPath, fixture.config, 0o600)
+	fixture.writeConfig(t)
 
 	writeTestFile(t, fixture.harnessConfigPath, []byte(
 		"paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: "+fixture.publicMetricPath+"\n",
@@ -205,6 +211,12 @@ func (fixture *authzFixture) writeEnvelope(t *testing.T, envelope Envelope) stri
 	writeTestJSON(t, path, envelope, 0o640)
 	fixture.setContextGroup(t, path)
 	return path
+}
+
+func (fixture *authzFixture) writeConfig(t *testing.T) {
+	t.Helper()
+	writeTestJSON(t, fixture.configPath, fixture.config, 0o640)
+	fixture.setContextGroup(t, fixture.configPath)
 }
 
 func (fixture *authzFixture) replaceScope(scope Scope) {

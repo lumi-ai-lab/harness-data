@@ -67,7 +67,13 @@ pass.
 `requesterContextOwnerUid` is a different, trusted Lumi publisher UID. The
 Agent must not run as root. `requesterContextReaderGid` is a dedicated group
 granted to Pi; numeric IDs are resolved by deployment and are not baked into
-the binaries. Every ancestor of `requesterContextDir` must be outside Agent
+the binaries. `/etc/harness-data/authz.json` and the configured
+`killSwitch.controlPath` must both be owned by root and this reader GID with
+exact mode `0640`; their parent directories must be root-controlled and
+non-writable by the Agent. The kill-switch parent directory must allow reader
+group traversal, for example exact mode `0710`. These permissions let the real
+non-root Pi process run `authz-bind` and revalidate the kill switch without
+granting it write access. Every ancestor of `requesterContextDir` must be outside Agent
 control and must not be group/world writable. The configured context root,
 Workspace directory, and Agent directory must all be owned by the publisher
 UID and reader GID with exact mode `0710`; envelope files must have the same

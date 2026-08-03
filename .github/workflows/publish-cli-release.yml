@@ -329,10 +329,33 @@ jobs:
           fi
 
           go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
+          reader_gid="$(id -g nobody)"
           sudo /tmp/release-smoke-fixture \
             --runtime "${runtime}" \
             --agent-uid "$(id -u nobody)" \
-            --reader-gid "$(id -g nobody)" |
+            --reader-gid "${reader_gid}" |
+            tee "${CONTRACT_ROOT}/fixture.json" >/dev/null
+          session_id="$(jq -er '.sessionId' "${CONTRACT_ROOT}/fixture.json")"
+          authz_config="/etc/harness-data/authz.json"
+          control_file="/var/lib/harness-data/release-smoke/control/authz-state.json"
+          for protected_file in "${authz_config}" "${control_file}"; do
+            test "$(sudo stat -c '%a' "${protected_file}")" = "640"
+            test "$(sudo stat -c '%u' "${protected_file}")" = "0"
+            test "$(sudo stat -c '%g' "${protected_file}")" = "${reader_gid}"
+            if ! sudo -u nobody test -r "${protected_file}" ||
+               sudo -u nobody test -w "${protected_file}" ||
+               sudo -u daemon test -r "${protected_file}"; then
+              echo "::error::authorization control file reader boundary is invalid: ${protected_file}"
+              exit 1
+            fi
+          done
+          control_dir="$(dirname "${control_file}")"
+          test "$(sudo stat -c '%a' "${control_dir}")" = "710"
+          test "$(sudo stat -c '%u' "${control_dir}")" = "0"
+          test "$(sudo stat -c '%g' "${control_dir}")" = "${reader_gid}"
+          sudo -u nobody "${runtime}/bin/data-harness-cli" authz-bind \
+            --config "${authz_config}" \
+            --session-id "${session_id}" |
             tee "${CONTRACT_ROOT}/binding.json" >/dev/null
           binding="$(jq -er '.bindingBase64url' "${CONTRACT_ROOT}/binding.json")"
           context_dir="/var/lib/harness-data/release-smoke/requester-context/release-smoke-workspace/pi"
@@ -570,10 +593,33 @@ jobs:
           fi
 
           go build -o /tmp/release-smoke-fixture ./cli/tests/cmd/release-smoke-fixture
+          reader_gid="$(id -g nobody)"
           sudo /tmp/release-smoke-fixture \
             --runtime "${runtime}" \
             --agent-uid "$(id -u nobody)" \
-            --reader-gid "$(id -g nobody)" |
+            --reader-gid "${reader_gid}" |
+            tee "${smoke_root}/fixture.json" >/dev/null
+          session_id="$(jq -er '.sessionId' "${smoke_root}/fixture.json")"
+          authz_config="/etc/harness-data/authz.json"
+          control_file="/var/lib/harness-data/release-smoke/control/authz-state.json"
+          for protected_file in "${authz_config}" "${control_file}"; do
+            test "$(sudo stat -c '%a' "${protected_file}")" = "640"
+            test "$(sudo stat -c '%u' "${protected_file}")" = "0"
+            test "$(sudo stat -c '%g' "${protected_file}")" = "${reader_gid}"
+            if ! sudo -u nobody test -r "${protected_file}" ||
+               sudo -u nobody test -w "${protected_file}" ||
+               sudo -u daemon test -r "${protected_file}"; then
+              echo "::error::authorization control file reader boundary is invalid: ${protected_file}"
+              exit 1
+            fi
+          done
+          control_dir="$(dirname "${control_file}")"
+          test "$(sudo stat -c '%a' "${control_dir}")" = "710"
+          test "$(sudo stat -c '%u' "${control_dir}")" = "0"
+          test "$(sudo stat -c '%g' "${control_dir}")" = "${reader_gid}"
+          sudo -u nobody "${runtime}/bin/data-harness-cli" authz-bind \
+            --config "${authz_config}" \
+            --session-id "${session_id}" |
             tee "${smoke_root}/binding.json" >/dev/null
           binding="$(jq -er '.bindingBase64url' "${smoke_root}/binding.json")"
           context_dir="/var/lib/harness-data/release-smoke/requester-context/release-smoke-workspace/pi"

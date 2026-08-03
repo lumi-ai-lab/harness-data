@@ -381,6 +381,22 @@ func verifyBrokerRuntime(configPath string, expectedServiceUID uint32) error {
 	if err != nil {
 		return err
 	}
+	readerSecurity := authz.FileSecurityOptions{
+		ExpectedOwnerUID: &owner,
+		ExpectedGroupGID: config.RequesterContextReaderGID,
+		ExpectedMode:     0o640,
+	}
+	if err := authz.VerifySecureRegularFile(configPath, readerSecurity); err != nil {
+		return fmt.Errorf("qdm-metric-cli broker authorization config reader boundary is insecure: %w", err)
+	}
+	controlDirectorySecurity := readerSecurity
+	controlDirectorySecurity.ExpectedMode = 0o710
+	if err := authz.VerifySecureDirectory(filepath.Dir(config.KillSwitch.ControlPath), controlDirectorySecurity); err != nil {
+		return fmt.Errorf("qdm-metric-cli broker authorization control directory is insecure: %w", err)
+	}
+	if err := authz.VerifySecureRegularFile(config.KillSwitch.ControlPath, readerSecurity); err != nil {
+		return fmt.Errorf("qdm-metric-cli broker authorization control file is insecure: %w", err)
+	}
 	privateSecurity := authz.FileSecurityOptions{ExpectedOwnerUID: &owner, Private: true}
 	if err := authz.VerifySecureDirectory(filepath.Dir(config.RealMetricCLI.Path), privateSecurity); err != nil {
 		return fmt.Errorf("qdm-metric-cli broker private directory is insecure: %w", err)

@@ -54,7 +54,12 @@ Agent-readable, non-writable authorization config and its mounted runtime
 inputs are ready. The configured requester-context path must end with
 `<workspace-id>/pi`; its context root, Workspace directory, and Agent directory
 must use exact mode `0710`, and envelope files exact mode `0640`, with the
-configured publisher owner and reader group.
+configured publisher owner and reader group. `/etc/harness-data/authz.json`
+and `killSwitch.controlPath` must likewise use exact mode `0640`, owner root,
+and the configured reader group; the kill-switch parent directory must be
+root-controlled and reader-group traversable, for example mode `0710`. The
+release smoke runs the installed `data-harness-cli authz-bind` as the real
+non-root Pi identity to enforce this deployment contract.
 
 The accepted producer contract is Envelope v1 / RequesterContext v2 with the
 exact `qdm.metric.query` capability and the Harness-owned
