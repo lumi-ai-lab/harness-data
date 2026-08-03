@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "users": [
+    {
+      "userId": "user-demo-allowed",
+      "displayName": "Allowed Demo User",
+      "enabled": true,
+      "authorization": {
+        "capabilities": [
+          "qdm.metric.query"
+        ],
+        "claims": {
+          "qdm.scope": {
+            "schemaVersion": 1,
+            "manageAreaIds": ["area-demo"],
+            "dcManageAreaIds": ["dc-area-demo"],
+            "categoryLevel1Ids": ["category-demo"]
+          }
+        }
+      }
+    }
+  ]
+}

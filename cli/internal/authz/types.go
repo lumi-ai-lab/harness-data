@@ -3,14 +3,19 @@
 package authz
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
 
 const (
-	DefaultConfigPath = "/etc/harness-data/authz.json"
-	CurrentVersion    = 1
-	RequiredPiVersion = "0.81.1"
+	DefaultConfigPath              = "/etc/harness-data/authz.json"
+	CurrentVersion                 = 1
+	CurrentEnvelopeVersion         = 1
+	CurrentRequesterContextVersion = 2
+	CurrentQDMScopeSchemaVersion   = 1
+	RequiredPiVersion              = "0.81.1"
+	ClaimNamespaceQDMScope         = "qdm.scope"
 
 	ModeLumiMVPRequired = "lumi-mvp-required"
 	ModeDisabledDeny    = "disabled-deny"
@@ -119,7 +124,7 @@ type LimitsConfig struct {
 	MaxOutputBytes       int64 `json:"maxOutputBytes"`
 }
 
-// RequesterContext mirrors Lumi RequesterContext V1 exactly.
+// RequesterContext mirrors Lumi RequesterContext V2 exactly.
 type RequesterContext struct {
 	Version        int           `json:"version"`
 	RequestID      string        `json:"requestId"`
@@ -143,13 +148,44 @@ type Audience struct {
 
 type Authorization struct {
 	Capabilities []string `json:"capabilities"`
-	Scope        Scope    `json:"scope"`
+	Claims       Claims   `json:"claims"`
+	// Scope is the validated Harness-owned qdm.scope projection. It is derived
+	// from Claims during validation and is never part of the Lumi wire format.
+	Scope Scope `json:"-"`
+}
+
+// Claims contains opaque namespace-owned authorization objects. Harness only
+// interprets ClaimNamespaceQDMScope and preserves every other claim as raw JSON.
+type Claims map[string]json.RawMessage
+
+// QDMScopeClaim is the Harness-owned schema stored in claims["qdm.scope"].
+type QDMScopeClaim struct {
+	SchemaVersion     int      `json:"schemaVersion"`
+	ManageAreaIDs     []string `json:"manageAreaIds"`
+	DCManageAreaIDs   []string `json:"dcManageAreaIds"`
+	CategoryLevel1IDs []string `json:"categoryLevel1Ids"`
 }
 
 type Scope struct {
 	ManageAreaIDs     []string `json:"manageAreaIds"`
 	DCManageAreaIDs   []string `json:"dcManageAreaIds"`
 	CategoryLevel1IDs []string `json:"categoryLevel1Ids"`
+}
+
+// NewQDMScopeClaims encodes a domain scope in Lumi's opaque claims envelope.
+// It is primarily used by trusted integration fixtures that publish a Lumi
+// RequesterContext; readers must still strictly validate the encoded claim.
+func NewQDMScopeClaims(scope Scope) Claims {
+	payload, err := json.Marshal(QDMScopeClaim{
+		SchemaVersion:     CurrentQDMScopeSchemaVersion,
+		ManageAreaIDs:     scope.ManageAreaIDs,
+		DCManageAreaIDs:   scope.DCManageAreaIDs,
+		CategoryLevel1IDs: scope.CategoryLevel1IDs,
+	})
+	if err != nil {
+		panic("authz: encode qdm.scope: " + err.Error())
+	}
+	return Claims{ClaimNamespaceQDMScope: payload}
 }
 
 // Envelope is the exact Lumi session file payload.

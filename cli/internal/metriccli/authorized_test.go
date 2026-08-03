@@ -112,15 +112,19 @@ func (fixture *wrapperFixture) writeRealCLI(t *testing.T, body string) {
 
 func (fixture *wrapperFixture) writeEnvelope(t *testing.T, expiresAt time.Time, requestID string) {
 	t.Helper()
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07", "CN08"},
+		CategoryLevel1IDs: []string{"12", "13"},
+	}
 	envelope := authz.Envelope{
-		Version:     authz.CurrentVersion,
+		Version:     authz.CurrentEnvelopeVersion,
 		WorkspaceID: "workspace-1",
 		AgentID:     "agent-1",
 		SessionID:   fixture.sessionID,
 		IssuedAt:    fixture.now.Add(-time.Minute),
 		ExpiresAt:   expiresAt,
 		RequesterContext: authz.RequesterContext{
-			Version:        authz.CurrentVersion,
+			Version:        authz.CurrentRequesterContextVersion,
 			RequestID:      requestID,
 			PolicyRevision: "sha256:" + strings.Repeat("a", 64),
 			Principal: authz.Principal{
@@ -129,10 +133,8 @@ func (fixture *wrapperFixture) writeEnvelope(t *testing.T, expiresAt time.Time, 
 			Audience: authz.Audience{ChatID: "chat-1", ChatType: "group"},
 			Authorization: authz.Authorization{
 				Capabilities: []string{authz.CapabilityMetricQuery},
-				Scope: authz.Scope{
-					ManageAreaIDs:     []string{"CN07", "CN08"},
-					CategoryLevel1IDs: []string{"12", "13"},
-				},
+				Claims:       authz.NewQDMScopeClaims(scope),
+				Scope:        scope,
 			},
 		},
 	}

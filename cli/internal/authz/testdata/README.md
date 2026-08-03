@@ -8,10 +8,12 @@ Provenance:
 - Lumi commit: `6dcef3fb4cbbd9b51e50da91b5a67c66be6d40c0`
 - Producer: `backend/internal/requestercontext.FileBridge.Write`
 - Policy loader: `backend/internal/wecom.LoadRequesterPolicy`
-- Policy input: `backend/integration/requestercontext/testdata/wecom-requesters.json`
+- Sanitized policy input: `lumi-wecom-requesters-v2.json`
+- Sanitized policy SHA-256: `56240eb055c533e6a7912d1258a7ed3dd86efdb90f711de7a9d0a860f747321a`
+- Production policy contract: `/Users/pengmd/tmp/wecom-requesters.json` (not copied because it contains real identities)
 - Fixed clock: `2026-08-03T03:00:00Z`
 - Workspace / Agent / session: `sandbox-workspace-demo` / `pi` / `session-demo-001`
-- Fixture SHA-256: `99084e1f5fc77ad44e3bc5137744d1743e4fbdd532f795e2f7fbe73679018e18`
+- Fixture SHA-256: `14106c8d6846f5520cdde2ca085714615ef0e99285258f1492f890ed578161e2`
 
 Regenerate this fixture through the Lumi producer whenever its envelope or
 RequesterContext contract changes. Do not edit its JSON fields independently

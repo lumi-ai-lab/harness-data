@@ -155,15 +155,20 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 	}
 
 	sessionID := "release-smoke-session"
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07"},
+		DCManageAreaIDs:   []string{"CN07"},
+		CategoryLevel1IDs: []string{"12"},
+	}
 	envelope := authz.Envelope{
-		Version:     authz.CurrentVersion,
+		Version:     authz.CurrentEnvelopeVersion,
 		WorkspaceID: "release-smoke-workspace",
 		AgentID:     "release-smoke-agent",
 		SessionID:   sessionID,
 		IssuedAt:    now.Add(-time.Minute),
 		ExpiresAt:   now.Add(10 * time.Minute),
 		RequesterContext: authz.RequesterContext{
-			Version:        authz.CurrentVersion,
+			Version:        authz.CurrentRequesterContextVersion,
 			RequestID:      "release-smoke-request",
 			PolicyRevision: "sha256:" + strings.Repeat("a", 64),
 			Principal: authz.Principal{
@@ -178,11 +183,8 @@ func buildFixture(runtimeRoot string, agentUID uint32, now time.Time) (authz.Bin
 			},
 			Authorization: authz.Authorization{
 				Capabilities: []string{authz.CapabilityMetricQuery},
-				Scope: authz.Scope{
-					ManageAreaIDs:     []string{"CN07"},
-					DCManageAreaIDs:   []string{"CN07"},
-					CategoryLevel1IDs: []string{"12"},
-				},
+				Claims:       authz.NewQDMScopeClaims(scope),
+				Scope:        scope,
 			},
 		},
 	}

@@ -8,7 +8,7 @@
   "requesterContext": {
     "version": 2,
     "requestId": "message-demo-001",
-    "policyRevision": "sha256:4b41fdb58a1c8a22baeaa7afa359dd7977e6a408cc651c7b98683a9519058a15",
+    "policyRevision": "sha256:56240eb055c533e6a7912d1258a7ed3dd86efdb90f711de7a9d0a860f747321a",
     "principal": {
       "channel": "wecom",
       "botId": "bot-demo-001",
@@ -21,8 +21,7 @@
     },
     "authorization": {
       "capabilities": [
-        "qdm.cmr.query",
-        "qdm.indicators.query"
+        "qdm.metric.query"
       ],
       "claims": {
         "qdm.scope": {

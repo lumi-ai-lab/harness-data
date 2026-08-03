@@ -133,15 +133,19 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 	), 0o600)
 	fixture.writeInstallerState(t)
 
+	scope := Scope{
+		ManageAreaIDs: []string{"CN07", "CN08"}, DCManageAreaIDs: []string{"CN07"},
+		CategoryLevel1IDs: []string{"12", "13"},
+	}
 	fixture.envelope = Envelope{
-		Version:     CurrentVersion,
+		Version:     CurrentEnvelopeVersion,
 		WorkspaceID: "workspace-1",
 		AgentID:     "agent-1",
 		SessionID:   fixture.sessionID,
 		IssuedAt:    fixture.now.Add(-time.Minute),
 		ExpiresAt:   fixture.now.Add(29 * time.Minute),
 		RequesterContext: RequesterContext{
-			Version:        CurrentVersion,
+			Version:        CurrentRequesterContextVersion,
 			RequestID:      "request-1",
 			PolicyRevision: "sha256:" + string(make([]byte, 0)),
 			Principal: Principal{
@@ -150,10 +154,8 @@ func newAuthzFixture(t *testing.T) *authzFixture {
 			Audience: Audience{ChatID: "chat-1", ChatType: "group"},
 			Authorization: Authorization{
 				Capabilities: []string{CapabilityMetricQuery},
-				Scope: Scope{
-					ManageAreaIDs: []string{"CN07", "CN08"}, DCManageAreaIDs: []string{"CN07"},
-					CategoryLevel1IDs: []string{"12", "13"},
-				},
+				Claims:       NewQDMScopeClaims(scope),
+				Scope:        scope,
 			},
 		},
 	}
@@ -184,6 +186,11 @@ func (fixture *authzFixture) writeEnvelope(t *testing.T, envelope Envelope) stri
 	path := filepath.Join(fixture.contextDir, name)
 	writeTestJSON(t, path, envelope, 0o644)
 	return path
+}
+
+func (fixture *authzFixture) replaceScope(scope Scope) {
+	fixture.envelope.RequesterContext.Authorization.Scope = scope
+	fixture.envelope.RequesterContext.Authorization.Claims = NewQDMScopeClaims(scope)
 }
 
 func (fixture *authzFixture) readOptions() []ReadOption {

@@ -102,7 +102,7 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	if err := decodeStrictJSON(data, &envelope); err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context envelope is invalid", err)
 	}
-	if err := validateEnvelope(config, envelope, sessionID, settings.now); err != nil {
+	if err := validateEnvelope(config, &envelope, sessionID, settings.now); err != nil {
 		return LoadedEnvelope{}, err
 	}
 	fingerprint, err := ContextFingerprint(envelope.RequesterContext)
@@ -116,11 +116,11 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 	}, nil
 }
 
-func validateEnvelope(config Config, envelope Envelope, expectedSessionID string, now time.Time) error {
+func validateEnvelope(config Config, envelope *Envelope, expectedSessionID string, now time.Time) error {
 	invalid := func(message string) error {
 		return authzError(CodeRequesterContextInvalid, message, nil)
 	}
-	if envelope.Version != CurrentVersion {
+	if envelope.Version != CurrentEnvelopeVersion {
 		return invalid("requester context envelope version must be 1")
 	}
 	if envelope.SessionID != expectedSessionID {
@@ -157,15 +157,15 @@ func validateEnvelope(config Config, envelope Envelope, expectedSessionID string
 	if !now.Before(envelope.ExpiresAt) {
 		return authzError(CodeRequesterContextExpired, "requester context envelope has expired", nil)
 	}
-	return validateRequesterContext(envelope.RequesterContext)
+	return validateRequesterContext(&envelope.RequesterContext)
 }
 
-func validateRequesterContext(context RequesterContext) error {
+func validateRequesterContext(context *RequesterContext) error {
 	invalid := func(message string) error {
 		return authzError(CodeRequesterContextInvalid, message, nil)
 	}
-	if context.Version != CurrentVersion {
-		return invalid("requester context version must be 1")
+	if context.Version != CurrentRequesterContextVersion {
+		return invalid("requester context version must be 2")
 	}
 	if context.Principal.Channel != "wecom" {
 		return invalid("requester principal channel must be wecom")
@@ -206,24 +206,38 @@ func validateRequesterContext(context RequesterContext) error {
 	if !hasMetricCapability {
 		return authzError(CodeCapabilityDenied, "requester lacks Metric query capability", nil)
 	}
-	if err := validateScopeValues(context.Authorization.Scope.ManageAreaIDs); err != nil {
+	claimPayload, ok := context.Authorization.Claims[ClaimNamespaceQDMScope]
+	if !ok {
+		return invalid("requester context qdm.scope claim is missing")
+	}
+	var claim QDMScopeClaim
+	if err := decodeStrictJSON(claimPayload, &claim); err != nil {
+		return authzError(CodeRequesterContextInvalid, "requester context qdm.scope claim is invalid", err)
+	}
+	if claim.SchemaVersion != CurrentQDMScopeSchemaVersion {
+		return invalid("requester context qdm.scope schema version must be 1")
+	}
+	if err := validateScopeValues(claim.ManageAreaIDs); err != nil {
 		return err
 	}
-	if len(context.Authorization.Scope.DCManageAreaIDs) > 0 {
-		if err := validateScopeValues(context.Authorization.Scope.DCManageAreaIDs); err != nil {
-			return err
-		}
-	}
-	if err := validateScopeValues(context.Authorization.Scope.CategoryLevel1IDs); err != nil {
+	if err := validateScopeValues(claim.DCManageAreaIDs); err != nil {
 		return err
+	}
+	if err := validateScopeValues(claim.CategoryLevel1IDs); err != nil {
+		return err
+	}
+	if len(claim.ManageAreaIDs) == 0 && len(claim.DCManageAreaIDs) == 0 && len(claim.CategoryLevel1IDs) == 0 {
+		return authzError(CodeScopeEmpty, "requester authorization scope is empty", nil)
+	}
+	context.Authorization.Scope = Scope{
+		ManageAreaIDs:     append([]string(nil), claim.ManageAreaIDs...),
+		DCManageAreaIDs:   append([]string(nil), claim.DCManageAreaIDs...),
+		CategoryLevel1IDs: append([]string(nil), claim.CategoryLevel1IDs...),
 	}
 	return nil
 }
 
 func validateScopeValues(values []string) error {
-	if len(values) == 0 {
-		return authzError(CodeScopeEmpty, "requester authorization scope is empty", nil)
-	}
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		if err := validateRequiredWireString(value); err != nil || strings.ContainsAny(value, ",*") {
@@ -256,9 +270,9 @@ func validateOptionalWireString(value string) error {
 	return nil
 }
 
-// ContextFingerprint returns SHA-256(JCS(typed RequesterContext V1)).
+// ContextFingerprint returns SHA-256(JCS(typed RequesterContext V2)).
 func ContextFingerprint(context RequesterContext) (string, error) {
-	if err := validateRequesterContext(context); err != nil {
+	if err := validateRequesterContext(&context); err != nil {
 		return "", err
 	}
 	canonical, err := canonicalJSON(context)

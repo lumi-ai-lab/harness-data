@@ -56,7 +56,9 @@ func TestReadEnvelopeBindingAndCurrentValidation(t *testing.T) {
 
 func TestScopeIDsRemainOpaqueAndCaseSensitive(t *testing.T) {
 	fixture := newAuthzFixture(t)
-	fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN 07", "cn07"}
+	scope := fixture.envelope.RequesterContext.Authorization.Scope
+	scope.ManageAreaIDs = []string{"CN 07", "cn07"}
+	fixture.replaceScope(scope)
 	fixture.writeEnvelope(t, fixture.envelope)
 	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
 	if err != nil {
@@ -65,6 +67,38 @@ func TestScopeIDsRemainOpaqueAndCaseSensitive(t *testing.T) {
 	got := loaded.Envelope.RequesterContext.Authorization.Scope.ManageAreaIDs
 	if len(got) != 2 || got[0] != "CN 07" || got[1] != "cn07" {
 		t.Fatalf("scope IDs were normalized: %#v", got)
+	}
+}
+
+func TestReadEnvelopeAcceptsDCOnlyScope(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	scope := fixture.envelope.RequesterContext.Authorization.Scope
+	scope.ManageAreaIDs = nil
+	scope.DCManageAreaIDs = []string{"DC07"}
+	fixture.replaceScope(scope)
+	fixture.writeEnvelope(t, fixture.envelope)
+
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.Envelope.RequesterContext.Authorization.Scope
+	if len(got.ManageAreaIDs) != 0 || len(got.DCManageAreaIDs) != 1 || got.DCManageAreaIDs[0] != "DC07" {
+		t.Fatalf("DC-only scope = %#v", got)
+	}
+}
+
+func TestReadEnvelopePreservesOpaqueNonQDMScopeClaims(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	fixture.envelope.RequesterContext.Authorization.Claims["com.example.audit"] = json.RawMessage(`{"schemaVersion":7,"opaque":[true,{"future":"value"}]}`)
+	fixture.writeEnvelope(t, fixture.envelope)
+
+	loaded, err := ReadEnvelope(fixture.config, fixture.sessionID, fixture.readOptions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Envelope.RequesterContext.Authorization.Claims["com.example.audit"]; !ok {
+		t.Fatal("opaque non-qdm.scope claim was discarded")
 	}
 }
 
@@ -301,6 +335,10 @@ func TestStrictEnvelopeValidationRejectsMalformedAndUnsafeInputs(t *testing.T) {
 			fixture.envelope.SessionID = "different"
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
+		"envelope v2": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.Version = 2
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
 		"future issued": func(t *testing.T, fixture *authzFixture) {
 			fixture.envelope.IssuedAt = fixture.now.Add(31 * time.Second)
 			fixture.envelope.ExpiresAt = fixture.envelope.IssuedAt.Add(time.Minute)
@@ -320,28 +358,63 @@ func TestStrictEnvelopeValidationRejectsMalformedAndUnsafeInputs(t *testing.T) {
 			fixture.envelope.RequesterContext.Authorization.Capabilities = []string{"other"}
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
-		"empty area scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = nil
+		"context v1": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.RequesterContext.Version = 1
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"legacy flat scope": func(t *testing.T, fixture *authzFixture) {
+			raw, _ := json.Marshal(fixture.envelope)
+			raw = bytes.Replace(raw, []byte(`"claims":`), []byte(`"scope":{},"claims":`), 1)
+			fixture.writeRawEnvelope(t, raw)
+		},
+		"missing qdm scope": func(t *testing.T, fixture *authzFixture) {
+			delete(fixture.envelope.RequesterContext.Authorization.Claims, ClaimNamespaceQDMScope)
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"wrong qdm scope type": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.RequesterContext.Authorization.Claims[ClaimNamespaceQDMScope] = json.RawMessage(`[]`)
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"unknown qdm scope field": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.RequesterContext.Authorization.Claims[ClaimNamespaceQDMScope] = json.RawMessage(`{"schemaVersion":1,"manageAreaIds":["CN07"],"dcManageAreaIds":[],"categoryLevel1Ids":["12"],"unknown":true}`)
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"wrong qdm scope schema": func(t *testing.T, fixture *authzFixture) {
+			fixture.envelope.RequesterContext.Authorization.Claims[ClaimNamespaceQDMScope] = json.RawMessage(`{"schemaVersion":2,"manageAreaIds":["CN07"],"dcManageAreaIds":[],"categoryLevel1Ids":["12"]}`)
+			fixture.writeEnvelope(t, fixture.envelope)
+		},
+		"empty scope": func(t *testing.T, fixture *authzFixture) {
+			fixture.replaceScope(Scope{})
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"comma in scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN07,CN08"}
+			scope := fixture.envelope.RequesterContext.Authorization.Scope
+			scope.ManageAreaIDs = []string{"CN07,CN08"}
+			fixture.replaceScope(scope)
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"control in scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN07\n"}
+			scope := fixture.envelope.RequesterContext.Authorization.Scope
+			scope.ManageAreaIDs = []string{"CN07\n"}
+			fixture.replaceScope(scope)
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"wildcard scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"*"}
+			scope := fixture.envelope.RequesterContext.Authorization.Scope
+			scope.ManageAreaIDs = []string{"*"}
+			fixture.replaceScope(scope)
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"duplicate scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.ManageAreaIDs = []string{"CN07", "CN07"}
+			scope := fixture.envelope.RequesterContext.Authorization.Scope
+			scope.ManageAreaIDs = []string{"CN07", "CN07"}
+			fixture.replaceScope(scope)
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 		"invalid DC scope": func(t *testing.T, fixture *authzFixture) {
-			fixture.envelope.RequesterContext.Authorization.Scope.DCManageAreaIDs = []string{"CN07", "*"}
+			scope := fixture.envelope.RequesterContext.Authorization.Scope
+			scope.DCManageAreaIDs = []string{"CN07", "*"}
+			fixture.replaceScope(scope)
 			fixture.writeEnvelope(t, fixture.envelope)
 		},
 	}
@@ -354,7 +427,7 @@ func TestStrictEnvelopeValidationRejectsMalformedAndUnsafeInputs(t *testing.T) {
 				assertAuthzCode(t, err, CodeRequesterContextExpired)
 			} else if name == "capability missing" {
 				assertAuthzCode(t, err, CodeCapabilityDenied)
-			} else if name == "empty area scope" {
+			} else if name == "empty scope" {
 				assertAuthzCode(t, err, CodeScopeEmpty)
 			} else {
 				assertAuthzCode(t, err, CodeRequesterContextInvalid)
