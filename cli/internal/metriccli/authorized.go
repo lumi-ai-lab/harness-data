@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -155,9 +156,62 @@ type authorizationScope struct {
 	CategoryLevel1IDs []string
 }
 
+// analysisAuthorizationRequestV010 mirrors the security-relevant JSON fields
+// decoded by the pinned real Metric CLI v0.1.0.
+type analysisAuthorizationRequestV010 struct {
+	Metrics []string                         `json:"metrics"`
+	Filters analysisAuthorizationFiltersV010 `json:"filters"`
+}
+
+type analysisAuthorizationFiltersV010 map[string][]string
+
+func (filters *analysisAuthorizationFiltersV010) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		*filters = nil
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return errors.New("analysis filters must be an object")
+	}
+	result := make(analysisAuthorizationFiltersV010, len(fields))
+	for dimension, encodedValues := range fields {
+		if bytes.Equal(bytes.TrimSpace(encodedValues), []byte("null")) {
+			return fmt.Errorf("analysis filter %s must be an array", dimension)
+		}
+		var values []string
+		if err := json.Unmarshal(encodedValues, &values); err != nil {
+			return fmt.Errorf("analysis filter %s must be an array", dimension)
+		}
+		result[dimension] = values
+	}
+	*filters = result
+	return nil
+}
+
+func requireDoubleHyphenFlags(args []string) error {
+	for _, argument := range args {
+		if argument == "-" || !strings.HasPrefix(argument, "-") {
+			continue
+		}
+		if argument == "--" ||
+			(strings.HasPrefix(argument, "--") && len(argument) > 2 && argument[2] != '-') {
+			continue
+		}
+		return fmt.Errorf(
+			"qdm-metric-cli flags must use the double-hyphen form: %q",
+			argument,
+		)
+	}
+	return nil
+}
+
 func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
 	if len(args) == 0 {
 		return nil, errors.New("qdm-metric-cli command is required")
+	}
+	if err := requireDoubleHyphenFlags(args[1:]); err != nil {
+		return nil, err
 	}
 	authorizationScope := authorizationScope{
 		ManageAreaIDs:     append([]string(nil), scope.ManageAreaIDs...),
@@ -167,10 +221,10 @@ func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, cata
 	case "metric", "tag", "health", "version":
 		return append([]string(nil), args...), nil
 	case "wikis":
-		return authorizeMetricFlag(args, "--code", catalog)
+		return authorizeWikis(args, catalog)
 	case "dim":
 		if len(args) > 1 && args[1] == "search" {
-			return authorizeMetricFlag(args, "--metric", catalog)
+			return authorizeDimensionSearch(args, catalog)
 		}
 		return append([]string(nil), args...), nil
 	case "analysis":
@@ -180,6 +234,40 @@ func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, cata
 	default:
 		return nil, fmt.Errorf("unsupported qdm-metric-cli command %q", args[0])
 	}
+}
+
+func authorizeWikis(args []string, catalog authz.MetricCatalog) ([]string, error) {
+	parsed, err := parseWikisArgumentsV010(args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return append([]string(nil), args...), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	code := strings.TrimSpace(parsed.Code)
+	if code != "" {
+		if err := authorizeMetric("--code", code, catalog); err != nil {
+			return nil, err
+		}
+	}
+	return append([]string(nil), args...), nil
+}
+
+func authorizeDimensionSearch(args []string, catalog authz.MetricCatalog) ([]string, error) {
+	parsed, err := parseDimensionSearchArgumentsV010(args[2:])
+	if errors.Is(err, flag.ErrHelp) {
+		return append([]string(nil), args...), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	metric := strings.TrimSpace(parsed.Metric)
+	if metric != "" {
+		if err := authorizeMetric("--metric", metric, catalog); err != nil {
+			return nil, err
+		}
+	}
+	return append([]string(nil), args...), nil
 }
 
 func authorizeAnalysis(args []string, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
@@ -192,107 +280,140 @@ func authorizeAnalysis(args []string, scope authorizationScope, maxMetrics int64
 		return nil, fmt.Errorf("unsupported qdm-metric-cli analysis subcommand %q", args[1])
 	}
 
-	payloadIndex, payloadJSONIndex := -1, -1
-	for index := 2; index < len(args); index++ {
-		switch args[index] {
-		case "--payload":
-			payloadIndex = index
-		case "--payload-json":
-			payloadJSONIndex = index
-		default:
-			if strings.HasPrefix(args[index], "--payload=") {
-				payloadIndex = index
-			}
-			if strings.HasPrefix(args[index], "--payload-json=") {
-				payloadJSONIndex = index
-			}
-		}
+	parsed, err := parseAnalysisArgumentsV010(args[2:])
+	if errors.Is(err, flag.ErrHelp) {
+		return append([]string(nil), args...), nil
 	}
-	if payloadIndex >= 0 && payloadJSONIndex >= 0 {
-		return nil, errors.New("analysis payload input cannot be combined")
+	if err != nil {
+		return nil, err
 	}
-	if payloadIndex >= 0 || payloadJSONIndex >= 0 {
-		return authorizeAnalysisPayload(args, payloadIndex, payloadJSONIndex, scope, maxMetrics, catalog)
+	payloadMode := parsed.Payload != "" || parsed.PayloadJSON != ""
+	if payloadMode {
+		return authorizeAnalysisPayload(
+			args[0],
+			args[1],
+			parsed,
+			scope,
+			maxMetrics,
+			catalog,
+		)
 	}
-	return authorizeAnalysisFlags(args, scope, maxMetrics, catalog)
+	return authorizeAnalysisFlags(args, parsed, scope, maxMetrics, catalog)
 }
 
-func authorizeAnalysisPayload(args []string, payloadIndex, payloadJSONIndex int, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
-	index := payloadIndex
-	prefix := "--payload"
-	if payloadJSONIndex >= 0 {
-		index = payloadJSONIndex
-		prefix = "--payload-json"
+func authorizeAnalysisPayload(
+	command string,
+	action string,
+	parsed analysisArgumentsV010,
+	scope authorizationScope,
+	maxMetrics int64,
+	catalog authz.MetricCatalog,
+) ([]string, error) {
+	for _, name := range []string{
+		"start-date", "end-date", "time-grain", "statistic-policy", "order-by",
+		"scope-json", "curr-page", "page-no", "page-size", "metric", "agg-dim",
+		"filter", "other-filter", "measure-filter",
+	} {
+		if parsed.Visited[name] {
+			return nil, fmt.Errorf("payload input cannot be combined with --%s", name)
+		}
 	}
+	if parsed.Payload != "" && parsed.PayloadJSON != "" {
+		return nil, errors.New("analysis payload input cannot be combined")
+	}
+
 	var raw []byte
-	if strings.HasPrefix(args[index], prefix+"=") {
-		value := strings.TrimPrefix(args[index], prefix+"=")
-		if prefix == "--payload" {
-			var err error
-			raw, err = os.ReadFile(filepath.Clean(value))
-			if err != nil {
-				return nil, fmt.Errorf("analysis payload cannot be read: %w", err)
-			}
-		} else {
-			raw = []byte(value)
+	if parsed.Payload != "" {
+		var err error
+		raw, err = os.ReadFile(filepath.Clean(parsed.Payload))
+		if err != nil {
+			return nil, fmt.Errorf("analysis payload cannot be read: %w", err)
 		}
 	} else {
-		if index+1 >= len(args) {
-			return nil, fmt.Errorf("%s requires a value", prefix)
-		}
-		if prefix == "--payload" {
-			var err error
-			raw, err = os.ReadFile(filepath.Clean(args[index+1]))
-			if err != nil {
-				return nil, fmt.Errorf("analysis payload cannot be read: %w", err)
-			}
-		} else {
-			raw = []byte(args[index+1])
-		}
+		raw = []byte(parsed.PayloadJSON)
 	}
 	if len(raw) == 0 || len(raw) > maxPayloadBytes {
 		return nil, errors.New("analysis payload is empty or too large")
 	}
-	var request map[string]any
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, fmt.Errorf("analysis payload must be a JSON object: %w", err)
-	}
-	if err := authorizeRequestObject(request, scope, maxMetrics, catalog); err != nil {
-		return nil, err
-	}
-	normalized, err := json.Marshal(request)
+	normalized, err := authorizeAnalysisPayloadJSON(raw, scope, maxMetrics, catalog)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]string, 0, len(args)+1)
-	for position := 0; position < len(args); position++ {
-		if position == index {
-			result = append(result, "--payload-json", string(normalized))
-			if !strings.Contains(args[position], "=") {
-				position++
-			}
-			continue
-		}
-		result = append(result, args[position])
-	}
+
+	result := []string{command, action, "--payload-json", string(normalized)}
+	result = appendStringFlagIfVisited(result, parsed.Visited, "socket", parsed.Socket)
+	result = appendDurationFlagIfVisited(result, parsed.Visited, "timeout", parsed.Timeout)
+	result = appendStringFlagIfVisited(result, parsed.Visited, "request-id", parsed.RequestID)
+	result = appendBoolFlagIfVisited(result, parsed.Visited, "single-page", parsed.SinglePage)
+	result = appendBoolFlagIfVisited(result, parsed.Visited, "yoy", parsed.YOY)
+	result = appendBoolFlagIfVisited(result, parsed.Visited, "mom", parsed.MOM)
+	result = appendBoolFlagIfVisited(result, parsed.Visited, "biz-thresh", parsed.BizThreshold)
+	result = appendStringFlagIfVisited(result, parsed.Visited, "format", parsed.Format)
+	result = appendStringFlagIfVisited(result, parsed.Visited, "output", parsed.Output)
 	return result, nil
 }
 
-func authorizeRequestObject(request map[string]any, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) error {
-	metrics, ok := request["metrics"].([]any)
-	if ok && maxMetrics > 0 && int64(len(metrics)) > maxMetrics {
+func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return nil, errors.New("analysis payload must be a JSON object")
+	}
+	// Fail closed on ambiguous protected aliases. The real v0.1.0 decoder uses
+	// encoding/json's last-match behavior, which is unsafe for authorization.
+	metricsPresent, metricsAliases := foldedJSONField(fields, "metrics")
+	if metricsAliases > 1 {
+		return nil, errors.New(`analysis payload contains conflicting "metrics" fields`)
+	}
+	_, filterAliases := foldedJSONField(fields, "filters")
+	if filterAliases > 1 {
+		return nil, errors.New(`analysis payload contains conflicting "filters" fields`)
+	}
+
+	var request analysisAuthorizationRequestV010
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return nil, fmt.Errorf("analysis payload has an invalid request shape: %w", err)
+	}
+	if err := authorizeAnalysisRequest(&request, scope, maxMetrics, catalog); err != nil {
+		return nil, err
+	}
+
+	deleteFoldedJSONFields(fields, "metrics")
+	deleteFoldedJSONFields(fields, "filters")
+	if metricsPresent {
+		encodedMetrics, err := json.Marshal(request.Metrics)
+		if err != nil {
+			return nil, err
+		}
+		fields["metrics"] = encodedMetrics
+	}
+	encodedFilters, err := json.Marshal(request.Filters)
+	if err != nil {
+		return nil, err
+	}
+	fields["filters"] = encodedFilters
+	return json.Marshal(fields)
+}
+
+func authorizeAnalysisRequest(request *analysisAuthorizationRequestV010, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) error {
+	if maxMetrics > 0 && int64(len(request.Metrics)) > maxMetrics {
 		return errors.New("analysis request contains too many metrics")
 	}
-	for _, rawMetric := range metrics {
-		metric, ok := rawMetric.(string)
-		if !ok || strings.TrimSpace(metric) != metric || metric == "" || !catalog.ApproveMetric(metric) {
+	for _, metric := range request.Metrics {
+		if strings.TrimSpace(metric) != metric || metric == "" || !catalog.ApproveMetric(metric) {
 			return errors.New("analysis request contains an unauthorized metric")
 		}
 	}
-	filters, err := filtersFromObject(request["filters"])
-	if err != nil {
-		return err
+	if request.Filters == nil {
+		request.Filters = analysisAuthorizationFiltersV010{}
 	}
+	for dimension, values := range request.Filters {
+		for _, value := range values {
+			if strings.TrimSpace(value) != value || value == "" || strings.ContainsAny(value, ",*") {
+				return fmt.Errorf("analysis filter %s contains an invalid value", dimension)
+			}
+		}
+	}
+	filters := map[string][]string(request.Filters)
 	if err := constrainFilter(filters, "manageAreaId", scope.ManageAreaIDs); err != nil {
 		return err
 	}
@@ -302,33 +423,26 @@ func authorizeRequestObject(request map[string]any, scope authorizationScope, ma
 	if err := constrainFilter(filters, "categoryLevel1Id", scope.CategoryLevel1IDs); err != nil {
 		return err
 	}
-	request["filters"] = filters
+	request.Filters = analysisAuthorizationFiltersV010(filters)
 	return nil
 }
 
-func filtersFromObject(value any) (map[string][]string, error) {
-	if value == nil {
-		return map[string][]string{}, nil
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil, errors.New("analysis filters must be an object")
-	}
-	filters := make(map[string][]string, len(object))
-	for dimension, rawValues := range object {
-		values, ok := rawValues.([]any)
-		if !ok {
-			return nil, fmt.Errorf("analysis filter %s must be an array", dimension)
-		}
-		for _, rawValue := range values {
-			value, ok := rawValue.(string)
-			if !ok || strings.TrimSpace(value) != value || value == "" || strings.ContainsAny(value, ",*") {
-				return nil, fmt.Errorf("analysis filter %s contains an invalid value", dimension)
-			}
-			filters[dimension] = append(filters[dimension], value)
+func foldedJSONField(fields map[string]json.RawMessage, name string) (bool, int) {
+	count := 0
+	for key := range fields {
+		if strings.EqualFold(key, name) {
+			count++
 		}
 	}
-	return filters, nil
+	return count > 0, count
+}
+
+func deleteFoldedJSONFields(fields map[string]json.RawMessage, name string) {
+	for key := range fields {
+		if strings.EqualFold(key, name) {
+			delete(fields, key)
+		}
+	}
 }
 
 func constrainFilter(filters map[string][]string, dimension string, authorized []string) error {
@@ -369,76 +483,44 @@ func constrainExistingFilter(filters map[string][]string, dimension string, auth
 	return nil
 }
 
-func authorizeAnalysisFlags(args []string, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
-	result := append([]string(nil), args...)
-	metrics := int64(0)
-	areasPresent, categoriesPresent := false, false
-	for index := 2; index < len(result); index++ {
-		argument := result[index]
-		if argument == "--metric" {
-			if index+1 >= len(result) {
-				return nil, errors.New("--metric requires a value")
-			}
-			if err := authorizeMetric(argument, result[index+1], catalog); err != nil {
-				return nil, err
-			}
-			metrics++
-			index++
-			continue
-		}
-		if strings.HasPrefix(argument, "--metric=") {
-			if err := authorizeMetric("--metric", strings.TrimPrefix(argument, "--metric="), catalog); err != nil {
-				return nil, err
-			}
-			metrics++
-			continue
-		}
-		if argument == "--filter" {
-			if index+1 >= len(result) {
-				return nil, errors.New("--filter requires a value")
-			}
-			if err := constrainFilterArgument(result[index+1], scope, &areasPresent, &categoriesPresent); err != nil {
-				return nil, err
-			}
-			index++
-			continue
-		}
-		if strings.HasPrefix(argument, "--filter=") {
-			if err := constrainFilterArgument(strings.TrimPrefix(argument, "--filter="), scope, &areasPresent, &categoriesPresent); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if maxMetrics > 0 && metrics > maxMetrics {
+func authorizeAnalysisFlags(
+	args []string,
+	parsed analysisArgumentsV010,
+	scope authorizationScope,
+	maxMetrics int64,
+	catalog authz.MetricCatalog,
+) ([]string, error) {
+	if maxMetrics > 0 && int64(len(parsed.Metrics)) > maxMetrics {
 		return nil, errors.New("analysis request contains too many metrics")
 	}
+	for _, metric := range parsed.Metrics {
+		if err := authorizeMetric("--metric", metric, catalog); err != nil {
+			return nil, err
+		}
+	}
+
+	areasPresent, categoriesPresent := false, false
+	for _, filter := range parsed.Filters {
+		if err := constrainFilterArgument(filter, scope, &areasPresent, &categoriesPresent); err != nil {
+			return nil, err
+		}
+	}
+
+	result := make([]string, 0, len(args)+4)
+	result = append(result, args[0], args[1])
 	if !areasPresent {
+		if len(scope.ManageAreaIDs) == 0 {
+			return nil, errors.New("requester authorization scope for manageAreaId is empty")
+		}
 		result = append(result, "--filter", "manageAreaId="+strings.Join(scope.ManageAreaIDs, ","))
 	}
 	if !categoriesPresent {
+		if len(scope.CategoryLevel1IDs) == 0 {
+			return nil, errors.New("requester authorization scope for categoryLevel1Id is empty")
+		}
 		result = append(result, "--filter", "categoryLevel1Id="+strings.Join(scope.CategoryLevel1IDs, ","))
 	}
-	return result, nil
-}
-
-func authorizeMetricFlag(args []string, flagName string, catalog authz.MetricCatalog) ([]string, error) {
-	result := append([]string(nil), args...)
-	for index := 1; index < len(result); index++ {
-		switch {
-		case result[index] == flagName:
-			if index+1 >= len(result) {
-				return nil, fmt.Errorf("%s requires a value", flagName)
-			}
-			if err := authorizeMetric(flagName, result[index+1], catalog); err != nil {
-				return nil, err
-			}
-			index++
-		case strings.HasPrefix(result[index], flagName+"="):
-			if err := authorizeMetric(flagName, strings.TrimPrefix(result[index], flagName+"="), catalog); err != nil {
-				return nil, err
-			}
-		}
-	}
+	result = append(result, args[2:]...)
 	return result, nil
 }
 

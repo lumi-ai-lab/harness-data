@@ -433,8 +433,10 @@ func TestAuthorizeMetricEqualsFormsAndPayloadFilters(t *testing.T) {
 	for name, payload := range map[string]string{
 		"non-object filters": `{"metrics":["saleAmt"],"filters":[]}`,
 		"non-array values":   `{"metrics":["saleAmt"],"filters":{"manageAreaId":"CN07"}}`,
+		"null filter values": `{"metrics":["saleAmt"],"filters":{"manageAreaId":null}}`,
 		"wildcard value":     `{"metrics":["saleAmt"],"filters":{"manageAreaId":["*"]}}`,
 		"unauthorized value": `{"metrics":["saleAmt"],"filters":{"manageAreaId":["CN99"]}}`,
+		"null request":       `null`,
 	} {
 		t.Run("rejects payload "+name, func(t *testing.T) {
 			if _, err := authorizeArguments(
@@ -447,6 +449,412 @@ func TestAuthorizeMetricEqualsFormsAndPayloadFilters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthorizePayloadCanonicalizesProtectedFields(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	catalog := fixture.catalog(t)
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07", "CN08"},
+		CategoryLevel1IDs: []string{"12", "13"},
+	}
+
+	for _, field := range []string{"Metrics", "METRICS", "mEtRiCs"} {
+		t.Run("rejects unauthorized "+field, func(t *testing.T) {
+			payload := `{"` + field + `":["saleCnt"]}`
+			_, err := authorizeArguments([]string{
+				"analysis", "validate", "--payload-json", payload,
+			}, scope, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "unauthorized metric") {
+				t.Fatalf("payload field %q bypassed metric authorization: %v", field, err)
+			}
+		})
+	}
+
+	t.Run("enforces metric limit through a case variant", func(t *testing.T) {
+		_, err := authorizeArguments([]string{
+			"analysis", "validate", "--payload-json",
+			`{"Metrics":["saleAmt","saleAmt"]}`,
+		}, scope, 1, catalog)
+		if err == nil || !strings.Contains(err.Error(), "too many metrics") {
+			t.Fatalf("case-variant metrics bypassed the metric limit: %v", err)
+		}
+	})
+
+	for _, field := range []string{"Filters", "FILTERS", "fIlTeRs"} {
+		t.Run("rejects unauthorized "+field, func(t *testing.T) {
+			payload := `{"metrics":["saleAmt"],"` + field +
+				`":{"manageAreaId":["CN99"],"categoryLevel1Id":["999"]}}`
+			_, err := authorizeArguments([]string{
+				"analysis", "validate", "--payload-json", payload,
+			}, scope, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "unauthorized value") {
+				t.Fatalf("payload field %q bypassed filter authorization: %v", field, err)
+			}
+		})
+	}
+
+	t.Run("preserves unrelated fields and emits canonical protected fields", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate", "--payload-json",
+			`{
+				"Metrics":["saleAmt"],
+				"Filters":{
+					"manageAreaId":["CN07"],
+					"categoryLevel1Id":["12"]
+				},
+				"extension":{"trace":"kept"}
+			}`,
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(args) != 4 || args[2] != "--payload-json" {
+			t.Fatalf("payload was not normalized to --payload-json: %v", args)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(args[3]), &fields); err != nil {
+			t.Fatalf("normalized payload is invalid JSON: %v", err)
+		}
+		for key := range fields {
+			if (strings.EqualFold(key, "metrics") && key != "metrics") ||
+				(strings.EqualFold(key, "filters") && key != "filters") {
+				t.Fatalf("normalized payload retained a protected field alias %q: %s", key, args[3])
+			}
+		}
+		if string(fields["metrics"]) != `["saleAmt"]` ||
+			!strings.Contains(string(fields["filters"]), `"manageAreaId":["CN07"]`) ||
+			!strings.Contains(string(fields["filters"]), `"categoryLevel1Id":["12"]`) ||
+			string(fields["extension"]) != `{"trace":"kept"}` {
+			t.Fatalf("normalized payload changed protected or unrelated fields: %s", args[3])
+		}
+	})
+
+	for _, payload := range []string{
+		`{"metrics":["saleAmt"],"Metrics":["saleAmt"]}`,
+		`{"filters":{},"Filters":{}}`,
+	} {
+		t.Run("rejects conflicting protected aliases", func(t *testing.T) {
+			_, err := authorizeArguments([]string{
+				"analysis", "validate", "--payload-json", payload,
+			}, scope, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "conflicting") {
+				t.Fatalf("conflicting protected aliases were accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestAuthorizeRequiresDoubleHyphenFlagForms(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	catalog := fixture.catalog(t)
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07", "CN08"},
+		CategoryLevel1IDs: []string{"12", "13"},
+	}
+
+	for name, args := range map[string][]string{
+		"wikis separated code": {
+			"wikis", "-code", "saleAmt",
+		},
+		"wikis equals code": {
+			"wikis", "-code=saleAmt",
+		},
+		"dimension metric": {
+			"dim", "search", "-metric", "saleAmt",
+		},
+		"analysis metric": {
+			"analysis", "validate", "-metric=saleAmt",
+		},
+		"analysis filter": {
+			"analysis", "validate", "-filter", "manageAreaId=CN07",
+		},
+		"analysis payload": {
+			"analysis", "validate", "-payload-json", `{"metrics":["saleAmt"]}`,
+		},
+		"analysis unrelated flag": {
+			"analysis", "validate", "-timeout=5s",
+		},
+		"single-hyphen help": {
+			"wikis", "-h",
+		},
+		"pass-through command flag": {
+			"metric", "search", "-keyword=sale",
+		},
+		"triple-hyphen flag": {
+			"wikis", "---code=saleAmt",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := authorizeArguments(args, scope, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "double-hyphen form") {
+				t.Fatalf("non-double-hyphen flag was not rejected: %v", err)
+			}
+		})
+	}
+
+	t.Run("rejects an ambiguous separated flag value", func(t *testing.T) {
+		_, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--metric", "saleAmt",
+			"--request-id", "-metric=saleCnt",
+		}, scope, 10, catalog)
+		if err == nil || !strings.Contains(err.Error(), "double-hyphen form") {
+			t.Fatalf("ambiguous single-hyphen value token was not rejected: %v", err)
+		}
+	})
+
+	t.Run("accepts a leading-hyphen value in equals form", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--metric", "saleAmt",
+			"--request-id=-metric=saleCnt",
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseAnalysisArgumentsV010(args[2:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.RequestID != "-metric=saleCnt" {
+			t.Fatalf("request ID=%q", parsed.RequestID)
+		}
+	})
+
+	t.Run("denies before executing the real CLI", func(t *testing.T) {
+		t.Setenv(bindingEnvironment, fixture.binding(t))
+		output, err := fixture.run(
+			t,
+			"analysis", "validate",
+			"--metric", "saleAmt",
+			"-filter", "manageAreaId=CN99",
+		)
+		if err == nil || !strings.Contains(err.Error(), "double-hyphen form") {
+			t.Fatalf("expected wrapper authorization denial, got output=%q err=%v", output, err)
+		}
+		if output != "" {
+			t.Fatalf("real Metric CLI was executed for a denied request: %q", output)
+		}
+	})
+}
+
+func TestAuthorizeFlagSetCompatibilityV010(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	catalog := fixture.catalog(t)
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07", "CN08"},
+		CategoryLevel1IDs: []string{"12", "13"},
+	}
+
+	t.Run("does not treat ordinary flag values as protected filters", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--start-date", "2026-08-01",
+			"--end-date", "2026-08-01",
+			"--metric", "saleAmt",
+			"--request-id=-filter=manageAreaId=CN07",
+			"--socket=-filter=categoryLevel1Id=12",
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseAnalysisArgumentsV010(args[2:])
+		if err != nil {
+			t.Fatalf("forwarded arguments do not match v0.1.0 parsing: %v", err)
+		}
+		filters := parseFilterArgumentsForTest(t, parsed.Filters)
+		assertFilterValuesForTest(t, filters, "manageAreaId", []string{"CN07", "CN08"})
+		assertFilterValuesForTest(t, filters, "categoryLevel1Id", []string{"12", "13"})
+		if parsed.RequestID != "-filter=manageAreaId=CN07" ||
+			parsed.Socket != "-filter=categoryLevel1Id=12" {
+			t.Fatalf("ordinary flag values changed unexpectedly: %+v", parsed)
+		}
+	})
+
+	t.Run("does not treat an ordinary flag value as payload input", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--metric", "saleAmt",
+			`--request-id=-payload-json={"metrics":["saleCnt"]}`,
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseAnalysisArgumentsV010(args[2:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Payload != "" || parsed.PayloadJSON != "" {
+			t.Fatalf("ordinary flag value became payload input: %+v", parsed)
+		}
+		filters := parseFilterArgumentsForTest(t, parsed.Filters)
+		assertFilterValuesForTest(t, filters, "manageAreaId", []string{"CN07", "CN08"})
+		assertFilterValuesForTest(t, filters, "categoryLevel1Id", []string{"12", "13"})
+	})
+
+	t.Run("injects scope before a trailing terminator", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--start-date", "2026-08-01",
+			"--end-date", "2026-08-01",
+			"--metric", "saleAmt",
+			"--",
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseAnalysisArgumentsV010(args[2:])
+		if err != nil {
+			t.Fatalf("scope was injected after the terminator: %v; args=%v", err, args)
+		}
+		filters := parseFilterArgumentsForTest(t, parsed.Filters)
+		assertFilterValuesForTest(t, filters, "manageAreaId", []string{"CN07", "CN08"})
+		assertFilterValuesForTest(t, filters, "categoryLevel1Id", []string{"12", "13"})
+	})
+
+	for name, args := range map[string][]string{
+		"wikis final code": {
+			"wikis", "--code", "saleCnt", "--code=saleAmt",
+		},
+		"dimension final metric": {
+			"dim", "search", "--metric", "saleCnt", "--metric=saleAmt",
+		},
+	} {
+		t.Run("authorizes "+name, func(t *testing.T) {
+			if _, err := authorizeArguments(args, scope, 10, catalog); err != nil {
+				t.Fatalf("final approved scalar value was rejected: %v", err)
+			}
+		})
+	}
+
+	t.Run("uses the final repeated payload file", func(t *testing.T) {
+		first := filepath.Join(fixture.root, "first.json")
+		second := filepath.Join(fixture.root, "second.json")
+		writeFile(t, first, []byte(`{"metrics":["saleCnt"]}`), 0o600)
+		writeFile(t, second, []byte(`{"metrics":["saleAmt"]}`), 0o600)
+
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--payload", first,
+			"--payload", second,
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatalf("final approved payload file was rejected: %v", err)
+		}
+		assertCanonicalPayloadArgumentsForTest(t, args, scope)
+	})
+
+	t.Run("uses payload JSON when the payload file value is empty", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--payload=",
+			"--payload-json", `{"metrics":["saleAmt"]}`,
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatalf("effective payload JSON was rejected: %v", err)
+		}
+		assertCanonicalPayloadArgumentsForTest(t, args, scope)
+	})
+
+	t.Run("preserves allowed payload flags by their final values", func(t *testing.T) {
+		args, err := authorizeArguments([]string{
+			"analysis", "execute",
+			"--payload-json", `{"metrics":["saleAmt"]}`,
+			"--request-id=-metric=saleCnt",
+			"--socket=-filter=manageAreaId=CN99",
+			"--timeout", "5s",
+			"--single-page=false",
+			"--yoy=false",
+			"--mom=true",
+			"--biz-thresh=false",
+			"--format", "json",
+			"--output", "envelope",
+		}, scope, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseAnalysisArgumentsV010(args[2:])
+		if err != nil {
+			t.Fatalf("canonical payload arguments do not parse: %v", err)
+		}
+		if parsed.RequestID != "-metric=saleCnt" ||
+			parsed.Socket != "-filter=manageAreaId=CN99" ||
+			parsed.Timeout != 5*time.Second ||
+			parsed.SinglePage ||
+			parsed.YOY ||
+			!parsed.MOM ||
+			parsed.BizThreshold ||
+			parsed.Format != "json" ||
+			parsed.Output != "envelope" {
+			t.Fatalf("allowed payload flags changed: %+v", parsed)
+		}
+		for _, name := range []string{
+			"request-id", "socket", "timeout", "single-page",
+			"yoy", "mom", "biz-thresh", "format", "output",
+		} {
+			if !parsed.Visited[name] {
+				t.Fatalf("canonical payload omitted visited flag %s: %v", name, args)
+			}
+		}
+		assertCanonicalPayloadArgumentsForTest(t, args, scope)
+	})
+
+	t.Run("rejects two effective payload sources", func(t *testing.T) {
+		payloadPath := filepath.Join(fixture.root, "request.json")
+		writeFile(t, payloadPath, []byte(`{"metrics":["saleAmt"]}`), 0o600)
+		_, err := authorizeArguments([]string{
+			"analysis", "validate",
+			"--payload", payloadPath,
+			"--payload-json", `{"metrics":["saleAmt"]}`,
+		}, scope, 10, catalog)
+		if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+			t.Fatalf("two effective payload sources were accepted: %v", err)
+		}
+	})
+}
+
+func parseFilterArgumentsForTest(t *testing.T, arguments []string) map[string][]string {
+	t.Helper()
+	result := map[string][]string{}
+	for _, argument := range arguments {
+		dimension, rawValues, ok := strings.Cut(argument, "=")
+		if !ok {
+			t.Fatalf("invalid forwarded filter argument %q", argument)
+		}
+		result[dimension] = append(result[dimension], strings.Split(rawValues, ",")...)
+	}
+	return result
+}
+
+func assertFilterValuesForTest(t *testing.T, filters map[string][]string, dimension string, expected []string) {
+	t.Helper()
+	actual := filters[dimension]
+	if len(actual) != len(expected) {
+		t.Fatalf("%s values=%v, want %v", dimension, actual, expected)
+	}
+	for index := range expected {
+		if actual[index] != expected[index] {
+			t.Fatalf("%s values=%v, want %v", dimension, actual, expected)
+		}
+	}
+}
+
+func assertCanonicalPayloadArgumentsForTest(t *testing.T, args []string, scope authz.Scope) {
+	t.Helper()
+	parsed, err := parseAnalysisArgumentsV010(args[2:])
+	if err != nil {
+		t.Fatalf("canonical payload arguments do not match v0.1.0 parsing: %v; args=%v", err, args)
+	}
+	if parsed.Payload != "" || parsed.PayloadJSON == "" {
+		t.Fatalf("payload was not reduced to one inline source: %+v", parsed)
+	}
+	var request analysisAuthorizationRequestV010
+	if err := json.Unmarshal([]byte(parsed.PayloadJSON), &request); err != nil {
+		t.Fatalf("canonical payload JSON is invalid: %v", err)
+	}
+	assertFilterValuesForTest(t, request.Filters, "manageAreaId", scope.ManageAreaIDs)
+	assertFilterValuesForTest(t, request.Filters, "categoryLevel1Id", scope.CategoryLevel1IDs)
 }
 
 func TestRunRejectsAdministrativeCommandsAndPreservesChildStatus(t *testing.T) {
