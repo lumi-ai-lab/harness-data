@@ -167,7 +167,7 @@ export async function collectDoctor(workspace, options = {}) {
   if (effectiveProfile === lumiRequiredProfile) {
     add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
     add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);
-    add("approved Wikis content", approvedWikisValid(workspace));
+    add("release-pinned Wikis content", approvedWikisValid(workspace));
   } else {
     add("wikis index", nonEmptyRegularFile(wikisIndex), wikisIndex);
     add("wikis runtime index", nonEmptyRegularFile(wikisRuntimeIndex), wikisRuntimeIndex);

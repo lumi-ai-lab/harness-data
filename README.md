@@ -160,17 +160,40 @@ npx @lumi-ai-lab/harness-data install \
 ```
 
 For non-interactive installation, pass `--profile` and `--agent` explicitly.
-The `lumi-mvp-required` profile requires `--agent pi` and an approved Wikis
+The `lumi-mvp-required` profile requires `--agent pi` and the release-pinned Wikis
 source:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
   --profile lumi-mvp-required \
   --agent pi \
-  --wikis-source /absolute/path/to/approved-wikis
+  --wikis-source /absolute/path/to/release-pinned-wikis
 ```
 
 ## Release Contract
+
+Release approval is attached to reviewed source inputs, not to three
+pre-generated repository artifacts. The repository does not require the old
+`bootstrap/approved-indicators-v1.json`, `bootstrap/approved-lumi-wikis/`, or
+`bootstrap/approved-lumi-wikis-manifest.json` inputs. Instead, reviewers approve
+the exact `wikis` gitlink commit, the checked-in
+`bootstrap/approved-metrics-v1.json` generated from the trusted Metric Registry,
+and the release PR through the repository's required business approval.
+
+The release workflow verifies that the checked-out Wikis submodule matches the
+reviewed gitlink, generates a content manifest from that pinned tree, and
+immediately verifies the tree against the generated manifest. This proves
+artifact consistency and reproducibility; it is not an independent business
+approval. Materialization then writes these immutable outputs into the runtime
+bundle:
+
+- `bootstrap/approved-lumi-wikis/`
+- `bootstrap/approved-lumi-wikis-manifest.json`
+- `bootstrap/approved-metrics-v1.json`
+
+The installer and `doctor` verify the Wikis allowlist and Metric catalog SHA
+again. Any source review or required-approver policy remains a repository and
+release-process gate outside that digest consistency check.
 
 Production runtime manifests pin both the authorized Harness
 `qdm-metric-cli` entry point and the private upstream `qdm-metric-cli` runtime

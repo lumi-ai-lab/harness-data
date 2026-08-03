@@ -200,7 +200,7 @@ test("release manifest rejects a Metric CLI other than v0.1.0", () => {
   }), /must be pinned to v0\.1\.0/);
 });
 
-test("release manifest materialization requires approved Wikis", () => {
+test("release manifest materialization requires pinned Wikis source and manifest", () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-manifest-"));
   assert.throws(() => materializeReleaseManifest({
     manifest: path.join(repository, "bootstrap", "cli-manifest.json"),
@@ -209,5 +209,5 @@ test("release manifest materialization requires approved Wikis", () => {
     dist: fixture,
     qdmMetricVersion: "v0.1.0",
     qdmMetricDist: fixture
-  }), /approved Wikis/);
+  }), /pinned Wikis source.*allowlist manifest/);
 });

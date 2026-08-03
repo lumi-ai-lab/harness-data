@@ -80,7 +80,7 @@ export function materializeReleaseManifest(options) {
     throw new Error(`qdm-metric-cli release must be pinned to v0.1.0: ${qdmMetricVersion || "missing"}`);
   }
   if (!options.approvedWikisSource || !options.approvedWikisManifest) {
-    throw new Error("business-approved Wikis source and allowlist manifest are required for release");
+    throw new Error("pinned Wikis source and its generated allowlist manifest are required for release");
   }
 
   const templatePath = path.resolve(options.manifest);

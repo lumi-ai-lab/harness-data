@@ -63,6 +63,12 @@ dimension, pagination, metadata, timeout, output, and kill-switch limit. See
 the root README and `config/authz-config-v1.json.example` for the full
 deployment contract.
 
+Release approval is based on review of the exact `wikis` gitlink, the checked-in
+Metric catalog, and the release PR. The Wikis copy and its allowlist manifest
+are generated from that pinned commit during release and stored only in the
+immutable runtime bundle. Generating and rechecking the manifest proves content
+consistency; it does not independently grant business approval.
+
 Supported local Agent templates are Claude Code, Codex, Pi, OpenClaw, and
 Hermes. Non-Pi templates use only the ordinary Harness context and posttool
 hooks and are not accepted by `lumi-mvp-required`.

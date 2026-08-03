@@ -224,7 +224,7 @@ async function installWikis(runtimeDir, profile, manifest, options = {}) {
   const target = path.join(runtimeDir, "wikis");
   if (profile === lumiRequiredProfile) {
     if (!options.wikisSource) {
-      throw new Error("lumi-mvp-required installation requires explicit --wikis-source for business-approved content");
+      throw new Error("lumi-mvp-required installation requires explicit --wikis-source for release-pinned content");
     }
     const approved = lumiApprovedWikisArtifact(manifest);
     const approvalManifest = path.resolve(runtimeDir, approved.manifest);
@@ -233,7 +233,7 @@ async function installWikis(runtimeDir, profile, manifest, options = {}) {
     const verified = verifyApprovedWikisSource(options.wikisSource, approvalManifest, approved.manifestSha256);
     fs.rmSync(target, { recursive: true, force: true });
     fs.cpSync(verified.source, target, { recursive: true });
-    ok(`已安装业务批准的 Lumi Wikis 内容 ${approved.manifestSha256.slice(0, 12)}`);
+    ok(`已安装发布版本固定的 Lumi Wikis 内容 ${approved.manifestSha256.slice(0, 12)}`);
     return { mode: "approved-release-content", source: verified.source, path: target };
   }
   if (options.wikisSource) {
@@ -734,7 +734,7 @@ export async function installCommand(options = {}) {
     : await chooseAgent(options);
   validateProfileAgent(profile, selectedAgent);
   if (profile === lumiRequiredProfile && !options.wikisSource) {
-    throw new Error("lumi-mvp-required installation requires explicit --wikis-source for business-approved content");
+    throw new Error("lumi-mvp-required installation requires explicit --wikis-source for release-pinned content");
   }
   const requestedRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   const existingState = readInstallerState(requestedRuntimeDir);
