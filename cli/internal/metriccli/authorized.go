@@ -92,10 +92,10 @@ func runAuthorized(
 		return deny(err)
 	}
 
-	forwarded, err := authorizeArguments(
+	forwarded, err := authorizeArgumentsWithLimits(
 		args,
 		loaded.Envelope.RequesterContext.Authorization.Scope,
-		config.Limits.MaxMetrics,
+		config.Limits,
 		catalog,
 	)
 	if err != nil {
@@ -122,7 +122,13 @@ func denyCode(code authz.Code, message string) error {
 func execute(parent context.Context, config authz.Config, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	timeout := time.Duration(config.Limits.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
+	killSwitchErrors := make(chan error, 1)
+	watcherDone := make(chan struct{})
+	go watchKillSwitch(ctx, config, cancel, killSwitchErrors, watcherDone)
+	defer func() {
+		cancel()
+		<-watcherDone
+	}()
 
 	command := exec.CommandContext(ctx, config.RealMetricCLI.Path, args...)
 	command.Stdin = stdin
@@ -132,6 +138,11 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 	command.Stdout = &output
 	command.Stderr = &errorOutput
 	if err := command.Run(); err != nil {
+		select {
+		case killSwitchErr := <-killSwitchErrors:
+			return &ExitError{Code: 77, Err: killSwitchErr}
+		default:
+		}
 		if _, writeErr := stderr.Write(errorOutput.Bytes()); writeErr != nil {
 			return writeErr
 		}
@@ -147,6 +158,11 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 		}
 		return err
 	}
+	select {
+	case killSwitchErr := <-killSwitchErrors:
+		return &ExitError{Code: 77, Err: killSwitchErr}
+	default:
+	}
 	if _, err := stderr.Write(errorOutput.Bytes()); err != nil {
 		return err
 	}
@@ -155,6 +171,39 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 	}
 	_, err := stdout.Write(output.Bytes())
 	return err
+}
+
+func watchKillSwitch(
+	ctx context.Context,
+	config authz.Config,
+	cancel context.CancelFunc,
+	errorsOut chan<- error,
+	done chan<- struct{},
+) {
+	defer close(done)
+	interval := time.Duration(config.KillSwitch.PollMilliseconds) * time.Millisecond
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			control, err := authz.ReadControl(config)
+			if err == nil && control.Enabled() {
+				continue
+			}
+			if err == nil {
+				err = errors.New("qdm-metric-cli authorization kill switch became disabled")
+			}
+			select {
+			case errorsOut <- err:
+			default:
+			}
+			cancel()
+			return
+		}
+	}
 }
 
 type boundedCapture struct {
@@ -206,14 +255,47 @@ func metricEnvironmentForChild() []string {
 
 type authorizationScope struct {
 	ManageAreaIDs     []string
+	DCManageAreaIDs   []string
 	CategoryLevel1IDs []string
 }
 
 // analysisAuthorizationRequestV010 mirrors the security-relevant JSON fields
 // decoded by the pinned real Metric CLI v0.1.0.
 type analysisAuthorizationRequestV010 struct {
-	Metrics []string                         `json:"metrics"`
-	Filters analysisAuthorizationFiltersV010 `json:"filters"`
+	Metrics    []string                         `json:"metrics"`
+	Time       analysisAuthorizationTimeV010    `json:"time"`
+	Dimensions []string                         `json:"dimensions"`
+	Filters    analysisAuthorizationFiltersV010 `json:"filters"`
+	PageSize   *int                             `json:"pageSize,omitempty"`
+}
+
+type analysisAuthorizationTimeV010 struct {
+	StartDate string `json:"startDate"`
+	EndDate   string `json:"endDate"`
+	Grain     string `json:"grain,omitempty"`
+}
+
+func (queryTime *analysisAuthorizationTimeV010) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("analysis time must be an object")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return errors.New("analysis time must be an object")
+	}
+	for _, name := range []string{"startDate", "endDate", "grain"} {
+		_, aliases := foldedJSONField(fields, name)
+		if aliases > 1 {
+			return fmt.Errorf("analysis time contains conflicting %s fields", name)
+		}
+	}
+	type plainTime analysisAuthorizationTimeV010
+	var decoded plainTime
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return errors.New("analysis time has an invalid shape")
+	}
+	*queryTime = analysisAuthorizationTimeV010(decoded)
+	return nil
 }
 
 type analysisAuthorizationFiltersV010 map[string][]string
@@ -260,6 +342,10 @@ func requireDoubleHyphenFlags(args []string) error {
 }
 
 func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
+	return authorizeArgumentsWithLimits(args, scope, authz.LimitsConfig{MaxMetrics: maxMetrics}, catalog)
+}
+
+func authorizeArgumentsWithLimits(args []string, scope authz.Scope, limits authz.LimitsConfig, catalog authz.MetricCatalog) ([]string, error) {
 	if len(args) == 0 {
 		return nil, errors.New("qdm-metric-cli command is required")
 	}
@@ -271,20 +357,26 @@ func authorizeArguments(args []string, scope authz.Scope, maxMetrics int64, cata
 	}
 	authorizationScope := authorizationScope{
 		ManageAreaIDs:     append([]string(nil), scope.ManageAreaIDs...),
+		DCManageAreaIDs:   append([]string(nil), scope.DCManageAreaIDs...),
 		CategoryLevel1IDs: append([]string(nil), scope.CategoryLevel1IDs...),
 	}
 	switch args[0] {
-	case "metric", "tag", "health", "version":
+	case "metric":
+		return authorizeMetricCommand(args, limits)
+	case "tag", "health", "version":
 		return append([]string(nil), args...), nil
 	case "wikis":
 		return authorizeWikis(args, catalog)
 	case "dim":
 		if len(args) > 1 && args[1] == "search" {
-			return authorizeDimensionSearch(args, catalog)
+			return authorizeDimensionSearch(args, limits, catalog)
 		}
-		return append([]string(nil), args...), nil
+		if len(args) > 1 && args[1] == "values" {
+			return authorizeDimensionValues(args, limits)
+		}
+		return nil, errors.New("unsupported qdm-metric-cli dim subcommand")
 	case "analysis":
-		return authorizeAnalysis(args, authorizationScope, maxMetrics, catalog)
+		return authorizeAnalysis(args, authorizationScope, limits, catalog)
 	case "registry", "doris":
 		return nil, errors.New("administrative qdm-metric-cli commands are not available to an Agent")
 	default:
@@ -335,7 +427,21 @@ func authorizeWikis(args []string, catalog authz.MetricCatalog) ([]string, error
 	return append([]string(nil), args...), nil
 }
 
-func authorizeDimensionSearch(args []string, catalog authz.MetricCatalog) ([]string, error) {
+func authorizeMetricCommand(args []string, limits authz.LimitsConfig) ([]string, error) {
+	if len(args) < 2 || args[1] != "search" {
+		return nil, errors.New("unsupported qdm-metric-cli metric subcommand")
+	}
+	parsed, err := parseMetricSearchArgumentsV010(args[2:])
+	if errors.Is(err, flag.ErrHelp) {
+		return append([]string(nil), args...), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return enforceMetadataLimit(args, parsed.Limit, parsed.Visited["limit"], limits)
+}
+
+func authorizeDimensionSearch(args []string, limits authz.LimitsConfig, catalog authz.MetricCatalog) ([]string, error) {
 	parsed, err := parseDimensionSearchArgumentsV010(args[2:])
 	if errors.Is(err, flag.ErrHelp) {
 		return append([]string(nil), args...), nil
@@ -355,10 +461,44 @@ func authorizeDimensionSearch(args []string, catalog authz.MetricCatalog) ([]str
 			return nil, err
 		}
 	}
-	return append([]string(nil), args...), nil
+	return enforceMetadataLimit(args, parsed.Limit, parsed.Visited["limit"], limits)
 }
 
-func authorizeAnalysis(args []string, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]string, error) {
+func authorizeDimensionValues(args []string, limits authz.LimitsConfig) ([]string, error) {
+	parsed, err := parseDimensionValuesArgumentsV010(args[2:])
+	if errors.Is(err, flag.ErrHelp) {
+		return append([]string(nil), args...), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Code == "" {
+		return nil, errors.New("dim values --code is required")
+	}
+	if isProtectedDimension(parsed.Code) {
+		return nil, fmt.Errorf("dim values for protected dimension %s is unavailable through the trusted broker", parsed.Code)
+	}
+	return enforceMetadataLimit(args, parsed.Limit, parsed.Visited["limit"], limits)
+}
+
+func enforceMetadataLimit(args []string, requested int, supplied bool, limits authz.LimitsConfig) ([]string, error) {
+	if supplied {
+		if requested < 1 || limits.MaxMetadataLimit > 0 && int64(requested) > limits.MaxMetadataLimit {
+			return nil, errors.New("metadata --limit exceeds the authorization limit")
+		}
+		return append([]string(nil), args...), nil
+	}
+	if limits.DefaultMetadataLimit <= 0 {
+		return append([]string(nil), args...), nil
+	}
+	if limits.MaxMetadataLimit > 0 && limits.DefaultMetadataLimit > limits.MaxMetadataLimit {
+		return nil, errors.New("default metadata limit exceeds the authorization limit")
+	}
+	result := append([]string(nil), args...)
+	return append(result, "--limit", fmt.Sprintf("%d", limits.DefaultMetadataLimit)), nil
+}
+
+func authorizeAnalysis(args []string, scope authorizationScope, limits authz.LimitsConfig, catalog authz.MetricCatalog) ([]string, error) {
 	if len(args) < 2 {
 		return nil, errors.New("qdm-metric-cli analysis subcommand is required")
 	}
@@ -388,11 +528,11 @@ func authorizeAnalysis(args []string, scope authorizationScope, maxMetrics int64
 			args[1],
 			parsed,
 			scope,
-			maxMetrics,
+			limits,
 			catalog,
 		)
 	}
-	return authorizeAnalysisFlags(args, parsed, scope, maxMetrics, catalog)
+	return authorizeAnalysisFlags(args, parsed, scope, limits, catalog)
 }
 
 func authorizeAnalysisPayload(
@@ -400,7 +540,7 @@ func authorizeAnalysisPayload(
 	action string,
 	parsed analysisArgumentsV010,
 	scope authorizationScope,
-	maxMetrics int64,
+	limits authz.LimitsConfig,
 	catalog authz.MetricCatalog,
 ) ([]string, error) {
 	for _, name := range []string{
@@ -416,7 +556,7 @@ func authorizeAnalysisPayload(
 	if len(raw) == 0 || len(raw) > maxPayloadBytes {
 		return nil, errors.New("analysis payload is empty or too large")
 	}
-	normalized, err := authorizeAnalysisPayloadJSON(raw, scope, maxMetrics, catalog)
+	normalized, err := authorizeAnalysisPayloadJSON(raw, scope, limits, catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +574,7 @@ func authorizeAnalysisPayload(
 	return result, nil
 }
 
-func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) ([]byte, error) {
+func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, limits authz.LimitsConfig, catalog authz.MetricCatalog) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return nil, errors.New("analysis payload must be a JSON object")
@@ -445,6 +585,25 @@ func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetri
 	if metricsAliases > 1 {
 		return nil, errors.New(`analysis payload contains conflicting "metrics" fields`)
 	}
+	dimensionsPresent, dimensionsAliases := foldedJSONField(fields, "dimensions")
+	if dimensionsAliases > 1 {
+		return nil, errors.New(`analysis payload contains conflicting "dimensions" fields`)
+	}
+	timePresent, timeAliases := foldedJSONField(fields, "time")
+	if timeAliases > 1 {
+		return nil, errors.New(`analysis payload contains conflicting "time" fields`)
+	}
+	pageSizePresent, pageSizeAliases := foldedJSONField(fields, "pageSize")
+	if pageSizeAliases > 1 {
+		return nil, errors.New(`analysis payload contains conflicting "pageSize" fields`)
+	}
+	if pageSizePresent {
+		for key, value := range fields {
+			if strings.EqualFold(key, "pageSize") && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return nil, errors.New("analysis pageSize must be an integer")
+			}
+		}
+	}
 	_, filterAliases := foldedJSONField(fields, "filters")
 	if filterAliases > 1 {
 		return nil, errors.New(`analysis payload contains conflicting "filters" fields`)
@@ -454,11 +613,14 @@ func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetri
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, fmt.Errorf("analysis payload has an invalid request shape: %w", err)
 	}
-	if err := authorizeAnalysisRequest(&request, scope, maxMetrics, catalog); err != nil {
+	if err := authorizeAnalysisRequest(&request, scope, limits, catalog); err != nil {
 		return nil, err
 	}
 
 	deleteFoldedJSONFields(fields, "metrics")
+	deleteFoldedJSONFields(fields, "dimensions")
+	deleteFoldedJSONFields(fields, "time")
+	deleteFoldedJSONFields(fields, "pageSize")
 	deleteFoldedJSONFields(fields, "filters")
 	if metricsPresent {
 		encodedMetrics, err := json.Marshal(request.Metrics)
@@ -466,6 +628,27 @@ func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetri
 			return nil, err
 		}
 		fields["metrics"] = encodedMetrics
+	}
+	if dimensionsPresent {
+		encodedDimensions, err := json.Marshal(request.Dimensions)
+		if err != nil {
+			return nil, err
+		}
+		fields["dimensions"] = encodedDimensions
+	}
+	if timePresent {
+		encodedTime, err := json.Marshal(request.Time)
+		if err != nil {
+			return nil, err
+		}
+		fields["time"] = encodedTime
+	}
+	if request.PageSize != nil {
+		encodedPageSize, err := json.Marshal(*request.PageSize)
+		if err != nil {
+			return nil, err
+		}
+		fields["pageSize"] = encodedPageSize
 	}
 	encodedFilters, err := json.Marshal(request.Filters)
 	if err != nil {
@@ -475,14 +658,39 @@ func authorizeAnalysisPayloadJSON(raw []byte, scope authorizationScope, maxMetri
 	return json.Marshal(fields)
 }
 
-func authorizeAnalysisRequest(request *analysisAuthorizationRequestV010, scope authorizationScope, maxMetrics int64, catalog authz.MetricCatalog) error {
-	if maxMetrics > 0 && int64(len(request.Metrics)) > maxMetrics {
+func authorizeAnalysisRequest(request *analysisAuthorizationRequestV010, scope authorizationScope, limits authz.LimitsConfig, catalog authz.MetricCatalog) error {
+	if limits.MaxMetrics > 0 && int64(len(request.Metrics)) > limits.MaxMetrics {
 		return errors.New("analysis request contains too many metrics")
 	}
 	for _, metric := range request.Metrics {
 		if strings.TrimSpace(metric) != metric || metric == "" || !catalog.ApproveMetric(metric) {
 			return errors.New("analysis request contains an unauthorized metric")
 		}
+	}
+	if len(request.Metrics) == 0 {
+		return errors.New("analysis request requires at least one metric")
+	}
+	if limits.MaxDimensions > 0 && int64(len(request.Dimensions)) > limits.MaxDimensions {
+		return errors.New("analysis request contains too many dimensions")
+	}
+	for _, dimension := range request.Dimensions {
+		if strings.TrimSpace(dimension) != dimension || dimension == "" {
+			return errors.New("analysis request contains an invalid dimension")
+		}
+		if !allMetricsSupportDimension(request.Metrics, dimension, catalog) {
+			return fmt.Errorf("analysis dimension %s is not supported by every selected metric", dimension)
+		}
+	}
+	if err := validateDateRange(request.Time.StartDate, request.Time.EndDate, limits.MaxDateRangeDays); err != nil {
+		return err
+	}
+	if request.PageSize == nil {
+		if limits.DefaultPageSize > 0 {
+			pageSize := int(limits.DefaultPageSize)
+			request.PageSize = &pageSize
+		}
+	} else if *request.PageSize < 1 || limits.MaxPageSize > 0 && int64(*request.PageSize) > limits.MaxPageSize {
+		return errors.New("analysis pageSize exceeds the authorization limit")
 	}
 	if request.Filters == nil {
 		request.Filters = analysisAuthorizationFiltersV010{}
@@ -495,16 +703,89 @@ func authorizeAnalysisRequest(request *analysisAuthorizationRequestV010, scope a
 		}
 	}
 	filters := map[string][]string(request.Filters)
-	if err := constrainFilter(filters, "manageAreaId", scope.ManageAreaIDs); err != nil {
-		return err
-	}
-	if err := constrainExistingFilter(filters, "sapArea2Id", scope.ManageAreaIDs); err != nil {
-		return err
-	}
-	if err := constrainFilter(filters, "categoryLevel1Id", scope.CategoryLevel1IDs); err != nil {
+	if err := authorizeProtectedFilters(request.Metrics, request.Dimensions, filters, scope, catalog); err != nil {
 		return err
 	}
 	request.Filters = analysisAuthorizationFiltersV010(filters)
+	return nil
+}
+
+type protectedScopeGroup struct {
+	dimensions []string
+	authorized []string
+}
+
+func protectedScopeGroups(scope authorizationScope) []protectedScopeGroup {
+	return []protectedScopeGroup{
+		{dimensions: []string{"manageAreaId"}, authorized: scope.ManageAreaIDs},
+		{dimensions: []string{"dcManageAreaId", "sapArea2Id"}, authorized: scope.DCManageAreaIDs},
+		{dimensions: []string{"categoryLevel1Id"}, authorized: scope.CategoryLevel1IDs},
+	}
+}
+
+func allMetricsSupportDimension(metrics []string, dimension string, catalog authz.MetricCatalog) bool {
+	if len(metrics) == 0 {
+		return false
+	}
+	for _, metric := range metrics {
+		if !catalog.MetricSupportsDimension(metric, dimension) {
+			return false
+		}
+	}
+	return true
+}
+
+func authorizeProtectedFilters(
+	metrics []string,
+	dimensions []string,
+	filters map[string][]string,
+	scope authorizationScope,
+	catalog authz.MetricCatalog,
+) error {
+	requestedDimensions := make(map[string]struct{}, len(dimensions)+len(filters))
+	for _, dimension := range dimensions {
+		requestedDimensions[dimension] = struct{}{}
+	}
+	for dimension := range filters {
+		requestedDimensions[dimension] = struct{}{}
+	}
+
+	applied := false
+	for _, group := range protectedScopeGroups(scope) {
+		requestedProtected := make([]string, 0, len(group.dimensions))
+		for _, dimension := range group.dimensions {
+			if _, requested := requestedDimensions[dimension]; requested {
+				requestedProtected = append(requestedProtected, dimension)
+			}
+		}
+		if len(requestedProtected) > 0 {
+			for _, dimension := range requestedProtected {
+				if !allMetricsSupportDimension(metrics, dimension, catalog) {
+					return fmt.Errorf("analysis protected dimension %s is not supported by every selected metric", dimension)
+				}
+				if err := constrainFilter(filters, dimension, group.authorized); err != nil {
+					return err
+				}
+				applied = true
+			}
+			continue
+		}
+
+		if len(group.authorized) == 0 {
+			continue
+		}
+		for _, candidate := range group.dimensions {
+			if !allMetricsSupportDimension(metrics, candidate, catalog) {
+				continue
+			}
+			filters[candidate] = append([]string(nil), group.authorized...)
+			applied = true
+			break
+		}
+	}
+	if !applied {
+		return errors.New("requester authorization scope does not cover every selected metric")
+	}
 	return nil
 }
 
@@ -568,10 +849,10 @@ func authorizeAnalysisFlags(
 	args []string,
 	parsed analysisArgumentsV010,
 	scope authorizationScope,
-	maxMetrics int64,
+	limits authz.LimitsConfig,
 	catalog authz.MetricCatalog,
 ) ([]string, error) {
-	if maxMetrics > 0 && int64(len(parsed.Metrics)) > maxMetrics {
+	if limits.MaxMetrics > 0 && int64(len(parsed.Metrics)) > limits.MaxMetrics {
 		return nil, errors.New("analysis request contains too many metrics")
 	}
 	for _, metric := range parsed.Metrics {
@@ -579,30 +860,82 @@ func authorizeAnalysisFlags(
 			return nil, err
 		}
 	}
+	if len(parsed.Metrics) == 0 {
+		return nil, errors.New("analysis request requires at least one metric")
+	}
+	if limits.MaxDimensions > 0 && int64(len(parsed.Dimensions)) > limits.MaxDimensions {
+		return nil, errors.New("analysis request contains too many dimensions")
+	}
+	if err := validateDateRange(parsed.StartDate, parsed.EndDate, limits.MaxDateRangeDays); err != nil {
+		return nil, err
+	}
+	if parsed.Visited["page-size"] {
+		if parsed.PageSize < 1 || limits.MaxPageSize > 0 && int64(parsed.PageSize) > limits.MaxPageSize {
+			return nil, errors.New("analysis --page-size exceeds the authorization limit")
+		}
+	}
+	for _, dimension := range parsed.Dimensions {
+		if strings.TrimSpace(dimension) != dimension || dimension == "" ||
+			!allMetricsSupportDimension(parsed.Metrics, dimension, catalog) {
+			return nil, fmt.Errorf("analysis dimension %s is not supported by every selected metric", dimension)
+		}
+	}
 
-	areasPresent, categoriesPresent := false, false
-	for _, filter := range parsed.Filters {
-		if err := constrainFilterArgument(filter, scope, &areasPresent, &categoriesPresent); err != nil {
+	protectedFilters := map[string][]string{}
+	for _, filter := range append(append([]string(nil), parsed.Filters...), parsed.OtherFilters...) {
+		dimension, values, err := parseFilterArgument(filter)
+		if err != nil {
 			return nil, err
 		}
+		if !isProtectedDimension(dimension) {
+			continue
+		}
+		protectedFilters[dimension] = append(protectedFilters[dimension], values...)
+	}
+	if err := authorizeProtectedFilters(parsed.Metrics, parsed.Dimensions, protectedFilters, scope, catalog); err != nil {
+		return nil, err
 	}
 
-	result := make([]string, 0, len(args)+4)
+	result := make([]string, 0, len(args)+len(protectedFilters)*2)
 	result = append(result, args[0], args[1])
-	if !areasPresent {
-		if len(scope.ManageAreaIDs) == 0 {
-			return nil, errors.New("requester authorization scope for manageAreaId is empty")
-		}
-		result = append(result, "--filter", "manageAreaId="+strings.Join(scope.ManageAreaIDs, ","))
+	if !parsed.Visited["page-size"] && limits.DefaultPageSize > 0 {
+		result = append(result, "--page-size", fmt.Sprintf("%d", limits.DefaultPageSize))
 	}
-	if !categoriesPresent {
-		if len(scope.CategoryLevel1IDs) == 0 {
-			return nil, errors.New("requester authorization scope for categoryLevel1Id is empty")
+	for _, dimension := range []string{"manageAreaId", "dcManageAreaId", "sapArea2Id", "categoryLevel1Id"} {
+		if _, supplied := requestedFilterDimension(parsed.Filters, parsed.OtherFilters, dimension); supplied {
+			continue
 		}
-		result = append(result, "--filter", "categoryLevel1Id="+strings.Join(scope.CategoryLevel1IDs, ","))
+		if values := protectedFilters[dimension]; len(values) > 0 {
+			result = append(result, "--filter", dimension+"="+strings.Join(values, ","))
+		}
 	}
 	result = append(result, args[2:]...)
 	return result, nil
+}
+
+func validateDateRange(startDate, endDate string, maxDays int64) error {
+	if startDate == "" && endDate == "" {
+		return nil
+	}
+	if startDate == "" || endDate == "" {
+		return errors.New("analysis date range requires both startDate and endDate")
+	}
+	start, err := time.Parse(time.DateOnly, startDate)
+	if err != nil || start.Format(time.DateOnly) != startDate {
+		return errors.New("analysis startDate must use YYYY-MM-DD")
+	}
+	end, err := time.Parse(time.DateOnly, endDate)
+	if err != nil || end.Format(time.DateOnly) != endDate {
+		return errors.New("analysis endDate must use YYYY-MM-DD")
+	}
+	if end.Before(start) {
+		return errors.New("analysis date range endDate precedes startDate")
+	}
+	days := int64(end.Sub(start)/(24*time.Hour)) + 1
+	if maxDays > 0 && days > maxDays {
+		return errors.New("analysis date range exceeds the authorization limit")
+	}
+	return nil
 }
 
 func authorizeMetric(flagName, value string, catalog authz.MetricCatalog) error {
@@ -612,35 +945,40 @@ func authorizeMetric(flagName, value string, catalog authz.MetricCatalog) error 
 	return nil
 }
 
-func constrainFilterArgument(value string, scope authorizationScope, areasPresent, categoriesPresent *bool) error {
+func parseFilterArgument(value string) (string, []string, error) {
 	dimension, rawValues, ok := strings.Cut(value, "=")
 	if !ok || strings.TrimSpace(dimension) != dimension || dimension == "" || rawValues == "" {
-		return fmt.Errorf("--filter must use dimension=value1,value2: %q", value)
+		return "", nil, fmt.Errorf("--filter must use dimension=value1,value2: %q", value)
 	}
-	if dimension != "manageAreaId" && dimension != "sapArea2Id" && dimension != "categoryLevel1Id" {
-		return nil
-	}
-	authorized := scope.ManageAreaIDs
-	present := areasPresent
-	if dimension == "categoryLevel1Id" {
-		authorized = scope.CategoryLevel1IDs
-		present = categoriesPresent
-	}
-	allowed := make(map[string]struct{}, len(authorized))
-	for _, item := range authorized {
-		allowed[item] = struct{}{}
-	}
-	for _, item := range strings.Split(rawValues, ",") {
+	values := strings.Split(rawValues, ",")
+	result := make([]string, 0, len(values))
+	for _, item := range values {
 		item = strings.TrimSpace(item)
 		if item == "" {
-			return fmt.Errorf("--filter %s contains an empty value", dimension)
+			return "", nil, fmt.Errorf("--filter %s contains an empty value", dimension)
 		}
-		if _, ok := allowed[item]; !ok {
-			return fmt.Errorf("--filter %s contains an unauthorized value", dimension)
+		result = append(result, item)
+	}
+	return dimension, result, nil
+}
+
+func isProtectedDimension(dimension string) bool {
+	for _, group := range protectedScopeGroups(authorizationScope{}) {
+		for _, protected := range group.dimensions {
+			if dimension == protected {
+				return true
+			}
 		}
 	}
-	if dimension != "sapArea2Id" {
-		*present = true
+	return false
+}
+
+func requestedFilterDimension(filters, otherFilters []string, dimension string) ([]string, bool) {
+	for _, filter := range append(append([]string(nil), filters...), otherFilters...) {
+		parsedDimension, values, err := parseFilterArgument(filter)
+		if err == nil && parsedDimension == dimension {
+			return values, true
+		}
 	}
-	return nil
+	return nil, false
 }

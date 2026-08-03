@@ -150,6 +150,21 @@ func (catalog MetricCatalog) ApproveMetric(code string) bool {
 	return ok
 }
 
+// MetricSupportsDimension reports whether the digest-pinned Metric CLI v0.1.0
+// contract allows one dimension for the selected metric.
+func (catalog MetricCatalog) MetricSupportsDimension(metricCode, dimensionCode string) bool {
+	metric, ok := catalog.Metrics[metricCode]
+	if !ok {
+		return false
+	}
+	for _, dimension := range metric.SupportedDimensions {
+		if dimension == dimensionCode {
+			return true
+		}
+	}
+	return false
+}
+
 func (catalog MetricCatalog) MatchID(id string, queryType int, requireQueryType bool) (CatalogMatch, bool) {
 	match, ok := catalog.ByID[id]
 	if !ok || requireQueryType && match.Ref.QueryType != queryType {

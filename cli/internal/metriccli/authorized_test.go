@@ -69,7 +69,24 @@ func newWrapperFixture(t *testing.T) *wrapperFixture {
 		agentUID:    distinctWrapperTestUID(ownerUID),
 	}
 	fixture.writeRealCLI(t, "#!/bin/sh\nprintf 'argc=%s\\n' \"$#\"\nfor arg in \"$@\"; do printf 'arg=%s\\n' \"$arg\"; done\n")
-	catalog := []byte(`{"version":1,"generatedFrom":"qdm-metric-cli-v0.1.0-contract","metrics":{"saleAmt":{"supportedDimensions":["manageAreaId","categoryLevel1Id"],"dictionaryRefs":[]}}}`)
+	catalog := []byte(`{
+		"version":1,
+		"generatedFrom":"qdm-metric-cli-v0.1.0-contract",
+		"metrics":{
+			"saleAmt":{
+				"supportedDimensions":["manageAreaId","dcManageAreaId","categoryLevel1Id"],
+				"dictionaryRefs":[]
+			},
+			"profitAmt":{
+				"supportedDimensions":["manageAreaId","dcManageAreaId","sapArea2Id","categoryLevel1Id"],
+				"dictionaryRefs":[]
+			},
+			"af19SaleAmt":{
+				"supportedDimensions":["manageAreaId","categoryLevel1Id"],
+				"dictionaryRefs":[]
+			}
+		}
+	}`)
 	writeFile(t, fixture.catalogPath, catalog, 0o600)
 	writeJSON(t, fixture.controlPath, authz.ControlState{
 		Version: authz.CurrentVersion, Generation: 1, State: "enabled",
@@ -377,11 +394,13 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 	fixture := newWrapperFixture(t)
 	scope := authorizationScope{
 		ManageAreaIDs:     []string{"CN07", "CN08"},
+		DCManageAreaIDs:   []string{"DC07", "DC08"},
 		CategoryLevel1IDs: []string{"12", "13"},
 	}
 	catalog := fixture.catalog(t)
 	authzScope := authz.Scope{
-		ManageAreaIDs: scope.ManageAreaIDs, CategoryLevel1IDs: scope.CategoryLevel1IDs,
+		ManageAreaIDs: scope.ManageAreaIDs, DCManageAreaIDs: scope.DCManageAreaIDs,
+		CategoryLevel1IDs: scope.CategoryLevel1IDs,
 	}
 
 	t.Run("injects missing protected filters", func(t *testing.T) {
@@ -416,7 +435,7 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 
 	t.Run("rejects unauthorized protected values", func(t *testing.T) {
 		_, err := authorizeArguments(
-			[]string{"analysis", "validate", "--filter", "manageAreaId=CN99"},
+			[]string{"analysis", "validate", "--metric", "saleAmt", "--filter", "manageAreaId=CN99"},
 			authzScope,
 			10,
 			catalog,
@@ -426,9 +445,9 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects an unauthorized sap area and retains the management-area guard", func(t *testing.T) {
+	t.Run("maps sapArea2Id to DC scope and retains other applicable guards", func(t *testing.T) {
 		_, err := authorizeArguments(
-			[]string{"analysis", "validate", "--filter", "sapArea2Id=CN99"},
+			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=DC99"},
 			authzScope,
 			10,
 			catalog,
@@ -438,7 +457,7 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 		}
 
 		args, err := authorizeArguments(
-			[]string{"analysis", "validate", "--filter", "sapArea2Id=CN07"},
+			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=DC07"},
 			authzScope,
 			10,
 			catalog,
@@ -447,9 +466,10 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		joined := strings.Join(args, " ")
-		if !strings.Contains(joined, "--filter sapArea2Id=CN07") ||
-			!strings.Contains(joined, "--filter manageAreaId=CN07,CN08") {
-			t.Fatalf("authorized sap area did not retain the management-area guard: %q", joined)
+		if !strings.Contains(joined, "--filter sapArea2Id=DC07") ||
+			!strings.Contains(joined, "--filter manageAreaId=CN07,CN08") ||
+			!strings.Contains(joined, "--filter categoryLevel1Id=12,13") {
+			t.Fatalf("authorized sap area did not retain applicable guards: %q", joined)
 		}
 	})
 
@@ -476,6 +496,321 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 			t.Fatalf("expected unauthorized metric error, got %v", err)
 		}
 	})
+}
+
+func TestAuthorizeDCScopeAcrossFlagsAndPayload(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	catalog := fixture.catalog(t)
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flags",
+			args: []string{"analysis", "validate", "--metric", "saleAmt"},
+		},
+		{
+			name: "payload",
+			args: []string{"analysis", "validate", "--payload-json", `{"metrics":["saleAmt"]}`},
+		},
+	} {
+		t.Run("DC-only injects dcManageAreaId in "+input.name, func(t *testing.T) {
+			forwarded, err := authorizeArguments(input.args, authz.Scope{
+				DCManageAreaIDs: []string{"DC07", "DC08"},
+			}, 10, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(forwarded, " ")
+			if !strings.Contains(joined, "dcManageAreaId") ||
+				!strings.Contains(joined, "DC07") || !strings.Contains(joined, "DC08") {
+				t.Fatalf("DC scope was not injected: %q", joined)
+			}
+			if strings.Contains(joined, "manageAreaId") || strings.Contains(joined, "categoryLevel1Id") {
+				t.Fatalf("empty non-DC scopes were injected: %q", joined)
+			}
+		})
+	}
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flags",
+			args: []string{
+				"analysis", "validate", "--metric", "saleAmt", "--filter", "dcManageAreaId=DC99",
+			},
+		},
+		{
+			name: "payload",
+			args: []string{
+				"analysis", "validate", "--payload-json",
+				`{"metrics":["saleAmt"],"filters":{"dcManageAreaId":["DC99"]}}`,
+			},
+		},
+	} {
+		t.Run("DC-only rejects another area in "+input.name, func(t *testing.T) {
+			_, err := authorizeArguments(input.args, authz.Scope{
+				DCManageAreaIDs: []string{"DC07"},
+			}, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "unauthorized value") {
+				t.Fatalf("unauthorized DC area was accepted: %v", err)
+			}
+		})
+	}
+
+	t.Run("manage-only cannot use dcManageAreaId or sapArea2Id", func(t *testing.T) {
+		for _, dimension := range []string{"dcManageAreaId", "sapArea2Id"} {
+			_, err := authorizeArguments([]string{
+				"analysis", "validate", "--metric", "profitAmt", "--filter", dimension + "=CN07",
+			}, authz.Scope{ManageAreaIDs: []string{"CN07"}}, 10, catalog)
+			if err == nil || !strings.Contains(err.Error(), "scope for "+dimension+" is empty") {
+				t.Fatalf("manage-only scope used %s: %v", dimension, err)
+			}
+		}
+	})
+
+	t.Run("DC-only rejects a metric without a DC-compatible dimension", func(t *testing.T) {
+		_, err := authorizeArguments([]string{
+			"analysis", "validate", "--metric", "af19SaleAmt",
+		}, authz.Scope{DCManageAreaIDs: []string{"DC07"}}, 10, catalog)
+		if err == nil || !strings.Contains(err.Error(), "does not cover every selected metric") {
+			t.Fatalf("DC-incompatible metric was accepted: %v", err)
+		}
+	})
+
+	t.Run("category-only scope remains executable", func(t *testing.T) {
+		forwarded, err := authorizeArguments([]string{
+			"analysis", "validate", "--metric", "saleAmt",
+		}, authz.Scope{CategoryLevel1IDs: []string{"12"}}, 10, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(forwarded, " ")
+		if !strings.Contains(joined, "categoryLevel1Id=12") || strings.Contains(joined, "manageAreaId") {
+			t.Fatalf("category-only scope was not applied exactly: %q", joined)
+		}
+	})
+
+	t.Run("other-filter cannot bypass protected scope", func(t *testing.T) {
+		_, err := authorizeArguments([]string{
+			"analysis", "validate", "--metric", "saleAmt", "--other-filter", "dcManageAreaId=DC99",
+		}, authz.Scope{DCManageAreaIDs: []string{"DC07"}}, 10, catalog)
+		if err == nil || !strings.Contains(err.Error(), "unauthorized value") {
+			t.Fatalf("protected other-filter bypassed DC scope: %v", err)
+		}
+	})
+}
+
+func TestAuthorizeRuntimeLimits(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	catalog := fixture.catalog(t)
+	scope := authz.Scope{
+		ManageAreaIDs:     []string{"CN07"},
+		CategoryLevel1IDs: []string{"12"},
+	}
+	limits := authz.LimitsConfig{
+		MaxDateRangeDays:     31,
+		MaxMetrics:           2,
+		MaxDimensions:        1,
+		DefaultPageSize:      7,
+		MaxPageSize:          10,
+		DefaultMetadataLimit: 4,
+		MaxMetadataLimit:     5,
+	}
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flags",
+			args: []string{
+				"analysis", "validate", "--metric", "saleAmt",
+				"--start-date", "2026-07-01", "--end-date", "2026-08-01",
+			},
+		},
+		{
+			name: "payload",
+			args: []string{
+				"analysis", "validate", "--payload-json",
+				`{"metrics":["saleAmt"],"time":{"startDate":"2026-07-01","endDate":"2026-08-01"}}`,
+			},
+		},
+		{
+			name: "payload case variant",
+			args: []string{
+				"analysis", "validate", "--payload-json",
+				`{"metrics":["saleAmt"],"Time":{"StartDate":"2026-07-01","EndDate":"2026-08-01"}}`,
+			},
+		},
+	} {
+		t.Run("rejects oversized date range in "+input.name, func(t *testing.T) {
+			_, err := authorizeArgumentsWithLimits(input.args, scope, limits, catalog)
+			if err == nil || !strings.Contains(err.Error(), "date range exceeds") {
+				t.Fatalf("oversized date range was accepted: %v", err)
+			}
+		})
+	}
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flags",
+			args: []string{
+				"analysis", "validate", "--metric", "saleAmt",
+				"--agg-dim", "manageAreaId", "--agg-dim", "categoryLevel1Id",
+			},
+		},
+		{
+			name: "payload",
+			args: []string{
+				"analysis", "validate", "--payload-json",
+				`{"metrics":["saleAmt"],"dimensions":["manageAreaId","categoryLevel1Id"]}`,
+			},
+		},
+	} {
+		t.Run("rejects too many dimensions in "+input.name, func(t *testing.T) {
+			_, err := authorizeArgumentsWithLimits(input.args, scope, limits, catalog)
+			if err == nil || !strings.Contains(err.Error(), "too many dimensions") {
+				t.Fatalf("dimension limit was bypassed: %v", err)
+			}
+		})
+	}
+
+	t.Run("injects default page size in flags and payload", func(t *testing.T) {
+		flags, err := authorizeArgumentsWithLimits([]string{
+			"analysis", "validate", "--metric", "saleAmt",
+		}, scope, limits, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(flags, " "), "--page-size 7") {
+			t.Fatalf("default flag page size was not injected: %v", flags)
+		}
+
+		payload, err := authorizeArgumentsWithLimits([]string{
+			"analysis", "validate", "--payload-json", `{"metrics":["saleAmt"]}`,
+		}, scope, limits, catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(payload, " "), `"pageSize":7`) {
+			t.Fatalf("default payload page size was not injected: %v", payload)
+		}
+	})
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "flags",
+			args: []string{"analysis", "validate", "--metric", "saleAmt", "--page-size", "11"},
+		},
+		{
+			name: "payload",
+			args: []string{
+				"analysis", "validate", "--payload-json", `{"metrics":["saleAmt"],"pageSize":11}`,
+			},
+		},
+		{
+			name: "payload case variant",
+			args: []string{
+				"analysis", "validate", "--payload-json", `{"metrics":["saleAmt"],"PageSize":11}`,
+			},
+		},
+	} {
+		t.Run("rejects oversized page in "+input.name, func(t *testing.T) {
+			_, err := authorizeArgumentsWithLimits(input.args, scope, limits, catalog)
+			if err == nil || !strings.Contains(err.Error(), "page") {
+				t.Fatalf("page-size limit was bypassed: %v", err)
+			}
+		})
+	}
+
+	for _, input := range []struct {
+		name string
+		args []string
+	}{
+		{name: "metric search", args: []string{"metric", "search"}},
+		{name: "dim search", args: []string{"dim", "search", "--metric", "saleAmt"}},
+		{name: "dim values", args: []string{"dim", "values", "--code", "storeId"}},
+	} {
+		t.Run("injects metadata default for "+input.name, func(t *testing.T) {
+			forwarded, err := authorizeArgumentsWithLimits(input.args, scope, limits, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(forwarded, " "), "--limit 4") {
+				t.Fatalf("metadata default was not injected: %v", forwarded)
+			}
+		})
+		oversized := append(append([]string(nil), input.args...), "--limit", "6")
+		t.Run("rejects metadata maximum for "+input.name, func(t *testing.T) {
+			_, err := authorizeArgumentsWithLimits(oversized, scope, limits, catalog)
+			if err == nil || !strings.Contains(err.Error(), "metadata --limit") {
+				t.Fatalf("metadata maximum was bypassed: %v", err)
+			}
+		})
+	}
+
+	t.Run("denies protected dimension value enumeration", func(t *testing.T) {
+		for _, dimension := range []string{"manageAreaId", "dcManageAreaId", "sapArea2Id", "categoryLevel1Id"} {
+			_, err := authorizeArgumentsWithLimits([]string{
+				"dim", "values", "--code", dimension,
+			}, scope, limits, catalog)
+			if err == nil || !strings.Contains(err.Error(), "protected dimension") {
+				t.Fatalf("protected dimension %s was enumerable: %v", dimension, err)
+			}
+		}
+	})
+}
+
+func TestKillSwitchPollCancelsRunningMetricCLI(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	fixture.writeRealCLI(t, "#!/bin/sh\nexec sleep 5\n")
+	fixture.config.RealMetricCLI.ArtifactSHA256 = fileSHA256(fixture.realCLIPath)
+	fixture.config.KillSwitch.PollMilliseconds = 10
+	fixture.config.Limits.TimeoutSeconds = 3
+	fixture.writeConfig(t)
+	t.Setenv(bindingEnvironment, fixture.binding(t))
+
+	writeErrors := make(chan error, 1)
+	timer := time.AfterFunc(50*time.Millisecond, func() {
+		state, err := json.Marshal(authz.ControlState{
+			Version: authz.CurrentVersion, Generation: 2, State: "disabled", UpdatedAt: time.Now().UTC(),
+		})
+		if err == nil {
+			temporary := fixture.controlPath + ".next"
+			err = os.WriteFile(temporary, state, 0o600)
+			if err == nil {
+				err = os.Rename(temporary, fixture.controlPath)
+			}
+		}
+		writeErrors <- err
+	})
+	defer timer.Stop()
+
+	started := time.Now()
+	_, err := fixture.run(t, "version")
+	if writeErr := <-writeErrors; writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "kill switch") {
+		t.Fatalf("running CLI did not observe kill-switch transition: %v", err)
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 77 {
+		t.Fatalf("kill-switch transition returned the wrong exit: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("kill-switch polling was too slow: %v", elapsed)
+	}
 }
 
 func TestAuthorizeMetricEqualsFormsAndPayloadFilters(t *testing.T) {

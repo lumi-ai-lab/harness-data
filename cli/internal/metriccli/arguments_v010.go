@@ -70,6 +70,33 @@ type dimensionSearchArgumentsV010 struct {
 	Limit     int
 	Format    string
 	Output    string
+	Visited   map[string]bool
+}
+
+type metricSearchArgumentsV010 struct {
+	Keyword         string
+	Status          string
+	CalculationType string
+	RequestID       string
+	Socket          string
+	Timeout         time.Duration
+	Exact           bool
+	Limit           int
+	Format          string
+	Output          string
+	Visited         map[string]bool
+}
+
+type dimensionValuesArgumentsV010 struct {
+	Code      string
+	Keyword   string
+	Limit     int
+	RequestID string
+	Socket    string
+	Timeout   time.Duration
+	Format    string
+	Output    string
+	Visited   map[string]bool
 }
 
 func parseAnalysisArgumentsV010(args []string) (analysisArgumentsV010, error) {
@@ -152,6 +179,7 @@ func parseDimensionSearchArgumentsV010(args []string) (dimensionSearchArgumentsV
 		Limit:   20,
 		Format:  "json",
 		Output:  "data",
+		Visited: map[string]bool{},
 	}
 	flags.StringVar(&result.Keyword, "keyword", "", "")
 	flags.StringVar(&result.Metric, "metric", "", "")
@@ -168,6 +196,71 @@ func parseDimensionSearchArgumentsV010(args []string) (dimensionSearchArgumentsV
 	if flags.NArg() != 0 {
 		return dimensionSearchArgumentsV010{}, errors.New("dim search does not accept positional arguments")
 	}
+	flags.Visit(func(item *flag.Flag) {
+		result.Visited[item.Name] = true
+	})
+	return result, nil
+}
+
+func parseMetricSearchArgumentsV010(args []string) (metricSearchArgumentsV010, error) {
+	flags := flag.NewFlagSet("metric search", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	result := metricSearchArgumentsV010{
+		Timeout: 60 * time.Second,
+		Limit:   20,
+		Format:  "json",
+		Output:  "data",
+		Visited: map[string]bool{},
+	}
+	flags.StringVar(&result.Keyword, "keyword", "", "")
+	flags.StringVar(&result.Status, "status", "", "")
+	flags.StringVar(&result.CalculationType, "calculation-type", "", "")
+	flags.StringVar(&result.RequestID, "request-id", "", "")
+	flags.StringVar(&result.Socket, "socket", "", "")
+	flags.DurationVar(&result.Timeout, "timeout", result.Timeout, "")
+	flags.BoolVar(&result.Exact, "exact", false, "")
+	flags.IntVar(&result.Limit, "limit", result.Limit, "")
+	flags.StringVar(&result.Format, "format", result.Format, "")
+	flags.StringVar(&result.Output, "output", result.Output, "")
+	if err := flags.Parse(args); err != nil {
+		return metricSearchArgumentsV010{}, err
+	}
+	if flags.NArg() != 0 {
+		return metricSearchArgumentsV010{}, errors.New("metric search does not accept positional arguments")
+	}
+	flags.Visit(func(item *flag.Flag) {
+		result.Visited[item.Name] = true
+	})
+	return result, nil
+}
+
+func parseDimensionValuesArgumentsV010(args []string) (dimensionValuesArgumentsV010, error) {
+	flags := flag.NewFlagSet("dim values", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	result := dimensionValuesArgumentsV010{
+		Timeout: 60 * time.Second,
+		Limit:   100,
+		Format:  "json",
+		Output:  "data",
+		Visited: map[string]bool{},
+	}
+	flags.StringVar(&result.Code, "code", "", "")
+	flags.StringVar(&result.Keyword, "keyword", "", "")
+	flags.IntVar(&result.Limit, "limit", result.Limit, "")
+	flags.StringVar(&result.RequestID, "request-id", "", "")
+	flags.StringVar(&result.Socket, "socket", "", "")
+	flags.DurationVar(&result.Timeout, "timeout", result.Timeout, "")
+	flags.StringVar(&result.Format, "format", result.Format, "")
+	flags.StringVar(&result.Output, "output", result.Output, "")
+	if err := flags.Parse(args); err != nil {
+		return dimensionValuesArgumentsV010{}, err
+	}
+	if flags.NArg() != 0 {
+		return dimensionValuesArgumentsV010{}, errors.New("dim values does not accept positional arguments")
+	}
+	flags.Visit(func(item *flag.Flag) {
+		result.Visited[item.Name] = true
+	})
 	return result, nil
 }
 
