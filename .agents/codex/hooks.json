@@ -13,7 +13,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^Bash$",
+        "matcher": "^(Bash|shell|shell_command|functions\\.shell_command|powershell|PowerShell)$",
         "hooks": [
           {
             "type": "command",

@@ -1863,7 +1863,7 @@ test("renders deterministic native Windows Codex hooks with an absolute exe", ()
   const posttoolGroup = hooks.hooks.PostToolUse[0];
 
   assert.equal(first.codexTrustReviewRequired, true);
-  assert.equal(posttoolGroup.matcher, "^Bash$");
+  assert.equal(posttoolGroup.matcher, "^(Bash|shell|shell_command|functions\\.shell_command|powershell|PowerShell)$");
   assert.equal(contextHook.command, contextHook.commandWindows);
   assert.match(contextHook.commandWindows, /^".*data-harness-cli\.exe" context --format codex-hook$/u);
   assert.doesNotMatch(contextHook.commandWindows, /\$PWD|dirname|python|powershell/iu);

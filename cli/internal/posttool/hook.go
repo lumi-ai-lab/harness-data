@@ -60,7 +60,7 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return false, Output{}, nil
 	}
-	if payload.ToolName != "Bash" || strings.TrimSpace(payload.ToolInput.Command) == "" {
+	if !isShellToolName(payload.ToolName) || strings.TrimSpace(payload.ToolInput.Command) == "" {
 		return false, Output{}, nil
 	}
 	sessionID := payload.SessionID
@@ -325,6 +325,15 @@ func stripMarkdownFrontmatter(data []byte) []byte {
 
 func normalizeCommand(command string) string {
 	return strings.Join(strings.Fields(command), " ")
+}
+
+func isShellToolName(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "bash", "shell", "shell_command", "functions.shell_command", "powershell":
+		return true
+	default:
+		return false
+	}
 }
 
 func getReportState(state sessionstate.File, reportName string) *sessionstate.Report {

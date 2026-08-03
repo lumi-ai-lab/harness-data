@@ -98,6 +98,37 @@ func TestCodexWindowsPostToolUseFixtureKeepsBashProtocolName(t *testing.T) {
 	}
 }
 
+func TestRunClaudeHookAcceptsCodexShellCommandToolName(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "codex-shell-command"
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeReport,
+		SelectedPlaybook: "playbooks/idx/business/s-sale-amt.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "functions.shell_command",
+		"tool_input": map[string]any{
+			"command": `& "C:\Harness Data\workspace\bin\data-harness-cli.exe" stage template`,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok, output, err := RunClaudeHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.HookEventName != "PostToolUse" {
+		t.Fatalf("expected functions.shell_command hook output, ok=%v output=%+v", ok, output)
+	}
+}
+
 func TestRunClaudeHookInjectsTemplateAfterStageTemplate(t *testing.T) {
 	root := testInjectRoot(t)
 	sessionID := "needs-template"

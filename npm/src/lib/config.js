@@ -158,7 +158,7 @@ function renderDeclarativeHooks(stage, agent, executable, platform) {
   replaceHookCommands(document, "UserPromptSubmit", contextCommand, platform, agent === "codex");
   replaceHookCommands(document, "PostToolUse", posttoolCommand, platform, agent === "codex");
   if (agent === "codex") {
-    for (const group of document.hooks?.PostToolUse || []) group.matcher = "^Bash$";
+    for (const group of document.hooks?.PostToolUse || []) group.matcher = "^(Bash|shell|shell_command|functions\\.shell_command|powershell|PowerShell)$";
   }
   writeDeterministicJSON(file, document);
 }
