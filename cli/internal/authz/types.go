@@ -14,7 +14,7 @@ const (
 	CurrentEnvelopeVersion         = 1
 	CurrentRequesterContextVersion = 2
 	CurrentQDMScopeSchemaVersion   = 1
-	RequiredPiVersion              = "0.81.1"
+	RequiredPiVersion              = "0.83.0"
 	ClaimNamespaceQDMScope         = "qdm.scope"
 
 	ModePiRequesterAuthorized = "pi-requester-authorized"

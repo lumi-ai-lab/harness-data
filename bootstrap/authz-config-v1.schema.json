@@ -27,7 +27,7 @@
     "mode": {
       "enum": ["pi-requester-authorized", "disabled-deny"]
     },
-    "piVersion": { "const": "0.81.1" },
+    "piVersion": { "const": "0.83.0" },
     "agentUid": {
       "type": "integer",
       "minimum": 1,

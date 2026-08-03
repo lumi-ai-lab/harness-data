@@ -265,7 +265,7 @@ fall back to another CLI or direct SQL.
 ```bash
 go test ./cli/...
 npm test --prefix npm -- --test-concurrency=1
-npm install --prefix /tmp/pi-runtime @earendil-works/pi-coding-agent@0.81.1
+npm install --prefix /tmp/pi-runtime @earendil-works/pi-coding-agent@0.83.0
 QDM_PI_RUNTIME_MODULE=/tmp/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js \
   node --test .agents/pi/extensions/qdm-harness/test/*.test.mjs
 ```
