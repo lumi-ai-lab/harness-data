@@ -43,7 +43,7 @@ Commands:
 
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
-  --profile NAME                     local-unrestricted or pi-requester-authorized (interactive installs default local)
+  --profile NAME                     local-unrestricted or pi-requester-authorized (default: local-unrestricted)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --wikis-source PATH                Local Wikis source override (local-unrestricted only)
   --github-token TOKEN               GitHub token for runtime Release assets

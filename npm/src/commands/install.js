@@ -721,10 +721,6 @@ export function removeLegacyLocalTools(runtimeDir) {
 }
 
 export async function installCommand(options = {}) {
-  const explicitProfile = String(options.profile || "").trim();
-  if (!explicitProfile && (options.yes || !process.stdin.isTTY)) {
-    throw new Error("non-interactive installation requires explicit --profile local-unrestricted or pi-requester-authorized");
-  }
   const profile = normalizeProfile(options.profile);
   if (profile === piRequesterAuthorizedProfile && String(options.profile || "") !== piRequesterAuthorizedProfile) {
     throw new Error("Pi requester installation must explicitly pass --profile pi-requester-authorized");

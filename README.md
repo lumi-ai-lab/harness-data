@@ -149,17 +149,18 @@ download with `--metric-cli-path`:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
-  --profile local-unrestricted \
   --agent codex
 
 # Optional local override:
 npx @lumi-ai-lab/harness-data install \
-  --profile local-unrestricted \
   --agent codex \
   --metric-cli-path /absolute/path/to/qdm-metric-cli
 ```
 
-For non-interactive installation, pass `--profile` and `--agent` explicitly.
+Omitting `--profile` always selects `local-unrestricted`, including
+non-interactive and `--yes` installations. Production authorization deployments
+must explicitly pass `--profile pi-requester-authorized`; pass `--agent` as well
+when the selected Agent must be deterministic.
 The `pi-requester-authorized` profile requires `--agent pi` and installs the
 release-pinned Wikis embedded in its runtime bundle:
 

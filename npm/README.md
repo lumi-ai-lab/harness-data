@@ -21,12 +21,10 @@ optional local executable override:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
-  --profile local-unrestricted \
   --agent codex
 
 # Optional local override:
 npx @lumi-ai-lab/harness-data install \
-  --profile local-unrestricted \
   --agent codex \
   --metric-cli-path /absolute/path/to/qdm-metric-cli
 ```
@@ -36,6 +34,10 @@ The installer writes:
 ```bash
 export QDM_METRIC_CLI="/absolute/runtime/path/bin/qdm-metric-cli"
 ```
+
+Omitting `--profile` always selects `local-unrestricted`, including
+non-interactive and `--yes` installations. Production authorization deployments
+must explicitly select `pi-requester-authorized`.
 
 The local-unrestricted profile does not configure credentials or requester
 authorization. The `pi-requester-authorized` profile requires `--agent pi`; the Pi

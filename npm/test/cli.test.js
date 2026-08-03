@@ -140,6 +140,23 @@ test("pi-requester-authorized rejects an external Wikis source", async () => {
   );
 });
 
+test("non-interactive installation without a profile defaults to local-unrestricted", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-default-profile-"));
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspace, ".harness", "installer-state.json"),
+    JSON.stringify({ unexpected: true })
+  );
+  try {
+    await assert.rejects(
+      () => installCommand({ dir: workspace, yes: true }),
+      /existing installer profile is ambiguous/
+    );
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("pi-requester-authorized installs Wikis from its runtime bundle", async () => {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "harness-approved-wikis-"));
   const source = path.join(runtime, "bootstrap", "approved-lumi-wikis");
