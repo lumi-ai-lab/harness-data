@@ -26,10 +26,13 @@ debug/permission-issue-20260804
 4. qdm-metric-cli 在缺少 requester context 时 fail-closed。
 5. CN18 未授权查询被 scope 校验拒绝，返回 exit 77。
 6. Pi Bash override 已覆盖 direct real CLI 与 authz-bind 直调。
+7. broker 模式下 Bash 环境只暴露一次性 HARNESS_AUTHZ_TOKEN_V1，不暴露 bindingBase64url。
+8. broker 会重新校验 scope；CN18 仍被拒绝。
+9. broker 持有 private real CLI 执行权限；CN01 授权查询可成功执行 real CLI。
 
-仍需架构补齐：
-1. 同容器非 root Agent 场景下，authorized CN01 查询会在 exec 私有 real CLI 时 Permission denied。
-2. 若要同时满足“Agent 不能直调 real CLI”和“授权查询能执行 real CLI”，需要 broker/helper/sidecar。
+部署前提：
+1. Agent/device executor 必须非 root。
+2. Metric broker 必须启动，并通过 HARNESS_METRIC_BROKER_SOCKET 暴露给 Pi 扩展和 public wrapper。
 3. 当前 Lumi sandbox 默认 root；如果 Agent Bash 也是 root，文件权限不能作为安全边界。
 ```
 
@@ -46,15 +49,16 @@ debug/permission-issue-20260804
    |      |
    |      +-- 无 context -> fail-closed
    |      |
-   |      +-- CN18 -> scope denied
+   |      +-- HARNESS_AUTHZ_TOKEN_V1
+   |             |
+   |             v
+   |          Metric broker(root:1000)
+   |             |
+   |             +-- CN18 -> scope denied
+   |             |
+   |             +-- CN01 -> exec private real -> success
    |      |
-   |      +-- CN01 -> scope pass
-   |             |
-   |             v
-   |          exec private real
-   |             |
-   |             v
-   |          Permission denied
+   |      +-- 无 broker token -> fail-closed
    |
    +-- /workspace/bin/qdm-metric-cli-real
    |      |
@@ -121,10 +125,10 @@ node --test .agents/pi/extensions/qdm-harness/test/*.mjs
 输出摘要：
 
 ```text
-1..42
-# tests 42
+1..44
+# tests 44
 # suites 0
-# pass 41
+# pass 43
 # fail 0
 # cancelled 0
 # skipped 1
@@ -145,6 +149,8 @@ override blocks direct qdm-metric-cli-real and rewrites to a fail-closed reject
 commandReferencesAuthzBind detects direct binding helper invocation
 override blocks direct authz-bind so binding material cannot enter Bash output
 authorized Pi Bash pins the public Metric CLI and removes forbidden inherited CLI variables
+broker mode registers binding out of band and exposes only a one-shot token to Bash
+default secure mode does not expose binding material to Bash without a broker
 ```
 
 ### 3.3 Go 授权测试
@@ -169,6 +175,7 @@ ok  	harness-data/cli/cmd/data-harness-cli
 
 ```text
 相关授权、Metric wrapper 和 CLI command 包通过。
+新增 broker 覆盖：TestBrokerExecutesAfterRevalidatingScope。
 完整 go test ./cli/... 曾失败在 cli/tests 的 Wikis/recall fixture 场景，
 失败信息与本次 real CLI 私有化无直接关系，未作为本次发布门禁。
 ```
@@ -395,7 +402,57 @@ wrapper_rc=77
 非 root Agent 无法通过直接路径、PATH 查找、symlink/alias 访问私有 real CLI。
 ```
 
-## 7. 授权范围测试
+## 7. Broker 启动验证
+
+broker volume：
+
+```text
+harness-auth-broker-20260805015337
+```
+
+启动命令：
+
+```bash
+docker run -d --name harness-auth-broker-test-20260805015337 \
+  --platform linux/amd64 \
+  --user 0:1000 \
+  -v /Users/jhyan/qdm/workspace-auth-test:/workspace \
+  -v harness-auth-private-20260805011224:/opt/harness-data/private/bin:ro \
+  -v harness-auth-broker-20260805015337:/run/harness-data \
+  -w /workspace \
+  -e LUMI_REQUESTER_CONTEXT_DIR=/workspace/requester-context/workspace-local/pi \
+  -e PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  node:22-bookworm \
+  /workspace/bin/data-harness-cli authz-metric-broker \
+    --socket /run/harness-data/metric-broker.sock
+```
+
+socket 检查：
+
+```bash
+docker run --rm --platform linux/amd64 --user 1000:1000 \
+  -v harness-auth-broker-20260805015337:/run/harness-data:ro \
+  node:22-bookworm \
+  sh -lc 'id; stat -c "%A %a %u %g %n" /run/harness-data /run/harness-data/metric-broker.sock'
+```
+
+输出：
+
+```text
+uid=1000(node) gid=1000(node) groups=1000(node)
+drwxr-xr-x 755 0 0 /run/harness-data
+srw-rw---- 660 0 1000 /run/harness-data/metric-broker.sock
+```
+
+结论：
+
+```text
+非 root Agent 可以连接 broker socket。
+非 root Agent 仍不能执行 /opt/harness-data/private/bin/qdm-metric-cli-real。
+broker 以 uid=0,gid=1000 运行，可执行 private real CLI，并通过 group socket 服务 Agent。
+```
+
+## 8. 授权范围测试
 
 测试 requester scope：
 
@@ -413,17 +470,30 @@ bindingBase64url: [REDACTED]
 docker run --rm --platform linux/amd64 --user 1000:1000 \
   -v /Users/jhyan/qdm/workspace-auth-test:/workspace \
   -v harness-auth-private-20260805011224:/opt/harness-data/private/bin:ro \
+  -v harness-auth-broker-20260805015337:/run/harness-data \
   -w /workspace \
+  -e LUMI_REQUESTER_CONTEXT_DIR=/workspace/requester-context/workspace-local/pi \
   node:22-bookworm \
   sh -lc '
-    export PATH=/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-    export LUMI_REQUESTER_CONTEXT_DIR=/workspace/requester-context/workspace-local/pi
-    binding_json=$(data-harness-cli authz-bind --session-id session-local-authz-doc-001)
-    binding=$(printf "%s" "$binding_json" | node -e "let s=\"\"; process.stdin.on(\"data\",d=>s+=d); process.stdin.on(\"end\",()=>process.stdout.write(JSON.parse(s).bindingBase64url));")
-    export HARNESS_AUTHZ_BINDING_V1="$binding"
-    qdm-metric-cli analysis execute --metric saleAmt --filter manageAreaId=CN18
+    binding_json=$(/workspace/bin/data-harness-cli authz-bind --session-id session-local-authz-broker-001)
+    binding=$(printf "%s" "$binding_json" | node -e "let s=\"\"; process.stdin.on(\"data\",d=>s+=d); process.stdin.on(\"end\",()=>process.stdout.write(JSON.parse(s).bindingBase64url || \"\"));")
+    unset HARNESS_AUTHZ_BINDING_V1
+    export HARNESS_METRIC_BROKER_SOCKET=/run/harness-data/metric-broker.sock
+
+    token1="BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    printf "{\"token\":\"%s\",\"bindingBase64url\":\"%s\"}\n" "$token1" "$binding" \
+      | /workspace/bin/data-harness-cli authz-metric-broker-register \
+          --socket /run/harness-data/metric-broker.sock
+    export HARNESS_AUTHZ_TOKEN_V1="$token1"
+    /workspace/bin/qdm-metric-cli analysis execute --metric saleAmt --filter manageAreaId=CN18
     echo unauth_rc=$?
-    qdm-metric-cli analysis execute --metric saleAmt --filter manageAreaId=CN01
+
+    token2="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    printf "{\"token\":\"%s\",\"bindingBase64url\":\"%s\"}\n" "$token2" "$binding" \
+      | /workspace/bin/data-harness-cli authz-metric-broker-register \
+          --socket /run/harness-data/metric-broker.sock
+    export HARNESS_AUTHZ_TOKEN_V1="$token2"
+    /workspace/bin/qdm-metric-cli analysis execute --metric saleAmt --filter manageAreaId=CN01
     echo auth_rc=$?
   '
 ```
@@ -435,10 +505,10 @@ docker run --rm --platform linux/amd64 --user 1000:1000 \
 {
   "binding": {
     "version": 1,
-    "sessionId": "session-local-authz-doc-001",
-    "requestId": "message-local-authz-doc-001",
-    "envelopeSha256": "147431a6a57e94ce53f1cfa83277de871875efd62e71d5d14daa109278f947a7",
-    "expiresAt": "2026-08-04T18:04:07.341Z"
+    "sessionId": "session-local-authz-broker-001",
+    "requestId": "message-local-authz-broker-001",
+    "envelopeSha256": "463a03d61bd15d701deb53cabb9c7e7692f1d62dd18f87a94eb04854a3a3d5a6",
+    "expiresAt": "2026-08-04T18:23:18.682Z"
   },
   "bindingBase64url": "[REDACTED]",
   "summary": {
@@ -454,22 +524,26 @@ docker run --rm --platform linux/amd64 --user 1000:1000 \
   }
 }
 -- unauthorized CN18
+{"registered":true}
+register1_rc=0
 qdm-metric-cli authorization denied (authz_config_invalid): analysis filter manageAreaId contains an unauthorized value
 unauth_rc=77
 -- authorized CN01
-fork/exec /opt/harness-data/private/bin/qdm-metric-cli-real: permission denied
-auth_rc=1
+{"registered":true}
+register2_rc=0
+REAL_CLI_EXECUTED analysis execute --page-size 200 --filter categoryLevel1Id=10 --metric saleAmt --filter manageAreaId=CN01
+auth_rc=0
 ```
 
 结论：
 
 ```text
-CN18 未授权查询已在 wrapper scope 校验阶段拒绝。
-CN01 授权查询通过 scope 校验后进入 real CLI exec 阶段，但因非 root Agent 无权执行私有 real CLI 而失败。
-这证明第一阶段修复阻断了越权路径，但也证明生产要完成授权成功链路必须补 broker/helper/sidecar。
+CN18 未授权查询已在 broker 侧 scope 校验阶段拒绝。
+CN01 授权查询通过 broker 执行 private real CLI 成功。
+Bash 环境没有 HARNESS_AUTHZ_BINDING_V1；只需要一次性 HARNESS_AUTHZ_TOKEN_V1。
 ```
 
-## 8. Lumi sandbox 验证
+## 9. Lumi sandbox 验证
 
 本机可运行的 Lumi sandbox 镜像：
 
@@ -516,9 +590,9 @@ unauthorized
 manifest 和 release workflow 已补 linux-arm64 支持，用于 Apple Silicon 本地 Lumi 验证。
 ```
 
-## 9. 过程问题与修复
+## 10. 过程问题与修复
 
-### 9.1 macOS tar AppleDouble
+### 10.1 macOS tar AppleDouble
 
 现象：
 
@@ -538,7 +612,7 @@ macOS tar 打包时生成 AppleDouble ._* 文件，导致 allowlist 校验失败
 COPYFILE_DISABLE=1 tar ...
 ```
 
-### 9.2 Docker Desktop bind mount 文件模式
+### 10.2 Docker Desktop bind mount 文件模式
 
 现象：
 
@@ -565,7 +639,7 @@ npm/src/commands/install.js 使用 copyReadableTree 替代 fs.cpSync。
 目录按 0755 创建，文件按 0644 写入。
 ```
 
-## 10. 关闭测试进程
+## 11. 关闭测试进程
 
 测试完成后执行了 Lumi/Docker 清理。
 
@@ -594,6 +668,12 @@ launchctl bootout gui/$(id -u)/com.lumi.llm-bot 2>/dev/null || true
 docker stop 1efe77e78918
 ```
 
+broker 验证结束后执行：
+
+```bash
+docker stop harness-auth-broker-test-20260805015337
+```
+
 最终复查：
 
 ```bash
@@ -606,22 +686,23 @@ ps -axo pid,ppid,command | rg -i 'lumi|device-executor|workspace-auth-test' || t
 
 ```text
 无 Lumi sandbox 容器。
+无 harness-auth-broker-test-20260805015337 broker 容器。
 无 com.lumi.llm-bot / com.lumi.llm-bot.wecom launchd 项。
 无 lumi、device-executor、workspace-auth-test 相关进程。
 仅剩 mall-study-* 容器，判断与本次验证无关，未停止。
 ```
 
-## 11. 风险结论
+## 12. 风险结论
 
 ```text
 新版本是否已解决事故中的直接越权问题：
 是。公开 real CLI 移除、模型侧 direct real/authz-bind 阻断、wrapper scope 校验使 CN18 越权路径失效。
 
 新版本是否已经形成完整生产闭环：
-否。若 Agent 非 root，授权成功查询还需要 broker/helper/sidecar 来执行私有 real CLI；若 Agent root，文件权限边界不成立。
+是，但部署必须同时满足非 root Agent、private real CLI、Metric broker、HARNESS_METRIC_BROKER_SOCKET 四个条件。
+如果 Agent root，文件权限边界仍不成立。
 
 alias/sss=xxx-real 是否会越权：
 在非 root + named volume/image layer 私有目录部署下不会，symlink/alias 执行返回 Permission denied。
 在 root Agent 场景下仍可能越权，因此 root Agent 不是安全部署形态。
 ```
-

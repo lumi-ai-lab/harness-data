@@ -26,20 +26,24 @@ Lumi / Pi Agent
 Pi extension
   - 模型上下文只暴露授权摘要
   - bindingBase64url 留在扩展内部
-  - Bash 执行前注入 HARNESS_AUTHZ_BINDING_V1
+  - 向 Metric broker 注册一次性 token
+  - Bash 执行前只注入 HARNESS_AUTHZ_TOKEN_V1
    |
    v
 /workspace/bin/qdm-metric-cli
-  - 校验 binding
-  - 读取 requester context
+  - 读取 HARNESS_AUTHZ_TOKEN_V1
+  - 请求 Metric broker 执行
+   |
+   v
+Metric broker
+  - 根据 token 取回 binding
+  - 重新读取 requester context
   - 校验 manageAreaId / categoryLevel1Id scope
+  - 未授权 filter -> exit 77
+  - 已授权 filter -> exec private real CLI
    |
-   +-- 未授权 filter -> exit 77
-   |
-   +-- 已授权 filter
-          |
-          v
-   /opt/harness-data/private/bin/qdm-metric-cli-real
+   v
+/opt/harness-data/private/bin/qdm-metric-cli-real
 ```
 
 禁止链路：
@@ -86,8 +90,12 @@ fbbb216 chore(release): 补充 linux-arm64 授权运行时校验
 - Docker 部署建议使用 `--private-tools-dir /opt/harness-data/private/bin`。
 - installer-state 升级为 `schemaVersion: 4`。
 - Go runtime 从 installer-state 读取 real CLI 私有路径。
+- `data-harness-cli authz-metric-broker` 提供授权执行 broker。
+- `data-harness-cli authz-metric-broker-register` 从 stdin 注册一次性 broker token。
+- `qdm-metric-cli` 在 `HARNESS_METRIC_BROKER_SOCKET` + `HARNESS_AUTHZ_TOKEN_V1` 存在时走 broker 执行。
 - readiness 拒绝 `/workspace/bin/qdm-metric-cli-real` 继续存在。
 - Pi Bash override 同时阻断直接引用 `qdm-metric-cli-real` 和 `authz-bind`。
+- Pi Bash override 默认不再向 Bash 环境注入 `HARNESS_AUTHZ_BINDING_V1`；broker 模式只注入一次性 `HARNESS_AUTHZ_TOKEN_V1`。
 
 ## 4. Docker 部署要求
 
@@ -140,26 +148,74 @@ uid=0(root) gid=0(root) groups=0(root)
 /opt/harness-data/private/bin/qdm-metric-cli-real
 ```
 
-所以生产部署必须二选一：
+所以生产部署必须使用非 root Agent，并启动 Metric broker：
 
 ```text
-方案 A：Agent/device executor 改为非 root 运行
-  - real CLI 放在 root/private 用户拥有的私有目录
-  - Agent 只读 requester context，只能执行 public wrapper
+Metric broker
+  - 以 root 或 private 用户运行
+  - 持有 /opt/harness-data/private/bin/qdm-metric-cli-real 执行权限
+  - 监听 Unix socket，例如 /run/harness-data/metric-broker.sock
+  - 接收 Pi 扩展注册的一次性 token
+  - 执行前重新校验 binding、requester context、catalog 和 CLI args
 
-方案 B：real CLI 不进入 Agent 容器
-  - sidecar/broker 持有 real CLI
-  - public wrapper 或授权服务只发送已校验的结构化请求
-  - broker 不接受 Agent 提交的任意 raw CLI 命令
+Pi Agent
+  - 以非 root UID 运行
+  - 不能读取或执行 private real CLI
+  - Bash 环境只拿到 HARNESS_AUTHZ_TOKEN_V1
+  - Bash 环境不再暴露 HARNESS_AUTHZ_BINDING_V1
 ```
 
-当前代码已完成第一阶段“real CLI 私有化 + 模型侧阻断”，但同容器非 root 场景下如果要让授权查询成功执行 real CLI，还需要 broker/helper/sidecar 承担特权执行。否则会出现：
+未启动 broker 时，非 root Agent 的授权查询会通过 scope 校验，但在直接 exec 私有 real CLI 时失败：
 
 ```text
 fork/exec /opt/harness-data/private/bin/qdm-metric-cli-real: permission denied
 ```
 
-这不是授权绕过，而是第一阶段权限边界生效后的执行链路缺口。
+启动 broker 后，`qdm-metric-cli` 不再直接 exec real CLI，而是通过 broker token 请求 broker 执行。broker 不是 raw exec proxy；即使 Agent 直接连 broker，也必须重新通过同一套 scope 校验。
+
+### 4.4 Metric broker 启动
+
+broker socket 需要对非 root Agent 可连接，但 real CLI 私有目录仍必须对 Agent 不可执行。Docker named volume 示例：
+
+```bash
+docker volume create harness-auth-broker
+```
+
+启动 broker：
+
+```bash
+docker run -d --name harness-auth-metric-broker \
+  --platform linux/amd64 \
+  --user 0:1000 \
+  -v /Users/jhyan/qdm/workspace-auth-test:/workspace \
+  -v harness-auth-private-20260805011224:/opt/harness-data/private/bin:ro \
+  -v harness-auth-broker:/run/harness-data \
+  -w /workspace \
+  -e LUMI_REQUESTER_CONTEXT_DIR=/workspace/requester-context/workspace-local/pi \
+  node:22-bookworm \
+  /workspace/bin/data-harness-cli authz-metric-broker \
+    --socket /run/harness-data/metric-broker.sock
+```
+
+Agent / Lumi 启动时需要带上：
+
+```bash
+HARNESS_METRIC_BROKER_SOCKET=/run/harness-data/metric-broker.sock
+```
+
+socket 权限期望：
+
+```text
+srw-rw---- 660 0 1000 /run/harness-data/metric-broker.sock
+```
+
+说明：
+
+```text
+broker 进程 uid=0，所以可以执行 private real CLI。
+broker 进程 gid=1000，所以 socket group=1000；非 root Agent uid=1000/gid=1000 可以连接 socket。
+private real CLI 仍在 root:root 0700/0500 目录中，Agent 不能直接执行。
+```
 
 ## 5. 安装命令
 
@@ -369,4 +425,3 @@ npm test: 38 pass, 0 fail
 Pi extension tests: 41 pass, 1 skipped, 0 fail
 Go authz/metriccli/cmd tests: pass
 ```
-

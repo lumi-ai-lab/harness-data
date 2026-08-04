@@ -22,8 +22,12 @@ The installed runtime contains:
 
 The runtime does not install or configure any legacy data CLI or token flow.
 In `pi-requester-authorized`, the Pi extension binds each ACP session to the
-current Lumi requester envelope. The public `qdm-metric-cli` reopens that JSON,
-applies the Harness scope, and directly executes the pinned Metric runtime.
+current Lumi requester envelope. In broker mode, the extension registers the
+binding with `data-harness-cli authz-metric-broker` outside Bash and exposes
+only a one-shot `HARNESS_AUTHZ_TOKEN_V1` to the shell. The public
+`qdm-metric-cli` sends that token to the broker, and the broker reopens the
+requester JSON, applies the Harness scope, and executes the pinned Metric
+runtime.
 The real Metric runtime is installed outside the public runtime `bin/` so
 direct Agent calls, aliases, and symlinks cannot bypass the public wrapper when
 the deployment runs the Agent as a non-root user.
@@ -34,14 +38,17 @@ The `pi-requester-authorized` profile downloads the public wrapper into the
 runtime and the pinned real Metric CLI into a private tools directory. The
 default private directory is `.harness/private/bin`; Docker deployments should
 pass a container-private location such as `/opt/harness-data/private/bin`.
-Lumi automatically supplies `LUMI_REQUESTER_CONTEXT_DIR` to Pi.
+Lumi automatically supplies `LUMI_REQUESTER_CONTEXT_DIR` to Pi. Secure Docker
+deployments must also start the Metric broker and set
+`HARNESS_METRIC_BROKER_SOCKET` for the Pi extension and Agent shell.
 
 The base64url/JCS binding correlates a tool call with the current session JSON;
 it is not a signature. Missing, replaced, malformed, or expired JSON fails
 closed. The private-path boundary is effective only when the Agent process is
 not root and cannot read or execute the private tools directory. If the Agent
 runs as root inside a Docker container, Unix mode bits do not prevent direct
-execution of the real CLI.
+execution of the real CLI. Do not rely on `HARNESS_AUTHZ_BINDING_V1` in
+production Pi deployments; broker mode keeps binding material out of Bash.
 
 ## Requester Authorization Contract
 
@@ -109,6 +116,10 @@ npx @lumi-ai-lab/harness-data install \
   --profile pi-requester-authorized \
   --agent pi \
   --private-tools-dir /opt/harness-data/private/bin
+
+# Start a broker reachable by the non-root Agent group:
+data-harness-cli authz-metric-broker \
+  --socket /run/harness-data/metric-broker.sock
 ```
 
 ## Release Contract

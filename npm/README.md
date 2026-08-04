@@ -37,7 +37,10 @@ must explicitly select `pi-requester-authorized`.
 The local-unrestricted profile does not configure requester authorization. The
 `pi-requester-authorized` profile requires `--agent pi`; the Pi extension binds
 each session to the current Lumi requester JSON and the public CLI applies its
-scope before invoking the pinned runtime from a private tools directory. Use
+scope before invoking the pinned runtime from a private tools directory. In
+secure Docker deployments, start `data-harness-cli authz-metric-broker` and set
+`HARNESS_METRIC_BROKER_SOCKET` so Bash receives only a one-shot broker token
+instead of `HARNESS_AUTHZ_BINDING_V1`. Use
 `--private-tools-dir /opt/harness-data/private/bin` for Docker images that run
 the Agent as a non-root user. If the Agent runs as root inside the container,
 filesystem permissions alone do not hide the real CLI.
