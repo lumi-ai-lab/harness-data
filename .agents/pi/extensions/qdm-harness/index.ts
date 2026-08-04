@@ -304,6 +304,29 @@ async function runHarnessAuthzBind(
   return parseAuthzBindOutput(String(result.stdout ?? ""), requestedSessionId);
 }
 
+async function registerMetricBrokerBinding(options: {
+  bindingBase64url: string;
+  projectRoot: string;
+  socket: string;
+  token: string;
+}): Promise<void> {
+  const cli = join(options.projectRoot, "bin", "data-harness-cli");
+  if (!existsSync(cli)) throw new Error(cliMissingMessage(cli));
+
+  const timeoutMs = contextTimeoutMs();
+  const result = (await runAsyncCommand(cli, ["authz-metric-broker-register", "--socket", options.socket], {
+    cwd: options.projectRoot,
+    input: JSON.stringify({
+      bindingBase64url: options.bindingBase64url,
+      token: options.token,
+    }),
+    timeoutMs,
+  })) as JsonObject;
+  if (result.error || result.timedOut || result.aborted || result.truncated || result.code !== 0) {
+    throw new Error(commandFailureMessage(result, timeoutMs));
+  }
+}
+
 async function loadProductionPiRuntime(): Promise<PiRuntime> {
   return (await import("@earendil-works/pi-coding-agent")) as PiRuntime;
 }
@@ -370,6 +393,12 @@ interface ExtensionDependencies {
     sessionId: string;
     ctx?: PiExtensionContext;
   }) => Promise<ReturnType<typeof parseAuthzBindOutput>>;
+  registerBrokerBinding?: (options: {
+    bindingBase64url: string;
+    projectRoot: string;
+    socket: string;
+    token: string;
+  }) => Promise<void>;
 }
 
 interface PiExtensionApi {
@@ -394,6 +423,9 @@ export async function installQdmHarnessExtension(
     dependencies.bindAuthorization ??
     ((options: { projectRoot: string; sessionId: string; ctx?: PiExtensionContext }) =>
       runHarnessAuthzBind(options.projectRoot, options.sessionId));
+  const brokerSocket = String(process.env.HARNESS_METRIC_BROKER_SOCKET || "").trim();
+  const allowBindingEnvironment = process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV === "1";
+  const registerBrokerBinding = dependencies.registerBrokerBinding ?? registerMetricBrokerBinding;
   if (authorizationEnabled) {
     const piRuntime = dependencies.piRuntime ?? (await loadProductionPiRuntime());
     assertPiRuntime(piRuntime);
@@ -402,8 +434,11 @@ export async function installQdmHarnessExtension(
     }
     registerAuthzBashOverride(pi, {
       createBashTool: piRuntime.createBashTool,
+      allowBindingEnvironment,
       cwd: pi.cwd ?? process.cwd(),
+      brokerSocket,
       projectRoot,
+      registerBrokerBinding,
       stateStore: authorizationState,
     });
   }

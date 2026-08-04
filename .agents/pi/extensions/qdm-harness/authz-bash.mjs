@@ -1,6 +1,9 @@
+import { randomBytes } from "node:crypto";
 import { delimiter, join } from "node:path";
 
 export const AUTHZ_BINDING_ENV = "HARNESS_AUTHZ_BINDING_V1";
+export const AUTHZ_TOKEN_ENV = "HARNESS_AUTHZ_TOKEN_V1";
+export const METRIC_BROKER_SOCKET_ENV = "HARNESS_METRIC_BROKER_SOCKET";
 
 const FORBIDDEN_QDM_ENV = [
   "QDM_CMR_CLI",
@@ -61,6 +64,42 @@ export function registerAuthzBashOverride(pi, options) {
       // Consume before constructing the per-invocation tool. No process-global
       // "current binding" exists, so concurrent calls cannot overwrite it.
       const bindingBase64url = stateStore.consumeToolCall(toolCallId);
+      const brokerSocket = String(options.brokerSocket || "").trim();
+      let brokerToken = "";
+      if (bindingBase64url && brokerSocket) {
+        brokerToken = randomBytes(32).toString("base64url");
+        try {
+          await options.registerBrokerBinding?.({
+            bindingBase64url,
+            projectRoot: options.projectRoot,
+            socket: brokerSocket,
+            token: brokerToken,
+          });
+        } catch (error) {
+          const message =
+            "Metric broker token 注册失败：无法在不暴露 binding material 的情况下执行数据查询。" +
+            "请确认 authz-metric-broker 已启动并且 socket 对 Pi 扩展可用。";
+          const rejected = createBashTool(invocationCwd(ctx, fallbackCwd), {
+            spawnHook: ({ command, cwd, env }) => {
+              const childEnv = { ...env };
+              delete childEnv[AUTHZ_BINDING_ENV];
+              delete childEnv[AUTHZ_TOKEN_ENV];
+              delete childEnv[METRIC_BROKER_SOCKET_ENV];
+              return { command, cwd, env: childEnv };
+            },
+          });
+          try {
+            return await rejected.execute(
+              toolCallId,
+              { ...params, command: buildRejectedCommand(message) },
+              signal,
+              onUpdate,
+            );
+          } finally {
+            stateStore.clearToolCall(toolCallId);
+          }
+        }
+      }
       const tool = createBashTool(invocationCwd(ctx, fallbackCwd), {
         spawnHook: ({ command, cwd, env }) => {
           const childEnv = { ...env };
@@ -70,8 +109,16 @@ export function registerAuthzBashOverride(pi, options) {
           childEnv.PATH = [publicBinDir, ...pathEntries].join(delimiter);
           childEnv.QDM_METRIC_CLI = publicMetricCLI;
           for (const name of FORBIDDEN_QDM_ENV) delete childEnv[name];
-          if (bindingBase64url) childEnv[AUTHZ_BINDING_ENV] = bindingBase64url;
-          else delete childEnv[AUTHZ_BINDING_ENV];
+          if (brokerToken) {
+            delete childEnv[AUTHZ_BINDING_ENV];
+            childEnv[AUTHZ_TOKEN_ENV] = brokerToken;
+            childEnv[METRIC_BROKER_SOCKET_ENV] = brokerSocket;
+          } else {
+            delete childEnv[AUTHZ_TOKEN_ENV];
+            if (!brokerSocket) delete childEnv[METRIC_BROKER_SOCKET_ENV];
+            if (options.allowBindingEnvironment && bindingBase64url) childEnv[AUTHZ_BINDING_ENV] = bindingBase64url;
+            else delete childEnv[AUTHZ_BINDING_ENV];
+          }
           return { command, cwd, env: childEnv };
         },
       });
