@@ -49,6 +49,7 @@ func TestBuildWithWikisIndexSingleMode(t *testing.T) {
 		"use rc=$?",
 		"do not assign to the read-only zsh parameter status",
 		"do not rerun it solely because later output formatting or wrapper logic failed",
+		"./bin/qdm-metric-cli",
 	} {
 		if !strings.Contains(response.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, response.Instruction)
@@ -435,6 +436,11 @@ func TestMetricCLIDiagnosticDoesNotSelectContextFiles(t *testing.T) {
 			if strings.Contains(response.Instruction, forbidden) {
 				t.Fatalf("%q instruction contains %q: %s", question, forbidden, response.Instruction)
 			}
+		}
+		// The diagnostic branch bypasses the shared common instruction, so it must
+		// not carry the ./bin/qdm-metric-cli invocation convention either.
+		if strings.Contains(response.Instruction, "./bin/qdm-metric-cli") {
+			t.Fatalf("%q diagnostic instruction must not carry the CLI invocation convention: %s", question, response.Instruction)
 		}
 		if !strings.Contains(response.Instruction, "Execute only the exact public qdm-metric-cli") {
 			t.Fatalf("%q unexpected instruction: %s", question, response.Instruction)
