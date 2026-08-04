@@ -11,8 +11,10 @@ The installed runtime contains:
   and posttool state.
 - `bin/qdm-metric-cli`: the authorized Metric discovery, dimension discovery,
   validation, preview, and execution entry point.
-- `bin/qdm-metric-cli-real`: the pinned upstream Metric runtime invoked by the
-  lightweight authorization wrapper.
+- `.harness/private/bin/qdm-metric-cli-real`, or the path selected by
+  `--private-tools-dir`: the pinned upstream Metric runtime invoked by the
+  lightweight authorization wrapper. It must not be installed in `bin/` or
+  exposed through the Agent-visible `PATH`.
 - `config/harness-config.yaml`: Harness paths and the `qdm_metric_cli` path.
 - `config/qdm-cli-paths.env`: exports only `QDM_METRIC_CLI`.
 - `agents/*`: context/posttool integrations. The Pi requester authorization profile uses only the Pi
@@ -22,23 +24,24 @@ The runtime does not install or configure any legacy data CLI or token flow.
 In `pi-requester-authorized`, the Pi extension binds each ACP session to the
 current Lumi requester envelope. The public `qdm-metric-cli` reopens that JSON,
 applies the Harness scope, and directly executes the pinned Metric runtime.
-This MVP intentionally trusts the JSON supplied by Lumi and does not establish
-a local UID/GID or filesystem ownership trust boundary.
+The real Metric runtime is installed outside the public runtime `bin/` so
+direct Agent calls, aliases, and symlinks cannot bypass the public wrapper when
+the deployment runs the Agent as a non-root user.
 
 ## Install
 
-The `pi-requester-authorized` profile downloads both pinned Metric binaries into
-the runtime and requires only `--agent pi`. Installation runs as an ordinary
-user on every platform represented in the release manifest. There is no
-`/etc/harness-data/authz.json`, root install, systemd service, fixed UID/GID, or
-deployment-managed requester-context directory. Lumi automatically supplies
-`LUMI_REQUESTER_CONTEXT_DIR` to Pi.
+The `pi-requester-authorized` profile downloads the public wrapper into the
+runtime and the pinned real Metric CLI into a private tools directory. The
+default private directory is `.harness/private/bin`; Docker deployments should
+pass a container-private location such as `/opt/harness-data/private/bin`.
+Lumi automatically supplies `LUMI_REQUESTER_CONTEXT_DIR` to Pi.
 
 The base64url/JCS binding correlates a tool call with the current session JSON;
 it is not a signature. Missing, replaced, malformed, or expired JSON fails
-closed. Because the Agent can potentially modify a locally readable file, this
-profile is intended for validation of filtering behavior rather than as a
-production host-security boundary.
+closed. The private-path boundary is effective only when the Agent process is
+not root and cannot read or execute the private tools directory. If the Agent
+runs as root inside a Docker container, Unix mode bits do not prevent direct
+execution of the real CLI.
 
 ## Requester Authorization Contract
 
@@ -100,6 +103,12 @@ release-pinned Wikis embedded in its runtime bundle:
 npx @lumi-ai-lab/harness-data install \
   --profile pi-requester-authorized \
   --agent pi
+
+# Docker / container deployment:
+npx @lumi-ai-lab/harness-data install \
+  --profile pi-requester-authorized \
+  --agent pi \
+  --private-tools-dir /opt/harness-data/private/bin
 ```
 
 ## Release Contract
@@ -150,10 +159,12 @@ installer rejects a release-set for another platform or a public/private Metric
 binary that does not match the selected platform entry. As with the earlier
 CMR, Indicators, SQL, and CAS CLIs, the installer then downloads the private
 Metric CLI directly from its own GitHub Release and verifies the extracted
-binary before installation. The private archive is held only in a temporary
-`0700` installer cache and deleted after extraction; it is never retained in
-the Agent-visible runtime cache. Harness-owned release archives continue to
-publish both `.sha256` and `.binary.sha256` files.
+binary before installation. The private binary is installed under
+`{privateToolsDir}/qdm-metric-cli-real`; `/bin/qdm-metric-cli-real` in the
+runtime is forbidden. The private archive is held only in a temporary `0700`
+installer cache and deleted after extraction; it is never retained in the
+Agent-visible runtime cache. Harness-owned release archives continue to publish
+both `.sha256` and `.binary.sha256` files.
 Because the source repository is private, installation requires
 `gh auth login`, `GITHUB_TOKEN`, or `--github-token` with read access unless
 `--metric-cli-path` is used.

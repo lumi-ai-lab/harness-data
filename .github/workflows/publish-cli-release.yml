@@ -77,6 +77,7 @@ jobs:
         include:
           - { target: windows-amd64, goos: windows, goarch: amd64, binary: data-harness-cli.exe, archive: zip }
           - { target: linux-amd64, goos: linux, goarch: amd64, binary: data-harness-cli, archive: tar.gz }
+          - { target: linux-arm64, goos: linux, goarch: arm64, binary: data-harness-cli, archive: tar.gz }
           - { target: darwin-amd64, goos: darwin, goarch: amd64, binary: data-harness-cli, archive: tar.gz }
           - { target: darwin-arm64, goos: darwin, goarch: arm64, binary: data-harness-cli, archive: tar.gz }
     steps:
@@ -176,7 +177,7 @@ jobs:
           printf '# Dimensions\n' > "${approved_wikis}/dims/index.md"
           printf '# Rules\n' > "${approved_wikis}/rules/index.md"
 
-          for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
+          for platform in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64; do
             extension="tar.gz"
             binary="qdm-metric-cli"
             if [[ "${platform}" == windows-* ]]; then
@@ -296,7 +297,12 @@ jobs:
               --runtime-bundle "${PWD}/dist/harness-data-runtime-${CONTRACT_VERSION_TAG}.tar.gz" \
               --runtime-tag "${CONTRACT_VERSION_TAG}" \
               --asset-dir "${smoke_assets}"
-          test -x "${runtime}/bin/qdm-metric-cli-real"
+          test ! -e "${runtime}/bin/qdm-metric-cli-real"
+          real_metric_path="$(
+            node -p "JSON.parse(require('fs').readFileSync('${runtime}/.harness/installer-state.json', 'utf8')).tools['qdm-metric-cli-real'].destination"
+          )"
+          test -x "${real_metric_path}"
+          test "$(dirname "${real_metric_path}")" = "${runtime}/.harness/private/bin"
           test ! -e "${runtime}/config/authz-config-v1.json.example"
           set +e
           env -u LUMI_REQUESTER_CONTEXT_DIR -u HARNESS_AUTHZ_BINDING_V1 \
@@ -479,7 +485,7 @@ jobs:
           echo "Resolved qdm-metric-cli ${version}"
           rm -rf /tmp/qdm-metric-release
           mkdir -p /tmp/qdm-metric-release
-          for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
+          for platform in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64; do
             extension="tar.gz"
             binary="qdm-metric-cli"
             if [[ "${platform}" == windows-* ]]; then
