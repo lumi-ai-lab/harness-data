@@ -20,6 +20,8 @@ var allowedFrontmatter = map[string]bool{
 	"negative_aliases": true,
 	"covers":           true,
 	"intents":          true,
+	"status":           true,
+	"object_type":      true,
 	"canonical_status": true,
 	"canonical_group":  true,
 	"canonical_target": true,
@@ -315,8 +317,16 @@ func parseH1(data []byte) (string, int) {
 	scanner := bufio.NewScanner(bytes.NewReader(stripFrontmatter(data)))
 	count := 0
 	title := ""
+	inFence := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
 		if strings.HasPrefix(line, "# ") {
 			count++
 			if title == "" {
@@ -382,7 +392,7 @@ func parseFrontmatter(logical string, data []byte) (Frontmatter, []CheckError) {
 			continue
 		}
 		switch key {
-		case "name", "label", "canonical_status", "canonical_group", "canonical_target", "canonical_reason":
+		case "name", "label", "status", "object_type", "canonical_status", "canonical_group", "canonical_target", "canonical_reason":
 			if value == "" || strings.HasPrefix(value, "[") {
 				errs = append(errs, CheckError{Path: logical, Code: "invalid_frontmatter_type", Message: "frontmatter field must be a string", Target: key})
 				continue
