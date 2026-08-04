@@ -11,7 +11,7 @@ const maxConfigBytes int64 = 1 << 20
 
 var (
 	lowercaseSHA256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	metricCLIVersionPattern = regexp.MustCompile(`^0\.1\.[0-9]+$`)
+	metricCLIVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 // LoadConfig reads and strictly validates an authorization config. An empty
@@ -90,7 +90,7 @@ func (config Config) Validate() error {
 		return invalid("authorization config Agent and requester context owner UIDs must differ")
 	}
 	if !metricCLIVersionPattern.MatchString(config.RealMetricCLI.Version) {
-		return invalid("real Metric CLI version must remain compatible with 0.1.x")
+		return invalid("real Metric CLI version must be a valid semver")
 	}
 	if !lowercaseSHA256Pattern.MatchString(config.RealMetricCLI.ArtifactSHA256) {
 		return invalid("real Metric CLI artifactSha256 is invalid")

@@ -435,7 +435,7 @@ export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, rele
   if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
       path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
       path.dirname(realDestination) !== privateMetricRoot ||
-      path.basename(realDestination) !== "qdm-metric-cli-v0.1.0") {
+      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realDestination))) {
     throw new Error("Pi requester authorization artifact destinations are invalid");
   }
 }
@@ -561,7 +561,7 @@ export function preparePiRequesterMetricBrokerDestination(manifest, options = {}
   const realTool = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
   const realPath = path.resolve(String(realTool?.destination || ""));
   if (path.dirname(realPath) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v0\.1\.\d+$/.test(path.basename(realPath))) {
+      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realPath))) {
     throw new Error("private Metric CLI destination is outside the trusted broker directory");
   }
 
@@ -589,7 +589,7 @@ export function installPiRequesterMetricBroker(runtimeDir, installedTools, optio
   const realMetric = installedTools?.["qdm-metric-cli-real"];
   const realPath = path.resolve(String(realMetric?.destination || ""));
   if (path.dirname(realPath) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v0\.1\.\d+$/.test(path.basename(realPath))) {
+      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realPath))) {
     throw new Error("private Metric CLI destination is outside the trusted broker directory");
   }
   assertRootOwnedDirectory("/opt/harness-data", 0o755);

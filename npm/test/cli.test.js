@@ -364,9 +364,8 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /github\.event_name == 'pull_request'/);
   assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
   assert.match(workflow, /version="\$\{VERSION_TAG:-v0\.0\.\$\{GITHUB_RUN_ID\}\}"/);
-  assert.match(workflow, /Resolve pinned qdm-metric-cli release/);
-  assert.match(workflow, /version="v0\.1\.0"/);
-  assert.doesNotMatch(workflow, /gh release view/);
+  assert.match(workflow, /Resolve latest qdm-metric-cli release/);
+  assert.match(workflow, /gh release view --repo "\$\{repo\}" --json tagName --jq \.tagName/);
   assert.match(workflow, /--pattern "\$\{asset\}\.sha256"/);
   assert.doesNotMatch(workflow, /--pattern "\$\{asset\}\.binary\.sha256"/);
   assert.match(workflow, /expected_archive_sha=.*awk/);

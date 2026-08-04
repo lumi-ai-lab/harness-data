@@ -434,14 +434,19 @@ jobs:
           version="${VERSION_TAG:-v0.0.${GITHUB_RUN_ID}}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve pinned qdm-metric-cli release
+      - name: Resolve latest qdm-metric-cli release
         id: metric
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
         run: |
           set -euo pipefail
           repo="pengmide/qdm-metric-cli"
-          version="v0.1.0"
+          version="$(gh release view --repo "${repo}" --json tagName --jq .tagName)"
+          if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::qdm-metric-cli latest release tag is not a semver tag: ${version}"
+            exit 1
+          fi
+          echo "Resolved qdm-metric-cli ${version}"
           rm -rf /tmp/qdm-metric-release
           mkdir -p /tmp/qdm-metric-release
           for platform in darwin-arm64 darwin-amd64 linux-amd64 windows-amd64; do
