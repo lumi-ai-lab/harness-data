@@ -456,6 +456,31 @@ test("profile state accepts both profiles without auth release state", () => {
   assert.throws(() => validateProfileAgent(piRequesterAuthorizedProfile, "hermes"), /requires --agent/);
 });
 
+test("profile state accepts any semver real Metric CLI version", () => {
+  // A legitimate semver (v0.2.0) with a matching digest must be accepted.
+  const semverReleaseSet = {
+    ...stateFixture(piRequesterAuthorizedProfile).releaseSet,
+    realMetricVersion: "v0.2.0"
+  };
+  semverReleaseSet.sha256 = piRequesterReleaseSetDigest(semverReleaseSet);
+  assert.equal(
+    profileFromState(stateFixture(piRequesterAuthorizedProfile, { releaseSet: semverReleaseSet })),
+    piRequesterAuthorizedProfile
+  );
+  // A non-semver real Metric CLI version is rejected even with a matching digest.
+  for (const realMetricVersion of ["v0.1", "0.1.0", "latest", "v0.1.0-contract"]) {
+    const invalidReleaseSet = {
+      ...stateFixture(piRequesterAuthorizedProfile).releaseSet,
+      realMetricVersion
+    };
+    invalidReleaseSet.sha256 = piRequesterReleaseSetDigest(invalidReleaseSet);
+    assert.equal(
+      profileFromState(stateFixture(piRequesterAuthorizedProfile, { releaseSet: invalidReleaseSet })),
+      ""
+    );
+  }
+});
+
 test("Pi requester installation verifies both platform-specific Metric CLI digests", () => {
   const releaseSet = stateFixture(piRequesterAuthorizedProfile).releaseSet;
   const installedTools = {

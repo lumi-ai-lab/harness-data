@@ -29,7 +29,7 @@ function validSha256(value) {
 }
 
 function supportedRealMetricVersion(value) {
-  return String(value || "") === "v0.1.0";
+  return /^v\d+\.\d+\.\d+$/.test(String(value || ""));
 }
 
 function validPiRequesterReleaseState(state) {
@@ -170,7 +170,7 @@ export function piRequesterReleaseSet(manifest, platform = platformKey()) {
     throw new Error("pi-requester-authorized release-set has invalid catalogSha256");
   }
   if (!supportedRealMetricVersion(releaseSet.realMetricVersion)) {
-    throw new Error("pi-requester-authorized release-set must pin realMetricVersion v0.1.0");
+    throw new Error("pi-requester-authorized release-set must pin realMetricVersion to a semver tag (vMAJOR.MINOR.PATCH)");
   }
   if (!Number.isInteger(releaseSet.authzSchemaVersion) || releaseSet.authzSchemaVersion < 1) {
     throw new Error("pi-requester-authorized release-set has invalid authzSchemaVersion");
