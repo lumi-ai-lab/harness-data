@@ -2,8 +2,10 @@ package authz
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -55,48 +57,16 @@ func (config Config) Validate() error {
 		"requesterContextDir":        config.RequesterContextDir,
 		"realMetricCli.path":         config.RealMetricCLI.Path,
 		"approvedMetricCatalog.path": config.ApprovedMetricCatalog.Path,
-		"killSwitch.controlPath":     config.KillSwitch.ControlPath,
 	} {
 		if err := validateAbsoluteCleanPath(value); err != nil {
 			return invalid(fmt.Sprintf("authorization config %s is invalid", name))
 		}
 	}
-	if config.AgentUID == nil {
-		return invalid("authorization config agentUid is required")
-	}
-	if config.RequesterContextOwnerUID == nil {
-		return invalid("authorization config requesterContextOwnerUid is required")
-	}
-	if config.RequesterContextReaderGID == nil {
-		return invalid("authorization config requesterContextReaderGid is required")
-	}
-	if *config.RequesterContextReaderGID == 0 {
-		return invalid("authorization config requesterContextReaderGid must not be root")
-	}
-	if err := validateRequesterContextPathSegment(config.RequesterContextWorkspaceID); err != nil {
-		return invalid("authorization config requesterContextWorkspaceId is invalid")
-	}
 	if config.RequesterContextAgentID != "pi" {
 		return invalid("authorization config requesterContextAgentId must be pi")
 	}
-	if filepath.Base(config.RequesterContextDir) != config.RequesterContextAgentID ||
-		filepath.Base(filepath.Dir(config.RequesterContextDir)) != config.RequesterContextWorkspaceID {
-		return invalid("authorization config requesterContextDir must end with requesterContextWorkspaceId/requesterContextAgentId")
-	}
-	if *config.AgentUID == 0 {
-		return invalid("authorization config agentUid must not be root")
-	}
-	if *config.AgentUID == *config.RequesterContextOwnerUID {
-		return invalid("authorization config Agent and requester context owner UIDs must differ")
-	}
 	if !metricCLIVersionPattern.MatchString(config.RealMetricCLI.Version) {
 		return invalid("real Metric CLI version must be a valid semver")
-	}
-	if !lowercaseSHA256Pattern.MatchString(config.RealMetricCLI.ArtifactSHA256) {
-		return invalid("real Metric CLI artifactSha256 is invalid")
-	}
-	if !lowercaseSHA256Pattern.MatchString(config.ApprovedMetricCatalog.SHA256) {
-		return invalid("approved metric catalog sha256 is invalid")
 	}
 	if config.MaxEnvelopeBytes <= 0 || config.MaxEnvelopeBytes > 16<<20 {
 		return invalid("maxEnvelopeBytes is outside the supported range")
@@ -106,9 +76,6 @@ func (config Config) Validate() error {
 	}
 	if config.ClockSkewSeconds < 0 || config.ClockSkewSeconds > config.MaxEnvelopeTTLSeconds {
 		return invalid("clockSkewSeconds is outside the supported range")
-	}
-	if config.KillSwitch.PollMilliseconds <= 0 || config.KillSwitch.PollMilliseconds > 60_000 {
-		return invalid("killSwitch.pollMilliseconds is outside the supported range")
 	}
 	limits := config.Limits
 	positive := map[string]int64{
@@ -139,6 +106,75 @@ func (config Config) Validate() error {
 		return invalid("authorization execution limits exceed supported safety bounds")
 	}
 	return nil
+}
+
+// RuntimeConfig builds the lightweight authorization settings from the
+// installed runtime and Lumi's per-agent requester-context directory. No
+// deployment-owned authorization file, UID/GID, or fixed filesystem mode is
+// required.
+func RuntimeConfig() (Config, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return Config{}, authzError(CodeConfigInvalid, "authorization runtime cannot resolve its executable", err)
+	}
+	contextDir := strings.TrimSpace(os.Getenv("LUMI_REQUESTER_CONTEXT_DIR"))
+	if contextDir == "" {
+		return Config{}, authzError(CodeConfigInvalid, "LUMI_REQUESTER_CONTEXT_DIR is required", nil)
+	}
+	root, err := findRuntimeRoot(executable)
+	if err != nil {
+		return Config{}, authzError(CodeConfigInvalid, "authorization runtime root cannot be resolved", err)
+	}
+	return ConfigForRuntime(root, contextDir), nil
+}
+
+// ConfigForRuntime is the deterministic form used by tests and embedded
+// launchers.
+func ConfigForRuntime(root, contextDir string) Config {
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	return Config{
+		Version:                     CurrentVersion,
+		Mode:                        ModePiRequesterAuthorized,
+		PiVersion:                   RequiredPiVersion,
+		RequesterContextDir:         filepath.Clean(contextDir),
+		RequesterContextWorkspaceID: "",
+		RequesterContextAgentID:     "pi",
+		MaxEnvelopeBytes:            64 << 10,
+		MaxEnvelopeTTLSeconds:       1800,
+		ClockSkewSeconds:            30,
+		RealMetricCLI: RealMetricCLIConfig{
+			Path:    filepath.Join(root, "bin", "qdm-metric-cli-real"+suffix),
+			Version: "0.1.0",
+		},
+		ApprovedMetricCatalog: ArtifactConfig{
+			Path: filepath.Join(root, "bootstrap", "approved-metrics-v1.json"),
+		},
+		Limits: LimitsConfig{
+			MaxDateRangeDays: 31, MaxMetrics: 10, MaxDimensions: 10,
+			DefaultPageSize: 200, MaxPageSize: 1000,
+			DefaultMetadataLimit: 100, MaxMetadataLimit: 500,
+			TimeoutSeconds: 30, MaxOutputBytes: 2 << 20,
+		},
+	}
+}
+
+func findRuntimeRoot(executable string) (string, error) {
+	current := filepath.Dir(filepath.Clean(executable))
+	for range 8 {
+		catalog := filepath.Join(current, "bootstrap", "approved-metrics-v1.json")
+		if info, err := os.Stat(catalog); err == nil && info.Mode().IsRegular() {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "", fmt.Errorf("installed runtime marker bootstrap/approved-metrics-v1.json was not found")
 }
 
 // RequireEnforcing rejects static deny-only configurations.

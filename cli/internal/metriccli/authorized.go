@@ -41,31 +41,32 @@ func ExitCode(err error) int {
 	return 1
 }
 
-// Run authorizes one qdm-metric-cli invocation and forwards it to the pinned
-// private binary. The public command never executes an unverified child.
+// Run authorizes one qdm-metric-cli invocation from Lumi's requester JSON and
+// forwards it to the pinned runtime binary.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return RunWithConfig(authz.DefaultConfigPath, args, stdin, stdout, stderr)
+	config, err := authz.RuntimeConfig()
+	if err != nil {
+		return deny(err)
+	}
+	return runAuthorized(config, strings.TrimSpace(os.Getenv(bindingEnvironment)), args, stdin, stdout, stderr)
 }
 
-// RunWithConfig is the injectable form of Run used by deterministic tests and
-// deployment wrappers that keep the authorization config outside the default
-// system path.
+// RunWithConfig is retained as an injectable compatibility form for tests.
 func RunWithConfig(configPath string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runAuthorized(configPath, strings.TrimSpace(os.Getenv(bindingEnvironment)), nil, args, stdin, stdout, stderr)
-}
-
-func runAuthorized(
-	configPath string,
-	encodedBinding string,
-	agentUID *uint32,
-	args []string,
-	stdin io.Reader,
-	stdout, stderr io.Writer,
-) error {
 	config, err := authz.LoadConfig(configPath)
 	if err != nil {
 		return deny(err)
 	}
+	return runAuthorized(config, strings.TrimSpace(os.Getenv(bindingEnvironment)), args, stdin, stdout, stderr)
+}
+
+func runAuthorized(
+	config authz.Config,
+	encodedBinding string,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
 	if encodedBinding == "" {
 		return denyCode(authz.CodeBindingMissing, "qdm-metric-cli requires a Harness authorization binding")
 	}
@@ -73,21 +74,11 @@ func runAuthorized(
 	if err != nil {
 		return deny(err)
 	}
-	validateOptions := []authz.ReadOption{}
-	if agentUID != nil {
-		validateOptions = append(validateOptions, authz.WithAgentUID(*agentUID))
-	}
-	loaded, err := authz.ValidateCurrent(config, binding, validateOptions...)
+	loaded, err := authz.ValidateCurrent(config, binding)
 	if err != nil {
 		return deny(err)
 	}
-	if _, err := authz.VerifyArtifact(config.RealMetricCLI.Path, config.RealMetricCLI.ArtifactSHA256, true); err != nil {
-		return deny(err)
-	}
-	catalog, err := authz.LoadMetricCatalog(
-		config.ApprovedMetricCatalog.Path,
-		config.ApprovedMetricCatalog.SHA256,
-	)
+	catalog, err := authz.LoadBundledMetricCatalog(config.ApprovedMetricCatalog.Path)
 	if err != nil {
 		return deny(err)
 	}
@@ -122,13 +113,7 @@ func denyCode(code authz.Code, message string) error {
 func execute(parent context.Context, config authz.Config, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	timeout := time.Duration(config.Limits.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
-	killSwitchErrors := make(chan error, 1)
-	watcherDone := make(chan struct{})
-	go watchKillSwitch(ctx, config, cancel, killSwitchErrors, watcherDone)
-	defer func() {
-		cancel()
-		<-watcherDone
-	}()
+	defer cancel()
 
 	command := exec.CommandContext(ctx, config.RealMetricCLI.Path, args...)
 	command.Stdin = stdin
@@ -138,11 +123,6 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 	command.Stdout = &output
 	command.Stderr = &errorOutput
 	if err := command.Run(); err != nil {
-		select {
-		case killSwitchErr := <-killSwitchErrors:
-			return &ExitError{Code: 77, Err: killSwitchErr}
-		default:
-		}
 		if _, writeErr := stderr.Write(errorOutput.Bytes()); writeErr != nil {
 			return writeErr
 		}
@@ -158,11 +138,6 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 		}
 		return err
 	}
-	select {
-	case killSwitchErr := <-killSwitchErrors:
-		return &ExitError{Code: 77, Err: killSwitchErr}
-	default:
-	}
 	if _, err := stderr.Write(errorOutput.Bytes()); err != nil {
 		return err
 	}
@@ -171,39 +146,6 @@ func execute(parent context.Context, config authz.Config, args []string, stdin i
 	}
 	_, err := stdout.Write(output.Bytes())
 	return err
-}
-
-func watchKillSwitch(
-	ctx context.Context,
-	config authz.Config,
-	cancel context.CancelFunc,
-	errorsOut chan<- error,
-	done chan<- struct{},
-) {
-	defer close(done)
-	interval := time.Duration(config.KillSwitch.PollMilliseconds) * time.Millisecond
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			control, err := authz.ReadControl(config)
-			if err == nil && control.Enabled() {
-				continue
-			}
-			if err == nil {
-				err = errors.New("qdm-metric-cli authorization kill switch became disabled")
-			}
-			select {
-			case errorsOut <- err:
-			default:
-			}
-			cancel()
-			return
-		}
-	}
 }
 
 type boundedCapture struct {
@@ -389,7 +331,7 @@ func rejectRuntimeEndpointOverrides(args []string) error {
 		argument := args[index]
 		switch {
 		case argument == "--payload" || strings.HasPrefix(argument, "--payload="):
-			return errors.New("--payload file input is unavailable through the trusted broker; use --payload-json")
+			return errors.New("--payload file input is unavailable through the authorization wrapper; use --payload-json")
 		case argument == "--socket":
 			if index+1 >= len(args) {
 				return errors.New("--socket requires a value")
@@ -476,7 +418,7 @@ func authorizeDimensionValues(args []string, limits authz.LimitsConfig) ([]strin
 		return nil, errors.New("dim values --code is required")
 	}
 	if isProtectedDimension(parsed.Code) {
-		return nil, fmt.Errorf("dim values for protected dimension %s is unavailable through the trusted broker", parsed.Code)
+		return nil, fmt.Errorf("dim values for protected dimension %s is unavailable through the authorization wrapper", parsed.Code)
 	}
 	return enforceMetadataLimit(args, parsed.Limit, parsed.Visited["limit"], limits)
 }

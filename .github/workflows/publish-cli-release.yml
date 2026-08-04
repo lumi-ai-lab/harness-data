@@ -205,10 +205,8 @@ jobs:
           done
 
           cp -R .agents/pi runtime/agents/pi
-          cp config/authz-config-v1.json.example runtime/config/authz-config-v1.json.example
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
-          cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
           APPROVED_WIKIS="${approved_wikis}" node --input-type=module <<'NODE'
           import { createApprovedWikisManifest } from "./npm/src/lib/approved-wikis.js";
           createApprovedWikisManifest(
@@ -278,7 +276,39 @@ jobs:
             echo "CONTRACT_VERSION_TAG=${VERSION_TAG}"
           } >> "$GITHUB_ENV"
 
-      - name: Exercise privileged install and broker authorization
+      - name: Exercise lightweight requester authorization install
+        run: |
+          set -euo pipefail
+          runtime="${CONTRACT_ROOT}/runtime-lightweight"
+          smoke_assets="${CONTRACT_ROOT}/public-assets"
+          mkdir -p "${smoke_assets}"
+          cp dist/data-harness-cli-* "${smoke_assets}/"
+          cp dist/qdm-metric-cli-* "${smoke_assets}/"
+          env \
+            "PATH=${CONTRACT_FAKE_BIN}:${PATH}" \
+            "HOME=${CONTRACT_ROOT}/home-lightweight" \
+            "QDM_METRIC_CONTRACT_ASSETS=${CONTRACT_METRIC_ASSETS}" \
+            node npm/bin/harness-data.js install \
+              --dir "${runtime}" \
+              --profile pi-requester-authorized \
+              --agent pi \
+              --yes \
+              --runtime-bundle "${PWD}/dist/harness-data-runtime-${CONTRACT_VERSION_TAG}.tar.gz" \
+              --runtime-tag "${CONTRACT_VERSION_TAG}" \
+              --asset-dir "${smoke_assets}"
+          test -x "${runtime}/bin/qdm-metric-cli-real"
+          test ! -e "${runtime}/config/authz-config-v1.json.example"
+          set +e
+          env -u LUMI_REQUESTER_CONTEXT_DIR -u HARNESS_AUTHZ_BINDING_V1 \
+            "${runtime}/bin/qdm-metric-cli" version
+          wrapper_status="$?"
+          set -e
+          test "${wrapper_status}" -eq 77
+
+      # Legacy privileged broker smoke retained temporarily for release-history
+      # readability; the lightweight profile no longer executes this step.
+      - name: Legacy privileged broker smoke (disabled)
+        if: ${{ false }}
         run: |
           set -euo pipefail
           runtime="${CONTRACT_ROOT}/runtime"
@@ -496,10 +526,8 @@ jobs:
           for agent in claude codex pi openclaw hermes; do
             cp -R ".agents/${agent}" "runtime/agents/${agent}"
           done
-          cp config/authz-config-v1.json.example runtime/config/authz-config-v1.json.example
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
-          cp bootstrap/authz-config-v1.schema.json runtime/bootstrap/authz-config-v1.schema.json
           node --input-type=module <<'NODE'
           import { createApprovedWikisManifest } from "./npm/src/lib/approved-wikis.js";
           createApprovedWikisManifest("wikis", "/tmp/approved-lumi-wikis-manifest.json");
@@ -523,7 +551,8 @@ jobs:
               > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256"
           )
 
-      - name: Smoke test released installation
+      - name: Legacy privileged released-install smoke (disabled)
+        if: ${{ false }}
         env:
           VERSION_TAG: ${{ steps.runtime.outputs.version }}
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}

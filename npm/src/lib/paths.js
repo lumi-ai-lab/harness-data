@@ -53,7 +53,6 @@ const piRequesterStateFields = [
   "manifestSha256",
   "packageVersion",
   "releaseSet",
-  "authzConfigPath",
   "lastCheckAt"
 ];
 
@@ -61,7 +60,7 @@ export function installerStateDocument(workspace, patch, options = {}) {
   const updatedAt = options.updatedAt || new Date().toISOString();
   if (patch?.profile === piRequesterAuthorizedProfile) {
     if (patch.schemaVersion !== installerStateSchemaVersion) {
-      throw new Error("pi-requester-authorized installer state must be a fresh schemaVersion 3 document");
+      throw new Error(`pi-requester-authorized installer state must be a fresh schemaVersion ${installerStateSchemaVersion} document`);
     }
     const state = { lastInstallDir: workspace, updatedAt };
     for (const field of piRequesterStateFields) {

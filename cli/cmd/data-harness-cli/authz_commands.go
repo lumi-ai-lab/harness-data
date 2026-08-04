@@ -5,8 +5,6 @@ import (
 	"errors"
 	"flag"
 	"io"
-	"os"
-	"path/filepath"
 
 	"harness-data/cli/internal/authz"
 )
@@ -42,11 +40,10 @@ func runAuthzBind(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("authz-bind", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	sessionID := flags.String("session-id", "", "raw ACP session ID")
-	configPath := flags.String("config", authz.DefaultConfigPath, "authorization config path")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *sessionID == "" {
 		return writeAuthzCommandFailure(output, nil, authz.CodeBindingInvalid, "authz-bind arguments are invalid")
 	}
-	config, err := authz.LoadConfig(*configPath)
+	config, err := authz.RuntimeConfig()
 	if err != nil {
 		return writeAuthzError(output, nil, err)
 	}
@@ -60,23 +57,24 @@ func runAuthzBind(args []string, output io.Writer) error {
 func runAuthzReadiness(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("authz-readiness", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	configPath := flags.String("config", authz.DefaultConfigPath, "authorization config path")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		ready := false
 		return writeAuthzCommandFailure(output, &ready, authz.CodeConfigInvalid, "authz-readiness arguments are invalid")
 	}
-	executable, executableErr := os.Executable()
-	if executableErr != nil {
-		ready := false
-		return writeAuthzCommandFailure(output, &ready, authz.CodeConfigInvalid, "data-harness-cli runtime path cannot be resolved")
-	}
-	runtimeRoot := filepath.Dir(filepath.Dir(executable))
-	report, err := authz.CheckReadiness(*configPath, authz.ReadinessOptions{RuntimeRoot: runtimeRoot})
+	config, err := authz.RuntimeConfig()
 	if err != nil {
 		ready := false
 		return writeAuthzError(output, &ready, err)
 	}
-	return writeCommandJSON(output, report)
+	if _, err := authz.LoadBundledMetricCatalog(config.ApprovedMetricCatalog.Path); err != nil {
+		ready := false
+		return writeAuthzError(output, &ready, err)
+	}
+	return writeCommandJSON(output, map[string]any{
+		"ready":     true,
+		"mode":      config.Mode,
+		"piVersion": config.PiVersion,
+	})
 }
 
 func runAuthzValidateCatalog(args []string, output io.Writer) error {

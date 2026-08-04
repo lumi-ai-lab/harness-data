@@ -146,7 +146,7 @@ export function materializeReleaseManifest(options) {
   const realMetric = requireTool(manifest, "qdm-metric-cli-real");
   realMetric.tracking = "fixed";
   realMetric.version = qdmMetricVersion;
-  realMetric.destination = `/opt/harness-data/private/qdm-metric-cli-${qdmMetricVersion}`;
+  realMetric.destination = "bin/qdm-metric-cli-real";
   realMetric.requireAssetSha256 = true;
   realMetric.requireBinarySha256 = true;
   for (const platform of Object.keys(realMetric.platforms || {})) {
@@ -207,7 +207,7 @@ export function materializeReleaseManifest(options) {
   };
   profile.approvedMetricCatalog = {
     source: "bootstrap/approved-metrics-v1.json",
-    destination: "/etc/harness-data/approved-metrics-v1.json",
+    destination: "bootstrap/approved-metrics-v1.json",
     sha256: approvedMetricCatalogSha256
   };
 

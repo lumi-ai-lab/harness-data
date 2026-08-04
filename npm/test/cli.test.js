@@ -14,7 +14,6 @@ import {
   installWikis,
   localUnrestrictedReleaseManifest,
   removeLegacyLocalTools,
-  renderPiRequesterMetricBrokerService,
   verifyPiRequesterInstalledReleaseSet
 } from "../src/commands/install.js";
 import { createApprovedWikisManifest } from "../src/lib/approved-wikis.js";
@@ -84,10 +83,7 @@ function stateFixture(profile = localUnrestrictedProfile, overrides = {}) {
     },
     manifestSha256: "b".repeat(64),
     packageVersion: "0.0.27",
-    ...(local ? {} : {
-      releaseSet,
-      authzConfigPath: "/etc/harness-data/authz.json"
-    }),
+    ...(local ? {} : { releaseSet }),
     ...overrides
   };
 }
@@ -357,7 +353,9 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   );
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
   const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
-  assert.equal(realMetric.private, true);
+  assert.equal(realMetric.private, undefined);
+  assert.equal(realMetric.requiresAuth, true);
+  assert.equal(realMetric.destination, "bin/qdm-metric-cli-real");
   assert.equal(realMetric.tracking, "latest");
   assert.equal(realMetric.version, "");
   assert.equal(realMetric.platforms["linux-amd64"].url, "");
@@ -382,30 +380,12 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   assert.match(workflow, /if: github\.event_name == 'pull_request'/);
   assert.match(workflow, /Build secretless release fixtures/);
   assert.match(workflow, /QDM_METRIC_CONTRACT_ASSETS/);
-  assert.match(workflow, /Exercise privileged install and broker authorization/);
-  assert.match(workflow, /Smoke test released installation/);
+  assert.doesNotMatch(workflow, /name: Exercise privileged install and broker authorization/);
   assert.match(workflow, /GH_TOKEN: \$\{\{ secrets\.RELEASE_GH_TOKEN \|\| github\.token \}\}/);
   assert.match(workflow, /--github-token "\$\{GH_TOKEN\}"/);
-  assert.match(workflow, /sudo env "PATH=\$\{PATH\}" "HOME=\$\{smoke_root\}\/home"/);
   assert.match(workflow, /--agent pi/);
   assert.doesNotMatch(workflow, /for agent in pi claude codex qwen/);
-  assert.match(workflow, /real_metric_path/);
-  assert.match(workflow, /stat -c '%a'/);
-  assert.match(workflow, /sudo -u nobody test -r "\$\{real_metric_path\}"/);
-  assert.match(workflow, /sudo -u nobody test -x "\$\{real_metric_path\}"/);
-  assert.match(workflow, /sudo -u nobody "\$\{real_metric_path\}" version/);
-  assert.match(workflow, /Agent UID can read or execute the private qdm-metric-cli/);
-  assert.match(workflow, /protected_broker_path="\/opt\/harness-data\/broker\/qdm-metric-cli"/);
-  assert.match(workflow, /Agent UID can read or execute the protected Metric broker/);
-  assert.match(workflow, /harness-data-metric-broker\.service/);
-  assert.match(workflow, /systemd-analyze verify/);
-  assert.match(workflow, /cli\/tests\/cmd\/release-smoke-fixture/);
-  assert.match(workflow, /\.bindingBase64url/);
-  assert.match(workflow, /broker-health/);
-  assert.match(workflow, /HARNESS_AUTHZ_BINDING_V1=\$\{binding\}/);
   assert.match(workflow, /qdm-metric-cli v0\.1\.0-contract/);
-  assert.match(workflow, /wrapper_status/);
-  assert.match(workflow, /\[\[ "\$\{wrapper_status\}" -ne 77 \]\]/);
   assert.match(workflow, /if: inputs\.publish \|\| startsWith\(github\.ref, 'refs\/tags\/v'\)/);
   assert.match(workflow, /inputs\.verify/);
   assert.doesNotMatch(releaseWorkflow, /console\.log\(`\$\{tool\.repo\}.*\.binary\.sha256/);
@@ -510,29 +490,7 @@ test("Pi requester installation verifies both platform-specific Metric CLI diges
   }, releaseSet), /do not match the release-set/);
 });
 
-test("Pi requester broker service executes only the root-protected broker copy", () => {
-  const service = renderPiRequesterMetricBrokerService();
-  assert.match(service, /^ExecStart="\/opt\/harness-data\/broker\/qdm-metric-cli" broker-serve$/m);
-  assert.doesNotMatch(service, /ExecStart=.*\/runtime\/bin\/qdm-metric-cli/m);
-  assert.match(service, /^User=root$/m);
-  assert.match(service, /^RuntimeDirectory=harness-data$/m);
-  for (const directive of [
-    "NoNewPrivileges=true",
-    "PrivateTmp=true",
-    "PrivateDevices=true",
-    "ProtectSystem=strict",
-    "ProtectHome=true",
-    "ProtectKernelTunables=true",
-    "ProtectKernelModules=true",
-    "ProtectControlGroups=true",
-    "RestrictNamespaces=true",
-    "RestrictSUIDSGID=true"
-  ]) {
-    assert.match(service, new RegExp(`^${directive}$`, "m"));
-  }
-});
-
-test("Pi requester installer state preserves authorization fields through write/read", () => {
+test("Pi requester installer state no longer carries deployment authorization paths", () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "harness-pi-requester-state-"));
   const workspace = path.join(temporary, "runtime");
   const previousEnvironment = {
@@ -551,7 +509,7 @@ test("Pi requester installer state preserves authorization fields through write/
 
     assert.deepEqual(state, written);
     assert.deepEqual(state.releaseSet, expected.releaseSet);
-    assert.equal(state.authzConfigPath, "/etc/harness-data/authz.json");
+    assert.equal(state.authzConfigPath, undefined);
     assert.equal(profileFromState(state), piRequesterAuthorizedProfile);
   } finally {
     for (const [name, value] of Object.entries(previousEnvironment)) {

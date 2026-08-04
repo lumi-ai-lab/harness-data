@@ -18,8 +18,7 @@ import (
 var policyRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type readSettings struct {
-	now      time.Time
-	agentUID uint32
+	now time.Time
 }
 
 // ReadOption customizes deterministic time validation in tests and callers.
@@ -32,19 +31,15 @@ func WithNow(now time.Time) ReadOption {
 	}
 }
 
-// WithAgentUID validates the requester-context boundary for the UID that will
-// consume the envelope. Runtime callers normally omit it and use the current
-// effective UID; trusted IPC brokers use the kernel-reported peer UID.
+// WithAgentUID is a no-op compatibility option. Lightweight authorization no
+// longer treats a process UID as part of the requester contract.
 func WithAgentUID(uid uint32) ReadOption {
-	return func(settings *readSettings) {
-		settings.agentUID = uid
-	}
+	return func(settings *readSettings) {}
 }
 
 func resolveReadSettings(options []ReadOption) readSettings {
 	settings := readSettings{
-		now:      time.Now().UTC(),
-		agentUID: currentProcessOwnerUID(),
+		now: time.Now().UTC(),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -83,20 +78,13 @@ func ReadEnvelope(config Config, sessionID string, options ...ReadOption) (Loade
 		return LoadedEnvelope{}, err
 	}
 	settings := resolveReadSettings(options)
-	contextSecurity, err := requesterContextSecurity(config, settings.agentUID)
-	if err != nil {
-		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context trust boundary is unavailable", err)
-	}
-	if err := verifyRequesterContextDirectory(config.RequesterContextDir, contextSecurity, settings.agentUID); err != nil {
-		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context directory is unavailable", err)
-	}
 	path := filepath.Join(config.RequesterContextDir, filename)
 	data, info, err := readRegularFile(path, config.MaxEnvelopeBytes)
 	if err != nil {
 		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file cannot be read safely", err)
 	}
-	if err := verifyRequesterContextFile(info, contextSecurity); err != nil {
-		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file permissions are invalid", err)
+	if !info.Mode().IsRegular() {
+		return LoadedEnvelope{}, authzError(CodeRequesterContextInvalid, "requester context file is not regular", nil)
 	}
 	var envelope Envelope
 	if err := decodeStrictJSON(data, &envelope); err != nil {
@@ -126,11 +114,11 @@ func validateEnvelope(config Config, envelope *Envelope, expectedSessionID strin
 	if envelope.SessionID != expectedSessionID {
 		return invalid("requester context session does not match")
 	}
-	if envelope.WorkspaceID != config.RequesterContextWorkspaceID {
-		return invalid("requester context envelope workspaceId does not match")
-	}
 	if envelope.AgentID != config.RequesterContextAgentID {
 		return invalid("requester context envelope agentId does not match")
+	}
+	if err := validateRequiredWireString(envelope.WorkspaceID); err != nil {
+		return invalid("requester context envelope workspaceId is invalid")
 	}
 	// sessionId is an opaque ACP identifier. It must be compared and hashed
 	// byte-for-byte; leading or trailing whitespace is data, not normalization.

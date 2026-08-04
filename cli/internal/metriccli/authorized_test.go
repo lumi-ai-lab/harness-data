@@ -220,9 +220,8 @@ func (fixture *wrapperFixture) run(t *testing.T, args ...string) (string, error)
 	t.Helper()
 	var output strings.Builder
 	err := runAuthorized(
-		fixture.configPath,
+		fixture.config,
 		strings.TrimSpace(os.Getenv(bindingEnvironment)),
-		&fixture.agentUID,
 		args,
 		strings.NewReader(""),
 		&output,
@@ -311,18 +310,6 @@ func TestRunRequiresAndValidatesBinding(t *testing.T) {
 			},
 			code: authz.CodeBindingMismatch,
 		},
-		{
-			name: "kill switch",
-			mutate: func(fixture *wrapperFixture, t *testing.T) string {
-				binding := fixture.binding(t)
-				writeJSON(t, fixture.controlPath, authz.ControlState{
-					Version: authz.CurrentVersion, Generation: 2, State: "disabled",
-					UpdatedAt: fixture.now,
-				}, 0o600)
-				return binding
-			},
-			code: authz.CodeKillSwitchActive,
-		},
 	}
 
 	for _, testCase := range tests {
@@ -347,34 +334,24 @@ func TestRunRequiresAndValidatesBinding(t *testing.T) {
 	}
 }
 
-func TestRunAuthorizedRequiresConfiguredAgentPeerUID(t *testing.T) {
+func TestRunAuthorizedDoesNotRequireConfiguredAgentPeerUID(t *testing.T) {
 	fixture := newWrapperFixture(t)
 	binding := fixture.binding(t)
-
-	for name, peerUID := range map[string]uint32{
-		"requester context writer": fixture.ownerUID,
-		"unrelated local user":     distinctWrapperTestUID(fixture.agentUID),
-		"root":                     0,
-	} {
-		t.Run(name, func(t *testing.T) {
-			var output strings.Builder
-			err := runAuthorized(
-				fixture.configPath,
-				binding,
-				&peerUID,
-				[]string{"version"},
-				strings.NewReader(""),
-				&output,
-				&output,
-			)
-			if err == nil || !strings.Contains(err.Error(), string(authz.CodeRequesterContextInvalid)) {
-				t.Fatalf("expected requester-context denial for peer UID %d, got %v", peerUID, err)
-			}
-		})
+	var output strings.Builder
+	err := runAuthorized(
+		fixture.config,
+		binding,
+		[]string{"version"},
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
+	if err != nil {
+		t.Fatalf("lightweight authorization rejected a valid Lumi JSON: %v", err)
 	}
 }
 
-func TestDirectAuthorizedRuntimeCannotReplaceBrokerPeerAuthentication(t *testing.T) {
+func TestDirectAuthorizedRuntimeExecutesWithoutBroker(t *testing.T) {
 	fixture := newWrapperFixture(t)
 	t.Setenv(bindingEnvironment, fixture.binding(t))
 	var output strings.Builder
@@ -385,8 +362,8 @@ func TestDirectAuthorizedRuntimeCannotReplaceBrokerPeerAuthentication(t *testing
 		&output,
 		&output,
 	)
-	if err == nil || !strings.Contains(err.Error(), string(authz.CodeRequesterContextInvalid)) {
-		t.Fatalf("expected direct runtime caller to be rejected, got %v", err)
+	if err != nil {
+		t.Fatalf("direct runtime caller was rejected: %v", err)
 	}
 }
 
@@ -419,7 +396,7 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects payload file form before the root broker reads it", func(t *testing.T) {
+	t.Run("rejects payload file form before the wrapper reads it", func(t *testing.T) {
 		payloadPath := filepath.Join(fixture.root, "request.json")
 		writeFile(t, payloadPath, []byte(`{"metrics":["saleAmt"]}`), 0o600)
 		_, err := authorizeArguments(
@@ -769,48 +746,6 @@ func TestAuthorizeRuntimeLimits(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestKillSwitchPollCancelsRunningMetricCLI(t *testing.T) {
-	fixture := newWrapperFixture(t)
-	fixture.writeRealCLI(t, "#!/bin/sh\nexec sleep 5\n")
-	fixture.config.RealMetricCLI.ArtifactSHA256 = fileSHA256(fixture.realCLIPath)
-	fixture.config.KillSwitch.PollMilliseconds = 10
-	fixture.config.Limits.TimeoutSeconds = 3
-	fixture.writeConfig(t)
-	t.Setenv(bindingEnvironment, fixture.binding(t))
-
-	writeErrors := make(chan error, 1)
-	timer := time.AfterFunc(50*time.Millisecond, func() {
-		state, err := json.Marshal(authz.ControlState{
-			Version: authz.CurrentVersion, Generation: 2, State: "disabled", UpdatedAt: time.Now().UTC(),
-		})
-		if err == nil {
-			temporary := fixture.controlPath + ".next"
-			err = os.WriteFile(temporary, state, 0o600)
-			if err == nil {
-				err = os.Rename(temporary, fixture.controlPath)
-			}
-		}
-		writeErrors <- err
-	})
-	defer timer.Stop()
-
-	started := time.Now()
-	_, err := fixture.run(t, "version")
-	if writeErr := <-writeErrors; writeErr != nil {
-		t.Fatal(writeErr)
-	}
-	if err == nil || !strings.Contains(err.Error(), "kill switch") {
-		t.Fatalf("running CLI did not observe kill-switch transition: %v", err)
-	}
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 77 {
-		t.Fatalf("kill-switch transition returned the wrong exit: %v", err)
-	}
-	if elapsed := time.Since(started); elapsed >= time.Second {
-		t.Fatalf("kill-switch polling was too slow: %v", elapsed)
-	}
 }
 
 func TestAuthorizeMetricEqualsFormsAndPayloadFilters(t *testing.T) {

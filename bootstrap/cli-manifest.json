@@ -15,10 +15,9 @@
         "manifest": "bootstrap/approved-lumi-wikis-manifest.json",
         "manifestSha256": ""
       },
-      "authzConfigPath": "/etc/harness-data/authz.json",
       "approvedMetricCatalog": {
         "source": "bootstrap/approved-metrics-v1.json",
-        "destination": "/etc/harness-data/approved-metrics-v1.json",
+        "destination": "bootstrap/approved-metrics-v1.json",
         "sha256": ""
       },
       "releaseSet": "pi-requester-v1",
@@ -94,8 +93,8 @@
       "name": "qdm-metric-cli-real",
       "binary": "qdm-metric-cli",
       "repo": "pengmide/qdm-metric-cli",
-      "private": true,
-      "destination": "/opt/harness-data/private/qdm-metric-cli",
+      "requiresAuth": true,
+      "destination": "bin/qdm-metric-cli-real",
       "tracking": "latest",
       "version": "",
       "requireAssetSha256": true,

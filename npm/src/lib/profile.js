@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { platformKey } from "./platform.js";
 
-export const installerStateSchemaVersion = 3;
+export const installerStateSchemaVersion = 4;
 export const localUnrestrictedProfile = "local-unrestricted";
 export const piRequesterAuthorizedProfile = "pi-requester-authorized";
 export const installProfiles = [localUnrestrictedProfile, piRequesterAuthorizedProfile];
@@ -50,7 +50,7 @@ function validPiRequesterReleaseState(state) {
     release.authzSchemaVersion === 1 &&
     supportedRealMetricVersion(release.realMetricVersion) &&
     release.sha256 === piRequesterReleaseSetDigest(release) &&
-    state.authzConfigPath === "/etc/harness-data/authz.json";
+    (state.authzConfigPath === undefined || state.authzConfigPath === "");
 }
 
 function commonV3StateIsValid(state) {
@@ -202,7 +202,7 @@ export function piRequesterMetricCatalogArtifact(manifest) {
     throw new Error("pi-requester-authorized manifest is missing its approved Metric catalog artifact");
   }
   if (catalog.source !== "bootstrap/approved-metrics-v1.json" ||
-      !path.isAbsolute(String(catalog.destination || "")) ||
+      catalog.destination !== "bootstrap/approved-metrics-v1.json" ||
       !validSha256(catalog.sha256)) {
     throw new Error("pi-requester-authorized approved Metric catalog artifact is invalid");
   }
@@ -234,8 +234,5 @@ export function validateProfileAgent(profile, agent) {
 }
 
 export function authzConfigPathFor(manifest, profile) {
-  if (profile !== piRequesterAuthorizedProfile) return "";
-  const value = String(manifestProfile(manifest, profile).authzConfigPath || "");
-  if (!path.isAbsolute(value)) throw new Error("pi-requester-authorized authzConfigPath must be absolute");
-  return value;
+	return "";
 }

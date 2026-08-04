@@ -55,17 +55,28 @@ type MetricCatalog struct {
 // LoadMetricCatalog verifies the exact file digest and parses the complete
 // catalog contract. A matching digest alone is not sufficient for readiness.
 func LoadMetricCatalog(path, expectedSHA256 string) (MetricCatalog, error) {
+	return loadMetricCatalog(path, expectedSHA256, true)
+}
+
+// LoadBundledMetricCatalog parses the catalog shipped in the same runtime.
+// Release download verification remains the installer's responsibility; the
+// authorization decision itself is based only on Lumi's requester JSON.
+func LoadBundledMetricCatalog(path string) (MetricCatalog, error) {
+	return loadMetricCatalog(path, "", false)
+}
+
+func loadMetricCatalog(path, expectedSHA256 string, verifyDigest bool) (MetricCatalog, error) {
 	invalid := func(message string, err error) (MetricCatalog, error) {
 		return MetricCatalog{}, authzError(CodeArtifactIntegrityFailed, message, err)
 	}
-	if err := validateAbsoluteCleanPath(path); err != nil || !lowercaseSHA256Pattern.MatchString(expectedSHA256) {
+	if err := validateAbsoluteCleanPath(path); err != nil || verifyDigest && !lowercaseSHA256Pattern.MatchString(expectedSHA256) {
 		return invalid("approved metric catalog parameters are invalid", err)
 	}
 	raw, _, err := readRegularFile(path, maxMetricCatalogBytes)
 	if err != nil {
 		return invalid("approved metric catalog cannot be read safely", err)
 	}
-	if sha256Hex(raw) != expectedSHA256 {
+	if verifyDigest && sha256Hex(raw) != expectedSHA256 {
 		return invalid("approved metric catalog digest does not match", nil)
 	}
 	var document metricCatalogFile

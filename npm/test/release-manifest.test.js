@@ -117,7 +117,7 @@ test("release manifest materializer fixes both runtime CLIs", () => {
   assert.match(manifest.tools[1].platforms["linux-amd64"].binarySha256, /^[a-f0-9]{64}$/);
   assert.equal(manifest.tools[2].tracking, "fixed");
   assert.equal(manifest.tools[2].version, qdmMetricVersion);
-  assert.equal(manifest.tools[2].destination, `/opt/harness-data/private/qdm-metric-cli-${qdmMetricVersion}`);
+  assert.equal(manifest.tools[2].destination, "bin/qdm-metric-cli-real");
   assert.match(
     manifest.tools[2].platforms["linux-amd64"].url,
     /pengmide\/qdm-metric-cli\/releases\/download\/v0\.1\.0\/qdm-metric-cli-v0\.1\.0-linux-amd64\.tar\.gz$/

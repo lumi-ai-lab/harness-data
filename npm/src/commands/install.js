@@ -22,9 +22,7 @@ import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, lat
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import {
-  authzConfigPathFor,
   installerStateSchemaVersion,
-  piRequesterMetricCatalogArtifact,
   piRequesterApprovedWikisArtifact,
   piRequesterReleaseSet,
   localUnrestrictedProfile,
@@ -38,10 +36,6 @@ import {
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
 const localMetricRepo = "pengmide/qdm-metric-cli";
-const privateMetricRoot = "/opt/harness-data/private";
-const protectedMetricBrokerRoot = "/opt/harness-data/broker";
-const protectedMetricBrokerPath = `${protectedMetricBrokerRoot}/qdm-metric-cli`;
-const metricBrokerServicePath = "/etc/systemd/system/harness-data-metric-broker.service";
 
 function readInstallState(runtimeDir) {
   const local = readInstallerState(runtimeDir);
@@ -411,9 +405,6 @@ export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, rele
     if (tool.tracking !== "fixed") throw new Error("Pi requester authorization artifacts must use fixed tracking");
   }
   const platform = platformKey();
-  if (!platform.startsWith("linux-")) {
-    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
-  }
   if (releaseSet.platform !== platform) {
     throw new Error(`Pi requester release-set platform does not match ${platform}`);
   }
@@ -431,11 +422,10 @@ export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, rele
     throw new Error(`Metric CLI artifacts do not match the Pi requester release-set for ${platform}`);
   }
   const publicPath = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
-  const realDestination = path.resolve(String(realMetric.destination || ""));
+  const realDestination = path.resolve(toolDestination(runtimeDir, realMetric));
   if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
       path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
-      path.dirname(realDestination) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realDestination))) {
+      realDestination !== path.resolve(runtimeDir, "bin", binaryName("qdm-metric-cli-real"))) {
     throw new Error("Pi requester authorization artifact destinations are invalid");
   }
 }
@@ -460,185 +450,13 @@ export function verifyPiRequesterInstalledReleaseSet(installedTools, releaseSet,
   }
 }
 
-export function installPiRequesterMetricCatalog(runtimeDir, manifest) {
-  const catalog = piRequesterMetricCatalogArtifact(manifest);
-  const source = path.resolve(runtimeDir, catalog.source);
-  const expectedSource = path.join(path.resolve(runtimeDir), "bootstrap", "approved-metrics-v1.json");
-  if (source !== expectedSource || fileSha256(source) !== catalog.sha256) {
-    throw new Error("approved Metric catalog does not match the release manifest");
-  }
-  const destination = catalog.destination;
-  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o755 });
-  if (fs.existsSync(destination) && fileSha256(destination) !== catalog.sha256) {
-    throw new Error(`approved Metric catalog destination already contains a different artifact: ${destination}`);
-  }
-  if (!fs.existsSync(destination)) fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
-  fs.chmodSync(destination, 0o644);
-  return destination;
-}
-
-function assertRootOwnedDirectory(directory, mode) {
-  fs.mkdirSync(directory, { recursive: true, mode });
-  const info = fs.lstatSync(directory);
-  if (!info.isDirectory() || info.isSymbolicLink()) {
-    throw new Error(`trusted broker path is not a regular directory: ${directory}`);
-  }
-  if (typeof info.uid === "number" && info.uid !== 0) {
-    throw new Error(`trusted broker path is not root-owned: ${directory}`);
-  }
-  fs.chownSync(directory, 0, 0);
-  fs.chmodSync(directory, mode);
-}
-
-function systemdQuote(value) {
-  if (/[\r\n\0]/.test(value)) throw new Error("trusted broker executable path is invalid");
-  return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
-}
-
-function writeRootOwnedFileAtomic(destination, content, mode) {
-  const temporary = path.join(
-    path.dirname(destination),
-    `.${path.basename(destination)}.install-${process.pid}-${crypto.randomBytes(6).toString("hex")}`
-  );
-  try {
-    fs.writeFileSync(temporary, content, { flag: "wx", mode });
-    fs.chownSync(temporary, 0, 0);
-    fs.chmodSync(temporary, mode);
-    fs.renameSync(temporary, destination);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
-}
-
-export function renderPiRequesterMetricBrokerService() {
-  return `[Unit]
-Description=Harness Data trusted Metric CLI broker
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-Group=root
-ExecStart=${systemdQuote(protectedMetricBrokerPath)} broker-serve
-RuntimeDirectory=harness-data
-RuntimeDirectoryMode=0755
-UMask=0077
-Restart=on-failure
-RestartSec=2s
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=true
-ProtectClock=true
-ProtectHostname=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectProc=invisible
-ProcSubset=pid
-RestrictSUIDSGID=true
-RestrictNamespaces=true
-LockPersonality=true
-SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-
-[Install]
-WantedBy=multi-user.target
-`;
-}
-
-export function preparePiRequesterMetricBrokerDestination(manifest, options = {}) {
-  if (process.platform !== "linux") {
-    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
-  }
-  const effectiveUID = options.effectiveUID ?? process.getuid?.();
-  if (effectiveUID !== 0) {
-    throw new Error("pi-requester-authorized installation must run as root to isolate the private Metric CLI");
-  }
-  const realTool = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
-  const realPath = path.resolve(String(realTool?.destination || ""));
-  if (path.dirname(realPath) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realPath))) {
-    throw new Error("private Metric CLI destination is outside the trusted broker directory");
-  }
-
-  assertRootOwnedDirectory("/opt/harness-data", 0o755);
-  assertRootOwnedDirectory(privateMetricRoot, 0o700);
-  if (fs.existsSync(realPath)) {
-    const info = fs.lstatSync(realPath);
-    if (!info.isFile() || info.isSymbolicLink() ||
-        (typeof info.uid === "number" && info.uid !== 0)) {
-      throw new Error("existing private Metric CLI destination is not a root-owned regular file");
-    }
-  }
-  return realPath;
-}
-
-export function installPiRequesterMetricBroker(runtimeDir, installedTools, options = {}) {
-  if (process.platform !== "linux") {
-    throw new Error("pi-requester-authorized requires Linux trusted broker isolation");
-  }
-  const effectiveUID = options.effectiveUID ?? process.getuid?.();
-  if (effectiveUID !== 0) {
-    throw new Error("pi-requester-authorized installation must run as root to isolate the private Metric CLI");
-  }
-
-  const realMetric = installedTools?.["qdm-metric-cli-real"];
-  const realPath = path.resolve(String(realMetric?.destination || ""));
-  if (path.dirname(realPath) !== privateMetricRoot ||
-      !/^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(path.basename(realPath))) {
-    throw new Error("private Metric CLI destination is outside the trusted broker directory");
-  }
-  assertRootOwnedDirectory("/opt/harness-data", 0o755);
-  assertRootOwnedDirectory(privateMetricRoot, 0o700);
-  const realInfo = fs.lstatSync(realPath);
-  if (!realInfo.isFile() || realInfo.isSymbolicLink()) {
-    throw new Error("private Metric CLI is not a regular file");
-  }
-
-  fs.chownSync(realPath, 0, 0);
-  fs.chmodSync(realPath, 0o500);
-
-  const publicMetricPath = path.join(path.resolve(runtimeDir), "bin", binaryName("qdm-metric-cli"));
-  const publicMetric = installedTools?.["qdm-metric-cli"];
-  if (path.resolve(String(publicMetric?.destination || "")) !== publicMetricPath ||
-      !/^[a-f0-9]{64}$/.test(String(publicMetric?.sha256 || ""))) {
-    throw new Error("public Metric broker artifact state is invalid");
-  }
-  const publicInfo = fs.lstatSync(publicMetricPath);
-  if (!publicInfo.isFile() || publicInfo.isSymbolicLink()) {
-    throw new Error("public Metric CLI is not a regular file");
-  }
-  const publicMetricBytes = fs.readFileSync(publicMetricPath);
-  if (crypto.createHash("sha256").update(publicMetricBytes).digest("hex") !== publicMetric.sha256) {
-    throw new Error("public Metric broker artifact does not match its installed SHA256");
-  }
-  assertRootOwnedDirectory(protectedMetricBrokerRoot, 0o700);
-  writeRootOwnedFileAtomic(protectedMetricBrokerPath, publicMetricBytes, 0o500);
-
-  const service = renderPiRequesterMetricBrokerService();
-  const servicePath = path.resolve(options.servicePath || metricBrokerServicePath);
-  assertRootOwnedDirectory(path.dirname(servicePath), 0o755);
-  writeRootOwnedFileAtomic(servicePath, service, 0o644);
-
-  return {
-    servicePath,
-    socketPath: "/run/harness-data/qdm-metric-cli.sock",
-    brokerPath: protectedMetricBrokerPath,
-    realPath
-  };
-}
-
 export function printDoctorSummary(doctor, options = {}) {
   const nonBlocking = options.nonBlocking || (() => false);
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
   const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
   if (!failed.length) {
     if (doctor.profile === piRequesterAuthorizedProfile) {
-      ok("pi-requester-authorized profile 与 installer-state v3");
+      ok(`pi-requester-authorized profile 与 installer-state v${installerStateSchemaVersion}`);
       ok("2 个运行时 CLI（data-harness-cli 与 qdm-metric-cli）");
       ok("唯一数据入口 qdm-metric-cli");
       ok("无 CAS/token 与其他数据 CLI");
@@ -722,6 +540,16 @@ export function removeLegacyLocalTools(runtimeDir) {
 
 export async function installCommand(options = {}) {
   const profile = normalizeProfile(options.profile);
+  if (profile === piRequesterAuthorizedProfile) {
+    const legacyArtifacts = [
+      "/etc/harness-data/authz.json",
+      "/etc/systemd/system/harness-data-metric-broker.service",
+      "/opt/harness-data/broker/qdm-metric-cli",
+    ].filter((file) => fs.existsSync(file));
+    if (legacyArtifacts.length) {
+      warn(`检测到已停用的严格授权部署文件，请按运维流程手工清理：${legacyArtifacts.join(", ")}`);
+    }
+  }
   if (profile === piRequesterAuthorizedProfile && String(options.profile || "") !== piRequesterAuthorizedProfile) {
     throw new Error("Pi requester installation must explicitly pass --profile pi-requester-authorized");
   }
@@ -789,7 +617,7 @@ export async function installCommand(options = {}) {
     fs.rmSync(path.join(runtimeDir, ".qdm-auth"), { recursive: true, force: true });
   }
   const releaseSet = profile === piRequesterAuthorizedProfile ? piRequesterReleaseSet(sourceManifest, key) : null;
-  const authzConfigPath = authzConfigPathFor(sourceManifest, profile);
+  const authzConfigPath = "";
   if (profile === piRequesterAuthorizedProfile) validatePiRequesterManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
 
   let manifest;
@@ -797,15 +625,12 @@ export async function installCommand(options = {}) {
   let platformTools = {};
   if (profile === piRequesterAuthorizedProfile) {
     if (!tokenMode) throw new Error("pi-requester-authorized profile requires authenticated access to fixed release artifacts");
-    preparePiRequesterMetricBrokerDestination(selectedManifest);
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, {
       ...options,
       state: installState,
       manifestOverride: selectedManifest
     });
     verifyPiRequesterInstalledReleaseSet(manifest.installedTools, releaseSet, selectedManifest);
-    installPiRequesterMetricBroker(runtimeDir, manifest.installedTools);
-    installPiRequesterMetricCatalog(runtimeDir, sourceManifest);
   } else {
     const releaseToolNames = selectedManifest.tools
       .map((tool) => tool.name)

@@ -256,13 +256,14 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
+  const requiresAuth = Boolean(tool.private || tool.requiresAuth);
   if (options.assetDir) {
     const source = path.join(path.resolve(options.assetDir), assetName(asset));
     let info;
     try {
       info = fs.lstatSync(source);
     } catch {
-      if (!tool.private) {
+      if (!requiresAuth) {
         throw new Error(`local release asset is missing: ${source}`);
       }
     }
@@ -278,12 +279,12 @@ async function downloadAsset(tool, asset, file, options = {}) {
       return;
     }
   }
-  if (!tool.private && !githubToken(options)) {
+  if (!requiresAuth && !githubToken(options)) {
     await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
   }
 
-  if (!tool.private) {
+  if (!requiresAuth) {
     try {
       if (await downloadPrivateWithGh(asset, file, options)) return;
       if (await downloadPrivateWithToken(asset, file, options)) return;

@@ -11,98 +11,34 @@ The installed runtime contains:
   and posttool state.
 - `bin/qdm-metric-cli`: the authorized Metric discovery, dimension discovery,
   validation, preview, and execution entry point.
-- private `qdm-metric-cli-real`: the pinned upstream Metric runtime stored in a
-  root-only `0700` directory as a root-only `0500` executable.
-- root-only broker executable: a SHA-verified copy of the public broker binary
-  stored at `/opt/harness-data/broker/qdm-metric-cli` with directory mode
-  `0700` and executable mode `0500`; systemd never starts the Agent-visible
-  runtime copy as root.
+- `bin/qdm-metric-cli-real`: the pinned upstream Metric runtime invoked by the
+  lightweight authorization wrapper.
 - `config/harness-config.yaml`: Harness paths and the `qdm_metric_cli` path.
 - `config/qdm-cli-paths.env`: exports only `QDM_METRIC_CLI`.
 - `agents/*`: context/posttool integrations. The Pi requester authorization profile uses only the Pi
   extension for requester authorization binding.
 
 The runtime does not install or configure any legacy data CLI or token flow.
-In `pi-requester-authorized`, the Pi extension binds each ACP session to the current
-Lumi requester envelope. The public `qdm-metric-cli` sends the invocation over
-the fixed `/run/harness-data/qdm-metric-cli.sock` Unix socket. A root-owned
-broker authenticates the caller with Linux `SO_PEERCRED`, requires the
-configured non-root `agentUid`, revalidates requester-context files owned by
-the separate `requesterContextOwnerUid` and assigned to the configured reader
-group, requires the configured Workspace and `pi` Agent identities, applies the
-Harness scope, and only then executes the private Metric runtime. The Agent UID
-cannot modify requester envelopes or traverse, read, or execute the private
-runtime and its embedded credential.
+In `pi-requester-authorized`, the Pi extension binds each ACP session to the
+current Lumi requester envelope. The public `qdm-metric-cli` reopens that JSON,
+applies the Harness scope, and directly executes the pinned Metric runtime.
+This MVP intentionally trusts the JSON supplied by Lumi and does not establish
+a local UID/GID or filesystem ownership trust boundary.
 
 ## Install
 
-The `pi-requester-authorized` profile downloads the platform-specific authorized
-`qdm-metric-cli` and its private `qdm-metric-cli-real` runtime pinned by the
-runtime manifest. This protected profile requires Linux, root installation,
-and the installed `harness-data-metric-broker.service`; deployment must provide
-root-owned, Agent-readable, non-writable `/etc/harness-data/authz.json` with
-deployment-resolved UID/GID values, then start the service after
-requester-context and kill-switch paths are mounted. The relevant config
-fragment is:
+The `pi-requester-authorized` profile downloads both pinned Metric binaries into
+the runtime and requires only `--agent pi`. Installation runs as an ordinary
+user on every platform represented in the release manifest. There is no
+`/etc/harness-data/authz.json`, root install, systemd service, fixed UID/GID, or
+deployment-managed requester-context directory. Lumi automatically supplies
+`LUMI_REQUESTER_CONTEXT_DIR` to Pi.
 
-```json
-{
-  "agentUid": "<resolved-pi-uid>",
-  "requesterContextDir": "/run/lumi/requester-context/<workspace-id>/pi",
-  "requesterContextWorkspaceId": "<workspace-id>",
-  "requesterContextAgentId": "pi",
-  "requesterContextOwnerUid": "<resolved-lumi-publisher-uid>",
-  "requesterContextReaderGid": "<resolved-reader-group-gid>"
-}
-```
-
-Angle-bracket values are deployment placeholders; UID/GID values must be
-replaced with unquoted JSON integers in the generated configuration.
-The complete [authorization configuration example](config/authz-config-v1.json.example)
-contains non-production numeric identities and zero digests. Deployment must
-replace every identity, Workspace value, path, and digest before readiness can
-pass.
-
-`agentUid` is the effective UID of Pi and the public CLI client.
-`requesterContextOwnerUid` is a different, trusted Lumi publisher UID. The
-Agent must not run as root. `requesterContextReaderGid` is a dedicated group
-granted to Pi; numeric IDs are resolved by deployment and are not baked into
-the binaries. Every ancestor of `requesterContextDir` must be outside Agent
-control and must not be group/world writable. The configured context root,
-Workspace directory, and Agent directory must all be owned by the publisher
-UID and reader GID with exact mode `0710`; envelope files must have the same
-owner/group and exact mode `0640`. The configured path must end with
-`<requesterContextWorkspaceId>/pi`.
-
-The base64url/JCS binding is intentionally not a signature. Re-encoding it or
-invoking `authz-bind` does not grant authority because both `authz-bind` and
-the root broker re-open the owner-validated envelope, and the broker also
-authenticates the caller UID.
-
-Lumi must launch Pi with the same deployment-resolved identity and reader
-group. For example, when Harness uses `agentUid=2001` and
-`requesterContextReaderGid=2003`, the corresponding Lumi fragment is:
-
-```json
-{
-  "agents": [
-    {
-      "id": "pi",
-      "command": "npx",
-      "args": ["-y", "pi-acp@0.0.33"],
-      "runAsUid": 2001,
-      "runAsGid": 2002,
-      "supplementaryGids": [2003]
-    }
-  ]
-}
-```
-
-The Lumi service must also set both
-`LUMI_REQUESTER_CONTEXT_ROOT=/run/lumi/requester-context` and
-`LUMI_REQUESTER_CONTEXT_READER_GID=2003`. The publisher must have permission
-to set the configured UID, GID, and supplementary groups. A secured Pi process
-is bound to one Workspace and must be restarted before switching Workspaces.
+The base64url/JCS binding correlates a tool call with the current session JSON;
+it is not a signature. Missing, replaced, malformed, or expired JSON fails
+closed. Because the Agent can potentially modify a locally readable file, this
+profile is intended for validation of filtering behavior rather than as a
+production host-security boundary.
 
 ## Requester Authorization Contract
 
@@ -119,7 +55,7 @@ must include the exact `qdm.metric.query` capability and a Harness-owned
 }
 ```
 
-The broker maps protected query dimensions to claims as follows:
+The wrapper maps protected query dimensions to claims as follows:
 
 | Query dimension | Authorized claim |
 | --- | --- |
@@ -129,18 +65,14 @@ The broker maps protected query dimensions to claims as follows:
 
 The same mapping is applied to ordinary CLI flags, `--other-filter`, and
 structured analysis JSON. When a supported protected filter is absent, the
-broker injects an applicable authorized scope. A request is rejected when no
+wrapper injects an applicable authorized scope. A request is rejected when no
 authorized protected scope applies to every selected metric. Protected
 dimension value enumeration is unavailable through `dim values`, because
 Metric CLI v0.1.0 cannot constrain that metadata call by requester scope.
 
-All fields declared under `limits` are enforced before or during private CLI
-execution. Date limits count both endpoints; metric and dimension counts are
-capped; missing page sizes and metadata limits receive configured defaults;
-explicit values cannot exceed their maxima. `timeoutSeconds` and
-`maxOutputBytes` bound the child process, while `killSwitch.pollMilliseconds`
-controls in-flight revalidation and cancels a running query when the protected
-control file becomes disabled or unreadable.
+Built-in execution limits are enforced before or during the real CLI process:
+31 days, 10 metrics, 10 dimensions, page size 200/1000, metadata limit 100/500,
+30 seconds, and 2 MiB of captured output.
 
 The `local-unrestricted` profile downloads the latest real `qdm-metric-cli`
 release from GitHub, verifies its published archive checksum, and installs it

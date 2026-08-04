@@ -28,7 +28,6 @@ const removedYamlKeys = [
   "qdm_sql_cli",
   "qdm_cas_cli"
 ];
-const protectedMetricBrokerPath = "/opt/harness-data/broker/qdm-metric-cli";
 
 function existsExecutable(file) {
   try {
@@ -110,36 +109,6 @@ function approvedWikisValid(workspace) {
   }
 }
 
-function privateMetricBrokerProtected(state) {
-  try {
-    const realPath = state.tools?.["qdm-metric-cli-real"]?.destination;
-    if (!realPath || path.dirname(realPath) !== "/opt/harness-data/private") return false;
-    const directory = fs.lstatSync(path.dirname(realPath));
-    const binary = fs.lstatSync(realPath);
-    const brokerDirectory = fs.lstatSync(path.dirname(protectedMetricBrokerPath));
-    const brokerBinary = fs.lstatSync(protectedMetricBrokerPath);
-    const rootOwned = (info) => typeof info.uid !== "number" || info.uid === 0;
-    return directory.isDirectory() &&
-      !directory.isSymbolicLink() &&
-      directory.mode % 0o1000 === 0o700 &&
-      rootOwned(directory) &&
-      binary.isFile() &&
-      !binary.isSymbolicLink() &&
-      binary.mode % 0o1000 === 0o500 &&
-      rootOwned(binary) &&
-      brokerDirectory.isDirectory() &&
-      !brokerDirectory.isSymbolicLink() &&
-      brokerDirectory.mode % 0o1000 === 0o700 &&
-      rootOwned(brokerDirectory) &&
-      brokerBinary.isFile() &&
-      !brokerBinary.isSymbolicLink() &&
-      brokerBinary.mode % 0o1000 === 0o500 &&
-      rootOwned(brokerBinary);
-  } catch {
-    return false;
-  }
-}
-
 export async function collectDoctor(workspace, options = {}) {
   const state = readInstallerState(workspace);
   let profile = "";
@@ -154,7 +123,7 @@ export async function collectDoctor(workspace, options = {}) {
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
   add("installer profile", Boolean(profile) && !profileError, profileError || profile || "missing");
-  add("installer state v3", state.schemaVersion === installerStateSchemaVersion);
+  add(`installer state v${installerStateSchemaVersion}`, state.schemaVersion === installerStateSchemaVersion);
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
   add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
   add("wikis/metrics", fs.existsSync(path.join(workspace, "wikis", "metrics")));
@@ -176,21 +145,18 @@ export async function collectDoctor(workspace, options = {}) {
   for (const binary of qdmCliBinariesForProfile(effectiveProfile)) {
     const file = path.join(workspace, "bin", binaryName(binary));
     add(`bin/${binary}`, existsExecutable(file));
-    const brokerProbe = effectiveProfile === piRequesterAuthorizedProfile && binary === "qdm-metric-cli";
-    const requireBroker = brokerProbe && !options.buildTime;
-    const probeArgs = binary === "qdm-metric-cli"
-      ? [brokerProbe ? "broker-health" : "version"]
-      : ["wikis"];
+    const authzProbe = effectiveProfile === piRequesterAuthorizedProfile && binary === "qdm-metric-cli";
+    const probeArgs = binary === "qdm-metric-cli" ? ["version"] : ["wikis"];
     const requiredStatus = binary !== "qdm-metric-cli"
       ? null
-      : brokerProbe
-        ? (options.buildTime ? 77 : 0)
+      : authzProbe
+        ? 77
         : 0;
     add(
       `bin/${binary} runnable`,
       executableLaunches(file, probeArgs, requiredStatus),
-      brokerProbe
-        ? (requireBroker ? "trusted broker health" : "fails closed before broker activation")
+      authzProbe
+        ? "fails closed without Lumi requester JSON"
         : ""
     );
   }
@@ -215,18 +181,9 @@ export async function collectDoctor(workspace, options = {}) {
 
   if (effectiveProfile === piRequesterAuthorizedProfile) {
     add("Pi-only profile", state.agent === "pi");
-    add("authorization config path", state.authzConfigPath === "/etc/harness-data/authz.json");
-    add("Metric authorization catalog", fs.existsSync("/etc/harness-data/approved-metrics-v1.json"));
-    if (options.buildTime) {
-      add("private qdm-metric-cli isolated", privateMetricBrokerProtected(state));
-      add("Metric broker systemd unit", nonEmptyRegularFile("/etc/systemd/system/harness-data-metric-broker.service"));
-    } else {
-      add("Metric broker reachable", executableLaunches(
-        path.join(workspace, "bin", binaryName("qdm-metric-cli")),
-        ["broker-health"],
-        0
-      ));
-    }
+    add("authorization config absent", !state.authzConfigPath);
+    add("Metric authorization catalog", nonEmptyRegularFile(path.join(workspace, "bootstrap", "approved-metrics-v1.json")));
+    add("direct Metric CLI", existsExecutable(path.join(workspace, "bin", binaryName("qdm-metric-cli-real"))));
     add("Agent hook .pi", agentOk(workspace, "pi"), "agents/pi");
     for (const name of concreteAgentNames.filter((name) => name !== "pi")) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));

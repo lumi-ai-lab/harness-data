@@ -99,8 +99,7 @@ func validateBinding(binding Binding, now time.Time) error {
 	return nil
 }
 
-// ValidateCurrent checks the binding, dynamic control state, and the current
-// authoritative Lumi file on every invocation.
+// ValidateCurrent checks the binding and current Lumi JSON on every invocation.
 func ValidateCurrent(config Config, binding Binding, options ...ReadOption) (LoadedEnvelope, error) {
 	if err := config.RequireEnforcing(); err != nil {
 		return LoadedEnvelope{}, err
@@ -109,14 +108,7 @@ func ValidateCurrent(config Config, binding Binding, options ...ReadOption) (Loa
 	if err := validateBinding(binding, settings.now); err != nil {
 		return LoadedEnvelope{}, err
 	}
-	control, err := ReadControl(config)
-	if err != nil {
-		return LoadedEnvelope{}, err
-	}
-	if !control.Enabled() {
-		return LoadedEnvelope{}, authzError(CodeKillSwitchActive, "authorization kill switch is disabled", nil)
-	}
-	envelopeOptions := []ReadOption{WithNow(settings.now), WithAgentUID(settings.agentUID)}
+	envelopeOptions := []ReadOption{WithNow(settings.now)}
 	loaded, err := ReadEnvelope(config, binding.SessionID, envelopeOptions...)
 	if err != nil {
 		return LoadedEnvelope{}, err
@@ -127,7 +119,6 @@ func ValidateCurrent(config Config, binding Binding, options ...ReadOption) (Loa
 		!binding.ExpiresAt.Equal(loaded.Envelope.ExpiresAt) {
 		return LoadedEnvelope{}, authzError(CodeBindingMismatch, "authorization binding does not match the current requester context", nil)
 	}
-	loaded.ControlGeneration = control.Generation
 	return loaded, nil
 }
 
@@ -136,13 +127,6 @@ func ValidateCurrent(config Config, binding Binding, options ...ReadOption) (Loa
 func Bind(config Config, sessionID string, options ...ReadOption) (BindResult, error) {
 	if err := config.RequireEnforcing(); err != nil {
 		return BindResult{}, err
-	}
-	control, err := ReadControl(config)
-	if err != nil {
-		return BindResult{}, err
-	}
-	if !control.Enabled() {
-		return BindResult{}, authzError(CodeKillSwitchActive, "authorization kill switch is disabled", nil)
 	}
 	loaded, err := ReadEnvelope(config, sessionID, options...)
 	if err != nil {
