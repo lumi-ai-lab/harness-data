@@ -13,7 +13,13 @@ import (
 
 func TestUsageListsAuthorizationCommands(t *testing.T) {
 	usage := usageText()
-	for _, command := range []string{"authz-bind", "authz-readiness", "authz-validate-catalog"} {
+	for _, command := range []string{
+		"authz-bind",
+		"authz-readiness",
+		"authz-validate-catalog",
+		"authz-metric-broker",
+		"authz-metric-broker-register",
+	} {
 		if !strings.Contains(usage, command) {
 			t.Fatalf("usage missing %s: %s", command, usage)
 		}

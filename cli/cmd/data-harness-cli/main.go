@@ -155,7 +155,7 @@ func printUsage() {
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show|authz-bind|authz-readiness|authz-validate-catalog>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show|authz-bind|authz-readiness|authz-validate-catalog|authz-metric-broker|authz-metric-broker-register>"
 }
 
 type showDocument struct {

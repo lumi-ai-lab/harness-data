@@ -1,6 +1,7 @@
 package metriccli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -365,6 +366,105 @@ func TestDirectAuthorizedRuntimeExecutesWithoutBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct runtime caller was rejected: %v", err)
 	}
+}
+
+func TestBrokerExecutesAfterRevalidatingScope(t *testing.T) {
+	fixture := newWrapperFixture(t)
+	socket := startTestMetricBroker(t, fixture)
+	token := strings.Repeat("A", 43)
+	if err := RegisterMetricBrokerToken(socket, token, fixture.binding(t)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(bindingEnvironment, "")
+	t.Setenv(brokerSocketEnvironment, socket)
+	t.Setenv(brokerTokenEnvironment, token)
+
+	var output strings.Builder
+	err := RunWithConfig(
+		fixture.configPath,
+		[]string{"analysis", "execute", "--metric", "saleAmt", "--filter", "manageAreaId=CN07"},
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
+	if err != nil {
+		t.Fatalf("broker-backed authorized query failed: %v output=%q", err, output.String())
+	}
+	if !strings.Contains(output.String(), "arg=--filter") || !strings.Contains(output.String(), "arg=manageAreaId=CN07") {
+		t.Fatalf("broker did not execute the real CLI with authorized args: %q", output.String())
+	}
+
+	output.Reset()
+	err = RunWithConfig(
+		fixture.configPath,
+		[]string{"analysis", "execute", "--metric", "saleAmt", "--filter", "manageAreaId=CN07"},
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
+	if err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("expected one-shot broker token rejection, got err=%v output=%q", err, output.String())
+	}
+
+	unauthorizedToken := strings.Repeat("B", 43)
+	if err := RegisterMetricBrokerToken(socket, unauthorizedToken, fixture.binding(t)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(brokerTokenEnvironment, unauthorizedToken)
+	output.Reset()
+	err = RunWithConfig(
+		fixture.configPath,
+		[]string{"analysis", "execute", "--metric", "saleAmt", "--filter", "manageAreaId=CN99"},
+		strings.NewReader(""),
+		&output,
+		&output,
+	)
+	if err == nil || !strings.Contains(err.Error(), "manageAreaId contains an unauthorized value") {
+		t.Fatalf("broker accepted an unauthorized filter: err=%v output=%q", err, output.String())
+	}
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 77 {
+		t.Fatalf("unauthorized broker request exit code = %v, want 77", err)
+	}
+}
+
+func startTestMetricBroker(t *testing.T, fixture *wrapperFixture) string {
+	t.Helper()
+	socket := filepath.Join("/tmp", "qdm-brk-"+fileSHA256(fixture.configPath)[:16]+".sock")
+	t.Cleanup(func() {
+		_ = os.Remove(socket)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeMetricBroker(ctx, socket, fixture.config)
+	}()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if _, err := os.Stat(socket); err == nil {
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatalf("metric broker shutdown failed: %v", err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("metric broker did not shut down")
+				}
+			})
+			return socket
+		}
+		select {
+		case err := <-done:
+			cancel()
+			t.Fatalf("metric broker exited before creating its socket: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	t.Fatal("metric broker did not create its socket")
+	return ""
 }
 
 func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
