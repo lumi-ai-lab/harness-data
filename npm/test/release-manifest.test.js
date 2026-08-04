@@ -193,11 +193,13 @@ test("release manifest rejects missing and extra release-set platforms", () => {
   }
 });
 
-test("release manifest rejects a Metric CLI other than v0.1.0", () => {
-  assert.throws(() => materializeReleaseManifest({
-    version: "v1.2.3",
-    qdmMetricVersion: "v0.1.1"
-  }), /must be pinned to v0\.1\.0/);
+test("release manifest rejects a non-semver Metric CLI version", () => {
+  for (const qdmMetricVersion of ["v0.1", "0.1.0", "latest", "v0.1.0-contract"]) {
+    assert.throws(() => materializeReleaseManifest({
+      version: "v1.2.3",
+      qdmMetricVersion
+    }), /must be a semver tag/);
+  }
 });
 
 test("release manifest materialization requires pinned Wikis source and manifest", () => {

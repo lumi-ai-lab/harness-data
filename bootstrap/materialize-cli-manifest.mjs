@@ -76,8 +76,8 @@ export function materializeReleaseManifest(options) {
     throw new Error(`release version must match vMAJOR.MINOR.PATCH: ${version || "missing"}`);
   }
   const qdmMetricVersion = String(options.qdmMetricVersion || "").trim();
-  if (qdmMetricVersion !== "v0.1.0") {
-    throw new Error(`qdm-metric-cli release must be pinned to v0.1.0: ${qdmMetricVersion || "missing"}`);
+  if (!/^v\d+\.\d+\.\d+$/.test(qdmMetricVersion)) {
+    throw new Error(`qdm-metric-cli release must be a semver tag (vMAJOR.MINOR.PATCH): ${qdmMetricVersion || "missing"}`);
   }
   if (!options.approvedWikisSource || !options.approvedWikisManifest) {
     throw new Error("pinned Wikis source and its generated allowlist manifest are required for release");

@@ -146,15 +146,19 @@ func TestMetricCatalogMatchesApprovedIdentifiersExactly(t *testing.T) {
 	}
 }
 
-func TestConfigAcceptsOnlyCompatibleMetricPatchVersions(t *testing.T) {
+func TestConfigAcceptsSemverMetricVersions(t *testing.T) {
 	fixture := newAuthzFixture(t)
 	config := fixture.config
-	config.RealMetricCLI.Version = "0.1.9"
-	if err := config.Validate(); err != nil {
-		t.Fatalf("expected compatible Metric CLI patch version: %v", err)
+	for _, version := range []string{"0.1.7", "0.1.9", "0.2.0", "1.0.0"} {
+		config.RealMetricCLI.Version = version
+		if err := config.Validate(); err != nil {
+			t.Fatalf("expected semver Metric CLI version %q to be accepted: %v", version, err)
+		}
 	}
-	config.RealMetricCLI.Version = "0.2.0"
-	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+	for _, version := range []string{"0.1", "0.1.x", "v0.1.0", "latest", "0.1.0-contract"} {
+		config.RealMetricCLI.Version = version
+		assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
+	}
 }
 
 func TestConfigRejectsLegacyLumiMode(t *testing.T) {
