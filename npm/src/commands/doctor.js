@@ -95,6 +95,13 @@ function nonEmptyRegularFile(file) {
   }
 }
 
+function privateRealMetricCLIValid(workspace, state) {
+  const destination = String(state.tools?.["qdm-metric-cli-real"]?.destination || "");
+  if (!destination || !path.isAbsolute(destination)) return false;
+  if (path.resolve(destination) === path.resolve(workspace, "bin", binaryName("qdm-metric-cli-real"))) return false;
+  return existsExecutable(destination);
+}
+
 function approvedWikisValid(workspace) {
   try {
     const manifest = readManifest(path.join(workspace, "bootstrap", "cli-manifest.json"));
@@ -183,7 +190,8 @@ export async function collectDoctor(workspace, options = {}) {
     add("Pi-only profile", state.agent === "pi");
     add("authorization config absent", !state.authzConfigPath);
     add("Metric authorization catalog", nonEmptyRegularFile(path.join(workspace, "bootstrap", "approved-metrics-v1.json")));
-    add("direct Metric CLI", existsExecutable(path.join(workspace, "bin", binaryName("qdm-metric-cli-real"))));
+    add("public real Metric CLI absent", !fs.existsSync(path.join(workspace, "bin", binaryName("qdm-metric-cli-real"))));
+    add("private real Metric CLI", privateRealMetricCLIValid(workspace, state));
     add("Agent hook .pi", agentOk(workspace, "pi"), "agents/pi");
     for (const name of concreteAgentNames.filter((name) => name !== "pi")) {
       add(`Agent hook .${name} absent`, !fs.existsSync(path.join(workspace, `.${name}`)));

@@ -146,7 +146,8 @@ export function materializeReleaseManifest(options) {
   const realMetric = requireTool(manifest, "qdm-metric-cli-real");
   realMetric.tracking = "fixed";
   realMetric.version = qdmMetricVersion;
-  realMetric.destination = "bin/qdm-metric-cli-real";
+  realMetric.private = true;
+  realMetric.destination = "{privateToolsDir}/qdm-metric-cli-real";
   realMetric.requireAssetSha256 = true;
   realMetric.requireBinarySha256 = true;
   for (const platform of Object.keys(realMetric.platforms || {})) {

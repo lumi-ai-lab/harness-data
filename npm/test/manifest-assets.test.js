@@ -26,6 +26,10 @@ function createArchive(root, assetName, content) {
   return { archive, binarySha256: sha256(binary), archiveSha256: sha256(archive) };
 }
 
+function defaultPrivateDestination(workspace) {
+  return path.join(workspace, ".harness", "private", "bin", binaryName("fixture-cli"));
+}
+
 function latestManifest(assetName) {
   return {
     schemaVersion: 3,
@@ -133,7 +137,7 @@ function manifestFor(asset, options = {}) {
       binary: "fixture-cli",
       repo: options.private ? "pengmide/fixture-cli" : "lumi-ai-lab/fixture-cli",
       ...(options.private ? { private: true } : {}),
-      destination: options.destination || "bin/fixture-cli",
+      destination: options.destination || (options.private ? "fixture-cli" : "bin/fixture-cli"),
       tracking: "fixed",
       version: "v0.1.0",
       requireAssetSha256: true,
@@ -242,7 +246,7 @@ exit 1
       assetDir,
       log: false
     });
-    const installed = path.join(workspace, "bin", binaryName("fixture-cli"));
+    const installed = defaultPrivateDestination(workspace);
     assert.equal(fs.readFileSync(installed, "utf8"), "#!/bin/sh\necho private\n");
     assert.equal(fs.statSync(installed).mode & 0o777, 0o500);
     assert.equal(fs.statSync(path.dirname(installed)).mode & 0o777, 0o700);
@@ -377,11 +381,11 @@ exit 1
     []
   );
   assert.deepEqual(
-    fs.readdirSync(path.join(workspace, "bin"))
+    fs.readdirSync(path.join(workspace, ".harness", "private", "bin"))
       .filter((name) => name.startsWith(".private-install-")),
     []
   );
-  assert.equal(fs.existsSync(path.join(workspace, "bin", binaryName("fixture-cli"))), false);
+  assert.equal(fs.existsSync(defaultPrivateDestination(workspace)), false);
 });
 
 test("binary checksum failure preserves an existing installed CLI", async () => {

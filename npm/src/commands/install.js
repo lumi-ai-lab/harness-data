@@ -12,7 +12,7 @@ import {
 import { verifyApprovedWikisSource } from "../lib/approved-wikis.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { readInstallerState, readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { installToolsFromManifest, manifestDigest, readManifest, toolDestination } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestDigest, privateToolsDir, readManifest, toolDestination } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
@@ -229,7 +229,7 @@ export async function installWikis(runtimeDir, profile, manifest, options = {}) 
     if (approvalManifest !== expectedManifest) throw new Error("approved Wikis manifest escapes the runtime bundle");
     const verified = verifyApprovedWikisSource(source, approvalManifest, approved.manifestSha256);
     fs.rmSync(target, { recursive: true, force: true });
-    fs.cpSync(verified.source, target, { recursive: true });
+    copyReadableTree(verified.source, target);
     ok(`已安装发布版本固定的 Lumi Wikis 内容 ${approved.manifestSha256.slice(0, 12)}`);
     return { mode: "approved-release-content", source: verified.source, path: target };
   }
@@ -237,7 +237,7 @@ export async function installWikis(runtimeDir, profile, manifest, options = {}) 
     const source = path.resolve(options.wikisSource);
     validateLocalWikisSource(source);
     fs.rmSync(target, { recursive: true, force: true });
-    fs.cpSync(source, target, { recursive: true });
+    copyReadableTree(source, target);
     ok(`harness-data-wikis 构建输入 ${source}`);
     return { mode: "release-build-input", source, path: target };
   }
@@ -270,9 +270,38 @@ export async function installWikis(runtimeDir, profile, manifest, options = {}) 
   const source = fs.existsSync(auto) ? auto : path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
   validateLocalWikisSource(source);
   fs.rmSync(target, { recursive: true, force: true });
-  fs.cpSync(source, target, { recursive: true });
+  copyReadableTree(source, target);
   ok(`harness-data-wikis 本地路径 ${source}`);
   return { mode: "local-path", source, path: target };
+}
+
+function copyReadableTree(source, target) {
+  const info = fs.lstatSync(source);
+  if (info.isSymbolicLink()) throw new Error(`refusing to copy symlinked Wikis path: ${source}`);
+  if (info.isDirectory()) {
+    fs.mkdirSync(target, { recursive: true, mode: 0o755 });
+    for (const entry of fs.readdirSync(source)) {
+      copyReadableTree(path.join(source, entry), path.join(target, entry));
+    }
+    try {
+      fs.chmodSync(target, 0o755);
+    } catch {
+      // Some Docker Desktop bind mounts reject chmod; mkdir mode and file modes
+      // still keep copied Wikis readable for the runtime.
+    }
+    return;
+  }
+  if (info.isFile()) {
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
+    fs.writeFileSync(target, fs.readFileSync(source), { mode: 0o644 });
+    try {
+      fs.chmodSync(target, 0o644);
+    } catch {
+      // See the directory chmod note above.
+    }
+    return;
+  }
+  throw new Error(`refusing to copy unsafe Wikis path: ${source}`);
 }
 
 export function validateLocalWikisSource(source) {
@@ -394,7 +423,7 @@ export function installSandboxPlatformTools(runtimeDir, profile, options = {}) {
   return installed;
 }
 
-export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, releaseSet) {
+export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, releaseSet, options = {}) {
   const helper = manifest.tools?.find((tool) => tool.name === "data-harness-cli");
   const publicMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli");
   const realMetric = manifest.tools?.find((tool) => tool.name === "qdm-metric-cli-real");
@@ -417,17 +446,37 @@ export function validatePiRequesterManifestReleaseSet(runtimeDir, manifest, rele
       realMetric.version !== releaseSet.realMetricVersion) {
     throw new Error("Metric CLI versions do not match the Pi requester release-set");
   }
+  if (realMetric.private !== true) {
+    throw new Error("Pi requester real Metric CLI must be marked private");
+  }
   if (publicMetric.platforms[platform].binarySha256 !== releaseSet.publicMetricSha256 ||
       realMetric.platforms[platform].binarySha256 !== releaseSet.realMetricSha256) {
     throw new Error(`Metric CLI artifacts do not match the Pi requester release-set for ${platform}`);
   }
   const publicPath = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
-  const realDestination = path.resolve(toolDestination(runtimeDir, realMetric));
-  if (path.resolve(toolDestination(runtimeDir, helper)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
-      path.resolve(toolDestination(runtimeDir, publicMetric)) !== path.resolve(publicPath) ||
-      realDestination !== path.resolve(runtimeDir, "bin", binaryName("qdm-metric-cli-real"))) {
+  const privateRoot = privateToolsDir(runtimeDir, options);
+  const realDestination = path.resolve(toolDestination(runtimeDir, realMetric, options));
+  if (path.resolve(toolDestination(runtimeDir, helper, options)) !== path.resolve(runtimeDir, "bin", binaryName("data-harness-cli")) ||
+      path.resolve(toolDestination(runtimeDir, publicMetric, options)) !== path.resolve(publicPath) ||
+      realDestination !== path.resolve(privateRoot, binaryName("qdm-metric-cli-real"))) {
     throw new Error("Pi requester authorization artifact destinations are invalid");
   }
+}
+
+function removePublicRealMetricCLI(runtimeDir) {
+  const publicReal = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli-real"));
+  let info;
+  try {
+    info = fs.lstatSync(publicReal);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  if (info.isDirectory()) {
+    throw new Error(`public real Metric CLI path is a directory and must be removed manually: ${publicReal}`);
+  }
+  fs.rmSync(publicReal, { force: true });
+  return true;
 }
 
 export function verifyPiRequesterInstalledReleaseSet(installedTools, releaseSet, manifest = null) {
@@ -618,7 +667,10 @@ export async function installCommand(options = {}) {
   }
   const releaseSet = profile === piRequesterAuthorizedProfile ? piRequesterReleaseSet(sourceManifest, key) : null;
   const authzConfigPath = "";
-  if (profile === piRequesterAuthorizedProfile) validatePiRequesterManifestReleaseSet(runtimeDir, selectedManifest, releaseSet);
+  if (profile === piRequesterAuthorizedProfile) {
+    validatePiRequesterManifestReleaseSet(runtimeDir, selectedManifest, releaseSet, options);
+    if (removePublicRealMetricCLI(runtimeDir)) action("移除公开 real Metric CLI：bin/qdm-metric-cli-real");
+  }
 
   let manifest;
   let localTools = {};
