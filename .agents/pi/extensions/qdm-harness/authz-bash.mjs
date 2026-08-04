@@ -17,12 +17,16 @@ const FORBIDDEN_QDM_ENV = [
 // can read data for areas/categories outside their authorization. Block direct
 // invocations and force the agent to re-issue via the qdm-metric-cli wrapper.
 const FORBIDDEN_REAL_BINARY = "qdm-metric-cli-real";
+const FORBIDDEN_AUTHZ_BIND = "authz-bind";
 const FORBIDDEN_REAL_MESSAGE =
   "直接调用 " +
   FORBIDDEN_REAL_BINARY +
   " 被禁止：它绕过 requester 权限校验（scope enforcement 在 qdm-metric-cli 包装器内，exec real 前先校验）。" +
   "请改用 qdm-metric-cli 包装器发起同样的查询（例如 bin/qdm-metric-cli 或 $QDM_METRIC_CLI），" +
   "可先 qdm-metric-cli --help 确认子命令与参数。";
+const FORBIDDEN_AUTHZ_BIND_MESSAGE =
+  "直接调用 authz-bind 被禁止：它会暴露可执行授权 binding material。" +
+  "请求者授权由 Pi 扩展在模型上下文外自动绑定；请直接使用 qdm-metric-cli 包装器查询。";
 
 export function buildRejectedCommand(message) {
   return "printf '%s\\n' " + JSON.stringify(message) + " 1>&2; exit 9";
@@ -32,6 +36,12 @@ export function commandReferencesRealBinary(params) {
   const commandText = String(params?.command ?? "");
   const blob = commandText || JSON.stringify(params ?? {});
   return blob.includes(FORBIDDEN_REAL_BINARY);
+}
+
+export function commandReferencesAuthzBind(params) {
+  const commandText = String(params?.command ?? "");
+  const blob = commandText || JSON.stringify(params ?? {});
+  return blob.includes(FORBIDDEN_AUTHZ_BIND);
 }
 
 function invocationCwd(ctx, fallback) {
@@ -73,6 +83,23 @@ export function registerAuthzBashOverride(pi, options) {
           return await tool.execute(
             toolCallId,
             { ...params, command: buildRejectedCommand(FORBIDDEN_REAL_MESSAGE) },
+            signal,
+            onUpdate,
+          );
+        } finally {
+          stateStore.clearToolCall(toolCallId);
+        }
+      }
+
+      // authz-bind is an extension-internal operation. If the model invokes it
+      // through Bash, its stdout can enter the transcript and leak executable
+      // binding material. Fail closed and keep binding injection out of model
+      // context.
+      if (commandReferencesAuthzBind(params)) {
+        try {
+          return await tool.execute(
+            toolCallId,
+            { ...params, command: buildRejectedCommand(FORBIDDEN_AUTHZ_BIND_MESSAGE) },
             signal,
             onUpdate,
           );

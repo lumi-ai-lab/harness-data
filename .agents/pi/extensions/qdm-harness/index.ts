@@ -156,7 +156,7 @@ function usesPiRequesterAuthorizationProfile(projectRoot: string): boolean {
     const state = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
     return (
       isObject(state) &&
-      state.schemaVersion === 3 &&
+      state.schemaVersion === 4 &&
       state.profile === PI_REQUESTER_AUTHORIZATION_PROFILE &&
       state.agent === "pi"
     );

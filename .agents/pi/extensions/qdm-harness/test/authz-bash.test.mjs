@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   registerAuthzBashOverride,
   buildRejectedCommand,
+  commandReferencesAuthzBind,
   commandReferencesRealBinary,
 } from "../authz-bash.mjs";
 
@@ -33,6 +34,16 @@ test("commandReferencesRealBinary does not flag the wrapper or unrelated command
   assert.equal(commandReferencesRealBinary({ command: "qdm-metric-cli --help" }), false);
   assert.equal(commandReferencesRealBinary({ command: "ls -la /workspace" }), false);
   assert.equal(commandReferencesRealBinary({}), false);
+});
+
+test("commandReferencesAuthzBind detects direct binding helper invocation", () => {
+  assert.equal(
+    commandReferencesAuthzBind({
+      command: "/workspace/bin/data-harness-cli authz-bind --session-id x",
+    }),
+    true,
+  );
+  assert.equal(commandReferencesAuthzBind({ command: "data-harness-cli wikis" }), false);
 });
 
 test("buildRejectedCommand fails closed and carries guidance", () => {
@@ -115,6 +126,16 @@ test("override blocks real binary referenced inside a chained command", async ()
   await run(tool(), original);
   assert.equal(executed.length, 1);
   assert.match(executed[0].params.command, /exit 9/);
+  assert.notEqual(executed[0].params.command, original);
+});
+
+test("override blocks direct authz-bind so binding material cannot enter Bash output", async () => {
+  const { tool, executed } = harness();
+  const original = "/workspace/bin/data-harness-cli authz-bind --session-id test-session";
+  await run(tool(), original);
+  assert.equal(executed.length, 1);
+  assert.match(executed[0].params.command, /exit 9/);
+  assert.match(executed[0].params.command, /authz-bind/);
   assert.notEqual(executed[0].params.command, original);
 });
 

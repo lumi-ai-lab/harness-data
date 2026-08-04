@@ -44,7 +44,7 @@ function createProject(t, options = {}) {
     writeFileSync(
       join(root, ".harness", "installer-state.json"),
       JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         profile: options.profile ?? "pi-requester-authorized",
         agent: "pi",
       }),
