@@ -422,9 +422,10 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("maps sapArea2Id to DC scope and retains other applicable guards", func(t *testing.T) {
+	t.Run("maps sapArea2Id to manage scope and retains other applicable guards", func(t *testing.T) {
+		// sapArea2Id 现由 manageAreaIds 约束；CN99 不在 [CN07,CN08] → 越权
 		_, err := authorizeArguments(
-			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=DC99"},
+			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=CN99"},
 			authzScope,
 			10,
 			catalog,
@@ -433,8 +434,9 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 			t.Fatalf("expected unauthorized sap area error, got %v", err)
 		}
 
+		// sapArea2Id=CN07 在 manageAreaIds 内 → 合法；DC 组与 category 组照常注入，manage 组因 sapArea2Id 已被请求而不再注入 manageAreaId
 		args, err := authorizeArguments(
-			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=DC07"},
+			[]string{"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=CN07"},
 			authzScope,
 			10,
 			catalog,
@@ -443,10 +445,13 @@ func TestAuthorizeAnalysisScopeAndPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		joined := strings.Join(args, " ")
-		if !strings.Contains(joined, "--filter sapArea2Id=DC07") ||
-			!strings.Contains(joined, "--filter manageAreaId=CN07,CN08") ||
+		if !strings.Contains(joined, "--filter sapArea2Id=CN07") ||
+			!strings.Contains(joined, "--filter dcManageAreaId=DC07,DC08") ||
 			!strings.Contains(joined, "--filter categoryLevel1Id=12,13") {
 			t.Fatalf("authorized sap area did not retain applicable guards: %q", joined)
+		}
+		if strings.Contains(joined, "manageAreaId=") {
+			t.Fatalf("manage group should not inject manageAreaId when sapArea2Id is supplied: %q", joined)
 		}
 	})
 
@@ -538,14 +543,28 @@ func TestAuthorizeDCScopeAcrossFlagsAndPayload(t *testing.T) {
 		})
 	}
 
-	t.Run("manage-only cannot use dcManageAreaId or sapArea2Id", func(t *testing.T) {
-		for _, dimension := range []string{"dcManageAreaId", "sapArea2Id"} {
-			_, err := authorizeArguments([]string{
-				"analysis", "validate", "--metric", "profitAmt", "--filter", dimension + "=CN07",
-			}, authz.Scope{ManageAreaIDs: []string{"CN07"}}, 10, catalog)
-			if err == nil || !strings.Contains(err.Error(), "scope for "+dimension+" is empty") {
-				t.Fatalf("manage-only scope used %s: %v", dimension, err)
-			}
+	t.Run("manage-only authorizes sapArea2Id but rejects dcManageAreaId", func(t *testing.T) {
+		// sapArea2Id 是门店维度，manage-only scope 覆盖它
+		args, err := authorizeArguments([]string{
+			"analysis", "validate", "--metric", "profitAmt", "--filter", "sapArea2Id=CN07",
+		}, authz.Scope{ManageAreaIDs: []string{"CN07"}}, 10, catalog)
+		if err != nil {
+			t.Fatalf("manage-only scope rejected sapArea2Id: %v", err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "--filter sapArea2Id=CN07") {
+			t.Fatalf("sapArea2Id was not retained: %q", joined)
+		}
+		if strings.Contains(joined, "dcManageAreaId") || strings.Contains(joined, "categoryLevel1Id") {
+			t.Fatalf("empty scopes were injected: %q", joined)
+		}
+
+		// dcManageAreaId 是仓维度，manage-only scope 不覆盖它
+		_, err = authorizeArguments([]string{
+			"analysis", "validate", "--metric", "profitAmt", "--filter", "dcManageAreaId=CN07",
+		}, authz.Scope{ManageAreaIDs: []string{"CN07"}}, 10, catalog)
+		if err == nil || !strings.Contains(err.Error(), "scope for dcManageAreaId is empty") {
+			t.Fatalf("manage-only scope authorized dcManageAreaId: %v", err)
 		}
 	})
 

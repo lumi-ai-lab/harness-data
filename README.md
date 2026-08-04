@@ -59,8 +59,8 @@ The wrapper maps protected query dimensions to claims as follows:
 
 | Query dimension | Authorized claim |
 | --- | --- |
-| `manageAreaId` | `manageAreaIds` |
-| `dcManageAreaId`, `sapArea2Id` | `dcManageAreaIds` |
+| `manageAreaId`, `sapArea2Id` | `manageAreaIds` |
+| `dcManageAreaId` | `dcManageAreaIds` |
 | `categoryLevel1Id` | `categoryLevel1Ids` |
 
 The same mapping is applied to ordinary CLI flags, `--other-filter`, and

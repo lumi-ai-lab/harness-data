@@ -659,8 +659,8 @@ type protectedScopeGroup struct {
 
 func protectedScopeGroups(scope authorizationScope) []protectedScopeGroup {
 	return []protectedScopeGroup{
-		{dimensions: []string{"manageAreaId"}, authorized: scope.ManageAreaIDs},
-		{dimensions: []string{"dcManageAreaId", "sapArea2Id"}, authorized: scope.DCManageAreaIDs},
+		{dimensions: []string{"manageAreaId", "sapArea2Id"}, authorized: scope.ManageAreaIDs},
+		{dimensions: []string{"dcManageAreaId"}, authorized: scope.DCManageAreaIDs},
 		{dimensions: []string{"categoryLevel1Id"}, authorized: scope.CategoryLevel1IDs},
 	}
 }
