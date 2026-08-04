@@ -19,6 +19,8 @@ var metricCLIDiagnosticPattern = regexp.MustCompile(`(?i)\bqdm-metric-cli(?:\.ex
 
 const shellExitCaptureInstruction = " When capturing a zsh command exit code, use rc=$?; do not assign to the read-only zsh parameter status. Treat the data CLI invocation and the surrounding output-capture wrapper as separate operations: if the CLI already executed, do not rerun it solely because later output formatting or wrapper logic failed."
 
+const cliInvocationInstruction = " Invoke the data CLI as ./bin/qdm-metric-cli (relative to the project root); do not rely on the bare command qdm-metric-cli being on PATH, since PATH injection is not guaranteed in every harness profile."
+
 var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
@@ -785,7 +787,7 @@ func instructionForPlan(plan WikiPlan) string {
 	if plan.Mode == sessionstate.ModeFree && plan.Reason == "metric_cli_diagnostic" {
 		return "Harness mode: free. reason=metric_cli_diagnostic. This is a qdm-metric-cli metadata diagnostic request. Do not read context files, specs, playbooks, templates, source code, or other CLIs. Execute only the exact public qdm-metric-cli version/help command requested by the user and return its actual stdout, stderr, and exit status." + shellExitCaptureInstruction
 	}
-	common := "All modes: read all contextFiles before running qdm-metric-cli. Numeric values must come from qdm-metric-cli; do not estimate or invent. Use only qdm-metric-cli for data queries. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file." + shellExitCaptureInstruction
+	common := "All modes: read all contextFiles before running qdm-metric-cli. Numeric values must come from qdm-metric-cli; do not estimate or invent. Use only qdm-metric-cli for data queries. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file." + shellExitCaptureInstruction + cliInvocationInstruction
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."
