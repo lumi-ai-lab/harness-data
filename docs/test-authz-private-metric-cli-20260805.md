@@ -566,7 +566,85 @@ aarch64
 ```text
 当前本地 Lumi sandbox 默认 root。
 如果 Agent Bash 也以 root 执行，私有目录 0700/0500 不能作为安全边界。
-必须将 Agent/device executor 切到非 root，或采用 sidecar/broker 方案让 real CLI 不进入 Agent 容器。
+必须将 Agent/device executor 切到非 root，并通过 Metric broker 执行 private real CLI。
+本次已用 --user 1000:1000 在 Lumi sandbox 镜像中完成非 root broker 验证。
+```
+
+arm64 Lumi broker 验证准备：
+
+```text
+公开二进制：/Users/jhyan/qdm/workspace-auth-test/bin/data-harness-cli
+公开二进制：/Users/jhyan/qdm/workspace-auth-test/bin/qdm-metric-cli
+二进制架构：ELF 64-bit LSB executable, ARM aarch64
+private volume：harness-auth-private-arm-broker-20260805020534
+broker volume：harness-auth-broker-arm-20260805020534
+broker container：harness-auth-lumi-broker-arm-20260805020534
+```
+
+Lumi broker 启动命令：
+
+```bash
+docker run -d --name harness-auth-lumi-broker-arm-20260805020534 \
+  --user 0:1000 \
+  -v /Users/jhyan/qdm/workspace-auth-test:/workspace \
+  -v harness-auth-private-arm-broker-20260805020534:/opt/harness-data/private/bin:ro \
+  -v harness-auth-broker-arm-20260805020534:/run/harness-data \
+  -w /workspace \
+  -e LUMI_REQUESTER_CONTEXT_DIR=/workspace/requester-context/workspace-local/pi \
+  --entrypoint /workspace/bin/data-harness-cli \
+  ghcr.io/lumi-ai-lab/lumi-sandbox:latest \
+  authz-metric-broker --socket /run/harness-data/metric-broker.sock
+```
+
+Lumi 非 root Agent 验证输出：
+
+```text
+-- runtime
+uid=1000(node) gid=1000(node) groups=1000(node)
+aarch64
+v22.22.2
+-- direct private
+sh: 8: /opt/harness-data/private/bin/qdm-metric-cli-real: Permission denied
+direct_rc=126
+-- authz-bind summary
+{
+  "binding": {
+    "version": 1,
+    "sessionId": "session-local-authz-lumi-arm-001",
+    "requestId": "message-local-authz-lumi-arm-001",
+    "envelopeSha256": "0872bc7215e4d603e430d6427b1af1115802050363b7d5fc9af2c8c161bd5560",
+    "expiresAt": "2026-08-04T18:35:56.204Z"
+  },
+  "bindingBase64url": "[REDACTED]",
+  "summary": {
+    "channel": "wecom",
+    "botId": "[REDACTED]",
+    "canonicalUserId": "yanjianhao",
+    "manageAreaIds": [
+      "CN01"
+    ],
+    "categoryLevel1Ids": [
+      "10"
+    ]
+  }
+}
+-- env check before query
+-- unauthorized CN18
+{"registered":true}
+register1_rc=0
+qdm-metric-cli authorization denied (authz_config_invalid): analysis filter manageAreaId contains an unauthorized value
+unauth_rc=77
+-- authorized CN01
+{"registered":true}
+register2_rc=0
+REAL_CLI_EXECUTED [analysis execute --page-size 200 --filter categoryLevel1Id=10 --metric saleAmt --filter manageAreaId=CN01]
+auth_rc=0
+```
+
+Lumi broker 停止命令：
+
+```bash
+docker stop harness-auth-lumi-broker-arm-20260805020534
 ```
 
 linux/amd64 Lumi sandbox 拉取失败：
@@ -672,6 +750,7 @@ broker 验证结束后执行：
 
 ```bash
 docker stop harness-auth-broker-test-20260805015337
+docker stop harness-auth-lumi-broker-arm-20260805020534
 ```
 
 最终复查：
@@ -687,6 +766,7 @@ ps -axo pid,ppid,command | rg -i 'lumi|device-executor|workspace-auth-test' || t
 ```text
 无 Lumi sandbox 容器。
 无 harness-auth-broker-test-20260805015337 broker 容器。
+无 harness-auth-lumi-broker-arm-20260805020534 Lumi broker 容器。
 无 com.lumi.llm-bot / com.lumi.llm-bot.wecom launchd 项。
 无 lumi、device-executor、workspace-auth-test 相关进程。
 仅剩 mall-study-* 容器，判断与本次验证无关，未停止。
