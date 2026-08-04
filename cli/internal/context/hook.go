@@ -170,7 +170,7 @@ func buildTimeContext(prompt string, resolver harness.PathResolver) timeContext 
 	return timeContext{
 		CurrentDate: current.Format("2006-01-02"),
 		Timezone:    timezone,
-		TimePolicy:  fmt.Sprintf("Use %s to infer --date, --week, or --month. Do not use date ranges.", resolver.ResolveRel(timePolicy)),
+		TimePolicy:  fmt.Sprintf("Use %s to infer --start-date and --end-date for qdm-metric-cli analysis execute. For a single day, set both --start-date and --end-date to the same YYYY-MM-DD. Do not use --date, --week, or --month unless the current qdm-metric-cli command help explicitly documents those flags.", resolver.ResolveRel(timePolicy)),
 		Prompt:      prompt,
 	}
 }

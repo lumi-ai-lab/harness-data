@@ -572,6 +572,36 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	}
 }
 
+func TestBuildTimeContextUsesMetricCLIDateRangePolicy(t *testing.T) {
+	root := t.TempDir()
+	writeContextFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeContextFile(t, root, "wikis/rules/QDM 时间口径/spec.md", "# QDM 时间口径规则\n")
+	resolver, err := harness.NewPathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tc := buildTimeContext("查询2026年7月26日的销售额", resolver)
+	for _, want := range []string{
+		"rules/QDM 时间口径/spec.md",
+		"--start-date and --end-date",
+		"For a single day, set both --start-date and --end-date to the same YYYY-MM-DD",
+		"Do not use --date, --week, or --month",
+	} {
+		if !strings.Contains(tc.TimePolicy, want) {
+			t.Fatalf("time policy missing %q: %s", want, tc.TimePolicy)
+		}
+	}
+	for _, old := range []string{
+		"infer --date, --week, or --month",
+		"Do not use date ranges",
+	} {
+		if strings.Contains(tc.TimePolicy, old) {
+			t.Fatalf("time policy still contains old guidance %q: %s", old, tc.TimePolicy)
+		}
+	}
+}
+
 func TestBuildWithWikisIndexReferenceSpecDoesNotSelectPlaybook(t *testing.T) {
 	root := t.TempDir()
 	writeContextFile(t, root, "config/harness-config.yaml", `paths:
