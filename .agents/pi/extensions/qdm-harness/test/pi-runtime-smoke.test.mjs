@@ -70,7 +70,7 @@ test(
           bashTool = tool;
         },
       },
-      { createBashTool: runtime.createBashTool, cwd, projectRoot: cwd, stateStore },
+      { createBashTool: runtime.createBashTool, cwd, projectRoot: cwd, stateStore, allowBindingEnvironment: true },
     );
 
     stateStore.bindToolCall("runtime-tool", stateStore.snapshotSession("runtime-session"));
