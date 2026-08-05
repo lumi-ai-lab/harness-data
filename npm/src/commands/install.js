@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, linkAgents, removeLegacyDataCLIs } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs } from "../lib/config.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -115,8 +115,8 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
 
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
-    fs.mkdirSync(path.join(stagedRoot, "config"), { recursive: true });
-    for (const file of fs.readdirSync(configSource)) fs.copyFileSync(path.join(configSource, file), path.join(stagedRoot, "config", file));
+    // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
+    fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
 
     for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
     mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
@@ -406,9 +406,15 @@ export async function installCommand(options = {}) {
   blank();
 
   step(5, 8, "生成本地配置");
-  writeLocalConfig(runtimeDir, { overwrite: true });
+  const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
+  if (authz.mode === "on") {
+    const blob = ensureLocalAuthBlob(runtimeDir);
+    ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+  } else {
+    ok("authz.mode: off");
+  }
   blank();
 
   step(6, 8, "配置 CAS 认证");

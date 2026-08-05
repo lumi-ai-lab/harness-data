@@ -24,6 +24,14 @@ or:
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
 ```
 
+Enable metric **data-auth** (authz) during install — writes `authz.mode: on`, copies the local-test encrypted blob, and keeps Host `_auth` as the preferred source when present:
+
+```bash
+GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install --data-auth
+```
+
+This is separate from the `auth` subcommand (CAS username/password for SQL). Without Lumi/Host, the shipped `config/fixtures/local-test-auth.blob` is used as fallback (`dev_user_id: local-test-user`).
+
 Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-metric-cli`, `qdm-sql-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` are no longer installed).
 
 Update an existing runtime interactively:

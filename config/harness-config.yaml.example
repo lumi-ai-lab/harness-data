@@ -9,9 +9,10 @@ cli:
   qdm_cas_cli: /absolute/path/to/cas-cli
 
 # Optional data-auth for qdm-metric-cli (default: mode off).
+# Installer: `npx @lumi-ai-lab/harness-data install --data-auth` writes mode on +
+# copies config/fixtures/local-test-auth.blob → config/dev-auth.blob.
 # Production: Host sends encrypted _auth + _auth_user_id; set allow_local_blob: false.
-# Local-only file fallback (dev): generate config/dev-auth.blob, set blob_file + dev_user_id
-# (dev_user_id has no code default — must be explicit).
+# Local-only file fallback (dev): blob_file + dev_user_id (dev_user_id has no code default).
 authz:
   mode: off
   # blob_file: config/dev-auth.blob

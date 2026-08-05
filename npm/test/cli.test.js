@@ -20,7 +20,18 @@ import { buildAndCheck, configureCasAuthentication, configureTokens, installRunt
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { authCommand } from "../src/commands/auth.js";
-import { agentChoices, hasAnyAgentHook, linkAgents, localPathToolNames, qdmCliBinaries, writeLocalConfig } from "../src/lib/config.js";
+import {
+  agentChoices,
+  ensureLocalAuthBlob,
+  hasAnyAgentHook,
+  linkAgents,
+  localPathToolNames,
+  localTestAuthBlobRel,
+  localTestAuthFixtureRel,
+  localTestAuthUserId,
+  qdmCliBinaries,
+  writeLocalConfig,
+} from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -72,6 +83,7 @@ test("prints help", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness-data <install\|update\|auth\|doctor\|version>/);
   assert.match(result.stdout, /auth     Configure CAS credentials and refresh access tokens/);
+  assert.match(result.stdout, /--data-auth/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -1150,6 +1162,57 @@ test("local config exports workspace CAS config dir", () => {
   assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
   assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
   assert.doesNotMatch(harnessConfig, /qdm_cmr_cli|qdm_indicators_cli/);
+  assert.match(harnessConfig, /authz:\n  mode: off/);
+  assert.match(harnessConfig, /allow_local_blob: true/);
+});
+
+test("local config dataAuth enables authz and local blob paths", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+
+  const { authz } = writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+
+  assert.equal(authz.mode, "on");
+  assert.equal(authz.blobFile, localTestAuthBlobRel);
+  assert.equal(authz.devUserId, localTestAuthUserId);
+  assert.equal(authz.allowLocalBlob, true);
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, /blob_file: config\/dev-auth\.blob/);
+  assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
+  assert.match(harnessConfig, /allow_local_blob: true/);
+});
+
+test("local config overwrite preserves existing authz when dataAuth omitted", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+  writeLocalConfig(workspace, { overwrite: true });
+
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, /blob_file: config\/dev-auth\.blob/);
+  assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
+});
+
+test("ensureLocalAuthBlob copies fixture and keeps existing blob", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fixtureDir = path.join(workspace, "config", "fixtures");
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const fixtureContent = "qdm1enc.fixture-test-blob\n";
+  fs.writeFileSync(path.join(workspace, localTestAuthFixtureRel), fixtureContent);
+
+  const first = ensureLocalAuthBlob(workspace);
+  assert.equal(first.copied, true);
+  assert.equal(fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8"), fixtureContent);
+
+  fs.writeFileSync(path.join(workspace, localTestAuthBlobRel), "qdm1enc.user-custom\n");
+  const second = ensureLocalAuthBlob(workspace);
+  assert.equal(second.copied, false);
+  assert.equal(fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8"), "qdm1enc.user-custom\n");
+});
+
+test("ensureLocalAuthBlob fails when fixture is missing", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  assert.throws(() => ensureLocalAuthBlob(workspace), /data-auth fixture missing/);
 });
 
 test("configure tokens fetches sql token from CAS rtp app", async () => {

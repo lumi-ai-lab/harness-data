@@ -19,7 +19,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -49,6 +49,7 @@ Install and auth options:
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --github-token TOKEN               GitHub token for private Release assets
   --cas-username USERNAME            CAS username (skip interactive prompt)
-  --cas-password PASSWORD            CAS password (skip interactive prompt)`);
+  --cas-password PASSWORD            CAS password (skip interactive prompt)
+  --data-auth                        Enable metric data-auth (authz.mode=on + local test blob)`);
   if (unknown) process.exitCode = 1;
 }

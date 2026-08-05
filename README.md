@@ -271,6 +271,26 @@ authz:
 - 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
 - 当前 turn 没有有效 blob / userId 时直接 **block** 上述调用
 
+**安装器开关**（不必手改配置）：
+
+```bash
+# 开启权限模式 + 落盘本地测试 blob（无 Host 时可用）
+npx @lumi-ai-lab/harness-data install --data-auth
+```
+
+会写入：
+
+```yaml
+authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-test-user
+  allow_local_blob: true
+```
+
+并从 runtime 内置的 `config/fixtures/local-test-auth.blob` 复制到 `config/dev-auth.blob`（工作副本 gitignore）。  
+说明：`harness-data auth` 是 **CAS** 子命令，与 metric data-auth **无关**。
+
 Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness context 默认 always inject）。权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
 
 | 来源 | 说明 |
@@ -279,7 +299,8 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 | `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件 |
 | `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置，代码无默认用户 |
 
-生产建议：`allow_local_blob: false`，只接受 Host `_auth`，避免仓库内测试 blob 污染生产。
+无上游（如未接 Lumi）时：默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。  
+生产若只信 Host：装完后可把 `allow_local_blob` 改为 `false`。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 
@@ -288,11 +309,13 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 - 回退：仓库根下 `bin/qdm-metric-cli`
 - PI Hook 会把裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
 
-本地生成测试 blob（gitignored，勿提交）：
+仓库已提交 fixture 密文（`config/fixtures/`）；也可自行再生成工作副本（gitignored，勿提交 `config/dev-auth.blob`）：
 
 ```bash
 cd /path/to/qdm-metric-cli
-go run ./scripts/auth_blob_encrypt.go -in test/auth.json > /path/to/harness-data/config/dev-auth.blob
+go run ./scripts/auth_blob_encrypt.go \
+  -in /path/to/harness-data/config/fixtures/local-test-auth.json \
+  > /path/to/harness-data/config/dev-auth.blob
 ```
 
 分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id` 或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。

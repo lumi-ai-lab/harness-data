@@ -36,8 +36,118 @@ export const removedDataCliBinaries = [
   "qdm-indicators-cli",
 ];
 
+/** Relative path of the committed local-test encrypted auth blob fixture. */
+export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
+/** Working copy path written by install --data-auth (gitignored). */
+export const localTestAuthBlobRel = "config/dev-auth.blob";
+/** Slot user id for the local-test fixture; must match blob userId. */
+export const localTestAuthUserId = "local-test-user";
+
 export function hasAnyAgentHook(workspace) {
   return concreteAgentNames.some((name) => fs.existsSync(path.join(workspace, `.${name}`)));
+}
+
+/**
+ * Parse authz fields from an existing harness-config.yaml (light line scan).
+ * @returns {{ mode: string, blobFile: string, devUserId: string, allowLocalBlob: boolean } | null}
+ */
+export function readAuthzFromHarnessConfig(harnessPath) {
+  if (!fs.existsSync(harnessPath)) return null;
+  const raw = fs.readFileSync(harnessPath, "utf8");
+  let section = "";
+  /** @type {{ mode?: string, blobFile?: string, devUserId?: string, allowLocalBlob?: boolean }} */
+  const out = {};
+  let sawAuthz = false;
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    const cut = trimmed.indexOf(":");
+    if (cut < 0) continue;
+    const key = trimmed.slice(0, cut).trim();
+    let value = trimmed.slice(cut + 1).trim();
+    const hash = value.indexOf("#");
+    if (hash >= 0) value = value.slice(0, hash).trim();
+    value = value.replace(/^["']|["']$/g, "");
+    if (indent === 0) {
+      section = value === "" ? key : "";
+      if (section === "authz") sawAuthz = true;
+      continue;
+    }
+    if (section !== "authz") continue;
+    switch (key) {
+      case "mode":
+        out.mode = value.toLowerCase() === "on" ? "on" : "off";
+        break;
+      case "blob_file":
+        out.blobFile = value;
+        break;
+      case "dev_user_id":
+        out.devUserId = value;
+        break;
+      case "allow_local_blob":
+        out.allowLocalBlob = parseConfigBool(value, true);
+        break;
+      default:
+        break;
+    }
+  }
+  if (!sawAuthz) return null;
+  return {
+    mode: out.mode === "on" ? "on" : "off",
+    blobFile: out.blobFile || "",
+    devUserId: out.devUserId || "",
+    allowLocalBlob: out.allowLocalBlob !== false,
+  };
+}
+
+/**
+ * Resolve authz block for writeLocalConfig.
+ * Priority: explicit dataAuth true/false → preserve existing → default off.
+ */
+export function resolveAuthzForWrite(options = {}, existing = null) {
+  if (options.dataAuth === true) {
+    return {
+      mode: "on",
+      blobFile: localTestAuthBlobRel,
+      devUserId: localTestAuthUserId,
+      allowLocalBlob: true,
+    };
+  }
+  if (options.dataAuth === false) {
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
+  }
+  if (existing) {
+    return {
+      mode: existing.mode === "on" ? "on" : "off",
+      blobFile: existing.blobFile || "",
+      devUserId: existing.devUserId || "",
+      allowLocalBlob: existing.allowLocalBlob !== false,
+    };
+  }
+  return {
+    mode: "off",
+    blobFile: "",
+    devUserId: "",
+    allowLocalBlob: true,
+  };
+}
+
+function formatAuthzYaml(authz) {
+  const lines = ["authz:", `  mode: ${authz.mode}`];
+  if (authz.mode === "on" && authz.blobFile) {
+    lines.push(`  blob_file: ${authz.blobFile}`);
+  }
+  if (authz.mode === "on" && authz.devUserId) {
+    lines.push(`  dev_user_id: ${authz.devUserId}`);
+  }
+  lines.push(`  allow_local_blob: ${authz.allowLocalBlob ? "true" : "false"}`);
+  return `${lines.join("\n")}\n`;
 }
 
 export function writeLocalConfig(workspace, options = {}) {
@@ -48,16 +158,40 @@ export function writeLocalConfig(workspace, options = {}) {
   if ((fs.existsSync(harness) || fs.existsSync(env)) && !options.overwrite) {
     throw new Error("local config already exists; rerun interactively and confirm overwrite or remove the files");
   }
+  const existing = options.overwrite ? readAuthzFromHarnessConfig(harness) : null;
+  const authz = resolveAuthzForWrite(options, existing);
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
   const casConfigDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n  qdm_sql_cli: ${bin("qdm-sql-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n  qdm_sql_cli: ${bin("qdm-sql-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n\n${formatAuthzYaml(authz)}`,
   );
   fs.writeFileSync(
     env,
     `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\nexport QDM_SQL_CLI="${bin("qdm-sql-cli")}"\nexport QDM_CAS_CLI="${bin("cas-cli")}"\nexport QDM_CAS_CONFIG_DIR="${casConfigDir}"\n`,
   );
+  return { authz };
+}
+
+/**
+ * Copy committed local-test fixture to config/dev-auth.blob when missing.
+ * @returns {{ copied: boolean, path: string }}
+ */
+export function ensureLocalAuthBlob(workspace, options = {}) {
+  const target = path.join(workspace, localTestAuthBlobRel);
+  const fixture = path.join(workspace, localTestAuthFixtureRel);
+  if (fs.existsSync(target) && !options.force) {
+    return { copied: false, path: target };
+  }
+  if (!fs.existsSync(fixture)) {
+    throw new Error(
+      `data-auth fixture missing: ${localTestAuthFixtureRel} (expected under runtime). ` +
+        "Ensure the runtime bundle includes config/fixtures/local-test-auth.blob.",
+    );
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(fixture, target);
+  return { copied: true, path: target };
 }
 
 export function removeLegacyDataCLIs(runtimeDir) {
@@ -96,4 +230,21 @@ export function linkAgents(workspace, agent) {
     fs.symlinkSync(source, target, "junction");
   }
   return pairs;
+}
+
+function parseConfigBool(value, fallback) {
+  switch (String(value).toLowerCase()) {
+    case "true":
+    case "yes":
+    case "1":
+    case "on":
+      return true;
+    case "false":
+    case "no":
+    case "0":
+    case "off":
+      return false;
+    default:
+      return fallback;
+  }
 }
