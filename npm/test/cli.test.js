@@ -140,8 +140,21 @@ test("private qdm cli tools point at their own repositories", () => {
 });
 
 test("qdm cli binary lists include sql cli", () => {
-  assert.deepEqual(qdmCliBinaries, ["data-harness-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli", "cas-cli"]);
-  assert.deepEqual(localPathToolNames, ["cas-cli", "qdm-indicators-cli", "qdm-cmr-cli", "qdm-sql-cli"]);
+  assert.deepEqual(qdmCliBinaries, [
+    "data-harness-cli",
+    "qdm-cmr-cli",
+    "qdm-indicators-cli",
+    "qdm-sql-cli",
+    "qdm-metric-cli",
+    "cas-cli",
+  ]);
+  assert.deepEqual(localPathToolNames, [
+    "cas-cli",
+    "qdm-indicators-cli",
+    "qdm-cmr-cli",
+    "qdm-sql-cli",
+    "qdm-metric-cli",
+  ]);
 });
 
 test("local wikis source requires root index", () => {

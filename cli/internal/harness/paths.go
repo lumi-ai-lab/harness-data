@@ -16,6 +16,22 @@ const (
 type Config struct {
 	Paths PathsConfig
 	CLI   CLIConfig
+	Authz AuthzConfig
+}
+
+// AuthzConfig controls optional data-auth injection for qdm-metric-cli.
+// mode defaults to off. When on, PI hooks force --data-auth --auth-blob.
+type AuthzConfig struct {
+	// Mode is "off" or "on". Empty means off.
+	Mode string
+	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob (dev/test only).
+	BlobFile string
+	// DevUserID is optional slot user id for local blob/env fallback when Host did not send _auth_user_id.
+	// Empty by default; must be set explicitly for local authz file mode. Production should use Host _auth_user_id.
+	DevUserID string
+	// AllowLocalBlob permits env/file fallback when Host did not send _auth.
+	// Nil/true is dev-friendly; production should set false so only Host _auth is accepted.
+	AllowLocalBlob *bool
 }
 
 type PathResolver struct {
@@ -36,6 +52,7 @@ type CLIConfig struct {
 	QDMIndicatorsCLI string
 	QDMSQLCLI        string
 	QDMCasCLI        string
+	QDMMetricCLI     string
 }
 
 func FindRoot(start string) (string, error) {
@@ -111,7 +128,7 @@ func LoadConfig(root string) (Config, error) {
 				return Config{}, fmt.Errorf("%s: unsupported top-level value %q", ConfigRel, line)
 			}
 			switch key {
-			case "paths", "cli":
+			case "paths", "cli", "authz":
 				section = key
 			default:
 				return Config{}, fmt.Errorf("%s: unsupported section %q", ConfigRel, key)
@@ -144,8 +161,27 @@ func LoadConfig(root string) (Config, error) {
 				cfg.CLI.QDMSQLCLI = value
 			case "qdm_cas_cli":
 				cfg.CLI.QDMCasCLI = value
+			case "qdm_metric_cli":
+				cfg.CLI.QDMMetricCLI = value
 			default:
 				return Config{}, fmt.Errorf("%s: unsupported cli key %q", ConfigRel, key)
+			}
+		case "authz":
+			switch key {
+			case "mode":
+				cfg.Authz.Mode = strings.ToLower(value)
+			case "blob_file":
+				cfg.Authz.BlobFile = value
+			case "dev_user_id":
+				cfg.Authz.DevUserID = value
+			case "allow_local_blob":
+				parsed, err := parseBoolConfig(value)
+				if err != nil {
+					return Config{}, fmt.Errorf("%s: authz.allow_local_blob: %w", ConfigRel, err)
+				}
+				cfg.Authz.AllowLocalBlob = &parsed
+			default:
+				return Config{}, fmt.Errorf("%s: unsupported authz key %q", ConfigRel, key)
 			}
 		default:
 			return Config{}, fmt.Errorf("%s: key %q must be under a section", ConfigRel, key)
@@ -157,7 +193,21 @@ func LoadConfig(root string) (Config, error) {
 	if err := validatePathsConfig(ConfigRel, cfg.Paths); err != nil {
 		return Config{}, err
 	}
+	normalizeAuthzConfig(&cfg.Authz)
 	return cfg, nil
+}
+
+func normalizeAuthzConfig(cfg *AuthzConfig) {
+	if cfg == nil {
+		return
+	}
+	if strings.TrimSpace(cfg.Mode) == "" {
+		cfg.Mode = "off"
+	} else {
+		cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	}
+	// DevUserID stays empty unless explicitly configured — no default principal.
+	cfg.DevUserID = strings.TrimSpace(cfg.DevUserID)
 }
 
 func loadLegacyPathsConfig(root string, cfg Config) (Config, error) {
@@ -300,7 +350,35 @@ func exists(path string) bool {
 func defaultConfig() Config {
 	return Config{
 		Paths: pathsFromKnowledge("."),
+		Authz: AuthzConfig{
+			Mode: "off",
+		},
 	}
+}
+
+func parseBoolConfig(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1", "on":
+		return true, nil
+	case "false", "no", "0", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("must be true or false, got %q", value)
+	}
+}
+
+// AuthzEnabled reports whether data-auth injection is active.
+func (c AuthzConfig) AuthzEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "on")
+}
+
+// LocalBlobAllowed reports whether env/file fallback is allowed.
+// Default true when unset (dev-friendly); explicit false disables.
+func (c AuthzConfig) LocalBlobAllowed() bool {
+	if c.AllowLocalBlob == nil {
+		return true
+	}
+	return *c.AllowLocalBlob
 }
 
 func defaultConfigForRoot(root string) Config {

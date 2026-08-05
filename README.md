@@ -242,7 +242,7 @@ cp config/qdm-cli-paths.env.example config/qdm-cli-paths.env
 source config/qdm-cli-paths.env
 ```
 
-`config/harness-config.yaml` 是受限 YAML，目前支持 `paths` 和 `cli` 两个 section。example 默认提供：
+`config/harness-config.yaml` 是受限 YAML，目前支持 `paths`、`cli` 和可选的 `authz` section。example 默认提供：
 
 ```yaml
 paths:
@@ -252,10 +252,51 @@ cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
   qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
   qdm_sql_cli: /absolute/path/to/qdm-sql-cli
+  qdm_metric_cli: /absolute/path/to/qdm-metric-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
+
+authz:
+  mode: off
+  # blob_file: config/dev-auth.blob          # local only
+  # dev_user_id: local-test-user             # required with blob_file; no code default
+  allow_local_blob: true                     # production: set false
 ```
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
+
+### 数据权限（qdm-metric-cli，默认关闭）
+
+`authz.mode` 默认 `off`，不影响现有行为。设为 `on` 后，PI 扩展在 `tool_call` 中保证：
+
+- 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
+- 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
+- 当前 turn 没有有效 blob / userId 时直接 **block** 该次调用
+
+权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
+
+| 来源 | 说明 |
+| --- | --- |
+| Host `_auth` + `_auth_user_id` | **生产主路径**：网关加密后旁路下发（不写进用户 prompt 正文） |
+| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件 |
+| `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置，代码无默认用户 |
+
+生产建议：`allow_local_blob: false`，只接受 Host `_auth`，避免仓库内测试 blob 污染生产。
+
+`qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
+
+- `config/harness-config.yaml` → `cli.qdm_metric_cli`（安装器写 `…/bin/qdm-metric-cli`）
+- `config/qdm-cli-paths.env` → `export QDM_METRIC_CLI="..."`
+- 回退：仓库根下 `bin/qdm-metric-cli`
+- PI Hook 会把裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
+
+本地生成测试 blob（gitignored，勿提交）：
+
+```bash
+cd /path/to/qdm-metric-cli
+go run ./scripts/auth_blob_encrypt.go -in test/auth.json > /path/to/harness-data/config/dev-auth.blob
+```
+
+分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id` 或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
 
 ## Context 输出
 
