@@ -1,6 +1,6 @@
 {
   "name": "@lumi-ai-lab/harness-data",
-  "version": "0.0.35",
+  "version": "0.0.36",
   "description": "Installer and updater for Harness Data",
   "type": "module",
   "bin": {
