@@ -6,7 +6,7 @@ import { binaryName } from "../lib/platform.js";
 import { blank, header, ok, step } from "../lib/log.js";
 import { configureCasAuthentication, configureTokens } from "./install.js";
 
-const requiredBinaries = ["cas-cli", "qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"];
+const requiredBinaries = ["cas-cli", "qdm-sql-cli", "qdm-metric-cli"];
 
 function validateAuthRuntime(runtimeDir) {
   if (!fs.existsSync(runtimeDir)) throw new Error(`runtime directory does not exist: ${runtimeDir}`);

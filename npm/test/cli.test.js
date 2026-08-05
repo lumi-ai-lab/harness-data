@@ -129,31 +129,28 @@ test("detects git protocol from remote URLs", () => {
 test("private qdm cli tools point at their own repositories", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
-  assert.equal(byName.get("qdm-cmr-cli").repo, "pengmide/qdm-cmr-cli");
-  assert.equal(byName.get("qdm-indicators-cli").repo, "pengmide/qdm-indicators-cli");
+  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli", "qdm-sql-cli", "cas-cli"]);
+  assert.equal(byName.get("qdm-metric-cli").repo, "pengmide/qdm-metric-cli");
   assert.equal(byName.get("qdm-sql-cli").repo, "pengmide/qdm-sql-cli");
   assert.equal(byName.get("cas-cli").repo, "pengmide/qdm-cas-cli");
-  assert.equal(byName.get("qdm-cmr-cli").private, true);
-  assert.equal(byName.get("qdm-indicators-cli").private, true);
+  assert.equal(byName.get("qdm-metric-cli").private, true);
   assert.equal(byName.get("qdm-sql-cli").private, true);
   assert.equal(byName.get("cas-cli").private, true);
+  assert.equal(byName.has("qdm-cmr-cli"), false);
+  assert.equal(byName.has("qdm-indicators-cli"), false);
 });
 
-test("qdm cli binary lists include sql cli", () => {
+test("qdm cli binary lists include metric and sql cli", () => {
   assert.deepEqual(qdmCliBinaries, [
     "data-harness-cli",
-    "qdm-cmr-cli",
-    "qdm-indicators-cli",
-    "qdm-sql-cli",
     "qdm-metric-cli",
+    "qdm-sql-cli",
     "cas-cli",
   ]);
   assert.deepEqual(localPathToolNames, [
     "cas-cli",
-    "qdm-indicators-cli",
-    "qdm-cmr-cli",
-    "qdm-sql-cli",
     "qdm-metric-cli",
+    "qdm-sql-cli",
   ]);
 });
 
@@ -419,7 +416,7 @@ test("private GitHub asset uses gh token download progress", { skip: process.pla
   const fakeBin = path.join(workspace, "fake-bin");
   const archive = "private archive\n";
   const binary = "#!/bin/sh\necho private\n";
-  const assetFile = `qdm-cmr-cli-v0.0.1-${key}.tar.gz`;
+  const assetFile = `fixture-private-cli-v0.0.1-${key}.tar.gz`;
   const writes = [];
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.writeFileSync(path.join(fakeBin, "gh"), `#!/bin/sh
@@ -440,7 +437,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-cli")}"
+printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("fixture-private-cli")}"
 `, { mode: 0o755 });
 
   const originalPath = process.env.PATH;
@@ -458,7 +455,7 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
         callback(response);
         if (String(url).includes("/releases/tags/v0.0.1")) {
           response.end(JSON.stringify({
-            assets: [{ name: assetFile, url: "https://api.github.com/repos/pengmide/qdm-cmr-cli/releases/assets/1" }]
+            assets: [{ name: assetFile, url: "https://api.github.com/repos/pengmide/fixture-private-cli/releases/assets/1" }]
           }));
           return;
         }
@@ -472,14 +469,14 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
       manifestOverride: {
         schemaVersion: 2,
         tools: [{
-          name: "qdm-cmr-cli",
-          binary: "qdm-cmr-cli",
-          repo: "pengmide/qdm-cmr-cli",
+          name: "fixture-private-cli",
+          binary: "fixture-private-cli",
+          repo: "pengmide/fixture-private-cli",
           private: true,
           version: "v0.0.1",
           platforms: {
             [key]: {
-              url: `https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/${assetFile}`,
+              url: `https://github.com/pengmide/fixture-private-cli/releases/download/v0.0.1/${assetFile}`,
               sha256: sha256(archive)
             }
           }
@@ -488,8 +485,8 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
       progressWriter: { write: (chunk) => writes.push(String(chunk)) }
     });
 
-    assert.equal(manifest.installedTools["qdm-cmr-cli"].version, "v0.0.1");
-    assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("qdm-cmr-cli")), "utf8"), binary);
+    assert.equal(manifest.installedTools["fixture-private-cli"].version, "v0.0.1");
+    assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("fixture-private-cli")), "utf8"), binary);
     assert.match(writes.join(""), new RegExp(`下载完成 ${assetFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.match(writes.join(""), new RegExp(`100% ${Buffer.byteLength(archive)} B/${Buffer.byteLength(archive)} B`));
   } finally {
@@ -504,7 +501,7 @@ test("private GitHub asset fallback via gh release download shows status", { ski
   const fakeBin = path.join(workspace, "fake-bin");
   const archive = "private archive via gh\n";
   const binary = "#!/bin/sh\necho private-gh\n";
-  const assetFile = `qdm-cmr-cli-v0.0.1-${key}.tar.gz`;
+  const assetFile = `fixture-private-cli-v0.0.1-${key}.tar.gz`;
   const writes = [];
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.writeFileSync(path.join(fakeBin, "gh"), `#!/bin/sh
@@ -542,7 +539,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-cli")}"
+printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("fixture-private-cli")}"
 `, { mode: 0o755 });
 
   const originalPath = process.env.PATH;
@@ -560,14 +557,14 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
       manifestOverride: {
         schemaVersion: 2,
         tools: [{
-          name: "qdm-cmr-cli",
-          binary: "qdm-cmr-cli",
-          repo: "pengmide/qdm-cmr-cli",
+          name: "fixture-private-cli",
+          binary: "fixture-private-cli",
+          repo: "pengmide/fixture-private-cli",
           private: true,
           version: "v0.0.1",
           platforms: {
             [key]: {
-              url: `https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/${assetFile}`,
+              url: `https://github.com/pengmide/fixture-private-cli/releases/download/v0.0.1/${assetFile}`,
               sha256: sha256(archive)
             }
           }
@@ -576,8 +573,8 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("qdm-cmr-c
       progressWriter: { write: (chunk) => writes.push(String(chunk)) }
     });
 
-    assert.equal(manifest.installedTools["qdm-cmr-cli"].version, "v0.0.1");
-    assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("qdm-cmr-cli")), "utf8"), binary);
+    assert.equal(manifest.installedTools["fixture-private-cli"].version, "v0.0.1");
+    assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("fixture-private-cli")), "utf8"), binary);
     assert.match(writes.join(""), /下载中 [-\\|/]/);
     assert.match(writes.join(""), new RegExp(`下载完成 ${assetFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     assert.doesNotMatch(writes.join(""), /\u001b\[1A/);
@@ -591,7 +588,7 @@ test("private GitHub asset failure reports gh release download detail", { skip: 
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const key = platformKey();
   const fakeBin = path.join(workspace, "fake-bin");
-  const assetFile = `qdm-cmr-cli-v0.0.1-${key}.tar.gz`;
+  const assetFile = `fixture-private-cli-v0.0.1-${key}.tar.gz`;
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.writeFileSync(path.join(fakeBin, "gh"), `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
@@ -616,14 +613,14 @@ exit 9
         manifestOverride: {
           schemaVersion: 2,
           tools: [{
-            name: "qdm-cmr-cli",
-            binary: "qdm-cmr-cli",
-            repo: "pengmide/qdm-cmr-cli",
+            name: "fixture-private-cli",
+            binary: "fixture-private-cli",
+            repo: "pengmide/fixture-private-cli",
             private: true,
             version: "v0.0.1",
             platforms: {
               [key]: {
-                url: `https://github.com/pengmide/qdm-cmr-cli/releases/download/v0.0.1/${assetFile}`,
+                url: `https://github.com/pengmide/fixture-private-cli/releases/download/v0.0.1/${assetFile}`,
                 sha256: ""
               }
             }
@@ -1147,8 +1144,12 @@ test("local config exports workspace CAS config dir", () => {
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
   const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
+  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli"/);
   assert.match(env, /export QDM_SQL_CLI=".*qdm-sql-cli"/);
+  assert.doesNotMatch(env, /QDM_CMR_CLI|QDM_INDICATORS_CLI/);
+  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
   assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
+  assert.doesNotMatch(harnessConfig, /qdm_cmr_cli|qdm_indicators_cli/);
 });
 
 test("configure tokens fetches sql token from CAS rtp app", async () => {
@@ -1161,15 +1162,12 @@ test("configure tokens fetches sql token from CAS rtp app", async () => {
   fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
 printf '%s\\n' "$*" >> "${casLog}"
 case "$*" in
-  "token --app cmr") echo cmr-token ;;
-  "token --app indicators") echo indicators-token ;;
   "token --app rtp") echo sql-token ;;
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"]) {
-    const tokenFile = path.join(workspace, `${name}.token`);
-    fs.writeFileSync(path.join(binDir, binaryName(name)), `#!/bin/sh
+  const tokenFile = path.join(workspace, "qdm-sql-cli.token");
+  fs.writeFileSync(path.join(binDir, binaryName("qdm-sql-cli")), `#!/bin/sh
 if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
   printf '%s\\n' "$3" > "${tokenFile}"
   exit 0
@@ -1180,12 +1178,11 @@ if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
 fi
 exit 2
 `, { mode: 0o755 });
-  }
 
   await configureTokens(workspace, casDir);
 
-  assert.equal(fs.readFileSync(casLog, "utf8"), "token --app cmr\ntoken --app indicators\ntoken --app rtp\n");
-  assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
+  assert.equal(fs.readFileSync(casLog, "utf8"), "token --app rtp\n");
+  assert.equal(fs.readFileSync(tokenFile, "utf8"), "sql-token\n");
 });
 
 test("CAS authentication retries with cached username and hides HTML errors", { skip: process.platform === "win32" }, async () => {
@@ -1198,9 +1195,9 @@ if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
   printf '%s' "$6" > "$QDM_CAS_CONFIG_DIR/credentials.enc"
   exit 0
 fi
-if [ "$1" = "token" ] && [ "$2" = "--app" ] && [ "$3" = "cmr" ]; then
+if [ "$1" = "token" ] && [ "$2" = "--app" ] && [ "$3" = "rtp" ]; then
   if [ "$(cat "$QDM_CAS_CONFIG_DIR/credentials.enc")" = "correct-password" ]; then
-    echo cmr-token
+    echo sql-token
     exit 0
   fi
   printf '<!DOCTYPE html><html><body>login failed</body></html>\n' >&2
@@ -1253,7 +1250,7 @@ exit 1
   assert.equal(fs.readdirSync(workspace).some((name) => name.startsWith(".cas-auth-")), false);
 });
 
-test("auth recreates deleted CAS auth directory and refreshes all tokens", { skip: process.platform === "win32" }, async () => {
+test("auth recreates deleted CAS auth directory and refreshes SQL token", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const binDir = path.join(workspace, "bin");
   const casLog = path.join(workspace, "cas.log");
@@ -1266,15 +1263,13 @@ if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
   exit 0
 fi
 case "$*" in
-  "token --app cmr") echo cmr-token ;;
-  "token --app indicators") echo indicators-token ;;
   "token --app rtp") echo sql-token ;;
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-  for (const name of ["qdm-cmr-cli", "qdm-indicators-cli", "qdm-sql-cli"]) {
-    const tokenFile = path.join(workspace, `${name}.token`);
-    fs.writeFileSync(path.join(binDir, binaryName(name)), `#!/bin/sh
+  fs.writeFileSync(path.join(binDir, binaryName("qdm-metric-cli")), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const tokenFile = path.join(workspace, "qdm-sql-cli.token");
+  fs.writeFileSync(path.join(binDir, binaryName("qdm-sql-cli")), `#!/bin/sh
 if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
   printf '%s\\n' "$3" > "${tokenFile}"
   exit 0
@@ -1285,15 +1280,12 @@ if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
 fi
 exit 2
 `, { mode: 0o755 });
-  }
 
   const result = await authCommand({ dir: workspace, casUsername: "new-user", casPassword: "new-password" });
 
   assert.equal(result.casDir, path.join(workspace, ".qdm-auth", "cas"));
   assert.equal(fs.readFileSync(path.join(result.casDir, "credentials.enc"), "utf8"), "encrypted\n");
-  assert.equal(fs.readFileSync(path.join(workspace, "qdm-cmr-cli.token"), "utf8"), "cmr-token\n");
-  assert.equal(fs.readFileSync(path.join(workspace, "qdm-indicators-cli.token"), "utf8"), "indicators-token\n");
-  assert.equal(fs.readFileSync(path.join(workspace, "qdm-sql-cli.token"), "utf8"), "sql-token\n");
+  assert.equal(fs.readFileSync(tokenFile, "utf8"), "sql-token\n");
   assert.match(fs.readFileSync(casLog, "utf8"), /config set-credentials --username new-user --password new-password/);
 });
 

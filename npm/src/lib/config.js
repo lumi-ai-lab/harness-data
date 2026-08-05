@@ -22,18 +22,18 @@ export const agentLinks = {
 export const agentChoiceText = agentChoices.join(", ");
 export const qdmCliBinaries = [
   "data-harness-cli",
-  "qdm-cmr-cli",
-  "qdm-indicators-cli",
-  "qdm-sql-cli",
   "qdm-metric-cli",
+  "qdm-sql-cli",
   "cas-cli",
 ];
 export const localPathToolNames = [
   "cas-cli",
-  "qdm-indicators-cli",
-  "qdm-cmr-cli",
-  "qdm-sql-cli",
   "qdm-metric-cli",
+  "qdm-sql-cli",
+];
+export const removedDataCliBinaries = [
+  "qdm-cmr-cli",
+  "qdm-indicators-cli",
 ];
 
 export function hasAnyAgentHook(workspace) {
@@ -52,12 +52,23 @@ export function writeLocalConfig(workspace, options = {}) {
   const casConfigDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_cmr_cli: ${bin("qdm-cmr-cli")}\n  qdm_indicators_cli: ${bin("qdm-indicators-cli")}\n  qdm_sql_cli: ${bin("qdm-sql-cli")}\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n  qdm_sql_cli: ${bin("qdm-sql-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n`,
   );
   fs.writeFileSync(
     env,
-    `export QDM_CMR_CLI="${bin("qdm-cmr-cli")}"\nexport QDM_INDICATORS_CLI="${bin("qdm-indicators-cli")}"\nexport QDM_SQL_CLI="${bin("qdm-sql-cli")}"\nexport QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\nexport QDM_CAS_CLI="${bin("cas-cli")}"\nexport QDM_CAS_CONFIG_DIR="${casConfigDir}"\n`,
+    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\nexport QDM_SQL_CLI="${bin("qdm-sql-cli")}"\nexport QDM_CAS_CLI="${bin("cas-cli")}"\nexport QDM_CAS_CONFIG_DIR="${casConfigDir}"\n`,
   );
+}
+
+export function removeLegacyDataCLIs(runtimeDir) {
+  const removed = [];
+  for (const name of removedDataCliBinaries) {
+    const destination = path.join(runtimeDir, "bin", binaryName(name));
+    if (!fs.existsSync(destination)) continue;
+    fs.rmSync(destination, { force: true });
+    removed.push(name);
+  }
+  return removed;
 }
 
 export function validateCasConfigDir(dir) {

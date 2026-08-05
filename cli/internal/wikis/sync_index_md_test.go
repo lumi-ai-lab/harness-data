@@ -96,7 +96,7 @@ label: 销售额
 	writeFile(t, root, "wikis/reports/经营综合分析报告/playbook.md", "# 经营综合分析报告取数\n")
 	writeFile(t, root, "wikis/reports/经营综合分析报告/template.md", "# 经营综合分析报告模板\n")
 	writeFile(t, root, "wikis/dims/门店/spec.md", "# 门店维度\n")
-	writeFile(t, root, "wikis/rules/qdm-cmr-cli/spec.md", "# QDM CMR CLI\n")
+	writeFile(t, root, "wikis/rules/qdm-metric-cli/spec.md", "# QDM Metric CLI\n")
 
 	result, err := SyncIndexMD(root, false)
 	if err != nil {
@@ -110,7 +110,7 @@ label: 销售额
 		"dims/index.md",
 		"dims/门店/index.md",
 		"rules/index.md",
-		"rules/qdm-cmr-cli/index.md",
+		"rules/qdm-metric-cli/index.md",
 	} {
 		if !hasString(result.Created, want) {
 			t.Fatalf("expected %s to be created: %+v", want, result)

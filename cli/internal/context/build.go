@@ -22,7 +22,7 @@ var constraints = []string{
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"when CMR, Indicators, or SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app cmr, \"$QDM_CAS_CLI\" token --app indicators, or \"$QDM_CAS_CLI\" token --app rtp for SQL, update the target CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login",
+	"when SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app rtp, update the SQL CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login. Metric queries use qdm-metric-cli with optional --data-auth/--auth-blob from the PI authz hook; do not call qdm-cmr-cli or qdm-indicators-cli",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -152,6 +152,9 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	conceptSpecs = includeSpecificReportConcepts(byPath, question, conceptSpecs)
 	sortRuntimeDocsByPath(ordinarySpecs)
 	sortRuntimeDocsByPath(conceptSpecs)
+
+	// Always inject Metric CLI usage docs when present in the knowledge tree.
+	add("rules/qdm-metric-cli/spec.md", "default metric cli usage")
 
 	addDefaultFreeFiles := func() {
 		add("index.md", "default knowledge index")

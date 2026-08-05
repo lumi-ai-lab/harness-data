@@ -36,7 +36,7 @@ function configPathsValid(workspace) {
   const file = path.join(workspace, "config", "qdm-cli-paths.env");
   if (!fs.existsSync(file)) return false;
   const content = fs.readFileSync(file, "utf8");
-  const required = ["QDM_CMR_CLI", "QDM_INDICATORS_CLI", "QDM_SQL_CLI", "QDM_METRIC_CLI", "QDM_CAS_CLI"];
+  const required = ["QDM_METRIC_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
   const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
   return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
 }
@@ -74,9 +74,9 @@ export async function collectDoctor(workspace, options = {}) {
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
   add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
-  add("CMR token", await tokenCheck(workspace, "qdm-cmr-cli", env));
-  add("Indicators token", await tokenCheck(workspace, "qdm-indicators-cli", env));
   add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
+  add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
+  add("legacy qdm-indicators-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {

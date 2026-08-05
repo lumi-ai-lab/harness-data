@@ -24,7 +24,7 @@ or:
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
 ```
 
-Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-indicators-cli`, `qdm-cmr-cli`, `qdm-sql-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively.
+Without a GitHub token, the installer interactively asks for local absolute paths to `cas-cli`, `qdm-metric-cli`, `qdm-sql-cli`, and `harness-data-wikis`. CAS username and password are always collected interactively. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` are no longer installed).
 
 Update an existing runtime interactively:
 

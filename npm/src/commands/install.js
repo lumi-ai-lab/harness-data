@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, linkAgents } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, linkAgents, removeLegacyDataCLIs } from "../lib/config.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -247,7 +247,8 @@ function sanitizedCasError(error) {
 async function validateCasCredentials(runtimeDir, casDir) {
   const env = { QDM_CAS_CONFIG_DIR: casDir };
   const command = path.join(runtimeDir, "bin", binaryName("cas-cli"));
-  await run(command, ["token", "--app", "cmr"], { cwd: runtimeDir, env });
+  // rtp is the remaining CAS app used by qdm-sql-cli token refresh.
+  await run(command, ["token", "--app", "rtp"], { cwd: runtimeDir, env });
 }
 
 function activateCasCredentials(stagedDir, targetDir) {
@@ -305,18 +306,11 @@ export async function configureCasAuthentication(runtimeDir, options = {}) {
 export async function configureTokens(runtimeDir, casDir) {
   const env = { QDM_CAS_CONFIG_DIR: casDir };
   const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
-  const cmrToken = (await run(bin("cas-cli"), ["token", "--app", "cmr"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-cmr-cli"), ["config", "set-token", cmrToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("CMR Token 已配置");
-  const indicatorsToken = (await run(bin("cas-cli"), ["token", "--app", "indicators"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-indicators-cli"), ["config", "set-token", indicatorsToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("Indicators Token 已配置");
   const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
   await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
   ok("SQL Token 已配置");
-  await run(bin("qdm-cmr-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  await run(bin("qdm-indicators-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
   await run(bin("qdm-sql-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
+  ok("Metric CLI 使用 auth-blob / data-auth，无需 CAS set-token");
 }
 
 export async function buildAndCheck(runtimeDir, options = {}) {
@@ -345,12 +339,11 @@ export function printDoctorSummary(doctor, options = {}) {
     ok("wikis/reports");
     ok("wikis/dims");
     ok("wikis/rules");
-    ok("5 个 CLI");
+    ok("4 个 CLI（data-harness / metric / sql / cas）");
     ok("本地配置");
     ok("CAS 凭证");
-    ok("CMR Token");
-    ok("Indicators Token");
     ok("SQL Token");
+    ok("唯一数据入口 qdm-metric-cli");
     if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
     for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
     return;
@@ -393,6 +386,8 @@ export async function installCommand(options = {}) {
     localTools = await installLocalTools(runtimeDir, options);
   }
   ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+  const removedLegacy = removeLegacyDataCLIs(runtimeDir);
+  for (const name of removedLegacy) action(`移除遗留数据 CLI：bin/${name}`);
   blank();
 
   // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI

@@ -84,7 +84,7 @@ func TestRunClaudeHookDoesNotRequireTemplateInFreeMode(t *testing.T) {
 		"session_id": sessionID,
 		"tool_name":  "Bash",
 		"tool_input": map[string]any{
-			"command": `qdm-cmr-cli report business indicators --indicator saleAmt --date 2026-05-28`,
+			"command": `qdm-metric-cli analysis execute --metric saleAmt --start-date 2026-05-28 --end-date 2026-05-28`,
 		},
 	}
 	body, err := json.Marshal(payload)

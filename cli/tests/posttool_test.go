@@ -1412,9 +1412,9 @@ func TestPosttoolFinancialSignalDoesNotInjectWithoutSelectedTemplate(t *testing.
 	writeContextState(t, root, sessionID, "查看昨天的财务报表")
 
 	for _, command := range []string{
-		`qdm-cmr-cli report company indicators --week 2026-20 --ai`,
-		`qdm-cmr-cli report company tree --values --week 2026-20`,
-		`qdm-cmr-cli table --report company --week 2026-20 --indicator EBITDA --dim-type 管理区域 --ai`,
+		`qdm-metric-cli analysis execute --metric saleAmt --start-date 2026-05-11 --end-date 2026-05-17 --ai`,
+		`qdm-metric-cli analysis preview --metric saleAmt --start-date 2026-05-11 --end-date 2026-05-17`,
+		`qdm-metric-cli dim values --code manageAreaId --keyword 华南 --limit 20`,
 	} {
 		ok, _, err := posttool.RunClaudeHook(root, bashPayload(t, sessionID, command))
 		if err != nil {

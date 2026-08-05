@@ -48,9 +48,9 @@ func preflightAuth(root string, plan WikiPlan) []string {
 }
 
 func authApps(cfg harness.CLIConfig) []authApp {
+	// qdm-metric-cli uses encrypted --auth-blob (PI hook), not CAS set-token preflight.
+	// Only SQL still uses CAS token refresh through cas-cli.
 	return []authApp{
-		{Name: "cmr", CASApp: "cmr", CLI: cfg.QDMCmrCLI},
-		{Name: "indicators", CASApp: "indicators", CLI: cfg.QDMIndicatorsCLI},
 		{Name: "sql", CASApp: "rtp", CLI: cfg.QDMSQLCLI},
 	}
 }

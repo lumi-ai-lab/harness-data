@@ -14,10 +14,8 @@ ensure_metric_env() {
   local metric_abs="$ROOT/bin/qdm-metric-cli"
   if [[ ! -f "$ENV_FILE" ]]; then
     cat >"$ENV_FILE" <<EOF
-export QDM_CMR_CLI="/absolute/path/to/qdm-cmr-cli"
-export QDM_INDICATORS_CLI="/absolute/path/to/qdm-indicators-cli"
-export QDM_SQL_CLI="/absolute/path/to/qdm-sql-cli"
 export QDM_METRIC_CLI="${metric_abs}"
+export QDM_SQL_CLI="/absolute/path/to/qdm-sql-cli"
 export QDM_CAS_CLI="/absolute/path/to/cas-cli"
 export QDM_CAS_CONFIG_DIR="${ROOT}/.qdm-auth/cas"
 EOF

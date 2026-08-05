@@ -4,10 +4,8 @@ paths:
   knowledge: wikis
 
 cli:
-  qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
-  qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
-  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
+  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
 
 # Optional data-auth for qdm-metric-cli (default: mode off).

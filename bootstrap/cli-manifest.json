@@ -22,29 +22,9 @@
       }
     },
     {
-      "name": "qdm-cmr-cli",
-      "binary": "qdm-cmr-cli",
-      "repo": "pengmide/qdm-cmr-cli",
-      "private": true,
-      "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
-      }
-    },
-    {
-      "name": "qdm-indicators-cli",
-      "binary": "qdm-indicators-cli",
-      "repo": "pengmide/qdm-indicators-cli",
+      "name": "qdm-metric-cli",
+      "binary": "qdm-metric-cli",
+      "repo": "pengmide/qdm-metric-cli",
       "private": true,
       "platforms": {
         "darwin-arm64": {

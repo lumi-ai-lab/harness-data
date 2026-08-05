@@ -48,7 +48,7 @@ npx @lumi-ai-lab/harness-data install
 
 安装器访问 GitHub 私有仓库时默认使用 `--git-protocol auto`：先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，如果本机没有可用 GitHub SSH key 或无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
 
-`qdm-cmr-cli`、`qdm-indicators-cli`、`qdm-sql-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-cmr-cli`、`pengmide/qdm-indicators-cli`、`pengmide/qdm-sql-cli`、`pengmide/qdm-cas-cli`。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
+`qdm-metric-cli`、`qdm-sql-cli`、`cas-cli` 的二进制文件来自各自私有仓库的 GitHub Release：`pengmide/qdm-metric-cli`、`pengmide/qdm-sql-cli`、`pengmide/qdm-cas-cli`。数据查询唯一入口是 `qdm-metric-cli`（不再安装 `qdm-cmr-cli` / `qdm-indicators-cli`）。安装器下载这些私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
 
 强制使用 SSH：
 
@@ -249,10 +249,8 @@ paths:
   knowledge: wikis
 
 cli:
-  qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
-  qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
-  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
+  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
 
 authz:

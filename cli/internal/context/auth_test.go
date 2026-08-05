@@ -10,122 +10,58 @@ import (
 	"harness-data/cli/internal/sessionstate"
 )
 
-func TestPreflightAuthAlwaysChecksCMRAndIndicators(t *testing.T) {
+func TestPreflightAuthChecksSQLOnly(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
-	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
 	sqlCLI := filepath.Join(binDir, "qdm-sql-cli")
-	writeValidTokenCLI(t, cmrCLI)
-	writeValidTokenCLI(t, indicatorsCLI)
 	writeValidTokenCLI(t, sqlCLI)
-	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, "", sqlCLI)
+	writePreflightConfig(t, root, "", sqlCLI)
 
 	notes := preflightAuth(root, WikiPlan{
 		SelectedPlaybook: "playbooks/unrelated/something.md",
 		Candidates: []sessionstate.PlaybookCandidate{
-			{Path: "playbooks/indicators/s-sale-amt.md"},
+			{Path: "playbooks/metrics/s-sale-amt.md"},
 		},
 	})
 
-	want := []string{"cmr token valid", "indicators token valid", "sql token valid"}
+	want := []string{"sql token valid"}
 	if !reflect.DeepEqual(notes, want) {
 		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
 	}
 }
 
-func TestPreflightAuthChecksBothAppsInFreeMode(t *testing.T) {
+func TestPreflightAuthChecksSQLInFreeMode(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
-	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
 	sqlCLI := filepath.Join(binDir, "qdm-sql-cli")
-	writeValidTokenCLI(t, cmrCLI)
-	writeValidTokenCLI(t, indicatorsCLI)
 	writeValidTokenCLI(t, sqlCLI)
-	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, "", sqlCLI)
+	writePreflightConfig(t, root, "", sqlCLI)
 
 	notes := preflightAuth(root, WikiPlan{Mode: sessionstate.ModeFree})
 
-	want := []string{"cmr token valid", "indicators token valid", "sql token valid"}
+	want := []string{"sql token valid"}
 	if !reflect.DeepEqual(notes, want) {
 		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
 	}
 }
 
-func TestPreflightAuthMissingCLIConfigDoesNotBlockOtherApp(t *testing.T) {
+func TestPreflightAuthMissingSQLConfigSkips(t *testing.T) {
 	root := t.TempDir()
-	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
-	writeValidTokenCLI(t, cmrCLI)
-	writePreflightConfig(t, root, cmrCLI, "", "")
+	writePreflightConfig(t, root, "", "")
 
 	notes := preflightAuth(root, WikiPlan{})
 
 	want := []string{
-		"cmr token valid",
-		"indicators token preflight skipped: target CLI path is not configured",
 		"sql token preflight skipped: target CLI path is not configured",
 	}
 	if !reflect.DeepEqual(notes, want) {
 		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
-	}
-}
-
-func TestPreflightAuthRefreshesOnlyInvalidApp(t *testing.T) {
-	root := t.TempDir()
-	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	casDir := filepath.Join(root, ".qdm-auth", "cas")
-	writeCasTestConfig(t, casDir)
-	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
-	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
-	sqlCLI := filepath.Join(binDir, "qdm-sql-cli")
-	casCLI := filepath.Join(binDir, "cas-cli")
-	indicatorTokenFile := filepath.Join(root, "indicator-token")
-	casLog := filepath.Join(root, "cas.log")
-	writeValidTokenCLI(t, cmrCLI)
-	writeRefreshableTokenCLI(t, indicatorsCLI, indicatorTokenFile)
-	writeValidTokenCLI(t, sqlCLI)
-	writeExecutable(t, casCLI, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+casLog+"'\necho 'Bearer Token:'\necho 'indicators-token'\n")
-	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, casCLI, sqlCLI)
-	t.Setenv("QDM_CAS_CONFIG_DIR", "")
-	t.Setenv("LUMI_WORKSPACE_PATH", "")
-
-	notes := preflightAuth(root, WikiPlan{SelectedPlaybook: "playbooks/cmr/business/s-sale-amt.md"})
-
-	want := []string{
-		"cmr token valid",
-		"indicators token refreshed through CAS credentials",
-		"sql token valid",
-	}
-	if !reflect.DeepEqual(notes, want) {
-		t.Fatalf("preflightAuth notes = %#v, want %#v", notes, want)
-	}
-	gotCASLog, err := os.ReadFile(casLog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotCASLog) != "token --timeout 40s --app indicators\n" {
-		t.Fatalf("cas calls = %q", string(gotCASLog))
-	}
-	gotToken, err := os.ReadFile(indicatorTokenFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotToken) != "indicators-token\n" {
-		t.Fatalf("indicator token = %q", string(gotToken))
 	}
 }
 
@@ -137,25 +73,19 @@ func TestPreflightAuthRefreshesSQLThroughRTPApp(t *testing.T) {
 	}
 	casDir := filepath.Join(root, ".qdm-auth", "cas")
 	writeCasTestConfig(t, casDir)
-	cmrCLI := filepath.Join(binDir, "qdm-cmr-cli")
-	indicatorsCLI := filepath.Join(binDir, "qdm-indicators-cli")
 	sqlCLI := filepath.Join(binDir, "qdm-sql-cli")
 	casCLI := filepath.Join(binDir, "cas-cli")
 	sqlTokenFile := filepath.Join(root, "sql-token")
 	casLog := filepath.Join(root, "cas.log")
-	writeValidTokenCLI(t, cmrCLI)
-	writeValidTokenCLI(t, indicatorsCLI)
 	writeRefreshableTokenCLI(t, sqlCLI, sqlTokenFile)
 	writeExecutable(t, casCLI, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+casLog+"'\necho 'Bearer Token:'\necho 'sql-token'\n")
-	writePreflightConfig(t, root, cmrCLI, indicatorsCLI, casCLI, sqlCLI)
+	writePreflightConfig(t, root, casCLI, sqlCLI)
 	t.Setenv("QDM_CAS_CONFIG_DIR", "")
 	t.Setenv("LUMI_WORKSPACE_PATH", "")
 
 	notes := preflightAuth(root, WikiPlan{Mode: sessionstate.ModeFree})
 
 	want := []string{
-		"cmr token valid",
-		"indicators token valid",
 		"sql token refreshed through CAS credentials",
 	}
 	if !reflect.DeepEqual(notes, want) {
@@ -234,23 +164,6 @@ func TestCasConfigPathResolution(t *testing.T) {
 			t.Fatalf("casConfigPath = %s, want %s", got, want)
 		}
 	})
-
-	t.Run("home fallback", func(t *testing.T) {
-		root := t.TempDir()
-		home := t.TempDir()
-		t.Setenv("QDM_CAS_CONFIG_DIR", "")
-		t.Setenv("LUMI_WORKSPACE_PATH", "")
-		t.Setenv("HOME", home)
-
-		got, err := casConfigPath(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := filepath.Join(home, ".cas-cli", "credentials.enc")
-		if got != want {
-			t.Fatalf("casConfigPath = %s, want %s", got, want)
-		}
-	})
 }
 
 func TestPreflightAppAuthRefreshPassesCASConfigDir(t *testing.T) {
@@ -264,15 +177,15 @@ func TestPreflightAppAuthRefreshPassesCASConfigDir(t *testing.T) {
 	envLog := filepath.Join(root, "cas-env.log")
 	tokenFile := filepath.Join(root, "target-token")
 	casCLI := filepath.Join(binDir, "cas-cli")
-	targetCLI := filepath.Join(binDir, "qdm-cmr-cli")
+	targetCLI := filepath.Join(binDir, "qdm-sql-cli")
 	writeExecutable(t, casCLI, "#!/bin/sh\nprintf '%s\\n' \"$QDM_CAS_CONFIG_DIR\" > '"+envLog+"'\necho 'Bearer Token:'\necho 'refreshed-token'\n")
 	writeExecutable(t, targetCLI, "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"check-token\" ]; then\n  [ -f '"+tokenFile+"' ] && echo true || echo false\n  exit 0\nfi\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"set-token\" ]; then\n  printf '%s\\n' \"$3\" > '"+tokenFile+"'\n  exit 0\nfi\nexit 2\n")
 	t.Setenv("QDM_CAS_CONFIG_DIR", "")
 	t.Setenv("LUMI_WORKSPACE_PATH", "")
 
-	note := preflightAppAuth(root, harness.CLIConfig{QDMCasCLI: casCLI}, authApp{Name: "cmr", CASApp: "cmr", CLI: targetCLI})
+	note := preflightAppAuth(root, harness.CLIConfig{QDMCasCLI: casCLI}, authApp{Name: "sql", CASApp: "rtp", CLI: targetCLI})
 
-	if note != "cmr token refreshed through CAS credentials" {
+	if note != "sql token refreshed through CAS credentials" {
 		t.Fatalf("preflightAppAuth note = %q", note)
 	}
 	gotEnv, err := os.ReadFile(envLog)
@@ -321,7 +234,7 @@ func writeExecutable(t *testing.T, path, content string) {
 	}
 }
 
-func writePreflightConfig(t *testing.T, root, cmrCLI, indicatorsCLI, casCLI string, sqlCLI ...string) {
+func writePreflightConfig(t *testing.T, root, casCLI, sqlCLI string) {
 	t.Helper()
 	content := "paths:\n" +
 		"  spec: wikis/spec\n" +
@@ -329,14 +242,8 @@ func writePreflightConfig(t *testing.T, root, cmrCLI, indicatorsCLI, casCLI stri
 		"  playbooks: wikis/playbooks\n" +
 		"  templates: wikis/templates\n" +
 		"cli:\n"
-	if cmrCLI != "" {
-		content += "  qdm_cmr_cli: " + cmrCLI + "\n"
-	}
-	if indicatorsCLI != "" {
-		content += "  qdm_indicators_cli: " + indicatorsCLI + "\n"
-	}
-	if len(sqlCLI) > 0 && sqlCLI[0] != "" {
-		content += "  qdm_sql_cli: " + sqlCLI[0] + "\n"
+	if sqlCLI != "" {
+		content += "  qdm_sql_cli: " + sqlCLI + "\n"
 	}
 	if casCLI != "" {
 		content += "  qdm_cas_cli: " + casCLI + "\n"

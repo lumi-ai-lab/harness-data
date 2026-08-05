@@ -32,8 +32,6 @@ func TestLoadConfigReadsSQLCLIPath(t *testing.T) {
   knowledge: wikis
 
 cli:
-  qdm_cmr_cli: /opt/qdm-cmr-cli
-  qdm_indicators_cli: /opt/qdm-indicators-cli
   qdm_sql_cli: /opt/qdm-sql-cli
   qdm_metric_cli: /opt/qdm-metric-cli
   qdm_cas_cli: /opt/cas-cli
