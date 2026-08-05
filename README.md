@@ -242,7 +242,7 @@ cp config/qdm-cli-paths.env.example config/qdm-cli-paths.env
 source config/qdm-cli-paths.env
 ```
 
-`config/harness-config.yaml` 是受限 YAML，目前支持 `paths` 和 `cli` 两个 section。example 默认提供：
+`config/harness-config.yaml` 是受限 YAML，目前支持 `paths`、`cli` 和可选的 `authz` section。example 默认提供：
 
 ```yaml
 paths:
@@ -252,10 +252,49 @@ cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
   qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
   qdm_sql_cli: /absolute/path/to/qdm-sql-cli
+  qdm_metric_cli: /absolute/path/to/qdm-metric-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
+
+authz:
+  mode: off
+  blob_file: config/dev-auth.blob
+  dev_user_id: pengmingde01
+  allow_local_blob: true
 ```
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
+
+### 数据权限（qdm-metric-cli，默认关闭）
+
+`authz.mode` 默认 `off`，不影响现有行为。设为 `on` 后，PI 扩展在 `tool_call` 中保证：
+
+- 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
+- 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
+- 当前 turn 没有有效 blob 时直接 **block** 该次调用
+
+权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
+
+| 来源 | 说明 |
+| --- | --- |
+| Host `_auth` + `_auth_user_id` | 生产：网关加密后旁路下发（不写进用户 prompt 正文） |
+| `HARNESS_AUTH_BLOB` / `HARNESS_AUTH_BLOB_FILE` | 可选，优先级高于本地文件 |
+| `authz.blob_file` | **本地测试推荐**：预生成密文文件，测试阶段可不配环境变量 |
+
+`qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现：
+
+- `config/harness-config.yaml` → `cli.qdm_metric_cli`
+- `config/qdm-cli-paths.env` → `export QDM_METRIC_CLI="..."`
+- 安装器写入 `bin/qdm-metric-cli`（或本地联调 symlink）
+- PI Hook 在 `analysis execute` 时会把裸 `qdm-metric-cli` / `$QDM_METRIC_CLI` 改写成配置的绝对路径，避免依赖临时 PATH
+
+本地生成测试 blob：
+
+```bash
+cd /path/to/qdm-metric-cli
+go run ./scripts/auth_blob_encrypt.go -in test/auth.json > /path/to/harness-data/config/dev-auth.blob
+```
+
+同 session 多用户分槽 key 为 `sessionId::userId`（开发默认 `dev_user_id: pengmingde01`）。
 
 ## Context 输出
 

@@ -7,4 +7,19 @@ cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
   qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
   qdm_sql_cli: /absolute/path/to/qdm-sql-cli
+  qdm_metric_cli: /absolute/path/to/qdm-metric-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
+
+# Optional data-auth for qdm-metric-cli (default off).
+# When mode is on, PI tool_call forces:
+#   qdm-metric-cli analysis execute ... --data-auth --auth-blob '<encrypted>'
+#
+# Host sends encrypted blob via _auth (+ _auth_user_id for multi-user sessions).
+# Local dev/test (no Host): put a pre-encrypted blob in blob_file.
+#   cd ../qdm-metric-cli && go run ./scripts/auth_blob_encrypt.go -in test/auth.json > config/dev-auth.blob
+# Env (optional, higher priority than file): HARNESS_AUTH_BLOB / HARNESS_AUTH_BLOB_FILE
+authz:
+  mode: off
+  blob_file: config/dev-auth.blob
+  dev_user_id: pengmingde01
+  allow_local_blob: true

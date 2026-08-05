@@ -5,6 +5,7 @@
 !.env.example
 config/harness-config.yaml
 config/qdm-cli-paths.env
+config/dev-auth.blob
 
 # macOS
 .DS_Store

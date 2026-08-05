@@ -1,0 +1,11 @@
+# 复制到 PI 对话里的提示词（三个场景共用）
+
+请只执行下面这一条命令一次。成功时只输出一行数字（门店行数）；
+如果命令被拦截或失败，只输出错误/拦截原因原文。不要解释、不要重试、不要读其它文件。
+
+source config/qdm-cli-paths.env && "$QDM_METRIC_CLI" analysis execute \
+  --metric saleAmt \
+  --start-date 2026-07-01 --end-date 2026-07-07 \
+  --agg-dim storeId \
+  --format json \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'

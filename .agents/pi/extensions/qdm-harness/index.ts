@@ -3,6 +3,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runAsyncCommand } from "./async-cli.mjs";
+import { loadAuthzConfig, resolveAuthBlob, resolveMetricCliPath } from "./authz-config.mjs";
+import { applyAuthzToToolCall } from "./authz-inject.mjs";
+import { AuthzStateStore } from "./authz-store.mjs";
 import { appendHarnessContext, ContextCache, latestUserMessage } from "./context-cache.mjs";
 
 type JsonObject = Record<string, unknown>;
@@ -21,6 +24,9 @@ interface PiExtensionContext {
 
 interface PiContextEvent {
   messages?: unknown[];
+  /** Host may attach encrypted auth blob here (not user prompt text). */
+  _auth?: string;
+  _auth_user_id?: string;
 }
 
 interface PiBeforeAgentStartEvent {
@@ -139,6 +145,24 @@ function addPiPathGuidance(context: string): string {
     .join("\n");
 }
 
+function authzGuidance(mode: "off" | "on", bound: boolean): string {
+  if (mode !== "on") return "";
+  if (!bound) {
+    return [
+      "# QDM Data Auth",
+      "",
+      "Authz mode is on but no encrypted auth blob is bound for this turn.",
+      "Do not run `qdm-metric-cli analysis execute` until auth is available.",
+    ].join("\n");
+  }
+  return [
+    "# QDM Data Auth",
+    "",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`.",
+    "Do not invent, omit, or override auth flags; the hook replaces them.",
+  ].join("\n");
+}
+
 async function runHarnessContext(
   projectRoot: string,
   prompt: string,
@@ -229,15 +253,47 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
   ].join(" ");
 }
 
+/**
+ * Bind auth for this turn: Host _auth wins; else local env/file when allowed.
+ * Test stage uses blob_file only (no env).
+ */
+function bindAuthzForTurn(
+  projectRoot: string,
+  store: AuthzStateStore,
+  ctx: PiExtensionContext | undefined,
+  event?: PiContextEvent,
+): { mode: "off" | "on"; bound: boolean; error?: string } {
+  const config = loadAuthzConfig(projectRoot);
+  if (config.mode !== "on") {
+    return { mode: "off", bound: false };
+  }
+
+  const resolved = resolveAuthBlob({
+    projectRoot,
+    config,
+    hostAuth: event?._auth,
+    hostUserId: event?._auth_user_id,
+  });
+
+  if (!resolved.ok) {
+    return { mode: "on", bound: false, error: resolved.error };
+  }
+
+  store.bind(sessionId(ctx), resolved.userId, resolved.blob, resolved.source);
+  return { mode: "on", bound: true };
+}
+
 export default function qdmHarnessExtension(pi: {
   on?: (event: string, handler: (event: unknown, ctx?: PiExtensionContext) => unknown) => void;
   cwd?: string;
 }): void {
   const contextCache = new ContextCache(CONTEXT_CACHE_LIMIT);
+  const authzStore = new AuthzStateStore();
   let projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
 
   const resetSessionState = (ctx?: PiExtensionContext): void => {
     contextCache.clear();
+    authzStore.clear(sessionId(ctx));
     ctx?.ui?.setStatus?.(CONTEXT_STATUS_KEY, undefined);
   };
 
@@ -260,8 +316,11 @@ export default function qdmHarnessExtension(pi: {
   });
 
   pi.on?.("context", async (event, ctx) => {
-    const messages = (event as PiContextEvent).messages;
+    const payload = event as PiContextEvent;
+    const messages = payload.messages;
     if (!Array.isArray(messages)) return undefined;
+
+    const authz = bindAuthzForTurn(projectRoot, authzStore, ctx, payload);
 
     const userMessage = latestUserMessage(messages);
     if (!userMessage) return { messages };
@@ -269,11 +328,31 @@ export default function qdmHarnessExtension(pi: {
     const context = await contextCache.getOrCreate(userMessage.key, () =>
       runHarnessContext(projectRoot, userMessage.prompt, ctx),
     );
-    if (!context) return { messages };
-    return { messages: appendHarnessContext(messages, userMessage.index, context) };
+
+    const parts = [context, authzGuidance(authz.mode, authz.bound)].filter(Boolean);
+    if (authz.mode === "on" && !authz.bound && authz.error) {
+      ctx?.ui?.notify?.(`QDM Authz: ${authz.error}`, "warning");
+    }
+    if (!parts.length) return { messages };
+    return { messages: appendHarnessContext(messages, userMessage.index, parts.join("\n\n")) };
   });
 
   pi.on?.("tool_call", (event, ctx) => {
+    const config = loadAuthzConfig(projectRoot);
+    const metricCliPath = resolveMetricCliPath(projectRoot, config);
+    const turn = authzStore.getCurrentTurn(sessionId(ctx));
+    const authzResult = applyAuthzToToolCall(event as PiToolCallEvent, {
+      mode: config.mode,
+      blob: turn?.blob ?? null,
+      metricCliPath,
+      missingReason: turn
+        ? undefined
+        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute",
+    });
+    if (authzResult?.block) {
+      return authzResult;
+    }
+
     injectPosttool(projectRoot, event, ctx);
     return undefined;
   });

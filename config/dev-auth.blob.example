@@ -1,0 +1,11 @@
+# Generate a real encrypted blob (one line, no comments) for local authz testing:
+#
+#   cd /path/to/qdm-metric-cli
+#   go run ./scripts/auth_blob_encrypt.go -in test/auth.json > /path/to/harness-data/config/dev-auth.blob
+#
+# Then set in config/harness-config.yaml:
+#
+#   authz:
+#     mode: on
+#     blob_file: config/dev-auth.blob
+#     dev_user_id: pengmingde01

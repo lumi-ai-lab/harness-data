@@ -8,6 +8,8 @@ Read `README.md` before running QDM data commands.
 
 - Always run from the harness-data runtime workspace root.
 - Use `source config/qdm-cli-paths.env` before invoking QDM data CLIs from shell snippets.
+- Prefer configured env paths: `$QDM_CMR_CLI`, `$QDM_INDICATORS_CLI`, `$QDM_SQL_CLI`, `$QDM_METRIC_CLI`, `$QDM_CAS_CLI` (do not guess bare binary names off PATH).
+- For metric queries use `"$QDM_METRIC_CLI" analysis execute ...`. When authz mode is on, the PI hook injects `--data-auth --auth-blob`; do not invent auth flags.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values or replace missing data with examples.
 - Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default.
