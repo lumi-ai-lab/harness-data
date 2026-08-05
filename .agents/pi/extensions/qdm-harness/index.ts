@@ -152,13 +152,14 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
       "# QDM Data Auth",
       "",
       "Authz mode is on but no encrypted auth blob is bound for this turn.",
-      "Do not run `qdm-metric-cli analysis execute` until auth is available.",
+      "Do not run `qdm-metric-cli analysis execute` or `qdm-metric-cli auth describe` until auth is available.",
     ].join("\n");
   }
   return [
     "# QDM Data Auth",
     "",
-    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`.",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`,",
+    "and `--auth-blob` for `qdm-metric-cli auth describe` (to answer what scopes the user has).",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
   ].join("\n");
 }
@@ -347,7 +348,7 @@ export default function qdmHarnessExtension(pi: {
       metricCliPath,
       missingReason: turn
         ? undefined
-        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute",
+        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe",
     });
     if (authzResult?.block) {
       return authzResult;

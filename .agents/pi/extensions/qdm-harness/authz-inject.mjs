@@ -1,14 +1,20 @@
 /**
- * Force --data-auth/--auth-blob only for real shell invocations of:
- *   qdm-metric-cli analysis execute ...
+ * Force auth flags only for real shell invocations of:
+ *   qdm-metric-cli analysis execute ...  → --data-auth --auth-blob
+ *   qdm-metric-cli auth describe ...     → --auth-blob
  *
  * Mentions inside quotes, heredocs, or commit messages must NOT be rewritten.
  * Detection: mask quoted/heredoc regions, then match command-word invocation.
  */
 
-/** Binary token that can start a real metric-cli analysis execute. */
+/** Binary token that can start a real metric-cli invocation. */
 const METRIC_BIN_SRC =
   String.raw`(?:\$\{?QDM_METRIC_CLI\}?|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`;
+
+/** Subcommand patterns gated by authz (command-word form only). */
+const SUBCMD_ANALYSIS_EXECUTE = String.raw`analysis\s+execute`;
+const SUBCMD_AUTH_DESCRIBE = String.raw`auth\s+describe`;
+const SUBCMD_AUTHZ_GATED = String.raw`(?:analysis\s+execute|auth\s+describe)`;
 
 /**
  * Replace contents of quotes and heredoc bodies with spaces (newlines kept).
@@ -134,33 +140,64 @@ export function maskQuotedAndHeredocRegions(command) {
 }
 
 /**
- * True only when the shell command actually *invokes*
- * qdm-metric-cli (or $QDM_METRIC_CLI) with subcommand `analysis execute`.
- *
- * @param {string} command
+ * @param {string} subcmdPattern e.g. analysis\\s+execute
  */
-export function isMetricAnalysisExecute(command) {
-  if (typeof command !== "string" || !command.trim()) return false;
-
-  const skeleton = maskQuotedAndHeredocRegions(command);
-
-  // Command-word metric-cli at start of a pipeline/list segment + analysis execute.
-  // Optional quotes around $QDM_METRIC_CLI remain after protected-var mask.
-  const invocation = new RegExp(
+function metricInvocationRegex(subcmdPattern) {
+  return new RegExp(
     String.raw`(?:^|[\n;|&]|(?:\b(?:then|do|if|elif|else)\b))\s*` +
       String.raw`(?:(?:source|\.)\s+[^\s;|&]+\s*(?:&&\s*)?)*` +
       String.raw`(?:[A-Za-z_][\w]*=(?:'[^\n']*'|"[^\n"]*"|\S+)\s+)*` +
       String.raw`(?:'|")?` +
       METRIC_BIN_SRC +
       String.raw`(?:'|")?` +
-      String.raw`\s+analysis\s+execute\b`,
+      String.raw`\s+` +
+      subcmdPattern +
+      String.raw`\b`,
   );
-
-  return invocation.test(skeleton);
 }
 
 /**
- * Rewrite command-word metric-cli tokens that start an `analysis execute` invocation.
+ * @param {string} command
+ * @param {string} subcmdPattern
+ */
+function matchesMetricInvocation(command, subcmdPattern) {
+  if (typeof command !== "string" || !command.trim()) return false;
+  const skeleton = maskQuotedAndHeredocRegions(command);
+  return metricInvocationRegex(subcmdPattern).test(skeleton);
+}
+
+/**
+ * True only when the shell command actually *invokes*
+ * qdm-metric-cli (or $QDM_METRIC_CLI) with subcommand `analysis execute`.
+ *
+ * @param {string} command
+ */
+export function isMetricAnalysisExecute(command) {
+  return matchesMetricInvocation(command, SUBCMD_ANALYSIS_EXECUTE);
+}
+
+/**
+ * True only when the shell command actually *invokes*
+ * qdm-metric-cli with subcommand `auth describe`.
+ *
+ * @param {string} command
+ */
+export function isMetricAuthDescribe(command) {
+  return matchesMetricInvocation(command, SUBCMD_AUTH_DESCRIBE);
+}
+
+/**
+ * True when the command is gated by authz injection (execute or describe).
+ *
+ * @param {string} command
+ */
+export function isMetricAuthzGatedCommand(command) {
+  return isMetricAnalysisExecute(command) || isMetricAuthDescribe(command);
+}
+
+/**
+ * Rewrite command-word metric-cli tokens that start a gated invocation
+ * (`analysis execute` or `auth describe`).
  *
  * @param {string} command
  * @param {string} metricCliPath absolute path to qdm-metric-cli
@@ -179,7 +216,11 @@ export function rewriteMetricCliInvocation(command, metricCliPath) {
     const binStart = match.index;
     const binEnd = binStart + match[0].length;
     const invokeHere = new RegExp(
-      String.raw`^(?:'|")?` + METRIC_BIN_SRC + String.raw`(?:'|")?\s+analysis\s+execute\b`,
+      String.raw`^(?:'|")?` +
+        METRIC_BIN_SRC +
+        String.raw`(?:'|")?\s+` +
+        SUBCMD_AUTHZ_GATED +
+        String.raw`\b`,
     ).test(skeleton.slice(binStart));
     if (!invokeHere) continue;
     out += command.slice(last, binStart) + quoted;
@@ -190,7 +231,7 @@ export function rewriteMetricCliInvocation(command, metricCliPath) {
 }
 
 /**
- * Strip model-supplied auth flags (used only after isMetricAnalysisExecute gate).
+ * Strip model-supplied auth flags (used only after gated-command gate).
  * @param {string} command
  */
 export function stripAuthFlags(command) {
@@ -215,38 +256,45 @@ export function shellQuote(value) {
 }
 
 /**
- * Insert auth flags into the metric-cli argv, not after shell pipes/redirections.
+ * Insert flags into the metric-cli argv, not after shell pipes/redirections.
+ * Anchors after the subcommand keyword (execute | describe).
  *
  * @param {string} command
  * @param {string} flags
+ * @param {"execute" | "describe"} [anchorWord="execute"]
  */
-export function insertFlagsBeforeShellTail(command, flags) {
+export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute") {
   const skeleton = maskQuotedAndHeredocRegions(command);
+  const subcmd =
+    anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_ANALYSIS_EXECUTE;
   const inv = new RegExp(
-    String.raw`(?:'|")?` + METRIC_BIN_SRC + String.raw`(?:'|")?\s+analysis\s+execute\b`,
+    String.raw`(?:'|")?` + METRIC_BIN_SRC + String.raw`(?:'|")?\s+` + subcmd + String.raw`\b`,
     "i",
   ).exec(skeleton);
 
-  let fromExecute;
+  let fromAnchor;
   if (inv) {
-    const rel = inv[0].toLowerCase().lastIndexOf("execute");
-    fromExecute = inv.index + rel;
+    const lower = inv[0].toLowerCase();
+    const rel = lower.lastIndexOf(anchorWord);
+    fromAnchor = inv.index + (rel >= 0 ? rel : inv[0].length - anchorWord.length);
   } else {
-    const m = command.match(/\bexecute\b/i);
+    const m = command.match(new RegExp(String.raw`\b${anchorWord}\b`, "i"));
     if (!m || m.index == null) return `${command}${flags}`;
-    fromExecute = m.index;
+    fromAnchor = m.index;
   }
 
-  const tail = command.slice(fromExecute);
+  const tail = command.slice(fromAnchor);
   const op = tail.match(/\s(?:\||&&|;|2?>|1?>|&>)/);
   if (!op || op.index == null) {
     return `${command}${flags}`;
   }
-  const abs = fromExecute + op.index;
+  const abs = fromAnchor + op.index;
   return `${command.slice(0, abs)}${flags}${command.slice(abs)}`;
 }
 
 /**
+ * Inject --data-auth --auth-blob for analysis execute.
+ *
  * @param {string} command
  * @param {string} blob encrypted qdm1enc blob
  * @param {string} [metricCliPath]
@@ -257,7 +305,23 @@ export function injectDataAuth(command, blob, metricCliPath = "") {
     cleaned = rewriteMetricCliInvocation(cleaned, metricCliPath);
   }
   const flags = ` --data-auth --auth-blob ${shellQuote(blob)}`;
-  return insertFlagsBeforeShellTail(cleaned, flags);
+  return insertFlagsBeforeShellTail(cleaned, flags, "execute");
+}
+
+/**
+ * Inject --auth-blob for auth describe (no --data-auth).
+ *
+ * @param {string} command
+ * @param {string} blob encrypted qdm1enc blob
+ * @param {string} [metricCliPath]
+ */
+export function injectAuthDescribeBlob(command, blob, metricCliPath = "") {
+  let cleaned = stripAuthFlags(command);
+  if (metricCliPath) {
+    cleaned = rewriteMetricCliInvocation(cleaned, metricCliPath);
+  }
+  const flags = ` --auth-blob ${shellQuote(blob)}`;
+  return insertFlagsBeforeShellTail(cleaned, flags, "describe");
 }
 
 /**
@@ -278,10 +342,12 @@ export function injectDataAuth(command, blob, metricCliPath = "") {
 export function applyAuthzToToolCall(event, options) {
   if (!["bash", "Bash"].includes(event.toolName ?? "")) return undefined;
   const command = event.input?.command;
-  // Gate: only real metric-cli analysis execute invocations (not prose / commit messages).
-  if (typeof command !== "string" || !isMetricAnalysisExecute(command)) {
+  // Gate: only real metric-cli gated invocations (not prose / commit messages).
+  if (typeof command !== "string" || !isMetricAuthzGatedCommand(command)) {
     return undefined;
   }
+
+  const isDescribe = isMetricAuthDescribe(command);
 
   if (options.mode !== "on") {
     if (options.metricCliPath && event.input && typeof event.input === "object") {
@@ -291,11 +357,12 @@ export function applyAuthzToToolCall(event, options) {
   }
 
   if (!options.blob) {
+    const defaultReason = isDescribe
+      ? "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli auth describe"
+      : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute";
     return {
       block: true,
-      reason:
-        options.missingReason ||
-        "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute",
+      reason: options.missingReason || defaultReason,
     };
   }
 
@@ -303,6 +370,14 @@ export function applyAuthzToToolCall(event, options) {
     return { block: true, reason: "authz: invalid tool input" };
   }
 
-  event.input.command = injectDataAuth(command, options.blob, options.metricCliPath || "");
+  if (isDescribe) {
+    event.input.command = injectAuthDescribeBlob(
+      command,
+      options.blob,
+      options.metricCliPath || "",
+    );
+  } else {
+    event.input.command = injectDataAuth(command, options.blob, options.metricCliPath || "");
+  }
   return undefined;
 }

@@ -38,7 +38,7 @@ Reconfigure CAS credentials after an account/password change or after `.qdm-auth
 npx @lumi-ai-lab/harness-data auth --dir /path/to/runtime
 ```
 
-The command recreates `.qdm-auth/cas`, stores the new encrypted CAS credentials, refreshes the CMR, Indicators, and SQL tokens, and validates all three tokens.
+The command recreates `.qdm-auth/cas`, stores the new encrypted CAS credentials, refreshes the SQL token via `cas-cli token --app rtp`, and validates it. Metric CLI uses auth-blob / data-auth (no CAS set-token).
 
 Diagnose a runtime:
 

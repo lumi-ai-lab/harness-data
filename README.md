@@ -90,7 +90,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 5 个 CLI、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 CMR/Indicators/SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`qdm-metric-cli` / `qdm-sql-cli` / `cas-cli` 等）、生成本地配置、配置或复用 CAS credentials、用 ticket 换取 SQL token、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。SQL token 对应 `cas-cli token --app rtp`；metric-cli 使用 auth-blob / data-auth，无需 CAS set-token。
 
 更新工作目录：
 
@@ -104,7 +104,7 @@ CAS 账号或密码发生变化，或者本地 `.qdm-auth` 被删除后，重新
 npx @lumi-ai-lab/harness-data auth --dir ~/harness-data
 ```
 
-该命令会自动重建 `.qdm-auth/cas`、加密保存新的 CAS 凭证，并重新签发和校验 CMR、Indicators、SQL Token；不会更新 runtime、CLI、Wikis 或 Agent Hook。
+该命令会自动重建 `.qdm-auth/cas`、加密保存新的 CAS 凭证，并重新签发和校验 SQL Token；不会更新 runtime、CLI、Wikis 或 Agent Hook。metric-cli 数据权限仍走 auth-blob，不经本命令 set-token。
 
 仅检查可用更新：
 
@@ -267,10 +267,11 @@ authz:
 `authz.mode` 默认 `off`，不影响现有行为。设为 `on` 后，PI 扩展在 `tool_call` 中保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
+- 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
 - 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
-- 当前 turn 没有有效 blob / userId 时直接 **block** 该次调用
+- 当前 turn 没有有效 blob / userId 时直接 **block** 上述调用
 
-权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
+Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness context 默认 always inject）。权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
 
 | 来源 | 说明 |
 | --- | --- |

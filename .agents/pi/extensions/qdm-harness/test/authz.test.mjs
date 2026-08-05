@@ -11,8 +11,11 @@ import {
 } from "../authz-config.mjs";
 import {
   applyAuthzToToolCall,
+  injectAuthDescribeBlob,
   injectDataAuth,
   isMetricAnalysisExecute,
+  isMetricAuthDescribe,
+  isMetricAuthzGatedCommand,
   rewriteMetricCliInvocation,
   stripAuthFlags,
 } from "../authz-inject.mjs";
@@ -136,6 +139,7 @@ test("isMetricAnalysisExecute and strip/inject auth flags", () => {
   );
   assert.equal(isMetricAnalysisExecute("qdm-metric-cli metric list"), false);
   assert.equal(isMetricAnalysisExecute("echo hello"), false);
+  assert.equal(isMetricAnalysisExecute("qdm-metric-cli auth describe"), false);
 
   // False positives: prose / commit messages / quoted docs must NOT match.
   assert.equal(
@@ -196,6 +200,86 @@ EOF
   assert.match(piped, /--data-auth --auth-blob/);
   assert.match(piped, /--auth-blob 'qdm1enc\.[^']+' \| python3/);
   assert.doesNotMatch(piped, /python3.*--data-auth/);
+});
+
+test("isMetricAuthDescribe and injectAuthDescribeBlob", () => {
+  assert.equal(isMetricAuthDescribe("qdm-metric-cli auth describe"), true);
+  assert.equal(
+    isMetricAuthDescribe(
+      'source config/qdm-cli-paths.env && "$QDM_METRIC_CLI" auth describe --resolve-labels=false',
+    ),
+    true,
+  );
+  assert.equal(isMetricAuthDescribe("./bin/qdm-metric-cli auth describe"), true);
+  assert.equal(isMetricAuthDescribe("qdm-metric-cli analysis execute --metric x"), false);
+  assert.equal(isMetricAuthDescribe("qdm-metric-cli metric list"), false);
+  assert.equal(
+    isMetricAuthDescribe('echo "qdm-metric-cli auth describe --auth-blob x"'),
+    false,
+  );
+  assert.equal(
+    isMetricAuthDescribe(
+      `git commit -m "support qdm-metric-cli auth describe --auth-blob '<加密blob>'"`,
+    ),
+    false,
+  );
+
+  assert.equal(isMetricAuthzGatedCommand("qdm-metric-cli auth describe"), true);
+  assert.equal(isMetricAuthzGatedCommand("qdm-metric-cli analysis execute --metric x"), true);
+  assert.equal(isMetricAuthzGatedCommand("qdm-metric-cli metric list"), false);
+
+  const metricPath = "/opt/bin/qdm-metric-cli";
+  const injected = injectAuthDescribeBlob(
+    "qdm-metric-cli auth describe --auth-blob 'qdm1enc.FAKE' --resolve-labels=false",
+    SAMPLE_BLOB,
+    metricPath,
+  );
+  assert.doesNotMatch(injected, /--data-auth/);
+  assert.match(injected, new RegExp(`--auth-blob '${SAMPLE_BLOB.replace(/\./g, "\\.")}'`));
+  assert.doesNotMatch(injected, /qdm1enc\.FAKE/);
+  assert.match(injected, /\/opt\/bin\/qdm-metric-cli/);
+  assert.match(injected, /--resolve-labels=false/);
+
+  const rewritten = rewriteMetricCliInvocation(
+    'source config/qdm-cli-paths.env && "$QDM_METRIC_CLI" auth describe',
+    metricPath,
+  );
+  assert.match(rewritten, /\/opt\/bin\/qdm-metric-cli/);
+  assert.doesNotMatch(rewritten, /\$QDM_METRIC_CLI/);
+});
+
+test("applyAuthzToToolCall injects auth describe without data-auth", () => {
+  const blocked = {
+    toolName: "bash",
+    input: { command: "qdm-metric-cli auth describe" },
+  };
+  const blockResult = applyAuthzToToolCall(blocked, { mode: "on", blob: null });
+  assert.equal(blockResult?.block, true);
+  assert.match(blockResult.reason, /auth describe/i);
+
+  const event = {
+    toolName: "Bash",
+    input: {
+      command: "qdm-metric-cli auth describe --auth-blob 'qdm1enc.FAKE'",
+    },
+  };
+  const ok = applyAuthzToToolCall(event, {
+    mode: "on",
+    blob: SAMPLE_BLOB,
+    metricCliPath: "/opt/bin/qdm-metric-cli",
+  });
+  assert.equal(ok, undefined);
+  assert.doesNotMatch(event.input.command, /--data-auth/);
+  assert.match(event.input.command, new RegExp(SAMPLE_BLOB.replace(/\./g, "\\.")));
+  assert.doesNotMatch(event.input.command, /qdm1enc\.FAKE/);
+  assert.match(event.input.command, /\/opt\/bin\/qdm-metric-cli/);
+
+  const offEvent = {
+    toolName: "bash",
+    input: { command: "qdm-metric-cli auth describe" },
+  };
+  assert.equal(applyAuthzToToolCall(offEvent, { mode: "off", blob: SAMPLE_BLOB }), undefined);
+  assert.equal(offEvent.input.command, "qdm-metric-cli auth describe");
 });
 
 test("applyAuthzToToolCall does not rewrite git commit messages", () => {
