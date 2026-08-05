@@ -102,10 +102,11 @@ func TestMultiDomainContextRecall(t *testing.T) {
 	for _, ref := range response.ContextFiles {
 		got[ref.Path] = true
 	}
+	// 新版 Wikis（Metric Registry 契约版本）已移除“门店净利润”指标，该多域召回用例改为断言实际召回的“会员复购次数”与“会员券（门店）”两个指标。
 	for _, want := range []string{
 		"wikis/metrics/会员复购次数/spec.md",
-		"wikis/metrics/门店净利润/spec.md",
-		"wikis/metrics/门店净利润/playbook.md",
+		"wikis/metrics/会员券（门店）/spec.md",
+		"wikis/metrics/会员券（门店）/playbook.md",
 	} {
 		if !got[want] {
 			if want == "wikis/metrics/会员复购次数/spec.md" && got["wikis/metrics/会员复购次数/playbook.md"] {
@@ -264,7 +265,9 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 		}
 	})
 
-	payload := bytes.NewBufferString(`{"session_id":"` + sessionID + `","prompt":"2026年第10周粤西1区会员经营情况如何 @dm"}`)
+	// 新版 Wikis 移除了“用户分析报告”，原 prompt 不再歧义（会直接解析到经营综合分析报告）。
+	// 改用仍会命中多个报告且无单一模板覆盖全部 spec 的 prompt，以保留“歧义→free”的本意。
+	payload := bytes.NewBufferString(`{"session_id":"` + sessionID + `","prompt":"门店和商品经营情况怎么样"}`)
 	ok, output, err := dhcontext.RunClaudeHook(root, payload.Bytes())
 	if err != nil {
 		t.Fatal(err)
@@ -278,8 +281,8 @@ func TestClaudeHookAmbiguousPlaybooksUsesFreeAnalysisMode(t *testing.T) {
 		"Do not run bin/data-harness-cli inject-template",
 		"wikis/reports/经营综合分析报告/index.md",
 		"wikis/reports/经营综合分析报告/spec.md",
-		"wikis/reports/用户分析报告/index.md",
-		"wikis/reports/用户分析报告/spec.md",
+		"wikis/reports/门店分析报告/index.md",
+		"wikis/reports/门店分析报告/spec.md",
 	} {
 		if !bytes.Contains([]byte(context), []byte(want)) {
 			t.Fatalf("missing %s in %s", want, context)
