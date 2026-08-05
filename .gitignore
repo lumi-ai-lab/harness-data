@@ -6,6 +6,7 @@
 config/harness-config.yaml
 config/qdm-cli-paths.env
 config/dev-auth.blob
+config/authz-manual-test/harness-config.baseline.yaml
 
 # macOS
 .DS_Store

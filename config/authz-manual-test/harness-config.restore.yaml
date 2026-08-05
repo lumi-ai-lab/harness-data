@@ -1,14 +1,13 @@
-# Default restore after manual tests: authz ON + local blob (dev).
+# Fallback restore when no baseline exists (switch.sh prefers baseline).
+# Prefer: bash config/authz-manual-test/switch.sh restore
 paths:
   knowledge: wikis
 
 cli:
-  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_metric_cli: bin/qdm-metric-cli
-  qdm_cas_cli: /absolute/path/to/cas-cli
+  qdm_sql_cli: bin/qdm-sql-cli
+  qdm_cas_cli: bin/cas-cli
 
 authz:
-  mode: on
-  blob_file: config/dev-auth.blob
-  dev_user_id: local-test-user
+  mode: off
   allow_local_blob: true

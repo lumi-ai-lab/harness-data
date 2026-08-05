@@ -1,11 +1,12 @@
 # Manual test profile: authz ON but blob missing -> hook blocks
+# Prefer: bash config/authz-manual-test/switch.sh deny
 paths:
   knowledge: wikis
 
 cli:
-  qdm_sql_cli: /absolute/path/to/qdm-sql-cli
   qdm_metric_cli: bin/qdm-metric-cli
-  qdm_cas_cli: /absolute/path/to/cas-cli
+  qdm_sql_cli: bin/qdm-sql-cli
+  qdm_cas_cli: bin/cas-cli
 
 authz:
   mode: on
