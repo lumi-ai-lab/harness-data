@@ -295,7 +295,7 @@ func (fixture *authzFixture) writeInstallerState(t *testing.T) {
 	state := installerState{
 		LastInstallDir: fixture.root,
 		UpdatedAt:      fixture.now.Add(-time.Minute).Format(time.RFC3339Nano),
-		SchemaVersion:  3,
+		SchemaVersion:  4,
 		Profile:        ModePiRequesterAuthorized,
 		Agent:          fixture.installerAgent,
 		InstallMode:    "github-token",

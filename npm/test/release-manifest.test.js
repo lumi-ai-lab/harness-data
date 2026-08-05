@@ -14,6 +14,7 @@ const releasePlatforms = [
   ["darwin-arm64", "tar.gz"],
   ["darwin-amd64", "tar.gz"],
   ["linux-amd64", "tar.gz"],
+  ["linux-arm64", "tar.gz"],
   ["windows-amd64", "zip"]
 ];
 
@@ -117,7 +118,8 @@ test("release manifest materializer fixes both runtime CLIs", () => {
   assert.match(manifest.tools[1].platforms["linux-amd64"].binarySha256, /^[a-f0-9]{64}$/);
   assert.equal(manifest.tools[2].tracking, "fixed");
   assert.equal(manifest.tools[2].version, qdmMetricVersion);
-  assert.equal(manifest.tools[2].destination, "bin/qdm-metric-cli-real");
+  assert.equal(manifest.tools[2].private, true);
+  assert.equal(manifest.tools[2].destination, "{privateToolsDir}/qdm-metric-cli-real");
   assert.match(
     manifest.tools[2].platforms["linux-amd64"].url,
     /pengmide\/qdm-metric-cli\/releases\/download\/v0\.1\.0\/qdm-metric-cli-v0\.1\.0-linux-amd64\.tar\.gz$/
@@ -154,13 +156,13 @@ test("release manifest rejects missing and extra release-set platforms", () => {
     [
       "extra platform",
       (manifest) => {
-        manifest.releaseSets["pi-requester-v1"].platforms["linux-arm64"] = {
+        manifest.releaseSets["pi-requester-v1"].platforms["linux-ppc64le"] = {
           sha256: "",
           publicMetricSha256: "",
           realMetricSha256: ""
         };
       },
-      /artifacts are incomplete for linux-arm64/
+      /artifacts are incomplete for linux-ppc64le/
     ]
   ]) {
     const fixture = fs.mkdtempSync(path.join(os.tmpdir(), `harness-release-platform-${name.replaceAll(" ", "-")}-`));

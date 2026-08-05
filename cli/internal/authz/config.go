@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +126,9 @@ func RuntimeConfig() (Config, error) {
 	if err != nil {
 		return Config{}, authzError(CodeConfigInvalid, "authorization runtime root cannot be resolved", err)
 	}
-	return ConfigForRuntime(root, contextDir), nil
+	config := ConfigForRuntime(root, contextDir)
+	applyRuntimeInstallerState(root, &config)
+	return config, nil
 }
 
 // ConfigForRuntime is the deterministic form used by tests and embedded
@@ -146,7 +149,7 @@ func ConfigForRuntime(root, contextDir string) Config {
 		MaxEnvelopeTTLSeconds:       1800,
 		ClockSkewSeconds:            30,
 		RealMetricCLI: RealMetricCLIConfig{
-			Path:    filepath.Join(root, "bin", "qdm-metric-cli-real"+suffix),
+			Path:    filepath.Join(root, ".harness", "private", "bin", "qdm-metric-cli-real"+suffix),
 			Version: "0.1.0",
 		},
 		ApprovedMetricCatalog: ArtifactConfig{
@@ -159,6 +162,37 @@ func ConfigForRuntime(root, contextDir string) Config {
 			TimeoutSeconds: 30, MaxOutputBytes: 2 << 20,
 		},
 	}
+}
+
+func applyRuntimeInstallerState(root string, config *Config) {
+	state, err := readRuntimeInstallerState(filepath.Join(root, ".harness", "installer-state.json"))
+	if err != nil || state.Profile != ModePiRequesterAuthorized {
+		return
+	}
+	if tool, ok := state.Tools["qdm-metric-cli-real"]; ok && validateAbsoluteCleanPath(tool.Destination) == nil {
+		config.RealMetricCLI.Path = tool.Destination
+	}
+	if version := strings.TrimPrefix(state.ReleaseSet.RealMetricVersion, "v"); metricCLIVersionPattern.MatchString(version) {
+		config.RealMetricCLI.Version = version
+	}
+	if lowercaseSHA256Pattern.MatchString(state.ReleaseSet.RealMetricSHA256) {
+		config.RealMetricCLI.ArtifactSHA256 = state.ReleaseSet.RealMetricSHA256
+	}
+	if lowercaseSHA256Pattern.MatchString(state.ReleaseSet.CatalogSHA256) {
+		config.ApprovedMetricCatalog.SHA256 = state.ReleaseSet.CatalogSHA256
+	}
+}
+
+func readRuntimeInstallerState(path string) (installerState, error) {
+	data, _, err := readRegularFile(path, maxInstallerStateBytes)
+	if err != nil {
+		return installerState{}, err
+	}
+	var state installerState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return installerState{}, err
+	}
+	return state, nil
 }
 
 func findRuntimeRoot(executable string) (string, error) {

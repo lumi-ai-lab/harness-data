@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"io"
+	"os"
 
 	"harness-data/cli/internal/authz"
+	"harness-data/cli/internal/metriccli"
 )
 
 type authzCommandErrorBody struct {
@@ -31,6 +34,10 @@ func runRootIndependentAuthzCommand(command string, args []string, output io.Wri
 		return true, runAuthzReadiness(args, output)
 	case "authz-validate-catalog":
 		return true, runAuthzValidateCatalog(args, output)
+	case "authz-metric-broker":
+		return true, runAuthzMetricBroker(args, output)
+	case "authz-metric-broker-register":
+		return true, runAuthzMetricBrokerRegister(args, output, io.LimitReader(os.Stdin, 32<<10))
 	default:
 		return false, nil
 	}
@@ -89,6 +96,44 @@ func runAuthzValidateCatalog(args []string, output io.Writer) error {
 		return writeAuthzError(output, nil, err)
 	}
 	return writeCommandJSON(output, authzCatalogValidation{Valid: true})
+}
+
+func runAuthzMetricBroker(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("authz-metric-broker", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	socket := flags.String("socket", "", "Unix socket path for authorized Metric broker")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *socket == "" {
+		return writeAuthzCommandFailure(output, nil, authz.CodeConfigInvalid, "authz-metric-broker arguments are invalid")
+	}
+	config, err := authz.RuntimeConfig()
+	if err != nil {
+		return writeAuthzError(output, nil, err)
+	}
+	return metriccli.ServeMetricBroker(context.Background(), *socket, config)
+}
+
+type authzMetricBrokerRegisterRequest struct {
+	Token            string `json:"token"`
+	BindingBase64URL string `json:"bindingBase64url"`
+}
+
+func runAuthzMetricBrokerRegister(args []string, output io.Writer, input io.Reader) error {
+	flags := flag.NewFlagSet("authz-metric-broker-register", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	socket := flags.String("socket", "", "Unix socket path for authorized Metric broker")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *socket == "" {
+		return writeAuthzCommandFailure(output, nil, authz.CodeConfigInvalid, "authz-metric-broker-register arguments are invalid")
+	}
+	var request authzMetricBrokerRegisterRequest
+	decoder := json.NewDecoder(input)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return writeAuthzCommandFailure(output, nil, authz.CodeBindingInvalid, "authz-metric-broker-register input is invalid")
+	}
+	if err := metriccli.RegisterMetricBrokerToken(*socket, request.Token, request.BindingBase64URL); err != nil {
+		return writeAuthzCommandFailure(output, nil, authz.CodeConfigInvalid, err.Error())
+	}
+	return writeCommandJSON(output, map[string]bool{"registered": true})
 }
 
 func writeAuthzError(output io.Writer, ready *bool, err error) error {

@@ -44,7 +44,7 @@ function createProject(t, options = {}) {
     writeFileSync(
       join(root, ".harness", "installer-state.json"),
       JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         profile: options.profile ?? "pi-requester-authorized",
         agent: "pi",
       }),
@@ -167,21 +167,30 @@ async function loadExtension(root, options = {}) {
   const tools = new Map();
   const executions = [];
   const piRuntime = options.piRuntime ?? fakePiRuntime(executions);
-  await installQdmHarnessExtension(
-    {
-      cwd: root,
-      on(event, handler) {
-        handlers.set(event, handler);
+  const previousLegacy = process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV;
+  if (options.legacyBindingEnv === false) delete process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV;
+  else process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV = "1";
+  try {
+    await installQdmHarnessExtension(
+      {
+        cwd: root,
+        on(event, handler) {
+          handlers.set(event, handler);
+        },
+        registerTool(tool) {
+          tools.set(tool.name, tool);
+        },
       },
-      registerTool(tool) {
-        tools.set(tool.name, tool);
+      {
+        piRuntime,
+        ...(options.bindAuthorization ? { bindAuthorization: options.bindAuthorization } : {}),
+        ...(options.registerBrokerBinding ? { registerBrokerBinding: options.registerBrokerBinding } : {}),
       },
-    },
-    {
-      piRuntime,
-      ...(options.bindAuthorization ? { bindAuthorization: options.bindAuthorization } : {}),
-    },
-  );
+    );
+  } finally {
+    if (previousLegacy === undefined) delete process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV;
+    else process.env.HARNESS_AUTHZ_LEGACY_BINDING_ENV = previousLegacy;
+  }
   return {
     bashTool: tools.get("bash"),
     executions,
@@ -316,6 +325,66 @@ test("authorized Pi Bash pins the public Metric CLI and removes forbidden inheri
   }
   assert.match(environment.HARNESS_AUTHZ_BINDING_V1, /^[A-Za-z0-9_-]+$/);
   assert.equal(environment.BASE_ENV, "1");
+});
+
+test("broker mode registers binding out of band and exposes only a one-shot token to Bash", async (t) => {
+  const previousSocket = process.env.HARNESS_METRIC_BROKER_SOCKET;
+  process.env.HARNESS_METRIC_BROKER_SOCKET = "/tmp/qdm-authz-broker.sock";
+  t.after(() => {
+    if (previousSocket === undefined) delete process.env.HARNESS_METRIC_BROKER_SOCKET;
+    else process.env.HARNESS_METRIC_BROKER_SOCKET = previousSocket;
+  });
+
+  const { root } = createProject(t);
+  const bound = authzCandidate();
+  const registrations = [];
+  const loaded = await loadExtension(root, {
+    bindAuthorization: async () => bound,
+    registerBrokerBinding: async (request) => {
+      registrations.push(structuredClone(request));
+    },
+  });
+  const { ctx } = createContext(root);
+  await loaded.handlers.get("context")({ messages: userMessages() }, ctx);
+
+  const event = { toolCallId: "tool-broker", toolName: "bash", input: { command: "qdm-metric-cli version" } };
+  await executeCaptured(loaded, ctx, event);
+
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0].bindingBase64url, bound.bindingBase64url);
+  assert.equal(registrations[0].projectRoot, root);
+  assert.equal(registrations[0].socket, "/tmp/qdm-authz-broker.sock");
+  assert.match(registrations[0].token, /^[A-Za-z0-9_-]+$/);
+
+  const environment = loaded.executions.at(-1).spawn.env;
+  assert.equal(Object.hasOwn(environment, "HARNESS_AUTHZ_BINDING_V1"), false);
+  assert.equal(environment.HARNESS_AUTHZ_TOKEN_V1, registrations[0].token);
+  assert.equal(environment.HARNESS_METRIC_BROKER_SOCKET, "/tmp/qdm-authz-broker.sock");
+  assert.equal(environment.QDM_METRIC_CLI, join(root, "bin", "qdm-metric-cli"));
+});
+
+test("default secure mode does not expose binding material to Bash without a broker", async (t) => {
+  const previousSocket = process.env.HARNESS_METRIC_BROKER_SOCKET;
+  delete process.env.HARNESS_METRIC_BROKER_SOCKET;
+  t.after(() => {
+    if (previousSocket === undefined) delete process.env.HARNESS_METRIC_BROKER_SOCKET;
+    else process.env.HARNESS_METRIC_BROKER_SOCKET = previousSocket;
+  });
+
+  const { root } = createProject(t);
+  const loaded = await loadExtension(root, {
+    bindAuthorization: async () => authzCandidate(),
+    legacyBindingEnv: false,
+  });
+  const { ctx } = createContext(root);
+  await loaded.handlers.get("context")({ messages: userMessages() }, ctx);
+
+  const event = { toolCallId: "tool-no-broker", toolName: "bash", input: { command: "env" } };
+  await executeCaptured(loaded, ctx, event);
+  const environment = loaded.executions.at(-1).spawn.env;
+  assert.equal(Object.hasOwn(environment, "HARNESS_AUTHZ_BINDING_V1"), false);
+  assert.equal(Object.hasOwn(environment, "HARNESS_AUTHZ_TOKEN_V1"), false);
+  assert.equal(Object.hasOwn(environment, "HARNESS_METRIC_BROKER_SOCKET"), false);
 });
 
 test("local-unrestricted profile keeps Pi Bash unchanged and skips requester authorization", async (t) => {

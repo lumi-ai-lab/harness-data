@@ -168,6 +168,40 @@ func TestConfigRejectsLegacyLumiMode(t *testing.T) {
 	assertAuthzCode(t, config.Validate(), CodeConfigInvalid)
 }
 
+func TestConfigForRuntimeUsesPrivateRealMetricCLI(t *testing.T) {
+	root := filepath.Clean(t.TempDir())
+	config := ConfigForRuntime(root, filepath.Join(root, "requester-context", "workspace-1", "pi"))
+	expected := filepath.Join(root, ".harness", "private", "bin", executableName("qdm-metric-cli-real"))
+	if config.RealMetricCLI.Path != expected {
+		t.Fatalf("real Metric CLI path = %q, want %q", config.RealMetricCLI.Path, expected)
+	}
+}
+
+func TestRuntimeInstallerStateOverridesRealMetricCLI(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	config := ConfigForRuntime(fixture.root, fixture.contextDir)
+	if config.RealMetricCLI.Path == fixture.realCLIPath {
+		t.Fatal("fixture unexpectedly matches the default private runtime path")
+	}
+	applyRuntimeInstallerState(fixture.root, &config)
+	if config.RealMetricCLI.Path != fixture.realCLIPath {
+		t.Fatalf("real Metric CLI path = %q, want installer destination %q", config.RealMetricCLI.Path, fixture.realCLIPath)
+	}
+	if config.RealMetricCLI.Version != fixture.config.RealMetricCLI.Version {
+		t.Fatalf("real Metric CLI version = %q, want %q", config.RealMetricCLI.Version, fixture.config.RealMetricCLI.Version)
+	}
+	if config.RealMetricCLI.ArtifactSHA256 != fixture.config.RealMetricCLI.ArtifactSHA256 {
+		t.Fatal("real Metric CLI sha256 was not loaded from installer state")
+	}
+}
+
+func TestReadinessRejectsPublicRealMetricCLI(t *testing.T) {
+	fixture := newAuthzFixture(t)
+	writeTestFile(t, filepath.Join(fixture.root, "bin", executableName("qdm-metric-cli-real")), []byte("#!/bin/sh\nexit 0\n"), 0o700)
+	_, err := CheckReadiness(fixture.configPath, fixture.readinessOptions())
+	assertAuthzCode(t, err, CodeConfigInvalid)
+}
+
 func disabledStrictConfigRequiresSeparatedAgentAndRequesterContextOwners(t *testing.T) {
 	fixture := newAuthzFixture(t)
 

@@ -1,6 +1,9 @@
+import { randomBytes } from "node:crypto";
 import { delimiter, join } from "node:path";
 
 export const AUTHZ_BINDING_ENV = "HARNESS_AUTHZ_BINDING_V1";
+export const AUTHZ_TOKEN_ENV = "HARNESS_AUTHZ_TOKEN_V1";
+export const METRIC_BROKER_SOCKET_ENV = "HARNESS_METRIC_BROKER_SOCKET";
 
 const FORBIDDEN_QDM_ENV = [
   "QDM_CMR_CLI",
@@ -17,12 +20,16 @@ const FORBIDDEN_QDM_ENV = [
 // can read data for areas/categories outside their authorization. Block direct
 // invocations and force the agent to re-issue via the qdm-metric-cli wrapper.
 const FORBIDDEN_REAL_BINARY = "qdm-metric-cli-real";
+const FORBIDDEN_AUTHZ_BIND = "authz-bind";
 const FORBIDDEN_REAL_MESSAGE =
   "直接调用 " +
   FORBIDDEN_REAL_BINARY +
   " 被禁止：它绕过 requester 权限校验（scope enforcement 在 qdm-metric-cli 包装器内，exec real 前先校验）。" +
   "请改用 qdm-metric-cli 包装器发起同样的查询（例如 bin/qdm-metric-cli 或 $QDM_METRIC_CLI），" +
   "可先 qdm-metric-cli --help 确认子命令与参数。";
+const FORBIDDEN_AUTHZ_BIND_MESSAGE =
+  "直接调用 authz-bind 被禁止：它会暴露可执行授权 binding material。" +
+  "请求者授权由 Pi 扩展在模型上下文外自动绑定；请直接使用 qdm-metric-cli 包装器查询。";
 
 export function buildRejectedCommand(message) {
   return "printf '%s\\n' " + JSON.stringify(message) + " 1>&2; exit 9";
@@ -32,6 +39,12 @@ export function commandReferencesRealBinary(params) {
   const commandText = String(params?.command ?? "");
   const blob = commandText || JSON.stringify(params ?? {});
   return blob.includes(FORBIDDEN_REAL_BINARY);
+}
+
+export function commandReferencesAuthzBind(params) {
+  const commandText = String(params?.command ?? "");
+  const blob = commandText || JSON.stringify(params ?? {});
+  return blob.includes(FORBIDDEN_AUTHZ_BIND);
 }
 
 function invocationCwd(ctx, fallback) {
@@ -51,6 +64,42 @@ export function registerAuthzBashOverride(pi, options) {
       // Consume before constructing the per-invocation tool. No process-global
       // "current binding" exists, so concurrent calls cannot overwrite it.
       const bindingBase64url = stateStore.consumeToolCall(toolCallId);
+      const brokerSocket = String(options.brokerSocket || "").trim();
+      let brokerToken = "";
+      if (bindingBase64url && brokerSocket) {
+        brokerToken = randomBytes(32).toString("base64url");
+        try {
+          await options.registerBrokerBinding?.({
+            bindingBase64url,
+            projectRoot: options.projectRoot,
+            socket: brokerSocket,
+            token: brokerToken,
+          });
+        } catch (error) {
+          const message =
+            "Metric broker token 注册失败：无法在不暴露 binding material 的情况下执行数据查询。" +
+            "请确认 authz-metric-broker 已启动并且 socket 对 Pi 扩展可用。";
+          const rejected = createBashTool(invocationCwd(ctx, fallbackCwd), {
+            spawnHook: ({ command, cwd, env }) => {
+              const childEnv = { ...env };
+              delete childEnv[AUTHZ_BINDING_ENV];
+              delete childEnv[AUTHZ_TOKEN_ENV];
+              delete childEnv[METRIC_BROKER_SOCKET_ENV];
+              return { command, cwd, env: childEnv };
+            },
+          });
+          try {
+            return await rejected.execute(
+              toolCallId,
+              { ...params, command: buildRejectedCommand(message) },
+              signal,
+              onUpdate,
+            );
+          } finally {
+            stateStore.clearToolCall(toolCallId);
+          }
+        }
+      }
       const tool = createBashTool(invocationCwd(ctx, fallbackCwd), {
         spawnHook: ({ command, cwd, env }) => {
           const childEnv = { ...env };
@@ -60,8 +109,16 @@ export function registerAuthzBashOverride(pi, options) {
           childEnv.PATH = [publicBinDir, ...pathEntries].join(delimiter);
           childEnv.QDM_METRIC_CLI = publicMetricCLI;
           for (const name of FORBIDDEN_QDM_ENV) delete childEnv[name];
-          if (bindingBase64url) childEnv[AUTHZ_BINDING_ENV] = bindingBase64url;
-          else delete childEnv[AUTHZ_BINDING_ENV];
+          if (brokerToken) {
+            delete childEnv[AUTHZ_BINDING_ENV];
+            childEnv[AUTHZ_TOKEN_ENV] = brokerToken;
+            childEnv[METRIC_BROKER_SOCKET_ENV] = brokerSocket;
+          } else {
+            delete childEnv[AUTHZ_TOKEN_ENV];
+            if (!brokerSocket) delete childEnv[METRIC_BROKER_SOCKET_ENV];
+            if (options.allowBindingEnvironment && bindingBase64url) childEnv[AUTHZ_BINDING_ENV] = bindingBase64url;
+            else delete childEnv[AUTHZ_BINDING_ENV];
+          }
           return { command, cwd, env: childEnv };
         },
       });
@@ -73,6 +130,23 @@ export function registerAuthzBashOverride(pi, options) {
           return await tool.execute(
             toolCallId,
             { ...params, command: buildRejectedCommand(FORBIDDEN_REAL_MESSAGE) },
+            signal,
+            onUpdate,
+          );
+        } finally {
+          stateStore.clearToolCall(toolCallId);
+        }
+      }
+
+      // authz-bind is an extension-internal operation. If the model invokes it
+      // through Bash, its stdout can enter the transcript and leak executable
+      // binding material. Fail closed and keep binding injection out of model
+      // context.
+      if (commandReferencesAuthzBind(params)) {
+        try {
+          return await tool.execute(
+            toolCallId,
+            { ...params, command: buildRejectedCommand(FORBIDDEN_AUTHZ_BIND_MESSAGE) },
             signal,
             onUpdate,
           );

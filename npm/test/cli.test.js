@@ -29,6 +29,7 @@ import {
   writeLocalConfig
 } from "../src/lib/config.js";
 import { readManifest } from "../src/lib/manifest.js";
+import { privateToolsDir, toolDestination } from "../src/lib/manifest.js";
 import {
   installerStateSchemaVersion,
   localUnrestrictedProfile,
@@ -193,14 +194,42 @@ test("manifest publishes the Harness helper, authorized qdm-metric-cli, and priv
   assert.deepEqual(selectManifestProfile(manifest, localUnrestrictedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli"]);
   assert.deepEqual(selectManifestProfile(manifest, piRequesterAuthorizedProfile).tools.map((tool) => tool.name), ["data-harness-cli", "qdm-metric-cli", "qdm-metric-cli-real"]);
   const metric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli");
+  const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
   assert.equal(metric.repo, "lumi-ai-lab/harness-data");
   assert.equal(metric.private, undefined);
+  assert.equal(realMetric.private, true);
+  assert.equal(realMetric.destination, "{privateToolsDir}/qdm-metric-cli-real");
   assert.deepEqual(Object.keys(metric.platforms).sort(), [
     "darwin-amd64",
     "darwin-arm64",
     "linux-amd64",
+    "linux-arm64",
     "windows-amd64"
   ]);
+});
+
+test("Pi requester real Metric CLI resolves only inside the private tools directory", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-private-destination-"));
+  const privateRoot = path.join(workspace, "private-tools");
+  const realMetric = {
+    name: "qdm-metric-cli-real",
+    binary: "qdm-metric-cli",
+    private: true,
+    destination: "{privateToolsDir}/qdm-metric-cli-real"
+  };
+  assert.equal(
+    toolDestination(workspace, realMetric, { privateToolsDir: privateRoot }),
+    path.join(privateRoot, binaryName("qdm-metric-cli-real"))
+  );
+  assert.equal(privateToolsDir(workspace, { privateToolsDir: privateRoot }), privateRoot);
+  assert.throws(
+    () => toolDestination(workspace, { ...realMetric, destination: "../qdm-metric-cli-real" }, { privateToolsDir: privateRoot }),
+    /escapes the private tools directory/
+  );
+  assert.throws(
+    () => toolDestination(workspace, { name: "qdm-metric-cli", binary: "qdm-metric-cli", destination: "/tmp/qdm-metric-cli" }),
+    /must stay inside the runtime workspace/
+  );
 });
 
 test("runtime CLI sets contain only the Harness helper and qdm-metric-cli", () => {
@@ -353,9 +382,9 @@ test("release workflow pins qdm-metric-cli and builds the runtime bundle", () =>
   );
   const manifest = readManifest(path.join(repository, "bootstrap", "cli-manifest.json"));
   const realMetric = manifest.tools.find((tool) => tool.name === "qdm-metric-cli-real");
-  assert.equal(realMetric.private, undefined);
+  assert.equal(realMetric.private, true);
   assert.equal(realMetric.requiresAuth, true);
-  assert.equal(realMetric.destination, "bin/qdm-metric-cli-real");
+  assert.equal(realMetric.destination, "{privateToolsDir}/qdm-metric-cli-real");
   assert.equal(realMetric.tracking, "latest");
   assert.equal(realMetric.version, "");
   assert.equal(realMetric.platforms["linux-amd64"].url, "");

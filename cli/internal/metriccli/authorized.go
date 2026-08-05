@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	bindingEnvironment = "HARNESS_AUTHZ_BINDING_V1"
-	maxPayloadBytes    = 16 << 20
+	bindingEnvironment      = "HARNESS_AUTHZ_BINDING_V1"
+	brokerSocketEnvironment = "HARNESS_METRIC_BROKER_SOCKET"
+	brokerTokenEnvironment  = "HARNESS_AUTHZ_TOKEN_V1"
+	maxPayloadBytes         = 16 << 20
 )
 
 // ExitError preserves the real Metric CLI exit code for the thin authorized
@@ -44,6 +46,9 @@ func ExitCode(err error) int {
 // Run authorizes one qdm-metric-cli invocation from Lumi's requester JSON and
 // forwards it to the pinned runtime binary.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if brokerConfigured() {
+		return runViaBroker(context.Background(), brokerSocketFromEnvironment(), brokerTokenFromEnvironment(), args, stdin, stdout, stderr)
+	}
 	config, err := authz.RuntimeConfig()
 	if err != nil {
 		return deny(err)
@@ -53,11 +58,26 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 // RunWithConfig is retained as an injectable compatibility form for tests.
 func RunWithConfig(configPath string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if brokerConfigured() {
+		return runViaBroker(context.Background(), brokerSocketFromEnvironment(), brokerTokenFromEnvironment(), args, stdin, stdout, stderr)
+	}
 	config, err := authz.LoadConfig(configPath)
 	if err != nil {
 		return deny(err)
 	}
 	return runAuthorized(config, strings.TrimSpace(os.Getenv(bindingEnvironment)), args, stdin, stdout, stderr)
+}
+
+func brokerSocketFromEnvironment() string {
+	return strings.TrimSpace(os.Getenv(brokerSocketEnvironment))
+}
+
+func brokerTokenFromEnvironment() string {
+	return strings.TrimSpace(os.Getenv(brokerTokenEnvironment))
+}
+
+func brokerConfigured() bool {
+	return brokerSocketFromEnvironment() != "" || brokerTokenFromEnvironment() != ""
 }
 
 func runAuthorized(

@@ -52,6 +52,11 @@
           "publicMetricSha256": "",
           "realMetricSha256": ""
         },
+        "linux-arm64": {
+          "sha256": "",
+          "publicMetricSha256": "",
+          "realMetricSha256": ""
+        },
         "windows-amd64": {
           "sha256": "",
           "publicMetricSha256": "",
@@ -70,6 +75,7 @@
         "darwin-arm64": { "archive": "tar.gz" },
         "darwin-amd64": { "archive": "tar.gz" },
         "linux-amd64": { "archive": "tar.gz" },
+        "linux-arm64": { "archive": "tar.gz" },
         "windows-amd64": { "archive": "zip" }
       }
     },
@@ -86,6 +92,7 @@
         "darwin-arm64": { "archive": "tar.gz", "url": "", "sha256": "" },
         "darwin-amd64": { "archive": "tar.gz", "url": "", "sha256": "" },
         "linux-amd64": { "archive": "tar.gz", "url": "", "sha256": "" },
+        "linux-arm64": { "archive": "tar.gz", "url": "", "sha256": "" },
         "windows-amd64": { "archive": "zip", "url": "", "sha256": "" }
       }
     },
@@ -94,7 +101,8 @@
       "binary": "qdm-metric-cli",
       "repo": "pengmide/qdm-metric-cli",
       "requiresAuth": true,
-      "destination": "bin/qdm-metric-cli-real",
+      "private": true,
+      "destination": "{privateToolsDir}/qdm-metric-cli-real",
       "tracking": "latest",
       "version": "",
       "requireAssetSha256": true,
@@ -103,6 +111,7 @@
         "darwin-arm64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
         "darwin-amd64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
         "linux-amd64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
+        "linux-arm64": { "archive": "tar.gz", "url": "", "sha256": "", "binarySha256": "" },
         "windows-amd64": { "archive": "zip", "url": "", "sha256": "", "binarySha256": "" }
       }
     }

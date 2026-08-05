@@ -330,11 +330,39 @@ function withPlatformExecutableSuffix(file) {
   return `${file}.exe`;
 }
 
-export function toolDestination(workspace, tool) {
+export function privateToolsDir(workspace, options = {}) {
+  const configured = String(options.privateToolsDir || process.env.HARNESS_PRIVATE_TOOLS_DIR || "").trim();
+  const directory = configured
+    ? path.resolve(configured)
+    : path.resolve(workspace, ".harness", "private", "bin");
+  if (path.normalize(directory) !== directory) {
+    throw new Error(`private tools directory must be a clean absolute path: ${directory}`);
+  }
+  return directory;
+}
+
+export function toolDestination(workspace, tool, options = {}) {
   const configured = String(tool.destination || "").trim();
+  if (tool.private) {
+    const privateRoot = privateToolsDir(workspace, options);
+    const templated = configured.replaceAll("{privateToolsDir}", privateRoot);
+    const candidate = templated
+      ? withPlatformExecutableSuffix(templated)
+      : binaryName(tool.binary);
+    const resolved = path.isAbsolute(candidate)
+      ? path.resolve(candidate)
+      : path.resolve(privateRoot, candidate);
+    const relative = path.relative(privateRoot, resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`${tool.name} private destination escapes the private tools directory: ${configured}`);
+    }
+    return resolved;
+  }
   if (!configured) return path.join(workspace, "bin", binaryName(tool.binary));
   const suffixed = withPlatformExecutableSuffix(configured);
-  if (path.isAbsolute(suffixed)) return path.normalize(suffixed);
+  if (path.isAbsolute(suffixed)) {
+    throw new Error(`${tool.name} destination must stay inside the runtime workspace: ${configured}`);
+  }
   const resolved = path.resolve(workspace, suffixed);
   const relative = path.relative(path.resolve(workspace), resolved);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -358,7 +386,7 @@ function reusableInstalledTool(workspace, tool, asset, options = {}) {
   if (!current.sha256) return null;
   if (asset.sha256 && current.assetSha256 !== asset.sha256) return null;
   if (asset.binarySha256 && current.sha256 !== asset.binarySha256) return null;
-  const binary = toolDestination(workspace, tool);
+  const binary = toolDestination(workspace, tool, options);
   if (!executable(binary)) return null;
   const actualSha = fileSha256(binary);
   if (actualSha !== current.sha256) return null;
@@ -401,7 +429,7 @@ function replaceInstalledBinary(extracted, destination) {
   }
 }
 
-async function extractArchiveBinary(workspace, cacheDir, archive, tool, expectedBinarySha256 = "") {
+async function extractArchiveBinary(workspace, cacheDir, archive, tool, expectedBinarySha256 = "", options = {}) {
   const extractDir = fs.mkdtempSync(path.join(cacheDir, `${tool.name}-extract-`));
   try {
     if (archive.endsWith(".zip")) {
@@ -424,7 +452,7 @@ async function extractArchiveBinary(workspace, cacheDir, archive, tool, expected
     if (expectedBinarySha256 && binarySha256 !== expectedBinarySha256) {
       throw new Error(`${tool.name} binary sha256 mismatch`);
     }
-    const destination = toolDestination(workspace, tool);
+    const destination = toolDestination(workspace, tool, options);
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: tool.private ? 0o700 : 0o755 });
     if (tool.private) fs.chmodSync(path.dirname(destination), 0o700);
     replaceInstalledBinary(extracted, destination);
@@ -459,7 +487,7 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
     if (tool.tracking === "fixed" && !String(tool.version || "").trim()) {
       throw new Error(`manifest fixed tool ${tool.name} requires version`);
     }
-    const destination = toolDestination(workspace, tool);
+    const destination = toolDestination(workspace, tool, options);
     if (destinations.has(destination)) throw new Error(`manifest tools share destination: ${destination}`);
     destinations.add(destination);
   }
@@ -475,7 +503,7 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
       continue;
     }
     const privateDestinationRoot = tool.private
-      ? path.dirname(toolDestination(workspace, tool))
+      ? path.dirname(toolDestination(workspace, tool, options))
       : "";
     if (privateDestinationRoot) {
       fs.mkdirSync(privateDestinationRoot, { recursive: true, mode: 0o700 });
@@ -503,7 +531,8 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
         toolCache,
         archive,
         tool,
-        asset.binarySha256
+        asset.binarySha256,
+        options
       );
       installedTools[tool.name] = {
         version: tool.version || "",

@@ -347,12 +347,13 @@ func digestVisibleFile(path string) (string, error) {
 }
 
 type readinessPaths struct {
-	runtimeRoot     string
-	installerState  string
-	cliManifest     string
-	publicMetricCLI string
-	harnessConfig   string
-	cliPathsEnv     string
+	runtimeRoot         string
+	installerState      string
+	cliManifest         string
+	publicMetricCLI     string
+	publicRealMetricCLI string
+	harnessConfig       string
+	cliPathsEnv         string
 }
 
 func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
@@ -364,12 +365,13 @@ func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
 		return readinessPaths{}, authzError(CodeConfigInvalid, "Harness runtime root is invalid", err)
 	}
 	resolved := readinessPaths{
-		runtimeRoot:     root,
-		installerState:  options.InstallerStatePath,
-		cliManifest:     filepath.Join(root, "bootstrap", "cli-manifest.json"),
-		publicMetricCLI: options.PublicMetricCLIPath,
-		harnessConfig:   options.HarnessConfigPath,
-		cliPathsEnv:     options.CLIPathsEnvPath,
+		runtimeRoot:         root,
+		installerState:      options.InstallerStatePath,
+		cliManifest:         filepath.Join(root, "bootstrap", "cli-manifest.json"),
+		publicMetricCLI:     options.PublicMetricCLIPath,
+		publicRealMetricCLI: filepath.Join(root, "bin", executableName("qdm-metric-cli-real")),
+		harnessConfig:       options.HarnessConfigPath,
+		cliPathsEnv:         options.CLIPathsEnvPath,
 	}
 	if resolved.installerState == "" {
 		resolved.installerState = filepath.Join(root, ".harness", "installer-state.json")
@@ -383,7 +385,7 @@ func resolveReadinessPaths(options ReadinessOptions) (readinessPaths, error) {
 	if resolved.cliPathsEnv == "" {
 		resolved.cliPathsEnv = filepath.Join(root, "config", "qdm-cli-paths.env")
 	}
-	for _, path := range []string{resolved.installerState, resolved.cliManifest, resolved.publicMetricCLI, resolved.harnessConfig, resolved.cliPathsEnv} {
+	for _, path := range []string{resolved.installerState, resolved.cliManifest, resolved.publicMetricCLI, resolved.publicRealMetricCLI, resolved.harnessConfig, resolved.cliPathsEnv} {
 		if err := validateAbsoluteCleanPath(path); err != nil {
 			return readinessPaths{}, authzError(CodeConfigInvalid, "Harness runtime readiness path is invalid", err)
 		}
@@ -436,7 +438,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 	if err := decodeInstallerStateJSON(data, &state); err != nil {
 		return invalid("installer state is invalid", err)
 	}
-	if state.SchemaVersion != 3 || state.Profile != ModePiRequesterAuthorized || state.Agent != "pi" {
+	if state.SchemaVersion != 4 || state.Profile != ModePiRequesterAuthorized || state.Agent != "pi" {
 		return invalid("installer state profile is inconsistent", nil)
 	}
 	updatedAt, updatedErr := time.Parse(time.RFC3339Nano, state.UpdatedAt)
@@ -448,7 +450,7 @@ func readAndValidateInstallerState(path, manifestPath, runtimeRoot, publicMetric
 		updatedErr != nil || updatedAt.IsZero() || checkedErr != nil || lastCheckAt.IsZero() {
 		return invalid("installer state metadata is inconsistent", firstNonNil(updatedErr, checkedErr))
 	}
-	if state.AuthzConfigPath != configPath {
+	if state.AuthzConfigPath != "" && state.AuthzConfigPath != configPath {
 		return invalid("installer state authorization config path is inconsistent", nil)
 	}
 	manifestData, _, err := readRegularFile(manifestPath, maxCLIManifestBytes)
@@ -606,6 +608,9 @@ func currentPlatformKey() string {
 
 func verifyMetricRuntimeConfig(paths readinessPaths, state installerState, security FileSecurityOptions) error {
 	release := state.ReleaseSet
+	if _, err := os.Lstat(paths.publicRealMetricCLI); err == nil || !os.IsNotExist(err) {
+		return authzError(CodeConfigInvalid, "private Metric CLI is present in the authorized runtime bin directory", err)
+	}
 	if _, err := VerifyArtifact(paths.publicMetricCLI, release.PublicMetricSHA256, true); err != nil {
 		return err
 	}

@@ -47,6 +47,7 @@ Install options:
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --wikis-source PATH                Local Wikis source override (local-unrestricted only)
   --github-token TOKEN               GitHub token for runtime Release assets
+  --private-tools-dir PATH           Private tool directory for pi-requester-authorized real Metric CLI
   --metric-cli-path PATH             Optional local qdm-metric-cli executable override
   --sandbox-cli-dir PATH             Linux sandbox CLI directory for cross-platform local installs`);
   if (unknown) process.exitCode = 1;
