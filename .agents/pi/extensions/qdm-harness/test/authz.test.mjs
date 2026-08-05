@@ -124,8 +124,43 @@ test("isMetricAnalysisExecute and strip/inject auth flags", () => {
     isMetricAnalysisExecute("qdm-metric-cli analysis execute --metric saleAmt"),
     true,
   );
+  assert.equal(
+    isMetricAnalysisExecute(
+      'source config/qdm-cli-paths.env && "$QDM_METRIC_CLI" analysis execute --metric x',
+    ),
+    true,
+  );
+  assert.equal(
+    isMetricAnalysisExecute("./bin/qdm-metric-cli analysis execute --format json"),
+    true,
+  );
   assert.equal(isMetricAnalysisExecute("qdm-metric-cli metric list"), false);
   assert.equal(isMetricAnalysisExecute("echo hello"), false);
+
+  // False positives: prose / commit messages / quoted docs must NOT match.
+  assert.equal(
+    isMetricAnalysisExecute(
+      `git commit -m "support qdm-metric-cli analysis execute --data-auth --auth-blob '<加密blob>'"`,
+    ),
+    false,
+  );
+  assert.equal(
+    isMetricAnalysisExecute(
+      "git commit -m 'qdm-metric-cli analysis execute --data-auth --auth-blob qdm1enc.FAKE'",
+    ),
+    false,
+  );
+  assert.equal(
+    isMetricAnalysisExecute('echo "qdm-metric-cli analysis execute --metric saleAmt"'),
+    false,
+  );
+  assert.equal(
+    isMetricAnalysisExecute(`git commit -m "$(cat <<'EOF'
+support qdm-metric-cli analysis execute --data-auth --auth-blob <加密blob>
+EOF
+)"`),
+    false,
+  );
 
   const stripped = stripAuthFlags(
     "qdm-metric-cli analysis execute --data-auth --auth-blob 'qdm1enc.FAKE' --metric saleAmt",
@@ -161,6 +196,32 @@ test("isMetricAnalysisExecute and strip/inject auth flags", () => {
   assert.match(piped, /--data-auth --auth-blob/);
   assert.match(piped, /--auth-blob 'qdm1enc\.[^']+' \| python3/);
   assert.doesNotMatch(piped, /python3.*--data-auth/);
+});
+
+test("applyAuthzToToolCall does not rewrite git commit messages", () => {
+  const original = `git commit -m "feat: qdm-metric-cli analysis execute --data-auth --auth-blob '<加密blob>'"`;
+  const event = {
+    toolName: "bash",
+    input: { command: original },
+  };
+  const result = applyAuthzToToolCall(event, {
+    mode: "on",
+    blob: SAMPLE_BLOB,
+    metricCliPath: "/opt/bin/qdm-metric-cli",
+  });
+  assert.equal(result, undefined);
+  assert.equal(event.input.command, original);
+
+  const offEvent = {
+    toolName: "bash",
+    input: { command: original },
+  };
+  applyAuthzToToolCall(offEvent, {
+    mode: "off",
+    blob: SAMPLE_BLOB,
+    metricCliPath: "/opt/bin/qdm-metric-cli",
+  });
+  assert.equal(offEvent.input.command, original);
 });
 
 test("applyAuthzToToolCall blocks without blob and injects with blob", () => {
