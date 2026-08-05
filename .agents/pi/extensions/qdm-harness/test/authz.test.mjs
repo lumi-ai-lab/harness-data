@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  DEFAULT_DEV_USER_ID,
   loadAuthzConfig,
   parseAuthzSection,
   resolveAuthBlob,
@@ -43,12 +42,12 @@ paths:
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: pengmingde01
+  dev_user_id: local-test-user
   allow_local_blob: true
 `);
   assert.equal(parsed.mode, "on");
   assert.equal(parsed.blobFile, "config/dev-auth.blob");
-  assert.equal(parsed.devUserId, "pengmingde01");
+  assert.equal(parsed.devUserId, "local-test-user");
   assert.equal(parsed.allowLocalBlob, true);
 });
 
@@ -57,19 +56,19 @@ test("resolveAuthBlob prefers host over file; file used when no env (test stage)
     authzYaml: `authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: pengmingde01
+  dev_user_id: local-test-user
 `,
   });
   writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const config = loadAuthzConfig(root, {});
   assert.equal(config.mode, "on");
-  assert.equal(config.devUserId, DEFAULT_DEV_USER_ID);
+  assert.equal(config.devUserId, "local-test-user");
 
   const fromFile = resolveAuthBlob({ projectRoot: root, config, env: {} });
   assert.equal(fromFile.ok, true);
   assert.equal(fromFile.source, "file");
-  assert.equal(fromFile.userId, "pengmingde01");
+  assert.equal(fromFile.userId, "local-test-user");
   assert.equal(fromFile.blob, SAMPLE_BLOB);
 
   const fromHost = resolveAuthBlob({
@@ -94,12 +93,27 @@ test("resolveAuthBlob prefers host over file; file used when no env (test stage)
   assert.equal(fromEnv.userId, "lisi");
 });
 
+test("resolveAuthBlob fails when blob_file has no user id", (t) => {
+  const root = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+`,
+  });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  const config = loadAuthzConfig(root, {});
+  assert.equal(config.devUserId, "");
+  const resolved = resolveAuthBlob({ projectRoot: root, config, env: {} });
+  assert.equal(resolved.ok, false);
+  assert.match(resolved.error, /dev_user_id/i);
+});
+
 test("AuthzStateStore isolates same session by userId", () => {
   const store = new AuthzStateStore();
-  store.bind("S1", "pengmingde01", `${SAMPLE_BLOB}a`, "file");
+  store.bind("S1", "user-a", `${SAMPLE_BLOB}a`, "file");
   store.bind("S1", "zhangsan", `${SAMPLE_BLOB}b`, "host");
 
-  assert.equal(store.getBlob("S1", "pengmingde01"), `${SAMPLE_BLOB}a`);
+  assert.equal(store.getBlob("S1", "user-a"), `${SAMPLE_BLOB}a`);
   assert.equal(store.getBlob("S1", "zhangsan"), `${SAMPLE_BLOB}b`);
   assert.equal(store.getCurrentTurn("S1")?.userId, "zhangsan");
   assert.equal(store.getCurrentTurn("S1")?.blob, `${SAMPLE_BLOB}b`);
@@ -184,7 +198,7 @@ test("extension tool_call injects from local blob_file when authz on", (t) => {
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: pengmingde01
+  dev_user_id: local-test-user
   allow_local_blob: true
 `,
   });

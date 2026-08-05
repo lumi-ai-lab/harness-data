@@ -1,4 +1,4 @@
-# Manual test profile: authz ON + valid local blob
+# Default restore after manual tests: authz ON + local blob (dev).
 paths:
   knowledge: wikis
 
@@ -6,11 +6,11 @@ cli:
   qdm_cmr_cli: /absolute/path/to/qdm-cmr-cli
   qdm_indicators_cli: /absolute/path/to/qdm-indicators-cli
   qdm_sql_cli: /absolute/path/to/qdm-sql-cli
-  qdm_metric_cli: /Users/pengmd/c/qdm/harness-data-redo-authz-v2/bin/qdm-metric-cli
+  qdm_metric_cli: bin/qdm-metric-cli
   qdm_cas_cli: /absolute/path/to/cas-cli
 
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: pengmingde01
+  dev_user_id: local-test-user
   allow_local_blob: true

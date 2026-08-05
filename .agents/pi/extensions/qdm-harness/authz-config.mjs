@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
-export const DEFAULT_DEV_USER_ID = "pengmingde01";
-
 /**
  * @typedef {{
  *   mode: "off" | "on",
@@ -22,7 +20,7 @@ export function loadAuthzConfig(projectRoot, env = process.env) {
   const defaults = {
     mode: "off",
     blobFile: "",
-    devUserId: DEFAULT_DEV_USER_ID,
+    devUserId: "",
     allowLocalBlob: true,
     metricCli: "",
   };
@@ -92,7 +90,7 @@ export function parseAuthzSection(raw) {
         out.blobFile = value;
         break;
       case "dev_user_id":
-        out.devUserId = value || DEFAULT_DEV_USER_ID;
+        out.devUserId = value;
         break;
       case "allow_local_blob":
         out.allowLocalBlob = parseBool(value, true);
@@ -133,7 +131,8 @@ export function parseCliMetricPath(raw) {
  * Resolve encrypted auth blob for the current turn.
  * Priority: host _auth > (if allowLocalBlob) env HARNESS_AUTH_BLOB > env file > config blob_file.
  *
- * Test stage: no env vars; use local blob_file only.
+ * userId must come from host _auth_user_id, HARNESS_AUTH_USER_ID, or explicit authz.dev_user_id.
+ * There is no default principal.
  *
  * @param {{
  *   projectRoot: string,
@@ -153,9 +152,12 @@ export function resolveAuthBlob(options) {
     if (!isEncryptedBlob(hostAuth)) {
       return { ok: false, error: "host _auth must be an encrypted qdm1enc blob" };
     }
-    const userId = hostUserId || config.devUserId || DEFAULT_DEV_USER_ID;
+    const userId = hostUserId || trim(config.devUserId);
     if (!userId) {
-      return { ok: false, error: "host _auth_user_id is required when authz mode is on" };
+      return {
+        ok: false,
+        error: "authz requires _auth_user_id (or authz.dev_user_id for local fallback only)",
+      };
     }
     return { ok: true, blob: hostAuth, userId, source: "host" };
   }
@@ -169,7 +171,13 @@ export function resolveAuthBlob(options) {
     if (!isEncryptedBlob(envBlob)) {
       return { ok: false, error: "HARNESS_AUTH_BLOB must be an encrypted qdm1enc blob" };
     }
-    const userId = trim(env.HARNESS_AUTH_USER_ID) || config.devUserId || DEFAULT_DEV_USER_ID;
+    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
+    if (!userId) {
+      return {
+        ok: false,
+        error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
+      };
+    }
     return { ok: true, blob: envBlob, userId, source: "env" };
   }
 
@@ -177,14 +185,26 @@ export function resolveAuthBlob(options) {
   if (envFile) {
     const loaded = readBlobFile(envFile, options.projectRoot);
     if (!loaded.ok) return loaded;
-    const userId = trim(env.HARNESS_AUTH_USER_ID) || config.devUserId || DEFAULT_DEV_USER_ID;
+    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
+    if (!userId) {
+      return {
+        ok: false,
+        error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
+      };
+    }
     return { ok: true, blob: loaded.blob, userId, source: "env_file" };
   }
 
   if (config.blobFile) {
     const loaded = readBlobFile(config.blobFile, options.projectRoot);
     if (!loaded.ok) return loaded;
-    const userId = config.devUserId || DEFAULT_DEV_USER_ID;
+    const userId = trim(config.devUserId);
+    if (!userId) {
+      return {
+        ok: false,
+        error: "authz.blob_file requires authz.dev_user_id (no default principal)",
+      };
+    }
     return { ok: true, blob: loaded.blob, userId, source: "file" };
   }
 

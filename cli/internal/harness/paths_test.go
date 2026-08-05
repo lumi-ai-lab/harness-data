@@ -52,8 +52,8 @@ cli:
 	if cfg.CLI.QDMMetricCLI != "/opt/qdm-metric-cli" {
 		t.Fatalf("unexpected metric cli path: %+v", cfg.CLI)
 	}
-	if cfg.Authz.Mode != "off" || cfg.Authz.DevUserID != "pengmingde01" {
-		t.Fatalf("unexpected default authz: %+v", cfg.Authz)
+	if cfg.Authz.Mode != "off" || cfg.Authz.DevUserID != "" {
+		t.Fatalf("unexpected default authz (mode off, empty dev_user_id): %+v", cfg.Authz)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestLoadConfigReadsAuthzSection(t *testing.T) {
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: pengmingde01
+  dev_user_id: local-test-user
   allow_local_blob: true
 `)
 	if err := os.WriteFile(filepath.Join(root, ConfigRel), body, 0o644); err != nil {
@@ -85,7 +85,7 @@ authz:
 	if cfg.Authz.BlobFile != "config/dev-auth.blob" {
 		t.Fatalf("unexpected blob_file: %+v", cfg.Authz)
 	}
-	if cfg.Authz.DevUserID != "pengmingde01" {
+	if cfg.Authz.DevUserID != "local-test-user" {
 		t.Fatalf("unexpected dev_user_id: %+v", cfg.Authz)
 	}
 	if !cfg.Authz.LocalBlobAllowed() {

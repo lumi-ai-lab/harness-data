@@ -24,12 +24,13 @@ type Config struct {
 type AuthzConfig struct {
 	// Mode is "off" or "on". Empty means off.
 	Mode string
-	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob (dev/test).
+	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob (dev/test only).
 	BlobFile string
-	// DevUserID is the slot user id when Host does not send _auth_user_id (dev default: pengmingde01).
+	// DevUserID is optional slot user id for local blob/env fallback when Host did not send _auth_user_id.
+	// Empty by default; must be set explicitly for local authz file mode. Production should use Host _auth_user_id.
 	DevUserID string
-	// AllowLocalBlob permits env/file fallback when Host did not send _auth. Empty defaults to true when Mode is on for local dev.
-	// Explicit "false" disables local fallback (production-like).
+	// AllowLocalBlob permits env/file fallback when Host did not send _auth.
+	// Nil/true is dev-friendly; production should set false so only Host _auth is accepted.
 	AllowLocalBlob *bool
 }
 
@@ -205,9 +206,8 @@ func normalizeAuthzConfig(cfg *AuthzConfig) {
 	} else {
 		cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
 	}
-	if strings.TrimSpace(cfg.DevUserID) == "" {
-		cfg.DevUserID = "pengmingde01"
-	}
+	// DevUserID stays empty unless explicitly configured — no default principal.
+	cfg.DevUserID = strings.TrimSpace(cfg.DevUserID)
 }
 
 func loadLegacyPathsConfig(root string, cfg Config) (Config, error) {
@@ -351,8 +351,7 @@ func defaultConfig() Config {
 	return Config{
 		Paths: pathsFromKnowledge("."),
 		Authz: AuthzConfig{
-			Mode:      "off",
-			DevUserID: "pengmingde01",
+			Mode: "off",
 		},
 	}
 }
