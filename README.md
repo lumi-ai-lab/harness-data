@@ -295,12 +295,16 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 | 来源 | 说明 |
 | --- | --- |
-| Host `_auth` + `_auth_user_id` | **生产主路径**：网关加密后旁路下发（不写进用户 prompt 正文） |
-| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件 |
-| `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置，代码无默认用户 |
+| Host `event._auth` + `_auth_user_id` | 理想旁路（需 ACP/Pi 透传；当前常不可用） |
+| **Lumi 文件信封** `LUMI_REQUESTER_CONTEXT_DIR` + `sha256(sessionId).json` | **当前生产可用 Host 旁路（方案 A）**；不受 `allow_local_blob` 屏蔽 |
+| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件；`allow_local_blob: false` 时禁用 |
+| `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置；`allow_local_blob: false` 时禁用 |
+
+解析优先级：`event._auth` → Lumi 信封 → `HARNESS_AUTH_*` → `blob_file`。  
+Lumi 仍会写 ACP `_meta`（供未来方案 B）；Harness 现在不依赖它。信封文件名与 Lumi 一致：`hex(sha256(utf8(rawSessionId))) + ".json"`，按 session 精确 open，不枚举目录。
 
 无上游（如未接 Lumi）时：默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。  
-生产若只信 Host：装完后可把 `allow_local_blob` 改为 `false`。
+生产若只信 Host（事件或 Lumi 信封）：装完后可把 `allow_local_blob` 改为 `false`。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 
@@ -318,7 +322,7 @@ go run ./scripts/auth_blob_encrypt.go \
   > /path/to/harness-data/config/dev-auth.blob
 ```
 
-分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id` 或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
+分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id`、Lumi 信封 `_auth_user_id`，或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
 
 ## Context 输出
 

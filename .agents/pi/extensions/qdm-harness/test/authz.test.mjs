@@ -20,6 +20,7 @@ import {
   stripAuthFlags,
 } from "../authz-inject.mjs";
 import { AuthzStateStore } from "../authz-store.mjs";
+import { loadLumiHostAuth, lumiEnvelopePath } from "../lumi-envelope.mjs";
 import qdmHarnessExtension from "../index.ts";
 
 const SAMPLE_BLOB =
@@ -432,4 +433,311 @@ test("extension tool_call blocks analysis execute when authz on and unbound", (t
   const result = handlers.get("tool_call")(event, ctx);
   assert.equal(result?.block, true);
   assert.match(result.reason, /no encrypted auth blob/i);
+});
+
+// --- Lumi envelope (Host path scheme A) ---
+
+const ENVELOPE_BLOB = `${SAMPLE_BLOB}envelope`;
+const ENVELOPE_SESSION = "sess";
+/** Lumi Go sha256("sess") lowercase hex — must stay in sync with producer. */
+const ENVELOPE_SESS_HEX =
+  "bd717b467075e051242456dd00511c90a39afc62b1da71a80714c0fb3986cb4d";
+
+/**
+ * @param {string} dir
+ * @param {object} overrides
+ */
+function writeEnvelope(dir, overrides = {}) {
+  const sessionId = overrides.sessionId ?? ENVELOPE_SESSION;
+  const path =
+    overrides.path ??
+    lumiEnvelopePath(dir, sessionId) ??
+    join(dir, `${ENVELOPE_SESS_HEX}.json`);
+  const body = {
+    version: 1,
+    workspaceId: "ws",
+    agentId: "agent",
+    sessionId,
+    issuedAt: "2026-08-05T12:00:00Z",
+    expiresAt: "2099-08-05T12:30:00Z",
+    _auth: ENVELOPE_BLOB,
+    _auth_user_id: "pengmingde01",
+    ...overrides.fields,
+  };
+  // Allow overriding top-level via fields; re-apply sessionId if fields overwrote path key only.
+  if (overrides.fields?.sessionId !== undefined) {
+    body.sessionId = overrides.fields.sessionId;
+  }
+  writeFileSync(path, `${JSON.stringify(body)}\n`);
+  return path;
+}
+
+test("lumiEnvelopePath matches Lumi Go sha256 hex for sess", () => {
+  const path = lumiEnvelopePath("/tmp/ctx", "sess");
+  assert.equal(path, join("/tmp/ctx", `${ENVELOPE_SESS_HEX}.json`));
+  assert.equal(lumiEnvelopePath("", "sess"), null);
+  assert.equal(lumiEnvelopePath("/tmp", ""), null);
+});
+
+test("loadLumiHostAuth soft-fails without env or file", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qdm-lumi-env-"));
+  t.after(() => rmSync(dir, { force: true, recursive: true }));
+
+  const noDir = loadLumiHostAuth({ env: {}, sessionId: "sess" });
+  assert.equal(noDir.ok, false);
+  assert.equal(noDir.soft, true);
+
+  const noFile = loadLumiHostAuth({
+    env: { LUMI_REQUESTER_CONTEXT_DIR: dir },
+    sessionId: "sess",
+  });
+  assert.equal(noFile.ok, false);
+  assert.equal(noFile.soft, true);
+  assert.match(noFile.error, /not found/i);
+});
+
+test("loadLumiHostAuth accepts valid envelope; rejects mismatch/expired/bad blob", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qdm-lumi-env-"));
+  t.after(() => rmSync(dir, { force: true, recursive: true }));
+
+  writeEnvelope(dir);
+  const ok = loadLumiHostAuth({
+    env: { LUMI_REQUESTER_CONTEXT_DIR: dir },
+    sessionId: ENVELOPE_SESSION,
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.source, "lumi_envelope");
+  assert.equal(ok.blob, ENVELOPE_BLOB);
+  assert.equal(ok.userId, "pengmingde01");
+
+  // sessionId mismatch (file is for "sess", query another id)
+  const otherPath = lumiEnvelopePath(dir, "other-sess");
+  writeFileSync(
+    otherPath,
+    JSON.stringify({
+      version: 1,
+      sessionId: "wrong-id",
+      expiresAt: "2099-01-01T00:00:00Z",
+      _auth: ENVELOPE_BLOB,
+      _auth_user_id: "u1",
+    }),
+  );
+  const mismatch = loadLumiHostAuth({
+    env: { LUMI_REQUESTER_CONTEXT_DIR: dir },
+    sessionId: "other-sess",
+  });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.soft, true);
+  assert.match(mismatch.error, /sessionId mismatch/i);
+
+  writeEnvelope(dir, {
+    sessionId: "expired-sess",
+    fields: { expiresAt: "2020-01-01T00:00:00Z" },
+  });
+  const expired = loadLumiHostAuth({
+    env: { LUMI_REQUESTER_CONTEXT_DIR: dir },
+    sessionId: "expired-sess",
+    now: Date.parse("2026-08-05T12:00:00Z"),
+  });
+  assert.equal(expired.ok, false);
+  assert.equal(expired.soft, true);
+  assert.match(expired.error, /expired/i);
+
+  writeEnvelope(dir, {
+    sessionId: "bad-blob-sess",
+    fields: { _auth: "plaintext-not-encrypted" },
+  });
+  const badBlob = loadLumiHostAuth({
+    env: { LUMI_REQUESTER_CONTEXT_DIR: dir },
+    sessionId: "bad-blob-sess",
+  });
+  assert.equal(badBlob.ok, false);
+  assert.equal(badBlob.soft, false);
+  assert.match(badBlob.error, /_auth/i);
+});
+
+test("resolveAuthBlob priority: host > envelope > env > file; allowLocalBlob gates local only", (t) => {
+  const root = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-test-user
+  allow_local_blob: true
+`,
+  });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+
+  const envelopeDir = mkdtempSync(join(tmpdir(), "qdm-lumi-prio-"));
+  t.after(() => rmSync(envelopeDir, { force: true, recursive: true }));
+  writeEnvelope(envelopeDir);
+
+  const config = loadAuthzConfig(root, {});
+  const envBase = {
+    LUMI_REQUESTER_CONTEXT_DIR: envelopeDir,
+    HARNESS_AUTH_BLOB: `${SAMPLE_BLOB}env`,
+    HARNESS_AUTH_USER_ID: "lisi",
+  };
+
+  const fromHost = resolveAuthBlob({
+    projectRoot: root,
+    config,
+    hostAuth: `${SAMPLE_BLOB}host`,
+    hostUserId: "zhangsan",
+    sessionId: ENVELOPE_SESSION,
+    env: envBase,
+  });
+  assert.equal(fromHost.ok, true);
+  assert.equal(fromHost.source, "host");
+  assert.equal(fromHost.userId, "zhangsan");
+
+  const fromEnvelope = resolveAuthBlob({
+    projectRoot: root,
+    config,
+    sessionId: ENVELOPE_SESSION,
+    env: envBase,
+  });
+  assert.equal(fromEnvelope.ok, true);
+  assert.equal(fromEnvelope.source, "lumi_envelope");
+  assert.equal(fromEnvelope.blob, ENVELOPE_BLOB);
+  assert.equal(fromEnvelope.userId, "pengmingde01");
+
+  const fromEnv = resolveAuthBlob({
+    projectRoot: root,
+    config,
+    sessionId: "no-such-session",
+    env: {
+      HARNESS_AUTH_BLOB: `${SAMPLE_BLOB}env`,
+      HARNESS_AUTH_USER_ID: "lisi",
+      LUMI_REQUESTER_CONTEXT_DIR: envelopeDir,
+    },
+  });
+  assert.equal(fromEnv.ok, true);
+  assert.equal(fromEnv.source, "env");
+
+  // allow_local_blob: false — envelope still works; pure file fails
+  const lockedRoot = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-test-user
+  allow_local_blob: false
+`,
+  });
+  writeFileSync(join(lockedRoot, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  const locked = loadAuthzConfig(lockedRoot, {});
+
+  const envelopeOk = resolveAuthBlob({
+    projectRoot: lockedRoot,
+    config: locked,
+    sessionId: ENVELOPE_SESSION,
+    env: { LUMI_REQUESTER_CONTEXT_DIR: envelopeDir },
+  });
+  assert.equal(envelopeOk.ok, true);
+  assert.equal(envelopeOk.source, "lumi_envelope");
+
+  const fileBlocked = resolveAuthBlob({
+    projectRoot: lockedRoot,
+    config: locked,
+    sessionId: null,
+    env: {},
+  });
+  assert.equal(fileBlocked.ok, false);
+  assert.match(fileBlocked.error, /local blob fallback disabled/i);
+
+  const envBlocked = resolveAuthBlob({
+    projectRoot: lockedRoot,
+    config: locked,
+    sessionId: null,
+    env: { HARNESS_AUTH_BLOB: `${SAMPLE_BLOB}env`, HARNESS_AUTH_USER_ID: "lisi" },
+  });
+  assert.equal(envBlocked.ok, false);
+
+  // Hard fail on bad envelope blob does not fall through to local file
+  writeEnvelope(envelopeDir, {
+    sessionId: "hard-fail-sess",
+    fields: { _auth: "not-encrypted" },
+  });
+  const hardFail = resolveAuthBlob({
+    projectRoot: root,
+    config,
+    sessionId: "hard-fail-sess",
+    env: { LUMI_REQUESTER_CONTEXT_DIR: envelopeDir },
+  });
+  assert.equal(hardFail.ok, false);
+  assert.match(hardFail.error, /_auth/i);
+});
+
+test("extension tool_call injects from Lumi envelope when allow_local_blob false", (t) => {
+  const root = createProject(t, {
+    authzYaml: `paths:
+  knowledge: wikis
+authz:
+  mode: on
+  allow_local_blob: false
+`,
+  });
+  const envelopeDir = mkdtempSync(join(tmpdir(), "qdm-lumi-ext-"));
+  t.after(() => rmSync(envelopeDir, { force: true, recursive: true }));
+  writeEnvelope(envelopeDir, { sessionId: "sess-envelope" });
+
+  const cli = join(root, "bin", "data-harness-cli");
+  writeFileSync(
+    cli,
+    `#!/usr/bin/env node
+process.stdin.resume();
+process.stdin.on("end", () => {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: "# ctx"
+    }
+  }));
+});
+`,
+  );
+  chmodSync(cli, 0o755);
+
+  const prevDir = process.env.LUMI_REQUESTER_CONTEXT_DIR;
+  process.env.LUMI_REQUESTER_CONTEXT_DIR = envelopeDir;
+  t.after(() => {
+    if (prevDir === undefined) delete process.env.LUMI_REQUESTER_CONTEXT_DIR;
+    else process.env.LUMI_REQUESTER_CONTEXT_DIR = prevDir;
+  });
+
+  const handlers = new Map();
+  qdmHarnessExtension({
+    cwd: root,
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+  });
+
+  const ctx = {
+    cwd: root,
+    sessionManager: { getSessionId: () => "sess-envelope" },
+    ui: { notify() {}, setStatus() {} },
+  };
+
+  return handlers
+    .get("context")(
+      {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "销售额？" }], timestamp: 1 },
+        ],
+        // no _auth on event — Host path is envelope only
+      },
+      ctx,
+    )
+    .then(() => {
+      const event = {
+        toolName: "bash",
+        input: {
+          command: "qdm-metric-cli analysis execute --metric saleAmt --start-date 2026-07-01",
+        },
+      };
+      const result = handlers.get("tool_call")(event, ctx);
+      assert.equal(result, undefined);
+      assert.match(event.input.command, /--data-auth/);
+      assert.match(event.input.command, new RegExp(ENVELOPE_BLOB.replace(/\./g, "\\.")));
+    });
 });

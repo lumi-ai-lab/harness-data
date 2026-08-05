@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { loadLumiHostAuth } from "./lumi-envelope.mjs";
+
 /**
  * @typedef {{
  *   mode: "off" | "on",
@@ -129,9 +131,13 @@ export function parseCliMetricPath(raw) {
 
 /**
  * Resolve encrypted auth blob for the current turn.
- * Priority: host _auth > (if allowLocalBlob) env HARNESS_AUTH_BLOB > env file > config blob_file.
+ * Priority:
+ *   1. host event _auth (future / direct Host)
+ *   2. Lumi file envelope (production Host bypass; ignores allowLocalBlob)
+ *   3–5. local env/file only when allowLocalBlob
  *
- * userId must come from host _auth_user_id, HARNESS_AUTH_USER_ID, or explicit authz.dev_user_id.
+ * userId must come from host _auth_user_id, envelope _auth_user_id,
+ * HARNESS_AUTH_USER_ID, or explicit authz.dev_user_id.
  * There is no default principal.
  *
  * @param {{
@@ -139,7 +145,9 @@ export function parseCliMetricPath(raw) {
  *   config: AuthzConfig,
  *   hostAuth?: string | null,
  *   hostUserId?: string | null,
+ *   sessionId?: string | null,
  *   env?: NodeJS.ProcessEnv,
+ *   now?: number,
  * }} options
  */
 export function resolveAuthBlob(options) {
@@ -162,8 +170,30 @@ export function resolveAuthBlob(options) {
     return { ok: true, blob: hostAuth, userId, source: "host" };
   }
 
+  // Host path #2: Lumi requester-context envelope (not gated by allowLocalBlob).
+  const fromLumi = loadLumiHostAuth({
+    env,
+    sessionId: options.sessionId,
+    now: options.now,
+  });
+  if (fromLumi.ok) {
+    return {
+      ok: true,
+      blob: fromLumi.blob,
+      userId: fromLumi.userId,
+      source: fromLumi.source,
+    };
+  }
+  // Hard fail: envelope structure valid but Host material invalid — do not degrade to local.
+  if (fromLumi.soft === false) {
+    return { ok: false, error: fromLumi.error };
+  }
+
   if (!config.allowLocalBlob) {
-    return { ok: false, error: "authz requires host _auth (local blob fallback disabled)" };
+    return {
+      ok: false,
+      error: "authz requires host _auth or Lumi envelope (local blob fallback disabled)",
+    };
   }
 
   const envBlob = trim(env.HARNESS_AUTH_BLOB);
@@ -211,7 +241,7 @@ export function resolveAuthBlob(options) {
   return {
     ok: false,
     error:
-      "authz mode is on but no encrypted blob is available (host _auth, HARNESS_AUTH_BLOB, or authz.blob_file)",
+      "authz mode is on but no encrypted blob is available (host _auth, Lumi envelope, HARNESS_AUTH_BLOB, or authz.blob_file)",
   };
 }
 

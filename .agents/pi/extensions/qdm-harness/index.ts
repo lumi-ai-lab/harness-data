@@ -89,6 +89,19 @@ function sessionId(ctx?: PiExtensionContext): string {
   );
 }
 
+/**
+ * Raw session id for Lumi envelope lookup (must match ACP sessionId used at write).
+ * Do not use getSessionFile or "unknown" — those would hash the wrong key.
+ */
+function envelopeSessionId(ctx?: PiExtensionContext): string | null {
+  const id =
+    ctx?.sessionManager?.getSessionId?.() ||
+    process.env.PI_SESSION_ID ||
+    process.env.CLAUDE_SESSION_ID ||
+    "";
+  return id || null;
+}
+
 function contextTimeoutMs(): number {
   const configured = process.env.QDM_PI_CONTEXT_TIMEOUT_MS?.trim();
   if (!configured) return DEFAULT_CONTEXT_TIMEOUT_MS;
@@ -255,15 +268,14 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
 }
 
 /**
- * Bind auth for this turn: Host _auth wins; else local env/file when allowed.
- * Test stage uses blob_file only (no env).
+ * Bind auth for this turn: Host event _auth > Lumi envelope > local env/file when allowed.
  */
 function bindAuthzForTurn(
   projectRoot: string,
   store: AuthzStateStore,
   ctx: PiExtensionContext | undefined,
   event?: PiContextEvent,
-): { mode: "off" | "on"; bound: boolean; error?: string } {
+): { mode: "off" | "on"; bound: boolean; error?: string; source?: string } {
   const config = loadAuthzConfig(projectRoot);
   if (config.mode !== "on") {
     return { mode: "off", bound: false };
@@ -274,6 +286,7 @@ function bindAuthzForTurn(
     config,
     hostAuth: event?._auth,
     hostUserId: event?._auth_user_id,
+    sessionId: envelopeSessionId(ctx),
   });
 
   if (!resolved.ok) {
@@ -281,7 +294,7 @@ function bindAuthzForTurn(
   }
 
   store.bind(sessionId(ctx), resolved.userId, resolved.blob, resolved.source);
-  return { mode: "on", bound: true };
+  return { mode: "on", bound: true, source: resolved.source };
 }
 
 export default function qdmHarnessExtension(pi: {
@@ -333,6 +346,13 @@ export default function qdmHarnessExtension(pi: {
     const parts = [context, authzGuidance(authz.mode, authz.bound)].filter(Boolean);
     if (authz.mode === "on" && !authz.bound && authz.error) {
       ctx?.ui?.notify?.(`QDM Authz: ${authz.error}`, "warning");
+    }
+    if (
+      authz.bound &&
+      authz.source === "lumi_envelope" &&
+      process.env.QDM_HARNESS_DIAG === "1"
+    ) {
+      ctx?.ui?.notify?.("QDM Authz: bound source=lumi_envelope", "info");
     }
     if (!parts.length) return { messages };
     return { messages: appendHarnessContext(messages, userMessage.index, parts.join("\n\n")) };
