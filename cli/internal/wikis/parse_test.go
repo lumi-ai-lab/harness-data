@@ -142,6 +142,103 @@ name: sale_amt
 	}
 }
 
+func TestParseDocumentAcceptsLatestWikiStatusFrontmatter(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/reports/门店分析报告/spec.md", `---
+name: "storeManagerAnalysisReport"
+label: "门店分析报告"
+status: "partial_metric_native"
+aliases:
+  - 门店管理报告
+---
+# 门店分析报告
+`)
+	result, err := RunCheck(root, CheckFrontmatter, CheckOptions{MaxErrors: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resultHasTarget(result, "unknown_frontmatter_field", "status") {
+		t.Fatalf("status frontmatter should be accepted, got %+v", result.Errors)
+	}
+	if !result.OK {
+		t.Fatalf("unexpected frontmatter errors: %+v", result.Errors)
+	}
+}
+
+func TestParseDocumentAcceptsLatestWikiObjectTypeFrontmatter(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/reports/门店经营策略库/spec.md", `---
+name: "storeOperationStrategyLibrarySpec"
+label: "门店经营策略库规格"
+object_type: "knowledge"
+aliases:
+  - 门店策略选择规则
+---
+# 门店经营策略库规格
+`)
+	result, err := RunCheck(root, CheckFrontmatter, CheckOptions{MaxErrors: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resultHasTarget(result, "unknown_frontmatter_field", "object_type") {
+		t.Fatalf("object_type frontmatter should be accepted, got %+v", result.Errors)
+	}
+	if !result.OK {
+		t.Fatalf("unexpected frontmatter errors: %+v", result.Errors)
+	}
+}
+
+func TestParseDocumentIgnoresH1MarkersInsideFencedCodeBlocks(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/reports/主推时令大单品/playbook.md", `---
+name: "seasonalHeroProductPlaybook"
+label: "主推时令大单品取数手册"
+---
+# 主推时令大单品取数手册
+
+`+"```bash"+`
+# 店日均指标组
+"$QDM_METRIC_CLI" analysis execute \
+  --start-date <weekStartDate> \
+  --end-date <weekEndDate>
+
+# 汇总指标组
+"$QDM_METRIC_CLI" analysis execute \
+  --start-date <weekStartDate> \
+  --end-date <weekEndDate>
+`+"```"+`
+`)
+	result, err := RunCheck(root, CheckTitles, CheckOptions{MaxErrors: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resultHasCode(result, "multiple_h1") {
+		t.Fatalf("code block comments should not count as H1 titles, got %+v", result.Errors)
+	}
+	if !result.OK {
+		t.Fatalf("unexpected title errors: %+v", result.Errors)
+	}
+}
+
+func TestParseDocumentStillRejectsMultipleRealH1Titles(t *testing.T) {
+	root := testWikiRoot(t)
+	writeFile(t, root, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n")
+	writeFile(t, root, "wikis/reports/主推时令大单品/playbook.md", `# 主推时令大单品取数手册
+
+# 第二个真实标题
+`)
+	result, err := RunCheck(root, CheckTitles, CheckOptions{MaxErrors: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resultHasCode(result, "multiple_h1") {
+		t.Fatalf("real H1 duplicates should still be rejected, got %+v", result.Errors)
+	}
+}
+
 func TestRunChecksFindsFrontmatterAliasesAndLinks(t *testing.T) {
 	root := testWikiRoot(t)
 	writeFile(t, root, "wikis/spec/index.md", "# Specs\n")
@@ -390,4 +487,13 @@ func hasCode(errs []CheckError, code string) bool {
 
 func resultHasCode(result CheckResult, code string) bool {
 	return hasCode(result.Errors, code)
+}
+
+func resultHasTarget(result CheckResult, code, target string) bool {
+	for _, err := range result.Errors {
+		if err.Code == code && err.Target == target {
+			return true
+		}
+	}
+	return false
 }
