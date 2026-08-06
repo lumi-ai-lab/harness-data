@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
 import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs } from "../lib/config.js";
-import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
+import { ask, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
@@ -212,107 +212,6 @@ export function validateLocalWikisSource(source) {
   }
 }
 
-function casConfigDir(runtimeDir) {
-  return path.join(runtimeDir, ".qdm-auth", "cas");
-}
-
-export async function writeCasCredentials(runtimeDir, options = {}) {
-  const username = options.casUsername || await ask("CAS 用户名：", options);
-  const password = options.casPassword || await askSecret("CAS 密码：", options);
-  if (!username || !password) throw new Error("CAS username and password are required");
-  const dir = options.casConfigDir || casConfigDir(runtimeDir);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const env = { QDM_CAS_CONFIG_DIR: dir };
-  await run(path.join(runtimeDir, "bin", binaryName("cas-cli")), ["config", "set-credentials", "--username", username, "--password", password], {
-    cwd: runtimeDir,
-    env,
-    sensitiveArgs: [5]
-  });
-  ok("CAS 凭证已加密保存");
-  return dir;
-}
-
-function isCasAuthenticationFailure(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid credentials?|bad credentials?|认证.{0,8}(失败|不通过)|账号.{0,8}密码|<!doctype html|<html[\s>]/i.test(message);
-}
-
-function sanitizedCasError(error) {
-  if (isCasAuthenticationFailure(error)) return new Error("CAS 账号或密码验证不通过");
-  const message = String(error?.message || error || "CAS 认证失败");
-  if (/<(!doctype|html)[\s>]/i.test(message)) return new Error("CAS 服务返回了异常页面，请稍后重试");
-  return error instanceof Error ? error : new Error(message);
-}
-
-async function validateCasCredentials(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const command = path.join(runtimeDir, "bin", binaryName("cas-cli"));
-  // rtp is the remaining CAS app used by qdm-sql-cli token refresh.
-  await run(command, ["token", "--app", "rtp"], { cwd: runtimeDir, env });
-}
-
-function activateCasCredentials(stagedDir, targetDir) {
-  const backupDir = `${targetDir}.backup-${process.pid}-${Date.now()}`;
-  fs.mkdirSync(path.dirname(targetDir), { recursive: true, mode: 0o700 });
-  try {
-    if (fs.existsSync(targetDir)) fs.renameSync(targetDir, backupDir);
-    fs.renameSync(stagedDir, targetDir);
-    fs.rmSync(backupDir, { recursive: true, force: true });
-  } catch (error) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    if (fs.existsSync(backupDir)) fs.renameSync(backupDir, targetDir);
-    throw error;
-  }
-}
-
-export async function configureCasAuthentication(runtimeDir, options = {}) {
-  const targetDir = casConfigDir(runtimeDir);
-  const promptUsername = options.askUsername || ask;
-  const promptPassword = options.askPassword || askSecret;
-  const suppliedCredentials = Boolean(options.casUsername || options.casPassword || options.yes);
-  const maxAttempts = suppliedCredentials ? 1 : Number(options.casMaxAttempts || 3);
-  let previousUsername = String(options.casUsername || "").trim();
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const usernameAnswer = options.casUsername || await promptUsername(previousUsername ? `CAS 用户名 [${previousUsername}]：` : "CAS 用户名：", options);
-    const username = String(usernameAnswer || previousUsername).trim();
-    const password = options.casPassword || await promptPassword("CAS 密码：", options);
-    previousUsername = username;
-    if (!username || !password) {
-      warn("CAS 用户名和密码不能为空");
-      if (attempt < maxAttempts) continue;
-      throw new Error("CAS username and password are required");
-    }
-
-    const stagedDir = fs.mkdtempSync(path.join(runtimeDir, ".cas-auth-"));
-    try {
-      await writeCasCredentials(runtimeDir, { ...options, casUsername: username, casPassword: password, casConfigDir: stagedDir });
-      action("正在验证 CAS 账号……");
-      await validateCasCredentials(runtimeDir, stagedDir);
-      activateCasCredentials(stagedDir, targetDir);
-      ok("CAS 认证成功");
-      return targetDir;
-    } catch (error) {
-      fs.rmSync(stagedDir, { recursive: true, force: true });
-      const cleanError = sanitizedCasError(error);
-      if (!isCasAuthenticationFailure(error) || attempt >= maxAttempts) throw cleanError;
-      warn(`${cleanError.message}，请重新输入`);
-    }
-  }
-
-  throw new Error("CAS 认证失败");
-}
-
-export async function configureTokens(runtimeDir, casDir) {
-  const env = { QDM_CAS_CONFIG_DIR: casDir };
-  const bin = (name) => path.join(runtimeDir, "bin", binaryName(name));
-  const sqlToken = (await run(bin("cas-cli"), ["token", "--app", "rtp"], { cwd: runtimeDir, env })).stdout.trim();
-  await run(bin("qdm-sql-cli"), ["config", "set-token", sqlToken], { cwd: runtimeDir, env, sensitiveArgs: [2] });
-  ok("SQL Token 已配置");
-  await run(bin("qdm-sql-cli"), ["config", "check-token"], { cwd: runtimeDir, env });
-  ok("Metric CLI 使用 auth-blob / data-auth，无需 CAS set-token");
-}
-
 export async function buildAndCheck(runtimeDir, options = {}) {
   const cli = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
   action("执行：data-harness-cli wikis build-index --skip-checks");
@@ -339,10 +238,8 @@ export function printDoctorSummary(doctor, options = {}) {
     ok("wikis/reports");
     ok("wikis/dims");
     ok("wikis/rules");
-    ok("4 个 CLI（data-harness / metric / sql / cas）");
+    ok("2 个 CLI（data-harness / metric）");
     ok("本地配置");
-    ok("CAS 凭证");
-    ok("SQL Token");
     ok("唯一数据入口 qdm-metric-cli");
     if (!warnings.some((check) => check.name.startsWith("Agent hook"))) ok("Agent Hook");
     for (const check of warnings) warn(`${check.name}${check.detail ? ` (${check.detail})` : ""}`);
@@ -359,16 +256,16 @@ export async function installCommand(options = {}) {
     `平台：${key}`
   ]);
 
-  step(1, 8, "检查本机依赖");
+  step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
 
-  step(2, 8, "安装 runtime bundle");
+  step(2, 7, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
   const bundle = await installRuntimeBundle(runtimeDir, options);
   blank();
 
-  step(3, 8, "安装 CLI 工具");
+  step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
   const installState = readInstallState(runtimeDir);
@@ -401,11 +298,11 @@ export async function installCommand(options = {}) {
   });
   blank();
 
-  step(4, 8, "同步 Wikis 知识库");
+  step(4, 7, "同步 Wikis 知识库");
   await installWikis(runtimeDir, options);
   blank();
 
-  step(5, 8, "生成本地配置");
+  step(5, 7, "生成本地配置");
   const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
@@ -417,16 +314,11 @@ export async function installCommand(options = {}) {
   }
   blank();
 
-  step(6, 8, "配置 CAS 认证");
-  const casDir = await configureCasAuthentication(runtimeDir, options);
-  await configureTokens(runtimeDir, casDir);
-  blank();
-
-  step(7, 8, "构建 Wikis 索引");
+  step(6, 7, "构建 Wikis 索引");
   await buildAndCheck(runtimeDir, options);
   blank();
 
-  step(8, 8, "配置 Agent Hook");
+  step(7, 7, "配置 Agent Hook");
   const selectedAgent = await chooseAgent(options);
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
@@ -435,7 +327,7 @@ export async function installCommand(options = {}) {
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, casConfigDir: casDir });
+  const doctor = await collectDoctor(runtimeDir, options);
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();

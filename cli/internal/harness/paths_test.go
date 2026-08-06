@@ -23,7 +23,7 @@ func TestLoadConfigDefaultsToWikisRoot(t *testing.T) {
 	}
 }
 
-func TestLoadConfigReadsSQLCLIPath(t *testing.T) {
+func TestLoadConfigReadsMetricCLIPath(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatal(err)
@@ -32,8 +32,8 @@ func TestLoadConfigReadsSQLCLIPath(t *testing.T) {
   knowledge: wikis
 
 cli:
-  qdm_sql_cli: /opt/qdm-sql-cli
   qdm_metric_cli: /opt/qdm-metric-cli
+  qdm_sql_cli: /opt/qdm-sql-cli
   qdm_cas_cli: /opt/cas-cli
 `)
 	if err := os.WriteFile(filepath.Join(root, ConfigRel), body, 0o644); err != nil {
@@ -43,9 +43,6 @@ cli:
 	cfg, err := LoadConfig(root)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if cfg.CLI.QDMSQLCLI != "/opt/qdm-sql-cli" {
-		t.Fatalf("unexpected sql cli path: %+v", cfg.CLI)
 	}
 	if cfg.CLI.QDMMetricCLI != "/opt/qdm-metric-cli" {
 		t.Fatalf("unexpected metric cli path: %+v", cfg.CLI)

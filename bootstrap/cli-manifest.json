@@ -40,46 +40,6 @@
           "archive": "zip"
         }
       }
-    },
-    {
-      "name": "qdm-sql-cli",
-      "binary": "qdm-sql-cli",
-      "repo": "pengmide/qdm-sql-cli",
-      "private": true,
-      "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
-      }
-    },
-    {
-      "name": "cas-cli",
-      "binary": "cas-cli",
-      "repo": "pengmide/qdm-cas-cli",
-      "private": true,
-      "platforms": {
-        "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
-        },
-        "linux-amd64": {
-          "archive": "tar.gz"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        }
-      }
     }
   ]
 }

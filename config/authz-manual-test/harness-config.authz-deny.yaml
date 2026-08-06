@@ -5,8 +5,6 @@ paths:
 
 cli:
   qdm_metric_cli: bin/qdm-metric-cli
-  qdm_sql_cli: bin/qdm-sql-cli
-  qdm_cas_cli: bin/cas-cli
 
 authz:
   mode: on

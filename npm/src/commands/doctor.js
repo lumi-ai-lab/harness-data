@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { run } from "../lib/exec.js";
 import { findWorkspaceDir } from "../lib/paths.js";
 import { binaryName } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries } from "../lib/config.js";
@@ -25,39 +24,16 @@ function agentOk(workspace, name) {
   }
 }
 
-async function tokenCheck(workspace, binary, env) {
-  const file = path.join(workspace, "bin", binaryName(binary));
-  if (!existsExecutable(file)) return false;
-  const result = await run(file, ["config", "check-token"], { cwd: workspace, env, allowFailure: true });
-  return result.code === 0;
-}
-
 function configPathsValid(workspace) {
   const file = path.join(workspace, "config", "qdm-cli-paths.env");
   if (!fs.existsSync(file)) return false;
   const content = fs.readFileSync(file, "utf8");
-  const required = ["QDM_METRIC_CLI", "QDM_SQL_CLI", "QDM_CAS_CLI"];
+  const required = ["QDM_METRIC_CLI"];
   const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
   return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
 }
 
-function casCredentialsValid(dir) {
-  const encrypted = path.join(dir, "credentials.enc");
-  try {
-    if (fs.statSync(encrypted).size > 0) return true;
-  } catch {}
-
-  try {
-    const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
-    return Boolean(config?.cas?.username && config?.cas?.password);
-  } catch {
-    return false;
-  }
-}
-
 export async function collectDoctor(workspace, options = {}) {
-  const casConfigDir = options.casConfigDir || path.join(workspace, ".qdm-auth", "cas");
-  const env = { QDM_CAS_CONFIG_DIR: casConfigDir };
   const checks = [];
   const add = (name, ok, detail = "") => checks.push({ name, ok, detail });
 
@@ -73,10 +49,10 @@ export async function collectDoctor(workspace, options = {}) {
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
-  add("CAS credentials file", casCredentialsValid(casConfigDir), casConfigDir);
-  add("SQL token", await tokenCheck(workspace, "qdm-sql-cli", env));
   add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
   add("legacy qdm-indicators-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
+  add("legacy qdm-sql-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-sql-cli"))));
+  add("legacy cas-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {

@@ -23,17 +23,15 @@ export const agentChoiceText = agentChoices.join(", ");
 export const qdmCliBinaries = [
   "data-harness-cli",
   "qdm-metric-cli",
-  "qdm-sql-cli",
-  "cas-cli",
 ];
 export const localPathToolNames = [
-  "cas-cli",
   "qdm-metric-cli",
-  "qdm-sql-cli",
 ];
 export const removedDataCliBinaries = [
   "qdm-cmr-cli",
   "qdm-indicators-cli",
+  "qdm-sql-cli",
+  "cas-cli",
 ];
 
 /** Relative path of the committed local-test encrypted auth blob fixture. */
@@ -161,14 +159,13 @@ export function writeLocalConfig(workspace, options = {}) {
   const existing = options.overwrite ? readAuthzFromHarnessConfig(harness) : null;
   const authz = resolveAuthzForWrite(options, existing);
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
-  const casConfigDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n  qdm_sql_cli: ${bin("qdm-sql-cli")}\n  qdm_cas_cli: ${bin("cas-cli")}\n\n${formatAuthzYaml(authz)}`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n\n${formatAuthzYaml(authz)}`,
   );
   fs.writeFileSync(
     env,
-    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\nexport QDM_SQL_CLI="${bin("qdm-sql-cli")}"\nexport QDM_CAS_CLI="${bin("cas-cli")}"\nexport QDM_CAS_CONFIG_DIR="${casConfigDir}"\n`,
+    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\n`,
   );
   return { authz };
 }
@@ -203,20 +200,6 @@ export function removeLegacyDataCLIs(runtimeDir) {
     removed.push(name);
   }
   return removed;
-}
-
-export function validateCasConfigDir(dir) {
-  const encrypted = path.join(dir, "credentials.enc");
-  try {
-    if (fs.statSync(encrypted).size > 0) return;
-  } catch {}
-
-  const legacy = path.join(dir, "config.json");
-  try {
-    const config = JSON.parse(fs.readFileSync(legacy, "utf8"));
-    if (config?.cas?.username && config?.cas?.password) return;
-  } catch {}
-  throw new Error(`CAS credentials are missing or invalid in: ${dir}`);
 }
 
 export function linkAgents(workspace, agent) {

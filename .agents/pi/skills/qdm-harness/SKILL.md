@@ -8,7 +8,7 @@ Read `README.md` before running QDM data commands.
 
 - Always run from the harness-data runtime workspace root.
 - Use `source config/qdm-cli-paths.env` before invoking QDM data CLIs from shell snippets.
-- Prefer configured env paths: `$QDM_METRIC_CLI`, `$QDM_SQL_CLI`, `$QDM_CAS_CLI` (do not guess bare binary names off PATH). Data queries use only `qdm-metric-cli`; do not call `qdm-cmr-cli` or `qdm-indicators-cli`.
+- Prefer configured env path: `$QDM_METRIC_CLI` (do not guess bare binary names off PATH). Data queries use only `qdm-metric-cli`; do not call `qdm-cmr-cli`, `qdm-indicators-cli`, `qdm-sql-cli`, or `cas-cli`.
 - For metric queries use `"$QDM_METRIC_CLI" analysis execute ...`. When authz mode is on, the PI hook injects `--data-auth --auth-blob`; do not invent, omit, or override auth flags.
 - When the user asks what permissions / data scopes they have, run `"$QDM_METRIC_CLI" auth describe` (hook injects `--auth-blob` when authz is on). Do not guess manageAreaId or categoryLevel1Id scopes.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
@@ -17,4 +17,3 @@ Read `README.md` before running QDM data commands.
 - Use appropriate Emoji in responses to make the output livelier and less rigid, while keeping the analysis professional.
 - Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file.
 - Do not read or use template files directly unless `bin/data-harness-cli inject-template` has been requested by the harness flow and the hook injects the template.
-- If SQL CLI token is invalid, use the configured `cas-cli` credential flow (`$QDM_CAS_CLI` token --app rtp) when CAS credentials are configured; do not start QR login from an automated hook. Metric CLI does not use CAS set-token.

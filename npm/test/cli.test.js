@@ -16,10 +16,9 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, configureCasAuthentication, configureTokens, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
-import { authCommand } from "../src/commands/auth.js";
 import {
   agentChoices,
   ensureLocalAuthBlob,
@@ -81,8 +80,8 @@ function reusableToolManifest(key) {
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /harness-data <install\|update\|auth\|doctor\|version>/);
-  assert.match(result.stdout, /auth     Configure CAS credentials and refresh access tokens/);
+  assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+  assert.doesNotMatch(result.stdout, /\bauth\b.*CAS/);
   assert.match(result.stdout, /--data-auth/);
 });
 
@@ -141,28 +140,22 @@ test("detects git protocol from remote URLs", () => {
 test("private qdm cli tools point at their own repositories", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
-  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli", "qdm-sql-cli", "cas-cli"]);
+  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli"]);
   assert.equal(byName.get("qdm-metric-cli").repo, "pengmide/qdm-metric-cli");
-  assert.equal(byName.get("qdm-sql-cli").repo, "pengmide/qdm-sql-cli");
-  assert.equal(byName.get("cas-cli").repo, "pengmide/qdm-cas-cli");
   assert.equal(byName.get("qdm-metric-cli").private, true);
-  assert.equal(byName.get("qdm-sql-cli").private, true);
-  assert.equal(byName.get("cas-cli").private, true);
   assert.equal(byName.has("qdm-cmr-cli"), false);
   assert.equal(byName.has("qdm-indicators-cli"), false);
+  assert.equal(byName.has("qdm-sql-cli"), false);
+  assert.equal(byName.has("cas-cli"), false);
 });
 
-test("qdm cli binary lists include metric and sql cli", () => {
+test("qdm cli binary lists include metric cli only", () => {
   assert.deepEqual(qdmCliBinaries, [
     "data-harness-cli",
     "qdm-metric-cli",
-    "qdm-sql-cli",
-    "cas-cli",
   ]);
   assert.deepEqual(localPathToolNames, [
-    "cas-cli",
     "qdm-metric-cli",
-    "qdm-sql-cli",
   ]);
 });
 
@@ -983,7 +976,7 @@ test("download progress uses a short live line in narrow terminals", async () =>
     };
 
     await download("https://example.invalid/asset.bin", target, {}, {
-      progressLabel: "cas-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
+      progressLabel: "qdm-metric-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
       progressWriter: {
         columns,
         write: (chunk) => writes.push(String(chunk))
@@ -1000,7 +993,7 @@ test("download progress uses a short live line in narrow terminals", async () =>
     .filter((line) => line.startsWith("下载中"));
   assert.ok(liveLines.length >= 1);
   assert.ok(liveLines.every((line) => terminalTextWidth(line) < columns));
-  assert.match(output, /下载完成 cas-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 2\.6 MB\/2\.6 MB\n$/);
+  assert.match(output, /下载完成 qdm-metric-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 2\.6 MB\/2\.6 MB\n$/);
   assert.doesNotMatch(output, /\r/);
   assert.match(output, /\u001b\[1G/);
   assert.doesNotMatch(output, /\u001b\[1A/);
@@ -1033,7 +1026,7 @@ test("download progress live line remains short after terminal resize", async ()
     };
 
     await download("https://example.invalid/asset.bin", target, {}, {
-      progressLabel: "cas-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
+      progressLabel: "qdm-metric-cli-v0.0.2-darwin-arm64-with-a-very-long-name.tar.gz",
       progressWriter: writer
     });
   } finally {
@@ -1048,7 +1041,7 @@ test("download progress live line remains short after terminal resize", async ()
 
   assert.ok(liveLines.length >= 2);
   assert.ok(liveLines.every((line) => terminalTextWidth(line) < writer.columns));
-  assert.match(output, /下载完成 cas-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 10 B\/10 B\n$/);
+  assert.match(output, /下载完成 qdm-metric-cli-v0\.0\.2-darwin-arm64-with-a-very-long-name\.tar\.gz 100% 10 B\/10 B\n$/);
   assert.doesNotMatch(output, /\r/);
   assert.match(output, /\u001b\[1G/);
   assert.doesNotMatch(output, /\u001b\[1A/);
@@ -1147,21 +1140,17 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("data-harn
   assert.equal(writes.filter((line) => line.includes(".sha256")).length, 0);
 });
 
-test("local config exports workspace CAS config dir", () => {
+test("local config exports metric cli path only", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
 
   writeLocalConfig(workspace, { overwrite: true });
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  const casDir = path.join(workspace, ".qdm-auth", "cas").replaceAll("\\", "/");
-  assert.match(env, new RegExp(`export QDM_CAS_CONFIG_DIR="${casDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`));
   assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli"/);
-  assert.match(env, /export QDM_SQL_CLI=".*qdm-sql-cli"/);
-  assert.doesNotMatch(env, /QDM_CMR_CLI|QDM_INDICATORS_CLI/);
+  assert.doesNotMatch(env, /QDM_SQL_CLI|QDM_CAS_CLI|QDM_CAS_CONFIG_DIR|QDM_CMR_CLI|QDM_INDICATORS_CLI/);
   assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
-  assert.match(harnessConfig, /qdm_sql_cli: .*qdm-sql-cli/);
-  assert.doesNotMatch(harnessConfig, /qdm_cmr_cli|qdm_indicators_cli/);
+  assert.doesNotMatch(harnessConfig, /qdm_sql_cli|qdm_cas_cli|qdm_cmr_cli|qdm_indicators_cli/);
   assert.match(harnessConfig, /authz:\n  mode: off/);
   assert.match(harnessConfig, /allow_local_blob: true/);
 });
@@ -1213,143 +1202,6 @@ test("ensureLocalAuthBlob copies fixture and keeps existing blob", () => {
 test("ensureLocalAuthBlob fails when fixture is missing", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   assert.throws(() => ensureLocalAuthBlob(workspace), /data-auth fixture missing/);
-});
-
-test("configure tokens fetches sql token from CAS rtp app", async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const binDir = path.join(workspace, "bin");
-  const casDir = path.join(workspace, ".qdm-auth", "cas");
-  const casLog = path.join(workspace, "cas.log");
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.mkdirSync(casDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
-printf '%s\\n' "$*" >> "${casLog}"
-case "$*" in
-  "token --app rtp") echo sql-token ;;
-  *) exit 2 ;;
-esac
-`, { mode: 0o755 });
-  const tokenFile = path.join(workspace, "qdm-sql-cli.token");
-  fs.writeFileSync(path.join(binDir, binaryName("qdm-sql-cli")), `#!/bin/sh
-if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
-  printf '%s\\n' "$3" > "${tokenFile}"
-  exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
-  test -s "${tokenFile}"
-  exit $?
-fi
-exit 2
-`, { mode: 0o755 });
-
-  await configureTokens(workspace, casDir);
-
-  assert.equal(fs.readFileSync(casLog, "utf8"), "token --app rtp\n");
-  assert.equal(fs.readFileSync(tokenFile, "utf8"), "sql-token\n");
-});
-
-test("CAS authentication retries with cached username and hides HTML errors", { skip: process.platform === "win32" }, async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const binDir = path.join(workspace, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
-if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
-  mkdir -p "$QDM_CAS_CONFIG_DIR"
-  printf '%s' "$6" > "$QDM_CAS_CONFIG_DIR/credentials.enc"
-  exit 0
-fi
-if [ "$1" = "token" ] && [ "$2" = "--app" ] && [ "$3" = "rtp" ]; then
-  if [ "$(cat "$QDM_CAS_CONFIG_DIR/credentials.enc")" = "correct-password" ]; then
-    echo sql-token
-    exit 0
-  fi
-  printf '<!DOCTYPE html><html><body>login failed</body></html>\n' >&2
-  exit 1
-fi
-exit 2
-`, { mode: 0o755 });
-
-  const usernames = ["alice", ""];
-  const passwords = ["wrong-password", "correct-password"];
-  const warnings = [];
-  const originalWarn = console.warn;
-  console.warn = (message) => warnings.push(String(message));
-  try {
-    const casDir = await configureCasAuthentication(workspace, {
-      askUsername: async () => usernames.shift(),
-      askPassword: async () => passwords.shift()
-    });
-    assert.equal(fs.readFileSync(path.join(casDir, "credentials.enc"), "utf8"), "correct-password");
-  } finally {
-    console.warn = originalWarn;
-  }
-  assert.equal(usernames.length, 0);
-  assert.match(warnings.join("\n"), /CAS 账号或密码验证不通过，请重新输入/);
-  assert.doesNotMatch(warnings.join("\n"), /DOCTYPE|<html/i);
-});
-
-test("failed CAS authentication preserves existing credentials and returns a clean error", { skip: process.platform === "win32" }, async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const binDir = path.join(workspace, "bin");
-  const casDir = path.join(workspace, ".qdm-auth", "cas");
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.mkdirSync(casDir, { recursive: true });
-  fs.writeFileSync(path.join(casDir, "credentials.enc"), "existing-credentials");
-  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
-if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
-  mkdir -p "$QDM_CAS_CONFIG_DIR"
-  printf 'invalid-credentials' > "$QDM_CAS_CONFIG_DIR/credentials.enc"
-  exit 0
-fi
-printf '<html><body>Unauthorized</body></html>\n' >&2
-exit 1
-`, { mode: 0o755 });
-
-  await assert.rejects(
-    configureCasAuthentication(workspace, { casUsername: "alice", casPassword: "wrong-password" }),
-    (error) => error.message === "CAS 账号或密码验证不通过" && !/<html/i.test(error.message)
-  );
-  assert.equal(fs.readFileSync(path.join(casDir, "credentials.enc"), "utf8"), "existing-credentials");
-  assert.equal(fs.readdirSync(workspace).some((name) => name.startsWith(".cas-auth-")), false);
-});
-
-test("auth recreates deleted CAS auth directory and refreshes SQL token", { skip: process.platform === "win32" }, async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const binDir = path.join(workspace, "bin");
-  const casLog = path.join(workspace, "cas.log");
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, binaryName("cas-cli")), `#!/bin/sh
-printf '%s\\n' "$*" >> "${casLog}"
-if [ "$1" = "config" ] && [ "$2" = "set-credentials" ]; then
-  mkdir -p "$QDM_CAS_CONFIG_DIR"
-  printf 'encrypted\\n' > "$QDM_CAS_CONFIG_DIR/credentials.enc"
-  exit 0
-fi
-case "$*" in
-  "token --app rtp") echo sql-token ;;
-  *) exit 2 ;;
-esac
-`, { mode: 0o755 });
-  fs.writeFileSync(path.join(binDir, binaryName("qdm-metric-cli")), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  const tokenFile = path.join(workspace, "qdm-sql-cli.token");
-  fs.writeFileSync(path.join(binDir, binaryName("qdm-sql-cli")), `#!/bin/sh
-if [ "$1" = "config" ] && [ "$2" = "set-token" ]; then
-  printf '%s\\n' "$3" > "${tokenFile}"
-  exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "check-token" ]; then
-  test -s "${tokenFile}"
-  exit $?
-fi
-exit 2
-`, { mode: 0o755 });
-
-  const result = await authCommand({ dir: workspace, casUsername: "new-user", casPassword: "new-password" });
-
-  assert.equal(result.casDir, path.join(workspace, ".qdm-auth", "cas"));
-  assert.equal(fs.readFileSync(path.join(result.casDir, "credentials.enc"), "utf8"), "encrypted\n");
-  assert.equal(fs.readFileSync(tokenFile, "utf8"), "sql-token\n");
-  assert.match(fs.readFileSync(casLog, "utf8"), /config set-credentials --username new-user --password new-password/);
 });
 
 test("agent choices include OpenClaw, Hermes, both, and all", () => {
@@ -1439,14 +1291,12 @@ function createDoctorWorkspace(agent) {
     "wikis/dims",
     "wikis/rules",
     "bin",
-    ".qdm-auth/cas",
   ]) {
     fs.mkdirSync(path.join(workspace, dir), { recursive: true });
   }
 
   fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
   fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
-  fs.writeFileSync(path.join(workspace, ".qdm-auth", "cas", "credentials.enc"), "encrypted-test-credentials");
   for (const binary of qdmCliBinaries) {
     fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
@@ -1464,14 +1314,11 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
   }
 });
 
-test("update doctor treats missing agent hooks and auth as non-blocking only", async () => {
+test("update doctor treats missing agent hooks as non-blocking only", async () => {
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook .openclaw" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CAS credentials file" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "CMR token" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Indicators token" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "SQL token" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
+  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "config CLI paths" }), false);
 });
 
 test("skip wikis check passes skip checks to build-index", async () => {

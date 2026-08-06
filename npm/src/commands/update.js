@@ -16,11 +16,7 @@ import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/lo
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
-    check.name.startsWith("Agent hook .") ||
-    check.name === "CAS credentials file" ||
-    check.name === "CMR token" ||
-    check.name === "Indicators token" ||
-    check.name === "SQL token";
+    check.name.startsWith("Agent hook .");
 }
 
 async function npmLatest() {

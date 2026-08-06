@@ -3,7 +3,6 @@ package context
 import (
 	"os"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -15,14 +14,12 @@ import (
 
 const multiSingleCandidateLimit = 20
 
-var selectFromSQLPattern = regexp.MustCompile(`(?is)\bselect\b.+\bfrom\b`)
-
 var constraints = []string{
 	"values_must_come_from_cli",
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"when SQL CLI reports token expired, unauthorized, 401, or login failure, use the Auth preflight result first; if CAS credentials are configured, source config/qdm-cli-paths.env, run \"$QDM_CAS_CLI\" token --app rtp, update the SQL CLI with config set-token, then retry once; if CAS credentials are missing, do not start QR login. Metric queries use qdm-metric-cli only; when authz is on, PI hook injects --data-auth/--auth-blob for analysis execute and --auth-blob for auth describe; to list current user scopes run auth describe; do not invent auth flags; do not call qdm-cmr-cli or qdm-indicators-cli",
+	"Metric queries use qdm-metric-cli only; when authz is on, PI hook injects --data-auth/--auth-blob for analysis execute and --auth-blob for auth describe; to list current user scopes run auth describe; do not invent auth flags; do not call qdm-cmr-cli, qdm-indicators-cli, qdm-sql-cli, or cas-cli",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -133,17 +130,6 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 	}
 
 	plan := WikiPlan{Mode: sessionstate.ModeFree, Reason: "no_recall_hit"}
-	if isSQLPassthroughQuestion(question) {
-		plan.Reason = "free_sql_passthrough"
-		add("rules/qdm-sql-cli/spec.md", "free SQL passthrough rule")
-		response := harness.ContextResponse{
-			Question:     question,
-			ContextFiles: refs,
-			Instruction:  instructionForPlan(plan),
-			Constraints:  constraints,
-		}
-		return response, plan
-	}
 
 	matches := RecallMatches(index, question, 0)
 	hits := recallHitsFromMatches(index, matches)
@@ -237,14 +223,6 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 		Constraints:  constraints,
 	}
 	return response, plan
-}
-
-func isSQLPassthroughQuestion(question string) bool {
-	compact := strings.ToLower(strings.Join(strings.Fields(question), ""))
-	if strings.Contains(compact, "执行sql") {
-		return true
-	}
-	return selectFromSQLPattern.MatchString(question)
 }
 
 func shouldPrioritizeReportConcept(question string, selected selectedReportConcept) bool {
@@ -793,7 +771,7 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. If SQL token is expired, use Auth preflight first; refresh through config/qdm-cli-paths.env and $QDM_CAS_CLI only when CAS credentials are configured, using app rtp for SQL; do not start QR login. Metric CLI uses encrypted auth-blob via PI authz hook, not CAS set-token. When the user asks about their data permissions or scopes, run qdm-metric-cli auth describe."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. Metric CLI uses encrypted auth-blob via PI authz hook. When the user asks about their data permissions or scopes, run qdm-metric-cli auth describe."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."

@@ -48,8 +48,6 @@ type PathsConfig struct {
 }
 
 type CLIConfig struct {
-	QDMSQLCLI    string
-	QDMCasCLI    string
 	QDMMetricCLI string
 }
 
@@ -151,14 +149,10 @@ func LoadConfig(root string) (Config, error) {
 			}
 		case "cli":
 			switch key {
-			case "qdm_sql_cli":
-				cfg.CLI.QDMSQLCLI = value
-			case "qdm_cas_cli":
-				cfg.CLI.QDMCasCLI = value
 			case "qdm_metric_cli":
 				cfg.CLI.QDMMetricCLI = value
-			case "qdm_cmr_cli", "qdm_indicators_cli":
-				// Removed legacy data CLIs; ignore leftover keys so old workspaces still load.
+			case "qdm_sql_cli", "qdm_cas_cli", "qdm_cmr_cli", "qdm_indicators_cli":
+				// Removed legacy CLIs; ignore leftover keys so old workspaces still load.
 			default:
 				return Config{}, fmt.Errorf("%s: unsupported cli key %q", ConfigRel, key)
 			}
