@@ -1329,7 +1329,19 @@ test("skip wikis check passes skip checks to build-index", async () => {
   const cliPath = path.join(binDir, binaryName("data-harness-cli"));
   fs.writeFileSync(cliPath, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logPath}"\n`, { mode: 0o755 });
 
-  await buildAndCheck(workspace, { skipWikisCheck: true, yes: true });
+  // buildAndCheck 会通过 console.log/console.warn 打印索引摘要；该测试作为
+  // node --test 子进程运行时，向真实 stdout 写入会污染父子进程间的测试协议
+  // 二进制流，导致 "Unable to deserialize cloned data" 反序列化错误，故静默日志。
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    await buildAndCheck(workspace, { skipWikisCheck: true, yes: true });
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+  }
 
   const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
   assert.deepEqual(calls, [
