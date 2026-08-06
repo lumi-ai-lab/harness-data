@@ -249,6 +249,25 @@ test("isMetricAuthDescribe and injectAuthDescribeBlob", () => {
   assert.doesNotMatch(rewritten, /\$QDM_METRIC_CLI/);
 });
 
+test("applyAuthzToToolCall refuses model-supplied blob when unbound and allowLocalBlob false", () => {
+  const event = {
+    toolName: "bash",
+    input: {
+      command:
+        'qdm-metric-cli auth describe --auth-blob "$(cat config/dev-auth.blob)"',
+    },
+  };
+  const result = applyAuthzToToolCall(event, {
+    mode: "on",
+    blob: null,
+    allowLocalBlob: false,
+  });
+  assert.equal(result?.block, true);
+  assert.match(result.reason, /refusing model-supplied/i);
+  // Command must not be rewritten into a runnable form with fixture blob.
+  assert.match(event.input.command, /cat config\/dev-auth\.blob/);
+});
+
 test("applyAuthzToToolCall injects auth describe without data-auth", () => {
   const blocked = {
     toolName: "bash",
@@ -740,4 +759,91 @@ process.stdin.on("end", () => {
       assert.match(event.input.command, /--data-auth/);
       assert.match(event.input.command, new RegExp(ENVELOPE_BLOB.replace(/\./g, "\\.")));
     });
+});
+
+test("extension tool_call re-binds Lumi envelope without prior context event", (t) => {
+  const root = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  allow_local_blob: false
+`,
+  });
+  const envelopeDir = mkdtempSync(join(tmpdir(), "qdm-lumi-rebind-"));
+  t.after(() => rmSync(envelopeDir, { force: true, recursive: true }));
+  writeEnvelope(envelopeDir, { sessionId: "sess-rebind" });
+
+  const prevDir = process.env.LUMI_REQUESTER_CONTEXT_DIR;
+  process.env.LUMI_REQUESTER_CONTEXT_DIR = envelopeDir;
+  t.after(() => {
+    if (prevDir === undefined) delete process.env.LUMI_REQUESTER_CONTEXT_DIR;
+    else process.env.LUMI_REQUESTER_CONTEXT_DIR = prevDir;
+  });
+
+  const handlers = new Map();
+  qdmHarnessExtension({
+    cwd: root,
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+  });
+
+  const ctx = {
+    cwd: root,
+    sessionManager: { getSessionId: () => "sess-rebind" },
+    ui: { notify() {}, setStatus() {} },
+  };
+
+  // Skip context bind — only tool_call path should resolve envelope.
+  const event = {
+    toolName: "bash",
+    input: {
+      command:
+        'qdm-metric-cli auth describe --auth-blob "$(cat config/dev-auth.blob)"',
+    },
+  };
+  const result = handlers.get("tool_call")(event, ctx);
+  assert.equal(result, undefined);
+  assert.match(event.input.command, /--auth-blob/);
+  assert.match(event.input.command, new RegExp(ENVELOPE_BLOB.replace(/\./g, "\\.")));
+  assert.doesNotMatch(event.input.command, /dev-auth\.blob/);
+  assert.doesNotMatch(event.input.command, /--data-auth/);
+});
+
+test("extension tool_call blocks model cat fixture when unbound and allow_local_blob false", (t) => {
+  const root = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  allow_local_blob: false
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-test-user
+`,
+  });
+  // Fixture on disk must not be used when allow_local_blob is false.
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+
+  const handlers = new Map();
+  qdmHarnessExtension({
+    cwd: root,
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+  });
+  const ctx = {
+    cwd: root,
+    sessionManager: { getSessionId: () => "sess-no-host" },
+    ui: { notify() {}, setStatus() {} },
+  };
+
+  const event = {
+    toolName: "bash",
+    input: {
+      command:
+        'qdm-metric-cli auth describe --auth-blob "$(cat config/dev-auth.blob)"',
+    },
+  };
+  const result = handlers.get("tool_call")(event, ctx);
+  assert.equal(result?.block, true);
+  assert.match(result.reason, /host blob not bound|refusing/i);
+  // Still the original command (blocked, not executed with fixture).
+  assert.match(event.input.command, /dev-auth\.blob/);
 });

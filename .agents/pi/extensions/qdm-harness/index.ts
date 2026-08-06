@@ -367,14 +367,43 @@ export default function qdmHarnessExtension(pi: {
   pi.on?.("tool_call", (event, ctx) => {
     const config = loadAuthzConfig(projectRoot);
     const metricCliPath = resolveMetricCliPath(projectRoot, config);
-    const turn = authzStore.getCurrentTurn(sessionId(ctx));
+
+    // Re-bind on tool_call if context-time bind missed (sessionId late / envelope timing).
+    // resolveAuthBlob still uses envelopeSessionId + LUMI_REQUESTER_CONTEXT_DIR.
+    let turn = authzStore.getCurrentTurn(sessionId(ctx));
+    if (config.mode === "on" && !turn?.blob) {
+      const rebound = bindAuthzForTurn(projectRoot, authzStore, ctx);
+      turn = authzStore.getCurrentTurn(sessionId(ctx));
+      if (
+        process.env.QDM_HARNESS_DIAG === "1" &&
+        rebound.mode === "on"
+      ) {
+        const sid = envelopeSessionId(ctx) || "(empty)";
+        const envDir = process.env.LUMI_REQUESTER_CONTEXT_DIR ? "set" : "unset";
+        if (rebound.bound) {
+          ctx?.ui?.notify?.(
+            `QDM Authz diag: tool_call re-bind ok source=${rebound.source} sid=${sid} envDir=${envDir}`,
+            "info",
+          );
+        } else {
+          ctx?.ui?.notify?.(
+            `QDM Authz diag: tool_call re-bind failed sid=${sid} envDir=${envDir} err=${rebound.error || "unknown"}`,
+            "warning",
+          );
+        }
+      }
+    }
+
     const authzResult = applyAuthzToToolCall(event as PiToolCallEvent, {
       mode: config.mode,
       blob: turn?.blob ?? null,
       metricCliPath,
-      missingReason: turn
+      allowLocalBlob: config.allowLocalBlob,
+      missingReason: turn?.blob
         ? undefined
-        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe",
+        : config.allowLocalBlob === false
+          ? "authz: host blob not bound; cannot run gated metric-cli under allow_local_blob=false (refusing any model-supplied --auth-blob)"
+          : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe",
     });
     if (authzResult?.block) {
       return authzResult;

@@ -325,7 +325,27 @@ export function injectAuthDescribeBlob(command, blob, metricCliPath = "") {
 }
 
 /**
+ * True when the command already carries model-supplied auth material
+ * (--auth-blob / --auth-json / --data-auth). Used under allow_local_blob=false
+ * to refuse cat-fixture false success instead of silent local identity.
+ *
+ * @param {string} command
+ */
+export function commandHasModelAuthFlags(command) {
+  if (typeof command !== "string" || !command) return false;
+  // Match on skeleton so quoted prose is ignored; flags in real argv still show.
+  const skeleton = maskQuotedAndHeredocRegions(command);
+  return /(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b/.test(skeleton);
+}
+
+/**
  * Apply authz policy to a bash tool_call event.
+ *
+ * When mode=on and a Host blob is bound, model-supplied --auth-blob/--auth-json/
+ * --data-auth are always stripped and replaced with the store blob.
+ * When mode=on and no blob is bound: block. If allowLocalBlob is false and the
+ * model already supplied auth flags, use an explicit refuse reason so operators
+ * never mistake fixture cat for Host identity.
  *
  * @param {{
  *   toolName?: string,
@@ -336,6 +356,7 @@ export function injectAuthDescribeBlob(command, blob, metricCliPath = "") {
  *   blob: string | null,
  *   metricCliPath?: string,
  *   missingReason?: string,
+ *   allowLocalBlob?: boolean,
  * }} options
  * @returns {{ block?: boolean, reason?: string } | undefined}
  */
@@ -357,9 +378,13 @@ export function applyAuthzToToolCall(event, options) {
   }
 
   if (!options.blob) {
-    const defaultReason = isDescribe
-      ? "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli auth describe"
-      : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute";
+    const refuseModel =
+      options.allowLocalBlob === false && commandHasModelAuthFlags(command);
+    const defaultReason = refuseModel
+      ? "authz: host blob not bound; refusing model-supplied --auth-blob under allow_local_blob=false"
+      : isDescribe
+        ? "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli auth describe"
+        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute";
     return {
       block: true,
       reason: options.missingReason || defaultReason,
@@ -370,6 +395,7 @@ export function applyAuthzToToolCall(event, options) {
     return { block: true, reason: "authz: invalid tool input" };
   }
 
+  // Always strip + re-inject from store so model cat(dev-auth.blob) cannot stick.
   if (isDescribe) {
     event.input.command = injectAuthDescribeBlob(
       command,
