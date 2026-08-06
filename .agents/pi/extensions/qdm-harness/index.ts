@@ -172,8 +172,14 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
     "# QDM Data Auth",
     "",
     "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`,",
-    "and `--auth-blob` for `qdm-metric-cli auth describe` (to answer what scopes the user has).",
+    "and `--auth-blob` for `qdm-metric-cli auth describe`.",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
+    "",
+    "While authz mode is on: after every successful `analysis execute`, the user-facing answer MUST include a short data-scope notice",
+    "(account scope: manageAreaId + categoryLevel1Id). The number is permission-scoped, not an unrestricted total.",
+    "`analysis execute` meta does not echo injected scope filters; obtain scope only via `qdm-metric-cli auth describe` (cache per session). Do not guess IDs or labels.",
+    'Call the scope "账号数据权限", never "用户筛选的品类", unless the user explicitly passed that filter.',
+    "When authz mode is off, do not add this notice.",
   ].join("\n");
 }
 
