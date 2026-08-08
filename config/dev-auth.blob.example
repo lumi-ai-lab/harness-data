@@ -17,5 +17,5 @@
 #     -in /path/to/harness-data/config/fixtures/local-test-auth.json \
 #     > /path/to/harness-data/config/dev-auth.blob
 #
-# Production should use Host _auth + _auth_user_id (optionally allow_local_blob: false).
+# Production should distribute an encrypted blob via HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID (keep allow_local_blob: true).
 # Do not commit config/dev-auth.blob (gitignored).
