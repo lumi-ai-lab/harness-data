@@ -9,7 +9,7 @@
 
 /** Binary token that can start a real metric-cli invocation. */
 const METRIC_BIN_SRC =
-  String.raw`(?:\$\{?QDM_METRIC_CLI\}?|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`;
+  String.raw`(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`;
 
 /** Subcommand patterns gated by authz (command-word form only). */
 const SUBCMD_ANALYSIS_EXECUTE = String.raw`analysis\s+execute`;
@@ -35,7 +35,7 @@ export function maskQuotedAndHeredocRegions(command) {
   };
 
   const isProtectedVarQuote = (inner) =>
-    /^\$\{?QDM_METRIC_CLI\}?$/.test(inner.trim());
+    /^\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?$/.test(inner.trim());
 
   while (i < n) {
     // Heredoc: <<[-]['|"]TAG['|"]

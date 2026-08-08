@@ -138,6 +138,15 @@ test("isMetricAnalysisExecute and strip/inject auth flags", () => {
     isMetricAnalysisExecute("./bin/qdm-metric-cli analysis execute --format json"),
     true,
   );
+  // ${QDM_METRIC_CLI:-default} 语法覆盖
+  assert.equal(
+    isMetricAnalysisExecute("${QDM_METRIC_CLI:-qdm-metric-cli} analysis execute --metric x"),
+    true,
+  );
+  assert.equal(
+    isMetricAnalysisExecute('"${QDM_METRIC_CLI:-qdm-metric-cli}" analysis execute --metric x'),
+    true,
+  );
   assert.equal(isMetricAnalysisExecute("qdm-metric-cli metric list"), false);
   assert.equal(isMetricAnalysisExecute("echo hello"), false);
   assert.equal(isMetricAnalysisExecute("qdm-metric-cli auth describe"), false);
@@ -212,6 +221,26 @@ test("isMetricAuthDescribe and injectAuthDescribeBlob", () => {
     true,
   );
   assert.equal(isMetricAuthDescribe("./bin/qdm-metric-cli auth describe"), true);
+  // ${QDM_METRIC_CLI:-default} 语法覆盖
+  assert.equal(
+    isMetricAuthDescribe("${QDM_METRIC_CLI:-qdm-metric-cli} auth describe"),
+    true,
+  );
+  assert.equal(
+    isMetricAuthDescribe('"${QDM_METRIC_CLI:-qdm-metric-cli}" auth describe'),
+    true,
+  );
+  assert.equal(
+    isMetricAuthDescribe('"${QDM_METRIC_CLI:-/workspace/bin/qdm-metric-cli}" auth describe'),
+    true,
+  );
+  // 两行赋值 + 变量引用（确保不回归）
+  assert.equal(
+    isMetricAuthDescribe(
+      'QDM_METRIC_CLI="${QDM_METRIC_CLI:-qdm-metric-cli}"\n"$QDM_METRIC_CLI" auth describe',
+    ),
+    true,
+  );
   assert.equal(isMetricAuthDescribe("qdm-metric-cli analysis execute --metric x"), false);
   assert.equal(isMetricAuthDescribe("qdm-metric-cli metric list"), false);
   assert.equal(
