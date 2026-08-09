@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir } from "../lib/paths.js";
 import { binaryName } from "../lib/platform.js";
-import { concreteAgentNames, qdmCliBinaries } from "../lib/config.js";
+import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 
 function existsExecutable(file) {
   try {
@@ -47,6 +47,12 @@ export async function collectDoctor(workspace, options = {}) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
+  const authz = readAuthzFromHarnessConfig(path.join(workspace, "config", "harness-config.yaml"));
+  if (authz && authz.mode === "on" && !authz.allowLocalBlob) {
+    add("authz allow_local_blob", false, "mode:on requires allow_local_blob:true (Host/Lumi fallback removed)");
+  } else {
+    add("authz allow_local_blob", true);
+  }
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
   add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));

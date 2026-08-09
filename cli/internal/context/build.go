@@ -19,7 +19,7 @@ var constraints = []string{
 	"do_not_estimate_missing_values",
 	"do_not_write_report_file_unless_requested",
 	"do_not_read_or_use_templates_unless_selectedTemplate_is_set",
-	"Metric queries use qdm-metric-cli only; when authz is on, PI hook injects --data-auth/--auth-blob for analysis execute and --auth-blob for auth describe; to list current user scopes run auth describe; do not invent auth flags; do not call qdm-cmr-cli, qdm-indicators-cli, qdm-sql-cli, or cas-cli",
+	"Metric queries use qdm-metric-cli only; when authz is on, Agent authz injects --data-auth/--auth-blob for analysis execute and --auth-blob for auth describe; to list current user scopes run auth describe; do not invent auth flags; do not call qdm-cmr-cli, qdm-indicators-cli, qdm-sql-cli, or cas-cli",
 }
 
 func Build(root, question string) (harness.ContextResponse, error) {
@@ -771,7 +771,7 @@ func inferTemplateQuestionIntents(question string) map[string]bool {
 }
 
 func instructionForPlan(plan WikiPlan) string {
-	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. Metric CLI uses encrypted auth-blob via PI authz hook. When the user asks about their data permissions or scopes, run qdm-metric-cli auth describe."
+	common := "All modes: read all contextFiles before running data CLI. Numeric values must come from CLI; do not estimate or invent. Deliver Harness analysis results, query results, reports, summaries, and diagnostic conclusions directly in the conversation by default. Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file. Metric CLI uses encrypted auth-blob via Agent authz hook/wrapper. When the user asks about their data permissions or scopes, run qdm-metric-cli auth describe."
 	switch plan.Mode {
 	case sessionstate.ModeSingle:
 		return common + " Harness mode: single. selectedPlaybook=" + plan.SelectedPlaybook + ". In single mode, only run data CLI commands explicitly described by selectedPlaybook. If the primary indicator command returns empty items or null values, do not switch to a broader report command unless selectedPlaybook explicitly says so; report the missing CLI evidence instead. Do not derive the primary metric by summing or transforming breakdown rows unless selectedPlaybook explicitly instructs it. After selected playbook data collection, answer the metric value directly with the CLI evidence. Do not run bin/data-harness-cli inject-template, and do not read, open, guess, or use template files."
