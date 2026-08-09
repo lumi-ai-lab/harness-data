@@ -1288,6 +1288,16 @@ test("WorkBuddy enablement detection distinguishes package from enabled plugin",
     enabledPlugins: { "qdm-harness@team-marketplace": false },
   }));
   status = detectWorkBuddyPluginEnabled({ homeDir: home, workspace });
+  assert.equal(status.configured, true);
+  assert.equal(status.enabled, true);
+  assert.equal(status.explicitlyDisabled, false);
+  assert.equal(status.settingsPath, path.join(settingsDir, "settings.json"));
+
+  fs.writeFileSync(path.join(workspace, ".codebuddy", "settings.local.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
+  }));
+  status = detectWorkBuddyPluginEnabled({ homeDir: home, workspace });
+  assert.equal(status.configured, true);
   assert.equal(status.enabled, false);
   assert.equal(status.explicitlyDisabled, true);
   assert.match(status.settingsPath, /settings\.local\.json$/);
@@ -1455,7 +1465,7 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   assert.equal(unknownEnablement?.status, "warning");
 
   fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
-    enabledPlugins: { "qdm-harness@team": false },
+    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
   }));
   const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
   assert.equal(disabled.checks.find((check) => check.name === "WorkBuddy plugin enablement")?.ok, false);

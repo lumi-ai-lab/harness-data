@@ -27,6 +27,10 @@ __pycache__/
 bin/
 !npm/bin/
 !npm/bin/**
+!.agents/workbuddy/bin/
+.agents/workbuddy/bin/*
+!.agents/workbuddy/bin/run-node
+!.agents/workbuddy/bin/run-node.cmd
 .bootstrap-cache/
 .bootstrap-cache*/
 plan/
