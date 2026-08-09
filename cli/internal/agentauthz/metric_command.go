@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var metricBinPattern = `(?:\$\{?QDM_METRIC_CLI\}?|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`
+var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`
 
 func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
@@ -54,7 +54,7 @@ func MaskQuotedAndHeredocRegions(command string) string {
 		}
 	}
 	isProtectedVarQuote := func(inner string) bool {
-		return regexp.MustCompile(`^\$\{?QDM_METRIC_CLI\}?$`).MatchString(strings.TrimSpace(inner))
+		return regexp.MustCompile(`^\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?$`).MatchString(strings.TrimSpace(inner))
 	}
 
 	for i < n {

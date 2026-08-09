@@ -73,3 +73,40 @@ func TestInjectAuthDescribeAddsOnlyAuthBlob(t *testing.T) {
 		t.Fatalf("expected auth blob injection: %s", got)
 	}
 }
+
+func TestMetricCommandDetectionMatchesDefaultExpansionSyntax(t *testing.T) {
+	// ${QDM_METRIC_CLI:-default} Bash parameter expansion with default value.
+	executeCases := []string{
+		`${QDM_METRIC_CLI:-qdm-metric-cli} analysis execute --metric saleAmt`,
+		`"${QDM_METRIC_CLI:-qdm-metric-cli}" analysis execute --metric saleAmt`,
+	}
+	for _, command := range executeCases {
+		if !IsMetricAnalysisExecute(command) {
+			t.Fatalf("expected analysis execute match for default-expansion: %s", command)
+		}
+		if !IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected gated match for default-expansion: %s", command)
+		}
+	}
+
+	describeCases := []string{
+		`${QDM_METRIC_CLI:-qdm-metric-cli} auth describe`,
+		`"${QDM_METRIC_CLI:-qdm-metric-cli}" auth describe`,
+		`"${QDM_METRIC_CLI:-/workspace/bin/qdm-metric-cli}" auth describe`,
+	}
+	for _, command := range describeCases {
+		if !IsMetricAuthDescribe(command) {
+			t.Fatalf("expected auth describe match for default-expansion: %s", command)
+		}
+		if !IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected gated match for default-expansion: %s", command)
+		}
+	}
+
+	// Two-line assignment + variable reference (ensure no regression).
+	multiLine := `QDM_METRIC_CLI="${QDM_METRIC_CLI:-qdm-metric-cli}"
+"$QDM_METRIC_CLI" auth describe`
+	if !IsMetricAuthDescribe(multiLine) {
+		t.Fatalf("expected auth describe match for multi-line assignment: %q", multiLine)
+	}
+}
