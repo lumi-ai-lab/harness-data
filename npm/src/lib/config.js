@@ -159,13 +159,16 @@ export function writeLocalConfig(workspace, options = {}) {
   const existing = options.overwrite ? readAuthzFromHarnessConfig(harness) : null;
   const authz = resolveAuthzForWrite(options, existing);
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
+  const metricPath = bin("qdm-metric-cli");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n\n${formatAuthzYaml(authz)}`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${metricPath}\n\n${formatAuthzYaml(authz)}`,
   );
+  // .env — POSIX export format (all platforms; Codex hooks use cli-shim.mjs which
+  // directly spawns the CLI, so this file is only for interactive shell usage)
   fs.writeFileSync(
     env,
-    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\n`,
+    `export QDM_METRIC_CLI="${metricPath}"\n`,
   );
   return { authz };
 }
@@ -213,6 +216,38 @@ export function linkAgents(workspace, agent) {
     fs.symlinkSync(source, target, "junction");
   }
   return pairs;
+}
+
+/**
+ * On Windows, patch agents/codex/hooks.json: replace each `bash -c '...'`
+ * command with `node "cli-shim.mjs" <args>`. The shim directly spawns
+ * data-harness-cli via spawnSync with shell:false, bypassing all Windows
+ * shells (PowerShell/CMD) and their incompatible quoting rules.
+ *
+ * `node` is a bare executable name in PATH (required by the npm package),
+ * recognised as a command — not a string expression — by every shell.
+ */
+export function patchCodexHooksForWindows(workspace) {
+  if (process.platform !== "win32") return;
+  const codexDir = path.join(workspace, "agents", "codex");
+  const hooksFile = path.join(codexDir, "hooks.json");
+  if (!fs.existsSync(hooksFile)) return;
+  const shimPath = path.join(codexDir, "hooks", "cli-shim.mjs").replaceAll("\\", "/");
+  if (!fs.existsSync(shimPath)) return; // cli-shim.mjs ships in the runtime bundle
+
+  const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  for (const event of Object.keys(hooks.hooks || {})) {
+    for (const entry of hooks.hooks[event]) {
+      for (const hook of entry.hooks || []) {
+        if (typeof hook.command !== "string") continue;
+        // Extract the CLI subcommand from: bash -c '... "$cli" context --format codex-hook'
+        const m = hook.command.match(/"\$cli"\s+(.+?)'\s*$/);
+        if (!m) continue;
+        hook.command = `node "${shimPath}" ${m[1]}`;
+      }
+    }
+  }
+  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
 }
 
 function parseConfigBool(value, fallback) {

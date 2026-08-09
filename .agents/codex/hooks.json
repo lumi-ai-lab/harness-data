@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" context --format codex-hook",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$cli\" context --format codex-hook'",
             "statusMessage": "Loading QDM Harness context"
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"$PWD\"; while [ \"$root\" != \"/\" ] && [ ! -x \"$root/bin/data-harness-cli\" ]; do root=\"$(dirname \"$root\")\"; done; if [ ! -x \"$root/bin/data-harness-cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$root/bin/data-harness-cli\" posttool --format codex-hook",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$cli\" posttool --format codex-hook'",
             "statusMessage": "Updating QDM Harness state"
           }
         ]

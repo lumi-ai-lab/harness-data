@@ -222,8 +222,8 @@ func isTemplateInjectionCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+inject-template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)["']?(\.[/\\])?(bin[/\\])?data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`[/\\]data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized)
 }
 
 func isTemplateStageCommand(command string) bool {
@@ -231,8 +231,8 @@ func isTemplateStageCommand(command string) bool {
 	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\./)?(bin/)?data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`/data-harness-cli["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+	return regexp.MustCompile(`(^|\s)["']?(\.[/\\])?(bin[/\\])?data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
+		regexp.MustCompile(`[/\\]data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {

@@ -1,17 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir } from "../lib/paths.js";
-import { binaryName } from "../lib/platform.js";
+import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries } from "../lib/config.js";
-
-function existsExecutable(file) {
-  try {
-    fs.accessSync(file, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function agentOk(workspace, name) {
   const target = path.join(workspace, `.${name}`);
@@ -25,12 +16,17 @@ function agentOk(workspace, name) {
 }
 
 function configPathsValid(workspace) {
-  const file = path.join(workspace, "config", "qdm-cli-paths.env");
-  if (!fs.existsSync(file)) return false;
-  const content = fs.readFileSync(file, "utf8");
-  const required = ["QDM_METRIC_CLI"];
-  const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
-  return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
+  const configDir = path.join(workspace, "config");
+
+  // .env (POSIX export — all platforms)
+  const envFile = path.join(configDir, "qdm-cli-paths.env");
+  if (fs.existsSync(envFile)) {
+    const content = fs.readFileSync(envFile, "utf8");
+    const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((m) => [m[1], m[2]]));
+    if (values.has("QDM_METRIC_CLI") && fs.existsSync(values.get("QDM_METRIC_CLI"))) return true;
+  }
+
+  return false;
 }
 
 export async function collectDoctor(workspace, options = {}) {
@@ -44,15 +40,15 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   for (const binary of qdmCliBinaries) {
-    add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
+    add(`bin/${binary}`, isExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
-  add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
-  add("legacy qdm-indicators-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
-  add("legacy qdm-sql-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-sql-cli"))));
-  add("legacy cas-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
+  add("legacy qdm-cmr-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
+  add("legacy qdm-indicators-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
+  add("legacy qdm-sql-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-sql-cli"))));
+  add("legacy cas-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {

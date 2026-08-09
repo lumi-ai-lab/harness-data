@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
-import { binaryName, platformKey } from "../lib/platform.js";
+import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
@@ -132,24 +132,15 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   return { tag, skipped: false };
 }
 
-function executable(file) {
-  try {
-    fs.accessSync(file, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function promptExecutable(runtimeDir, name, options = {}) {
   const auto = path.join(runtimeDir, "bin", binaryName(name));
-  if (executable(auto)) {
+  if (isExecutable(auto)) {
     ok(`自动识别 ${name}: ${auto}`);
     return auto;
   }
   const value = await ask(`请输入 ${name} 的绝对路径：`, options);
   const file = path.resolve(value);
-  if (!executable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
+  if (!isExecutable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
   return file;
 }
 
@@ -162,7 +153,7 @@ async function installLocalTools(runtimeDir, options = {}) {
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
       fs.copyFileSync(source, target);
-      fs.chmodSync(target, 0o755);
+      if (process.platform !== "win32") fs.chmodSync(target, 0o755);
     }
     installed[name] = { mode: "local-path", source };
   }
@@ -324,6 +315,7 @@ export async function installCommand(options = {}) {
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
+  patchCodexHooksForWindows(runtimeDir);
   blank();
 
   console.log("安装校验");

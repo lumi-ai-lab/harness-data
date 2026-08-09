@@ -11,7 +11,7 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, writeLocalConfig } from "../lib/config.js";
+import { hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
@@ -99,6 +99,11 @@ export async function updateWikis(runtimeDir, options, state) {
 }
 
 export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
+  // Unconditionally patch Codex hooks — a runtime bundle update restores
+  // hooks.json to the original `bash -c '...'` form, so we must re-patch
+  // even when agent junctions already exist.
+  patchCodexHooksForWindows(runtimeDir);
+
   if (hasAnyAgentHook(runtimeDir)) {
     ok("Agent Hook 已配置");
     return null;
@@ -109,6 +114,7 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
+  patchCodexHooksForWindows(runtimeDir);
   return { agent, linkedAgents };
 }
 
