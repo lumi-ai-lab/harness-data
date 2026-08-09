@@ -28,6 +28,7 @@ import {
   localTestAuthBlobRel,
   localTestAuthFixtureRel,
   localTestAuthUserId,
+  patchCodexHooksForWindows,
   qdmCliBinaries,
   writeLocalConfig,
 } from "../src/lib/config.js";
@@ -1206,6 +1207,37 @@ test("ensureLocalAuthBlob fails when fixture is missing", () => {
 
 test("agent choices include OpenClaw, Hermes, both, and all", () => {
   assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
+});
+
+test("Windows Codex hook patch targets the final CLI invocation", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const codexDir = path.join(workspace, "agents", "codex");
+  const hooksDir = path.join(codexDir, "hooks");
+  const hooksFile = path.join(codexDir, "hooks.json");
+  const shimPath = path.join(hooksDir, "cli-shim.mjs").replaceAll("\\", "/");
+  const originalCommand = "bash -c 'while [ -z \"$cli\" ]; do cli=found; done; if [ -z \"$cli\" ]; then exit 1; fi; \"$cli\" context --format codex-hook'";
+  const hooks = {
+    hooks: {
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: originalCommand }] }],
+    },
+  };
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(path.join(hooksDir, "cli-shim.mjs"), "");
+  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
+
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+  try {
+    patchCodexHooksForWindows(workspace);
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
+
+  const patched = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  assert.equal(
+    patched.hooks.UserPromptSubmit[0].hooks[0].command,
+    `node "${shimPath}" context --format codex-hook`,
+  );
 });
 
 test("links selected agent templates", () => {

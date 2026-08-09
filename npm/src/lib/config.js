@@ -240,8 +240,11 @@ export function patchCodexHooksForWindows(workspace) {
     for (const entry of hooks.hooks[event]) {
       for (const hook of entry.hooks || []) {
         if (typeof hook.command !== "string") continue;
-        // Extract the CLI subcommand from: bash -c '... "$cli" context --format codex-hook'
-        const m = hook.command.match(/"\$cli"\s+(.+?)'\s*$/);
+        // Extract only the final CLI invocation from:
+        // bash -c '... [ -z "$cli" ]; ...; "$cli" context --format codex-hook'
+        const invocationStart = hook.command.lastIndexOf('"$cli"');
+        if (invocationStart < 0) continue;
+        const m = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
         if (!m) continue;
         hook.command = `node "${shimPath}" ${m[1]}`;
       }
