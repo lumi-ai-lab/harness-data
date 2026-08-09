@@ -74,6 +74,18 @@ jobs:
             exit 1
           fi
 
+          workbuddy_version="$(node -p 'JSON.parse(require("fs").readFileSync(".agents/workbuddy/.codebuddy-plugin/plugin.json", "utf8")).version')"
+          if [[ "${workbuddy_version}" != "${VERSION}" ]]; then
+            echo "::error::WorkBuddy plugin version ${workbuddy_version} does not match tag ${VERSION_TAG}"
+            exit 1
+          fi
+
+          workbuddy_marketplace_version="$(node -p 'JSON.parse(require("fs").readFileSync(".agents/.codebuddy-plugin/marketplace.json", "utf8")).plugins.find((plugin) => plugin.name === "qdm-harness").version')"
+          if [[ "${workbuddy_marketplace_version}" != "${VERSION}" ]]; then
+            echo "::error::WorkBuddy marketplace version ${workbuddy_marketplace_version} does not match tag ${VERSION_TAG}"
+            exit 1
+          fi
+
           test -n "$(git ls-tree HEAD wikis | awk '{print $3}')"
           test "$(git -C wikis rev-parse HEAD)" = "$(git ls-tree HEAD wikis | awk '{print $3}')"
 

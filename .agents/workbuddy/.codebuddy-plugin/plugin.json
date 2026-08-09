@@ -1,0 +1,15 @@
+{
+  "name": "qdm-harness",
+  "version": "0.0.43",
+  "description": "为 WorkBuddy 注入 QDM Harness 上下文、运行约束和报告模板。",
+  "author": {
+    "name": "Lumi AI Lab"
+  },
+  "keywords": [
+    "qdm",
+    "harness",
+    "analytics"
+  ],
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json"
+}

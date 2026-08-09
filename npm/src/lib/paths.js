@@ -29,10 +29,21 @@ export function readUserState() {
   }
 }
 
+export function readWorkspaceState(workspace, options = {}) {
+  const resolvedWorkspace = path.resolve(workspace || defaultWorkspaceDir());
+  try {
+    return JSON.parse(fs.readFileSync(path.join(resolvedWorkspace, ".harness", "installer-state.json"), "utf8"));
+  } catch {
+    const userState = options.userState || readUserState();
+    if (!userState.lastInstallDir || path.resolve(userState.lastInstallDir) !== resolvedWorkspace) return {};
+    return userState;
+  }
+}
+
 export function writeState(workspace, patch) {
   const file = userStatePath();
   const state = {
-    ...readUserState(),
+    ...readWorkspaceState(workspace),
     lastInstallDir: workspace,
     updatedAt: new Date().toISOString(),
     ...patch

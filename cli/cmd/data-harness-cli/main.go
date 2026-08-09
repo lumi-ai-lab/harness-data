@@ -68,7 +68,7 @@ func run() error {
 		fs := flag.NewFlagSet("context", flag.ExitOnError)
 		question := fs.String("question", "", "question")
 		jsonOut := fs.Bool("json", false, "print json")
-		format := fs.String("format", "text", "output format: text, json, claude-hook, codex-hook, or agent-hook")
+		format := fs.String("format", "text", "output format: text, json, claude-hook, codex-hook, agent-hook, or workbuddy-hook")
 		_ = fs.Parse(os.Args[2:])
 		if *jsonOut {
 			*format = "json"
@@ -100,12 +100,24 @@ func run() error {
 			if ok {
 				return printCompactJSON(output)
 			}
+		case "workbuddy-hook":
+			input, err := dhcontext.ReadHookStdin()
+			if err != nil {
+				return err
+			}
+			ok, output, err := dhcontext.RunWorkBuddyHook(root, input)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return printCompactJSON(output)
+			}
 		default:
 			return fmt.Errorf("unsupported context --format: %s", *format)
 		}
 	case "posttool":
 		fs := flag.NewFlagSet("posttool", flag.ExitOnError)
-		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, or agent-hook")
+		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, agent-hook, or workbuddy-hook")
 		_ = fs.Parse(os.Args[2:])
 		if !isAgentHookFormat(*format) {
 			return fmt.Errorf("unsupported posttool --format: %s", *format)
@@ -113,6 +125,16 @@ func run() error {
 		input, err := posttool.ReadHookStdin()
 		if err != nil {
 			return err
+		}
+		if *format == "workbuddy-hook" {
+			ok, output, err := posttool.RunWorkBuddyHook(root, input)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return printCompactJSON(output)
+			}
+			return nil
 		}
 		ok, output, err := posttool.RunClaudeHook(root, input)
 		if err != nil {
@@ -127,7 +149,7 @@ func run() error {
 		if fs.NArg() != 0 {
 			return fmt.Errorf("inject-template does not accept arguments")
 		}
-		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current Claude session.")
+		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current agent session.")
 	case "stage":
 		return runStage(os.Args[2:])
 	case "show":
@@ -140,7 +162,7 @@ func run() error {
 
 func isAgentHookFormat(format string) bool {
 	switch format {
-	case "claude-hook", "codex-hook", "agent-hook":
+	case "claude-hook", "codex-hook", "agent-hook", "workbuddy-hook":
 		return true
 	default:
 		return false
@@ -1599,6 +1621,9 @@ func splitCSV(value string) []string {
 }
 
 func rootStart() string {
+	if projectDir := os.Getenv("CODEBUDDY_PROJECT_DIR"); projectDir != "" {
+		return projectDir
+	}
 	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
 		return projectDir
 	}
