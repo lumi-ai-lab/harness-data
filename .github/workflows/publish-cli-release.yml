@@ -144,6 +144,14 @@ jobs:
           cp -R .agents/pi runtime/agents/pi
           cp -R .agents/openclaw runtime/agents/openclaw
           cp -R .agents/hermes runtime/agents/hermes
+          cp -R .agents/workbuddy runtime/agents/workbuddy
+          cp -R .agents/.codebuddy-plugin runtime/agents/.codebuddy-plugin
+          test -f runtime/agents/.codebuddy-plugin/marketplace.json
+          test -f runtime/agents/workbuddy/.codebuddy-plugin/plugin.json
+          test -f runtime/agents/workbuddy/hooks/hooks.json
+          test -f runtime/agents/workbuddy/scripts/harness-hook.mjs
+          test -f runtime/agents/workbuddy/skills/qdm-harness/SKILL.md
+          chmod +x runtime/agents/workbuddy/bin/run-node runtime/agents/workbuddy/scripts/harness-hook.mjs
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
           mkdir -p runtime/config/fixtures

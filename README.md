@@ -35,7 +35,15 @@ Hermes-Agent 使用 `.hermes` 加载项目上下文、skill 和 hook：
 - 优先使用 Hermes Python plugin 的 `pre_llm_call` / `post_tool_call`
 - `agent-hooks/qdm-pre-llm-call.sh` 和 `agent-hooks/qdm-post-tool-call.sh` 作为 shell hook fallback，同样复用 `agent-hook` 格式
 
-本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
+
+- `UserPromptSubmit` 通过零依赖 `harness-hook.mjs` 调用 `context --format workbuddy-hook`
+- `PostToolUse` 匹配 `Bash|PowerShell|execute_command`，归一化为 `Bash` 后调用 `posttool --format workbuddy-hook`
+- 插件清单位于 `agents/workbuddy/.codebuddy-plugin/plugin.json`，本地 Marketplace 清单位于 `agents/.codebuddy-plugin/marketplace.json`；目录存在不等于插件已经安装或启用
+- 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
+- WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
+
+本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
 `context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
@@ -77,6 +85,14 @@ npx @lumi-ai-lab/harness-data install \
   --agent codex
 ```
 
+WorkBuddy 安装会准备本地 Marketplace；完成后在 WorkBuddy 插件管理中选择 **Add Marketplace**，添加 runtime 的 `agents` 目录，再安装并启用 `qdm-harness@lumi-harness-data`、reload plugins：
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --yes \
+  --agent workbuddy
+```
+
 CI 或非交互环境可用 token 环境变量完成 HTTPS 访问；同一个 token 也会用于下载私有 qdm CLI Release asset。token 不会写入 remote URL、安装状态或项目配置。
 
 ```bash
@@ -87,9 +103,9 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
   --github-token-env GITHUB_TOKEN
 ```
 
-`--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
+`--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。metric-cli 使用 auth-blob / data-auth 做数据权限（可用 `--data-auth` 开启本地测试）。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 使用 auth-blob / data-auth 做数据权限（可用 `--data-auth` 开启本地测试），但 `--agent workbuddy` 与 `--data-auth` 当前不兼容，安装器会直接拒绝该组合。
 
 更新工作目录：
 
@@ -196,6 +212,8 @@ Wikis 索引。因此，指标、报告、维度、规则或模板等普通知�
 ./bin/data-harness-cli wikis recall-debug --question "会员复购为什么下降？"
 printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format claude-hook
 printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' | ./bin/data-harness-cli posttool --format claude-hook
+printf '{"session_id":"workbuddy-debug","prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format workbuddy-hook
+printf '{"session_id":"workbuddy-debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli stage template"}}' | ./bin/data-harness-cli posttool --format workbuddy-hook
 ./bin/data-harness-cli show member-repurchase --json
 ```
 
@@ -203,7 +221,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 目录结构
 
-- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`。
+- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`，WorkBuddy 则使用 `.agents/workbuddy` 原生插件包。
 - `bootstrap/cli-manifest.json`：npm 安装器下载 5 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。
@@ -252,6 +270,8 @@ authz:
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
 ### 数据权限（qdm-metric-cli，默认关闭）
+
+WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下 Agent authz 能力目前适用于 Pi 和 Codex，不适用于 WorkBuddy。
 
 `authz.mode` 默认 `off`。Hook 读取配置后立即退出，不识别或改写任何 Bash 命令。设为 `on` 后，Agent authz 适配器才会进入命令识别与授权流程，并保证：
 
