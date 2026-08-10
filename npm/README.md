@@ -24,13 +24,41 @@ or:
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
 ```
 
-Enable metric **data-auth** (authz) during install — writes `authz.mode: on`, copies the local-test encrypted blob, and uses local blob sources (env vars or config file) for authorization:
+Enable metric **data-auth** (authz) during install — default behavior; writes `authz.mode: on` and prompts for the auth blob and dev_user_id:
+
+```bash
+npx @lumi-ai-lab/harness-data install
+```
+
+Non-interactive install with flags:
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --auth-blob 'qdm1enc...' --auth-user-id 'your-user-id' --yes
+```
+
+Or via env vars:
+
+```bash
+HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
+npx @lumi-ai-lab/harness-data install --yes
+```
+
+Install **without** authz (requires password):
+
+```bash
+npx @lumi-ai-lab/harness-data install --no-auth
+# or non-interactive:
+npx @lumi-ai-lab/harness-data install --no-auth --auth-off-password 'qdmzt@2026' --yes
+```
+
+Dev/test shortcut using the built-in local-test fixture blob:
 
 ```bash
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
-The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
+With `--data-auth`, the shipped `config/fixtures/local-test-auth.blob` is used as fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
 
 Without a GitHub token, the installer interactively asks for a local absolute path to `qdm-metric-cli` and `harness-data-wikis`. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli` are no longer installed).
 
