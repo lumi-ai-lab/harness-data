@@ -124,11 +124,19 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
     };
   }
   if (existing) {
+    const mode = existing.mode === "on" ? "on" : "off";
+    let allowLocalBlob = existing.allowLocalBlob !== false;
+    // MVP convergence: Host/Lumi auth fallback has been removed, so
+    // allow_local_blob=false with mode=on is a dead-end config that can
+    // never authorize any gated command. Migrate it to true on update.
+    if (mode === "on" && !allowLocalBlob) {
+      allowLocalBlob = true;
+    }
     return {
-      mode: existing.mode === "on" ? "on" : "off",
+      mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      allowLocalBlob: existing.allowLocalBlob !== false,
+      allowLocalBlob,
     };
   }
   return {

@@ -1,6 +1,6 @@
 # Local data-auth fixtures
 
-Shared **local-only** metric data-auth materials for Harness when Host `_auth` is not available (for example no Lumi upstream yet).
+Shared **local-only** metric data-auth materials for Harness data-auth injection.
 
 | File | Purpose |
 | --- | --- |
@@ -35,7 +35,7 @@ authz:
   allow_local_blob: true
 ```
 
-Host `_auth` still wins when present.
+MVP only reads local blob sources (env vars or config file); no Host `_auth` or Lumi envelope.
 
 ## Regenerate blob
 

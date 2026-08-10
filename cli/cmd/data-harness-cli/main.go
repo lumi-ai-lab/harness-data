@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"harness-data/cli/internal/agentauthz"
 	dhcontext "harness-data/cli/internal/context"
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
@@ -62,6 +64,8 @@ func run() error {
 		return fmt.Errorf("cannot find harness root: %w", err)
 	}
 	switch os.Args[1] {
+	case "authz-hook":
+		return runAuthzHook(root, os.Args[2:])
 	case "wikis":
 		return runWikis(root, os.Args[2:])
 	case "context":
@@ -174,7 +178,31 @@ func printUsage() {
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|authz-hook|show>"
+}
+
+func runAuthzHook(root string, args []string) error {
+	fs := flag.NewFlagSet("authz-hook", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agent := fs.String("agent", "codex", "agent name")
+	if err := fs.Parse(args); err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError{Code: 2, Err: fmt.Errorf("authz-hook does not accept positional arguments")}
+	}
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	ok, output, err := agentauthz.Run(root, *agent, input)
+	if err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	if ok {
+		return printCompactJSON(output)
+	}
+	return nil
 }
 
 type showDocument struct {

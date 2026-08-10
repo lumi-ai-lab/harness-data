@@ -17,6 +17,7 @@ Claude Code 的 `PostToolUse` hook 调用：
 Codex 使用 `.codex/hooks.json` 配置同等事件：
 
 - `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
+- `PreToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli authz-hook --agent codex` 授权 `qdm-metric-cli` gated 命令
 - `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
 
 Pi 使用 `.pi/settings.json` 加载项目扩展：
@@ -263,21 +264,75 @@ authz:
   mode: off
   # blob_file: config/dev-auth.blob          # local only
   # dev_user_id: local-test-user             # required with blob_file; no code default
-  allow_local_blob: true                     # production: set false
+  allow_local_blob: true                     # admin-distributed local blob requires true
 ```
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
 ### 数据权限（qdm-metric-cli，默认关闭）
 
-WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下能力目前属于 Pi 接入。
+WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下 Agent authz 能力目前适用于 Pi 和 Codex，不适用于 WorkBuddy。
 
-`authz.mode` 默认 `off`，不影响现有行为。设为 `on` 后，PI 扩展在 `tool_call` 中保证：
+`authz.mode` 默认 `off`。Hook 读取配置后立即退出，不识别或改写任何 Bash 命令。设为 `on` 后，Agent authz 适配器才会进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
 - 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
 - 当前 turn 没有有效 blob / userId 时直接 **block** 上述调用
+
+Pi 的实现基于扩展 `tool_call` 事件读取授权信息，并在 tool call 阶段直接改写 Bash command。Codex 适配按同一思路实现：`PreToolUse matcher=Bash` 每次读取本地 blob 来源（环境变量或配置文件），然后直接把 gated `qdm-metric-cli` 命令改写成带 runtime auth flags 的命令。MVP 不接入 Host `_auth`，不读取 Lumi Envelope。
+
+无 wrapper 模式下，Codex `updatedInput.command` 这个必要传输面会承载完整 `qdm1enc...`，因为 `qdm-metric-cli` 当前只通过 `--auth-blob` 接收权限 blob。约束边界是：除 `updatedInput.command` 中执行所必需的 argv 外，hook 不额外在 stderr、诊断文案、context 文案或普通日志中输出完整 blob。模型自带的 `--auth-blob` / `--auth-json` / `--data-auth` 会先被剥离并替换成 runtime blob。
+
+`authz.mode=on` 时启用第二层 blob 来源隔离：
+
+```text
+普通 Bash
+  -> Codex PreToolUse
+  -> unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR
+  -> 执行原 Bash 命令
+
+qdm-metric-cli gated Bash
+  -> Codex PreToolUse
+  -> hook 读取本地 blob（env / config file）
+  -> hook strip 模型自带 auth flags
+  -> hook 直接返回 qdm-metric-cli --data-auth --auth-blob ...
+  -> 返回命令前 unset auth 来源 env
+```
+
+当前目标使用场景是：用户在 Codex App 或终端里使用 Harness，权限 blob 由管理员预先生成并分发到用户本机。Harness 只负责验证本地是否绑定了有效 blob，并在执行 `qdm-metric-cli analysis execute` / `qdm-metric-cli auth describe` 前注入权限参数；不负责生成、加密或解密 blob。
+
+管理员分发 blob 的推荐接入方式：
+
+```text
+管理员
+  -> 生成 qdm1enc... blob
+  -> 分发到用户本机 workspace 外，例如 ~/.qdm/auth/qdm-auth.blob
+  -> 文件权限 0600
+
+用户 Codex App
+  -> 启动 Codex 时提供 HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID
+  -> Codex PreToolUse hook 改写 gated qdm-metric-cli 命令
+  -> hook 直接注入 --auth-blob
+  -> qdm-metric-cli 做真实权限验证
+
+用户终端
+  -> 提供同一组 HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID
+  -> 在 Codex hook 生效的终端里直接执行 qdm-metric-cli 命令
+  -> qdm-metric-cli 做真实权限验证
+```
+
+配置要求：
+
+```yaml
+authz:
+  mode: on
+  allow_local_blob: true
+```
+
+`allow_local_blob=true` 是管理员分发本地 blob 场景的必要开关；若设为 `false`，Harness 会禁用所有本地 blob 来源（`HARNESS_AUTH_BLOB*` 和 `authz.blob_file`）。
+
+安全约束：管理员分发的 blob 文件建议放在 workspace 外，不提交、不让模型通过项目文件直接读取。`authz.mode=on` 时，Codex hook 会对普通 Bash 注入 `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR`，避免普通 Bash 继承 auth 来源 env；gated command 也会在直接注入 runtime blob 后先 unset 这些来源 env。`LUMI_REQUESTER_CONTEXT_DIR` 虽已不再读取，但为兼容旧运行环境仍一并清理。当前 Codex 没有 hook-only env 通道，因此该隔离依赖 Codex `PreToolUse` hook 被启用且可信。
 
 **安装器开关**（不必手改配置）：
 
@@ -303,23 +358,21 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 | 来源 | 说明 |
 | --- | --- |
-| Host `event._auth` + `_auth_user_id` | 理想旁路（需 ACP/Pi 透传；当前常不可用） |
-| **Lumi 文件信封** `LUMI_REQUESTER_CONTEXT_DIR` + `sha256(sessionId).json` | **当前生产可用 Host 旁路（方案 A）**；不受 `allow_local_blob` 屏蔽 |
-| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件；`allow_local_blob: false` 时禁用 |
-| `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置；`allow_local_blob: false` 时禁用 |
+| Host `event._auth` + `_auth_user_id` | Pi 主路径；Codex MVP 不接入 Host `_auth` |
+| `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID` | **管理员分发 blob 的推荐路径**：blob 文件放 workspace 外，文件权限建议 `0600`；`allow_local_blob: false` 时禁用。`authz.mode=on` 时普通 Bash 会被 PreToolUse 改写为先 unset 这些变量 |
+| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件；`allow_local_blob: false` 时禁用。`authz.mode=on` 时普通 Bash 会被 PreToolUse 改写为先 unset 这些变量 |
+| `authz.blob_file` + `authz.dev_user_id` | 本地文件配置；`dev_user_id` 必须显式配置；`allow_local_blob: false` 时禁用。若用于管理员分发 blob，建议配置 workspace 外绝对路径 |
 
-解析优先级：`event._auth` → Lumi 信封 → `HARNESS_AUTH_*` → `blob_file`。  
-Lumi 仍会写 ACP `_meta`（供未来方案 B）；Harness 现在不依赖它。信封文件名与 Lumi 一致：`hex(sha256(utf8(rawSessionId))) + ".json"`，按 session 精确 open，不枚举目录。
+解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-无上游（如未接 Lumi）时：默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。  
-生产若只信 Host（事件或 Lumi 信封）：装完后可把 `allow_local_blob` 改为 `false`。
+默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。管理员分发 blob 的正式使用场景保持 `allow_local_blob: true`，并把 blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 
 - `config/harness-config.yaml` → `cli.qdm_metric_cli`（安装器写 `…/bin/qdm-metric-cli`）
 - `config/qdm-cli-paths.env` → `export QDM_METRIC_CLI="..."`
 - 回退：仓库根下 `bin/qdm-metric-cli`
-- PI Hook 会把裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
+- `authz.mode=on` 时，Agent authz 会把受控命令中的裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
 
 仓库已提交 fixture 密文（`config/fixtures/`）；也可自行再生成工作副本（gitignored，勿提交 `config/dev-auth.blob`）：
 
@@ -330,7 +383,7 @@ go run ./scripts/auth_blob_encrypt.go \
   > /path/to/harness-data/config/dev-auth.blob
 ```
 
-分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id`、Lumi 信封 `_auth_user_id`，或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
+分槽 key 为 `sessionId::userId`；userId 来自本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
 
 ## Context 输出
 

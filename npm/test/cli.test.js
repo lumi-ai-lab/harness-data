@@ -29,6 +29,8 @@ import {
   localTestAuthFixtureRel,
   localTestAuthUserId,
   qdmCliBinaries,
+  readAuthzFromHarnessConfig,
+  resolveAuthzForWrite,
   writeLocalConfig,
 } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
@@ -1207,6 +1209,105 @@ test("local config overwrite preserves existing authz when dataAuth omitted", ()
   assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
 });
 
+test("resolveAuthzForWrite migrates allow_local_blob:false to true when mode=on", () => {
+  const migrated = resolveAuthzForWrite({}, {
+    mode: "on",
+    blobFile: "config/dev-auth.blob",
+    devUserId: "local-test-user",
+    allowLocalBlob: false,
+  });
+  assert.equal(migrated.mode, "on");
+  assert.equal(migrated.allowLocalBlob, true);
+  assert.equal(migrated.blobFile, "config/dev-auth.blob");
+  assert.equal(migrated.devUserId, "local-test-user");
+});
+
+test("resolveAuthzForWrite preserves allow_local_blob:false when mode=off", () => {
+  const preserved = resolveAuthzForWrite({}, {
+    mode: "off",
+    blobFile: "",
+    devUserId: "",
+    allowLocalBlob: false,
+  });
+  assert.equal(preserved.mode, "off");
+  assert.equal(preserved.allowLocalBlob, false);
+});
+
+test("writeLocalConfig overwrites and migrates allow_local_blob:false to true", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
+  // Simulate old production config with allow_local_blob: false
+  fs.writeFileSync(
+    path.join(workspace, "config", "harness-config.yaml"),
+    "paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: bin/qdm-metric-cli\n\nauthz:\n  mode: on\n  allow_local_blob: false\n",
+  );
+  writeLocalConfig(workspace, { overwrite: true });
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, /allow_local_blob: true/);
+});
+
+test("doctor fails on authz mode=on with allow_local_blob=false", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const dir of [
+    "agents/codex",
+    "bootstrap",
+    "wikis/metrics",
+    "wikis/reports",
+    "wikis/dims",
+    "wikis/rules",
+    "bin",
+    "config",
+  ]) {
+    fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  }
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
+  for (const binary of qdmCliBinaries) {
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  fs.writeFileSync(
+    path.join(workspace, "config", "harness-config.yaml"),
+    "paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: bin/qdm-metric-cli\n\nauthz:\n  mode: on\n  allow_local_blob: false\n",
+  );
+  fs.writeFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), `export QDM_METRIC_CLI="${path.join(workspace, "bin", "qdm-metric-cli")}"\n`);
+  linkAgents(workspace, "codex");
+
+  const report = await collectDoctor(workspace);
+  const check = report.checks.find((c) => c.name === "authz allow_local_blob");
+  assert.ok(check, "missing authz allow_local_blob check");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /Host\/Lumi fallback removed/);
+});
+
+test("doctor passes on authz mode=on with allow_local_blob=true", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const dir of [
+    "agents/codex",
+    "bootstrap",
+    "wikis/metrics",
+    "wikis/reports",
+    "wikis/dims",
+    "wikis/rules",
+    "bin",
+    "config",
+  ]) {
+    fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  }
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
+  for (const binary of qdmCliBinaries) {
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+  linkAgents(workspace, "codex");
+
+  const report = await collectDoctor(workspace);
+  const check = report.checks.find((c) => c.name === "authz allow_local_blob");
+  assert.ok(check, "missing authz allow_local_blob check");
+  assert.equal(check.ok, true);
+});
+
 test("ensureLocalAuthBlob copies fixture and keeps existing blob", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const fixtureDir = path.join(workspace, "config", "fixtures");
@@ -1309,6 +1410,20 @@ test("WorkBuddy version detection reads the cross-platform product manifest", ()
   fs.mkdirSync(productDir, { recursive: true });
   fs.writeFileSync(path.join(productDir, "product.json"), JSON.stringify({ genieVersion: "5.3.8" }));
   assert.equal(detectWorkBuddyVersion({ workBuddyAppPath: appRoot }), "5.3.8");
+});
+
+test("codex agent template includes authz PreToolUse hook and guidance", () => {
+  const hooksPath = path.join(root, "..", ".agents", "codex", "hooks.json");
+  const hooksConfig = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+  const preToolUse = hooksConfig.hooks.PreToolUse;
+  assert.ok(Array.isArray(preToolUse), "missing PreToolUse hooks");
+  const bashHook = preToolUse.find((entry) => entry.matcher === "Bash");
+  assert.ok(bashHook, "missing Bash PreToolUse hook");
+  const commands = bashHook.hooks.map((hook) => hook.command).join("\n");
+  assert.match(commands, /authz-hook --agent codex/);
+  assert.match(commands, /exit 2/);
+  const instructions = fs.readFileSync(path.join(root, "..", ".agents", "codex", "AGENTS.md"), "utf8");
+  assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
 });
 
 test("links selected agent templates", () => {
@@ -1638,7 +1753,7 @@ test("update wikis discards local commits, tracked changes, and untracked files"
   fs.writeFileSync(path.join(seed, "index.md"), "remote-v2\n");
   git(["add", "index.md"], seed);
   git(["commit", "-m", "remote update"], seed);
-  git(["push", "origin", "master"], seed);
+  git(["push", "origin", "HEAD:master"], seed);
 
   const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
 

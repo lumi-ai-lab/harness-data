@@ -62,6 +62,12 @@ export async function collectDoctor(workspace, options = {}) {
     add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
+  const authz = readAuthzFromHarnessConfig(path.join(workspace, "config", "harness-config.yaml"));
+  if (authz && authz.mode === "on" && !authz.allowLocalBlob) {
+    add("authz allow_local_blob", false, "mode:on requires allow_local_blob:true (Host/Lumi fallback removed)");
+  } else {
+    add("authz allow_local_blob", true);
+  }
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
   add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
@@ -71,7 +77,6 @@ export async function collectDoctor(workspace, options = {}) {
 
   const configuredAgent = selectedAgent(workspace, options);
   const workBuddySelected = configuredAgent === "workbuddy";
-  const authz = readAuthzFromHarnessConfig(path.join(workspace, "config", "harness-config.yaml"));
   if (workBuddySelected) {
     add("WorkBuddy authz.mode=off", authz?.mode !== "on", authz?.mode === "on" ? "data-auth is not supported" : "off");
   }
