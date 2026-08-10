@@ -18,7 +18,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -45,10 +45,6 @@ Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --agent NAME                       claude, codex, pi, openclaw, hermes, workbuddy, both, or all
   --github-token TOKEN               GitHub token for private Release assets
-  --auth-blob BLOB                   Auth blob string (qdm1enc...); default: interactive prompt
-  --auth-user-id ID                  dev_user_id for authz; default: interactive prompt
-  --data-auth                        Use built-in local-test fixture blob (dev/test shortcut)
-  --no-auth                          Install without authz (requires password)
-  --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)`);
+  --data-auth                        Enable metric data-auth (authz.mode=on + local test blob)`);
   if (unknown) process.exitCode = 1;
 }

@@ -37,9 +37,6 @@ export const removedDataCliBinaries = [
   "cas-cli",
 ];
 
-/** Hardcoded password for --no-auth install (临时硬编码). */
-export const AUTH_OFF_PASSWORD = "qdmzt@2026";
-
 /** Relative path of the committed local-test encrypted auth blob fixture. */
 export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
 /** Working copy path written by install --data-auth (gitignored). */
@@ -110,16 +107,6 @@ export function readAuthzFromHarnessConfig(harnessPath) {
  * Priority: explicit dataAuth true/false → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
-  // --no-auth: 关闭权限（密码由 install.js 验证）
-  if (options.noAuth === true) {
-    return {
-      mode: "off",
-      blobFile: "",
-      devUserId: "",
-      allowLocalBlob: true,
-    };
-  }
-  // --data-auth: 用内置 fixture（向后兼容，开发/测试用）
   if (options.dataAuth === true) {
     return {
       mode: "on",
@@ -136,16 +123,6 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
       allowLocalBlob: true,
     };
   }
-  // 用户提供了 blob（默认 install 路径）
-  if (options.authBlob === true) {
-    return {
-      mode: "on",
-      blobFile: localTestAuthBlobRel,
-      devUserId: options.devUserId || "",
-      allowLocalBlob: true,
-    };
-  }
-  // 无显式 flag 时：有 existing 则沿用，否则默认 off
   if (existing) {
     const mode = existing.mode === "on" ? "on" : "off";
     let allowLocalBlob = existing.allowLocalBlob !== false;
@@ -223,19 +200,6 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(fixture, target);
   return { copied: true, path: target };
-}
-
-/**
- * Write user-provided auth blob string to config/dev-auth.blob.
- * @param {string} workspace - runtime dir
- * @param {string} blobContent - the encrypted blob string (qdm1enc...)
- * @returns {{ path: string }}
- */
-export function writeAuthBlob(workspace, blobContent) {
-  const target = path.join(workspace, localTestAuthBlobRel);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, blobContent + "\n", "utf8");
-  return { path: target };
 }
 
 export function removeLegacyDataCLIs(runtimeDir) {
