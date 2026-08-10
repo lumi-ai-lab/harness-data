@@ -49,6 +49,14 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 
 ## 常用命令
 
+将 Markdown 渲染为不依赖外部 CSS/JavaScript 的单文件 HTML：
+
+```bash
+node .agents/pi/skills/html-report/scripts/render-report.mjs \
+  --md /path/to/report.md \
+  --out /path/to/report.html
+```
+
 一键交互式初始化：
 
 ```bash
