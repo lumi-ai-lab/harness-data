@@ -269,11 +269,11 @@ authz:
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
-### 数据权限（qdm-metric-cli，默认关闭）
+### 数据权限（qdm-metric-cli，默认开启）
 
 WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下 Agent authz 能力目前适用于 Pi 和 Codex，不适用于 WorkBuddy。
 
-`authz.mode` 默认 `off`。Hook 读取配置后立即退出，不识别或改写任何 Bash 命令。设为 `on` 后，Agent authz 适配器才会进入命令识别与授权流程，并保证：
+`authz.mode` 默认 `on`。安装器默认要求输入 auth blob 和 dev_user_id（可用 `--no-auth` 关闭，需密码）。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
@@ -337,21 +337,41 @@ authz:
 **安装器开关**（不必手改配置）：
 
 ```bash
-# 开启权限模式 + 落盘本地测试 blob（无 Host 时可用）
+# ① 默认安装（带权限）——交互输入 blob + dev_user_id
+npx @lumi-ai-lab/harness-data install
+
+# ② 带权限 + flag 直传 blob（非交互，适合 CI）
+npx @lumi-ai-lab/harness-data install \
+  --auth-blob 'qdm1enc...' \
+  --auth-user-id 'your-user-id' \
+  --yes
+
+# ③ 带权限 + env 传入 blob
+HARNESS_AUTH_BLOB='qdm1enc...' \
+HARNESS_AUTH_USER_ID='your-user-id' \
+npx @lumi-ai-lab/harness-data install --yes
+
+# ④ 关闭权限（需密码）
+npx @lumi-ai-lab/harness-data install --no-auth
+# 或非交互：
+npx @lumi-ai-lab/harness-data install --no-auth --auth-off-password 'qdmzt@2026' --yes
+
+# ⑤ 开发/测试快捷方式（用内置 fixture blob）
 npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
-会写入：
+默认安装会写入：
 
 ```yaml
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: local-test-user
+  dev_user_id: <用户输入>
   allow_local_blob: true
 ```
 
-并从 runtime 内置的 `config/fixtures/local-test-auth.blob` 复制到 `config/dev-auth.blob`（工作副本 gitignore）。  
+并将用户提供的 blob 写入 `config/dev-auth.blob`（工作副本 gitignore）。  
+`--data-auth` 从 runtime 内置的 `config/fixtures/local-test-auth.blob` 复制到 `config/dev-auth.blob`（开发/测试快捷方式）。  
 说明：`harness-data auth` 是 **CAS** 子命令，与 metric data-auth **无关**。
 
 Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness context 默认 always inject）。权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
@@ -365,7 +385,8 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。管理员分发 blob 的正式使用场景保持 `allow_local_blob: true`，并把 blob 文件放在 workspace 外。
+无上游（如未接 Lumi）时：`install --data-auth` + 内置 fixture 可测权限注入/拦截；`install --no-auth` 可测主链路（需密码）。  
+生产若只信 Host（事件或 Lumi 信封）：装完后可把 `allow_local_blob` 改为 `false`。管理员分发 blob 的正式使用场景保持 `allow_local_blob: true`，并把 blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 

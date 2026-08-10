@@ -20,6 +20,7 @@ import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from ".
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import {
+  AUTH_OFF_PASSWORD,
   agentChoices,
   ensureLocalAuthBlob,
   hasAnyAgentHook,
@@ -31,6 +32,7 @@ import {
   qdmCliBinaries,
   readAuthzFromHarnessConfig,
   resolveAuthzForWrite,
+  writeAuthBlob,
   writeLocalConfig,
 } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
@@ -1424,6 +1426,60 @@ test("codex agent template includes authz PreToolUse hook and guidance", () => {
   assert.match(commands, /exit 2/);
   const instructions = fs.readFileSync(path.join(root, "..", ".agents", "codex", "AGENTS.md"), "utf8");
   assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
+});
+
+test("writeAuthBlob writes user blob to config/dev-auth.blob", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  writeAuthBlob(workspace, "qdm1enc.test-blob-content");
+  const blob = fs.readFileSync(path.join(workspace, "config", "dev-auth.blob"), "utf8").trim();
+  assert.equal(blob, "qdm1enc.test-blob-content");
+});
+
+test("resolveAuthzForWrite with authBlob=true sets mode on with devUserId", () => {
+  const authz = resolveAuthzForWrite({ authBlob: true, devUserId: "my-user" });
+  assert.equal(authz.mode, "on");
+  assert.equal(authz.blobFile, localTestAuthBlobRel);
+  assert.equal(authz.devUserId, "my-user");
+  assert.equal(authz.allowLocalBlob, true);
+});
+
+test("resolveAuthzForWrite with noAuth=true sets mode off", () => {
+  const authz = resolveAuthzForWrite({ noAuth: true });
+  assert.equal(authz.mode, "off");
+  assert.equal(authz.blobFile, "");
+  assert.equal(authz.devUserId, "");
+});
+
+test("local config authBlob writes mode on with user-provided blob", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  writeAuthBlob(workspace, "qdm1enc.user-encrypted-blob");
+  const { authz } = writeLocalConfig(workspace, { overwrite: true, authBlob: true, devUserId: "prod-user" });
+  assert.equal(authz.mode, "on");
+  assert.equal(authz.blobFile, localTestAuthBlobRel);
+  assert.equal(authz.devUserId, "prod-user");
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, /blob_file: config\/dev-auth\.blob/);
+  assert.match(harnessConfig, /dev_user_id: prod-user/);
+  assert.equal(
+    fs.readFileSync(path.join(workspace, "config", "dev-auth.blob"), "utf8").trim(),
+    "qdm1enc.user-encrypted-blob",
+  );
+});
+
+test("local config noAuth sets mode off", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const { authz } = writeLocalConfig(workspace, { overwrite: true, noAuth: true });
+  assert.equal(authz.mode, "off");
+  assert.equal(authz.blobFile, "");
+  assert.equal(authz.devUserId, "");
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: off/);
+});
+
+test("AUTH_OFF_PASSWORD is hardcoded to expected value", () => {
+  assert.equal(AUTH_OFF_PASSWORD, "qdmzt@2026");
+});
 });
 
 test("links selected agent templates", () => {
