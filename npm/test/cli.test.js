@@ -1332,6 +1332,64 @@ test("ensureLocalAuthBlob fails when fixture is missing", () => {
   assert.throws(() => ensureLocalAuthBlob(workspace), /data-auth fixture missing/);
 });
 
+test("ensureLocalAuthBlob with force overwrites existing user blob", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fixtureDir = path.join(workspace, "config", "fixtures");
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const fixtureContent = "qdm1enc.fixture-test-blob\n";
+  fs.writeFileSync(path.join(workspace, localTestAuthFixtureRel), fixtureContent);
+
+  // 先写入用户自定义 blob（模拟默认 install 的 writeAuthBlob）
+  writeAuthBlob(workspace, "qdm1enc.userA-custom-blob");
+
+  // 不带 force 时保留已有 blob
+  const kept = ensureLocalAuthBlob(workspace);
+  assert.equal(kept.copied, false);
+  assert.equal(
+    fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8").trim(),
+    "qdm1enc.userA-custom-blob",
+  );
+
+  // 带 force 时强制覆盖为 fixture
+  const forced = ensureLocalAuthBlob(workspace, { force: true });
+  assert.equal(forced.copied, true);
+  assert.equal(
+    fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8"),
+    fixtureContent,
+  );
+});
+
+test("dataAuth install overwrites user-provided blob with fixture (regression)", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const fixtureDir = path.join(workspace, "config", "fixtures");
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const fixtureContent = "qdm1enc.fixture-test-blob\n";
+  fs.writeFileSync(path.join(workspace, localTestAuthFixtureRel), fixtureContent);
+
+  // 步骤1: 模拟默认 install —— 写入用户 A 的 blob + dev_user_id
+  writeAuthBlob(workspace, "qdm1enc.userA-encrypted-blob");
+  writeLocalConfig(workspace, { overwrite: true, authBlob: true, devUserId: "userA" });
+
+  // 步骤2: 模拟 install --data-auth —— 切换配置为 local-test-user
+  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+
+  // 步骤3: ensureLocalAuthBlob 必须强制覆盖（与 install.js 一致）
+  const blob = ensureLocalAuthBlob(workspace, { force: true });
+  assert.equal(blob.copied, true);
+  assert.equal(
+    fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8"),
+    fixtureContent,
+  );
+
+  // 断言配置中 dev_user_id 为 local-test-user，与 fixture blob 一致
+  const harnessConfig = fs.readFileSync(
+    path.join(workspace, "config", "harness-config.yaml"),
+    "utf8",
+  );
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
+});
+
 test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
   assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"]);
   assert.equal(agentIncludesWorkBuddy("workbuddy"), true);
@@ -1479,7 +1537,6 @@ test("local config noAuth sets mode off", () => {
 
 test("AUTH_OFF_PASSWORD is hardcoded to expected value", () => {
   assert.equal(AUTH_OFF_PASSWORD, "qdmzt@2026");
-});
 });
 
 test("links selected agent templates", () => {

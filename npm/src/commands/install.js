@@ -321,7 +321,7 @@ export async function installCommand(options = {}) {
     writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
     ok("config/harness-config.yaml");
     ok("config/qdm-cli-paths.env");
-    const blob = ensureLocalAuthBlob(runtimeDir);
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
   } else {
     // —— 默认:带权限,输入 blob + dev_user_id ——

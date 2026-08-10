@@ -12,7 +12,7 @@ cli:
 # `install --data-auth`: uses built-in local-test fixture blob (dev/test shortcut).
 # Production: Host sends encrypted _auth + _auth_user_id; set allow_local_blob: false.
 authz:
-  mode: on
-  blob_file: config/dev-auth.blob
-  dev_user_id: local-test-user
+  mode: off
+  # blob_file: config/dev-auth.blob
+  # dev_user_id: local-test-user
   allow_local_blob: true
