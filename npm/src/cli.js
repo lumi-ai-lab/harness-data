@@ -43,7 +43,7 @@ Commands:
 
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
-  --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
+  --agent NAME                       claude, codex, pi, openclaw, hermes, workbuddy, both, or all
   --github-token TOKEN               GitHub token for private Release assets
   --data-auth                        Enable metric data-auth (authz.mode=on + local test blob)`);
   if (unknown) process.exitCode = 1;

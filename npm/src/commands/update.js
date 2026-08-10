@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chooseAgent, confirm } from "../lib/prompt.js";
-import { findWorkspaceDir, readUserState, writeState } from "../lib/paths.js";
+import { findWorkspaceDir, readWorkspaceState, writeState } from "../lib/paths.js";
 import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
@@ -11,8 +11,9 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, writeLocalConfig } from "../lib/config.js";
+import { hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -104,6 +105,15 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
   // even when agent junctions already exist.
   patchCodexHooksForWindows(runtimeDir);
 
+  if (agentIncludesWorkBuddy(options.agent)) {
+    const plugin = inspectWorkBuddyPlugin(runtimeDir);
+    if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
+    if (!plugin.versionMatchesPackage) {
+      throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}`);
+    }
+    ok(`WorkBuddy Marketplace 已准备：${plugin.marketplaceRoot}；安装/启用状态需在 WorkBuddy 中确认`);
+    return null;
+  }
   if (hasAnyAgentHook(runtimeDir)) {
     ok("Agent Hook 已配置");
     return null;
@@ -119,7 +129,7 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
 }
 
 export async function checkUpdates(workspace, options = {}) {
-  const state = readUserState();
+  const state = readWorkspaceState(workspace);
   const latestInstaller = await npmLatest();
   return {
     installer: { current: packageVersion(), latest: latestInstaller, update: Boolean(latestInstaller && latestInstaller !== packageVersion()) },
@@ -136,7 +146,10 @@ export async function updateCommand(options = {}) {
     `运行目录：${runtimeDir}`,
     `平台：${key}`
   ]);
-  const state = readUserState();
+  const state = readWorkspaceState(runtimeDir);
+  const configuredAgent = options.agent || state.agent;
+  const existingAuthz = readAuthzFromHarnessConfig(path.join(runtimeDir, "config", "harness-config.yaml"));
+  assertWorkBuddyAuthCompatibility(configuredAgent, existingAuthz?.mode === "on");
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
   let changed = false;
@@ -158,10 +171,17 @@ export async function updateCommand(options = {}) {
 
   step(2, 7, "检查 runtime bundle");
   const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
-  if (state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) {
-    action(`发现更新：runtime bundle ${state.runtimeTag} -> ${runtimeRelease.tag_name}`);
-    if (await confirm("是否更新 runtime bundle？")) {
-      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true });
+  const workBuddyPlugin = inspectWorkBuddyPlugin(runtimeDir);
+  const workBuddyRepairNeeded = agentIncludesWorkBuddy(configuredAgent) &&
+    (!workBuddyPlugin.prepared || !workBuddyPlugin.versionMatchesPackage);
+  if ((state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) || workBuddyRepairNeeded) {
+    if (workBuddyRepairNeeded && state.runtimeTag === runtimeRelease.tag_name) {
+      action("发现 WorkBuddy plugin package 缺失或不完整，需要修复 runtime bundle");
+    } else {
+      action(`发现更新：runtime bundle ${state.runtimeTag || "unknown"} -> ${runtimeRelease.tag_name}`);
+    }
+    if (await confirm(workBuddyRepairNeeded ? "是否修复 runtime bundle？" : "是否更新 runtime bundle？")) {
+      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true, requireWorkBuddy: agentIncludesWorkBuddy(configuredAgent) });
       runtimeTag = bundle.tag || runtimeRelease.tag_name;
       changed = true;
       applied.push(`runtime bundle ${runtimeTag}`);
@@ -198,7 +218,7 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(5, 7, "检查 Agent Hook");
-  const restoredAgent = await restoreAgentHooksIfMissing(runtimeDir, trackingOptions);
+  const restoredAgent = await restoreAgentHooksIfMissing(runtimeDir, { ...trackingOptions, agent: configuredAgent });
   blank();
 
   step(6, 7, "构建 Wikis 索引");
@@ -213,7 +233,7 @@ export async function updateCommand(options = {}) {
   if (changed) {
     writeLocalConfig(runtimeDir, { overwrite: true });
     ok("本地配置已刷新");
-    const doctor = await collectDoctor(runtimeDir, trackingOptions);
+    const doctor = await collectDoctor(runtimeDir, { ...trackingOptions, agent: configuredAgent });
     printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });
     if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");
     writeState(runtimeDir, {

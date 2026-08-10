@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"harness-data/cli/internal/agentauthz"
 	dhcontext "harness-data/cli/internal/context"
 	"harness-data/cli/internal/harness"
 	idx "harness-data/cli/internal/index"
@@ -62,13 +64,15 @@ func run() error {
 		return fmt.Errorf("cannot find harness root: %w", err)
 	}
 	switch os.Args[1] {
+	case "authz-hook":
+		return runAuthzHook(root, os.Args[2:])
 	case "wikis":
 		return runWikis(root, os.Args[2:])
 	case "context":
 		fs := flag.NewFlagSet("context", flag.ExitOnError)
 		question := fs.String("question", "", "question")
 		jsonOut := fs.Bool("json", false, "print json")
-		format := fs.String("format", "text", "output format: text, json, claude-hook, codex-hook, or agent-hook")
+		format := fs.String("format", "text", "output format: text, json, claude-hook, codex-hook, agent-hook, or workbuddy-hook")
 		_ = fs.Parse(os.Args[2:])
 		if *jsonOut {
 			*format = "json"
@@ -100,12 +104,24 @@ func run() error {
 			if ok {
 				return printCompactJSON(output)
 			}
+		case "workbuddy-hook":
+			input, err := dhcontext.ReadHookStdin()
+			if err != nil {
+				return err
+			}
+			ok, output, err := dhcontext.RunWorkBuddyHook(root, input)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return printCompactJSON(output)
+			}
 		default:
 			return fmt.Errorf("unsupported context --format: %s", *format)
 		}
 	case "posttool":
 		fs := flag.NewFlagSet("posttool", flag.ExitOnError)
-		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, or agent-hook")
+		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, agent-hook, or workbuddy-hook")
 		_ = fs.Parse(os.Args[2:])
 		if !isAgentHookFormat(*format) {
 			return fmt.Errorf("unsupported posttool --format: %s", *format)
@@ -113,6 +129,16 @@ func run() error {
 		input, err := posttool.ReadHookStdin()
 		if err != nil {
 			return err
+		}
+		if *format == "workbuddy-hook" {
+			ok, output, err := posttool.RunWorkBuddyHook(root, input)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return printCompactJSON(output)
+			}
+			return nil
 		}
 		ok, output, err := posttool.RunClaudeHook(root, input)
 		if err != nil {
@@ -127,7 +153,7 @@ func run() error {
 		if fs.NArg() != 0 {
 			return fmt.Errorf("inject-template does not accept arguments")
 		}
-		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current Claude session.")
+		fmt.Println("QDM_INJECT_TEMPLATE_SIGNAL emitted. Do not use this command stdout as the template. Wait for the PostToolUse hook to inject the selected template for the current agent session.")
 	case "stage":
 		return runStage(os.Args[2:])
 	case "show":
@@ -140,7 +166,7 @@ func run() error {
 
 func isAgentHookFormat(format string) bool {
 	switch format {
-	case "claude-hook", "codex-hook", "agent-hook":
+	case "claude-hook", "codex-hook", "agent-hook", "workbuddy-hook":
 		return true
 	default:
 		return false
@@ -152,7 +178,31 @@ func printUsage() {
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|show>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|authz-hook|show>"
+}
+
+func runAuthzHook(root string, args []string) error {
+	fs := flag.NewFlagSet("authz-hook", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agent := fs.String("agent", "codex", "agent name")
+	if err := fs.Parse(args); err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	if fs.NArg() != 0 {
+		return exitCodeError{Code: 2, Err: fmt.Errorf("authz-hook does not accept positional arguments")}
+	}
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	ok, output, err := agentauthz.Run(root, *agent, input)
+	if err != nil {
+		return exitCodeError{Code: 2, Err: err}
+	}
+	if ok {
+		return printCompactJSON(output)
+	}
+	return nil
 }
 
 type showDocument struct {
@@ -1599,6 +1649,9 @@ func splitCSV(value string) []string {
 }
 
 func rootStart() string {
+	if projectDir := os.Getenv("CODEBUDDY_PROJECT_DIR"); projectDir != "" {
+		return projectDir
+	}
 	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
 		return projectDir
 	}

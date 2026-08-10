@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, readAuthzFromHarnessConfig, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
-import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
+import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
@@ -13,17 +13,10 @@ import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
-
-function readInstallState(runtimeDir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(runtimeDir, ".harness", "installer-state.json"), "utf8"));
-  } catch {
-    return readUserState();
-  }
-}
 
 async function requireCommands(commands) {
   for (const command of commands) {
@@ -76,7 +69,11 @@ function mergeRuntimeConfig(runtimeDir, sourceDir) {
 export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
-      fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json"))) {
+      fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json")) &&
+      (!options.requireWorkBuddy || (
+        fs.existsSync(path.join(runtimeDir, "agents", "workbuddy", ".codebuddy-plugin", "plugin.json")) &&
+        fs.existsSync(path.join(runtimeDir, "agents", ".codebuddy-plugin", "marketplace.json"))
+      ))) {
     skip("runtime bundle 已存在");
     return { tag: "", skipped: true };
   }
@@ -222,7 +219,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
 export function printDoctorSummary(doctor, options = {}) {
   const nonBlocking = options.nonBlocking || (() => false);
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
-  const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
+  const warnings = doctor.checks.filter((check) => (!check.ok && nonBlocking(check)) || check.status === "warning");
   if (!failed.length) {
     ok("runtime");
     ok("wikis/metrics");
@@ -242,10 +239,16 @@ export function printDoctorSummary(doctor, options = {}) {
 
 export async function installCommand(options = {}) {
   const key = platformKey();
+  const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [
-    `安装目录：${resolveWorkspaceDir(options.dir || process.cwd())}`,
+    `安装目录：${targetRuntimeDir}`,
     `平台：${key}`
   ]);
+
+  const selectedAgent = await chooseAgent(options);
+  const existingAuthz = readAuthzFromHarnessConfig(path.join(targetRuntimeDir, "config", "harness-config.yaml"));
+  const effectiveDataAuth = options.dataAuth === true || (options.dataAuth === undefined && existingAuthz?.mode === "on");
+  assertWorkBuddyAuthCompatibility(selectedAgent, effectiveDataAuth);
 
   step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
@@ -253,13 +256,13 @@ export async function installCommand(options = {}) {
 
   step(2, 7, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
-  const bundle = await installRuntimeBundle(runtimeDir, options);
+  const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
   blank();
 
   step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
-  const installState = readInstallState(runtimeDir);
+  const installState = readWorkspaceState(runtimeDir);
 
   let manifest;
   let localTools = {};
@@ -310,16 +313,25 @@ export async function installCommand(options = {}) {
   blank();
 
   step(7, 7, "配置 Agent Hook");
-  const selectedAgent = await chooseAgent(options);
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
   patchCodexHooksForWindows(runtimeDir);
+  if (agentIncludesWorkBuddy(selectedAgent)) {
+    const plugin = inspectWorkBuddyPlugin(runtimeDir);
+    if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
+    if (!plugin.versionMatchesPackage) {
+      throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}; update the runtime bundle`);
+    }
+    ok(`WorkBuddy Marketplace prepared: ${path.relative(runtimeDir, plugin.marketplaceRoot)}`);
+    action(`需要 WorkBuddy ${workBuddyMinimumVersion}+；在插件管理中 Add Marketplace：${plugin.marketplaceRoot}`);
+    action(`安装并启用 qdm-harness@${plugin.marketplaceName}，reload plugins 后在 Harness runtime workspace 中新建会话`);
+  }
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, options);
+  const doctor = await collectDoctor(runtimeDir, { ...options, agent: selectedAgent });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();

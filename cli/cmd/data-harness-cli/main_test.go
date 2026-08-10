@@ -36,6 +36,30 @@ label: 销售额
 	}
 }
 
+func TestAgentHookFormatsIncludeWorkBuddy(t *testing.T) {
+	for _, format := range []string{"claude-hook", "codex-hook", "agent-hook", "workbuddy-hook"} {
+		if !isAgentHookFormat(format) {
+			t.Fatalf("expected supported format %q", format)
+		}
+	}
+	if isAgentHookFormat("unknown-hook") {
+		t.Fatal("unexpected support for unknown hook format")
+	}
+}
+
+func TestRootStartPrefersCodeBuddyProjectDir(t *testing.T) {
+	t.Setenv("CODEBUDDY_PROJECT_DIR", "/workbuddy/project")
+	t.Setenv("CLAUDE_PROJECT_DIR", "/claude/project")
+	if got := rootStart(); got != "/workbuddy/project" {
+		t.Fatalf("rootStart = %q", got)
+	}
+
+	t.Setenv("CODEBUDDY_PROJECT_DIR", "")
+	if got := rootStart(); got != "/claude/project" {
+		t.Fatalf("Claude fallback rootStart = %q", got)
+	}
+}
+
 func writeMainTestFile(t *testing.T, root, rel, content string) {
 	t.Helper()
 	full := filepath.Join(root, filepath.FromSlash(rel))

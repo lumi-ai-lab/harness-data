@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { binaryName } from "./platform.js";
 
-export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
+export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"];
 export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
 export const agentLinks = {
   claude: [["agents/claude", ".claude"]],
@@ -10,6 +10,9 @@ export const agentLinks = {
   pi: [["agents/pi", ".pi"]],
   openclaw: [["agents/openclaw", ".openclaw"]],
   hermes: [["agents/hermes", ".hermes"]],
+  // WorkBuddy uses its plugin package directly; it must not be represented by
+  // a misleading project symlink such as .workbuddy.
+  workbuddy: [],
   both: [["agents/claude", ".claude"], ["agents/codex", ".codex"]],
   all: [
     ["agents/claude", ".claude"],
@@ -121,11 +124,19 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
     };
   }
   if (existing) {
+    const mode = existing.mode === "on" ? "on" : "off";
+    let allowLocalBlob = existing.allowLocalBlob !== false;
+    // MVP convergence: Host/Lumi auth fallback has been removed, so
+    // allow_local_blob=false with mode=on is a dead-end config that can
+    // never authorize any gated command. Migrate it to true on update.
+    if (mode === "on" && !allowLocalBlob) {
+      allowLocalBlob = true;
+    }
     return {
-      mode: existing.mode === "on" ? "on" : "off",
+      mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      allowLocalBlob: existing.allowLocalBlob !== false,
+      allowLocalBlob,
     };
   }
   return {

@@ -10,7 +10,7 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { binaryName, platformKey } from "../src/lib/platform.js";
-import { defaultWorkspaceDir, userStatePath } from "../src/lib/paths.js";
+import { defaultWorkspaceDir, readWorkspaceState, userStatePath } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
@@ -30,9 +30,19 @@ import {
   localTestAuthUserId,
   patchCodexHooksForWindows,
   qdmCliBinaries,
+  readAuthzFromHarnessConfig,
+  resolveAuthzForWrite,
   writeLocalConfig,
 } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
+import {
+  agentIncludesWorkBuddy,
+  assertWorkBuddyAuthCompatibility,
+  detectWorkBuddyPluginEnabled,
+  detectWorkBuddyVersion,
+  inspectWorkBuddyPlugin,
+  versionAtLeast,
+} from "../src/lib/workbuddy.js";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = path.join(root, "bin", "harness-data.js");
@@ -122,6 +132,23 @@ test("resolves platform and state paths", () => {
   assert.match(platformKey(), /^(darwin-arm64|darwin-amd64|linux-amd64|windows-amd64)$/);
   assert.equal(defaultWorkspaceDir(), process.cwd());
   assert.match(userStatePath(), /harness-data-installer/);
+});
+
+test("workspace installer state is local-first and does not leak across runtimes", () => {
+  const first = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-first-"));
+  const second = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-second-"));
+  fs.mkdirSync(path.join(first, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(first, ".harness", "installer-state.json"), JSON.stringify({ agent: "workbuddy", runtimeTag: "v-local" }));
+
+  assert.deepEqual(readWorkspaceState(first, {
+    userState: { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" },
+  }), { agent: "workbuddy", runtimeTag: "v-local" });
+  assert.deepEqual(readWorkspaceState(second, {
+    userState: { lastInstallDir: first, agent: "pi", runtimeTag: "v-global" },
+  }), {});
+  assert.deepEqual(readWorkspaceState(second, {
+    userState: { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" },
+  }), { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" });
 });
 
 test("normalizes git protocol options", () => {
@@ -1183,6 +1210,105 @@ test("local config overwrite preserves existing authz when dataAuth omitted", ()
   assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
 });
 
+test("resolveAuthzForWrite migrates allow_local_blob:false to true when mode=on", () => {
+  const migrated = resolveAuthzForWrite({}, {
+    mode: "on",
+    blobFile: "config/dev-auth.blob",
+    devUserId: "local-test-user",
+    allowLocalBlob: false,
+  });
+  assert.equal(migrated.mode, "on");
+  assert.equal(migrated.allowLocalBlob, true);
+  assert.equal(migrated.blobFile, "config/dev-auth.blob");
+  assert.equal(migrated.devUserId, "local-test-user");
+});
+
+test("resolveAuthzForWrite preserves allow_local_blob:false when mode=off", () => {
+  const preserved = resolveAuthzForWrite({}, {
+    mode: "off",
+    blobFile: "",
+    devUserId: "",
+    allowLocalBlob: false,
+  });
+  assert.equal(preserved.mode, "off");
+  assert.equal(preserved.allowLocalBlob, false);
+});
+
+test("writeLocalConfig overwrites and migrates allow_local_blob:false to true", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
+  // Simulate old production config with allow_local_blob: false
+  fs.writeFileSync(
+    path.join(workspace, "config", "harness-config.yaml"),
+    "paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: bin/qdm-metric-cli\n\nauthz:\n  mode: on\n  allow_local_blob: false\n",
+  );
+  writeLocalConfig(workspace, { overwrite: true });
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: on/);
+  assert.match(harnessConfig, /allow_local_blob: true/);
+});
+
+test("doctor fails on authz mode=on with allow_local_blob=false", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const dir of [
+    "agents/codex",
+    "bootstrap",
+    "wikis/metrics",
+    "wikis/reports",
+    "wikis/dims",
+    "wikis/rules",
+    "bin",
+    "config",
+  ]) {
+    fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  }
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
+  for (const binary of qdmCliBinaries) {
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  fs.writeFileSync(
+    path.join(workspace, "config", "harness-config.yaml"),
+    "paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: bin/qdm-metric-cli\n\nauthz:\n  mode: on\n  allow_local_blob: false\n",
+  );
+  fs.writeFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), `export QDM_METRIC_CLI="${path.join(workspace, "bin", "qdm-metric-cli")}"\n`);
+  linkAgents(workspace, "codex");
+
+  const report = await collectDoctor(workspace);
+  const check = report.checks.find((c) => c.name === "authz allow_local_blob");
+  assert.ok(check, "missing authz allow_local_blob check");
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /Host\/Lumi fallback removed/);
+});
+
+test("doctor passes on authz mode=on with allow_local_blob=true", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  for (const dir of [
+    "agents/codex",
+    "bootstrap",
+    "wikis/metrics",
+    "wikis/reports",
+    "wikis/dims",
+    "wikis/rules",
+    "bin",
+    "config",
+  ]) {
+    fs.mkdirSync(path.join(workspace, dir), { recursive: true });
+  }
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "# Wikis\n");
+  for (const binary of qdmCliBinaries) {
+    fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+  linkAgents(workspace, "codex");
+
+  const report = await collectDoctor(workspace);
+  const check = report.checks.find((c) => c.name === "authz allow_local_blob");
+  assert.ok(check, "missing authz allow_local_blob check");
+  assert.equal(check.ok, true);
+});
+
 test("ensureLocalAuthBlob copies fixture and keeps existing blob", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const fixtureDir = path.join(workspace, "config", "fixtures");
@@ -1205,8 +1331,100 @@ test("ensureLocalAuthBlob fails when fixture is missing", () => {
   assert.throws(() => ensureLocalAuthBlob(workspace), /data-auth fixture missing/);
 });
 
-test("agent choices include OpenClaw, Hermes, both, and all", () => {
-  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"]);
+test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
+  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"]);
+  assert.equal(agentIncludesWorkBuddy("workbuddy"), true);
+  assert.equal(agentIncludesWorkBuddy("all"), false);
+  assert.equal(agentIncludesWorkBuddy("both"), false);
+});
+
+test("WorkBuddy rejects data-auth while preserving existing all semantics", () => {
+  assert.throws(() => assertWorkBuddyAuthCompatibility("workbuddy", true), /does not support --data-auth/);
+  assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("workbuddy", false));
+  assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("all", true));
+});
+
+test("WorkBuddy plugin package matches npm version and native hook contract", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  copyWorkBuddyPlugin(workspace);
+  const plugin = inspectWorkBuddyPlugin(workspace);
+  assert.equal(plugin.prepared, true, plugin.errors.join("; "));
+  assert.equal(plugin.version, packageVersion());
+  assert.equal(plugin.marketplaceVersion, packageVersion());
+  assert.equal(plugin.marketplaceName, "lumi-harness-data");
+  assert.equal(plugin.marketplaceRoot, path.join(workspace, "agents"));
+  assert.equal(versionAtLeast("5.3.5"), true);
+  assert.equal(versionAtLeast("5.3.8"), true);
+  assert.equal(versionAtLeast("5.3.4"), false);
+});
+
+test("WorkBuddy enablement detection distinguishes package from enabled plugin", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-home-"));
+  const settingsDir = path.join(home, ".workbuddy");
+  fs.mkdirSync(settingsDir, { recursive: true });
+  let status = detectWorkBuddyPluginEnabled({ homeDir: home });
+  assert.equal(status.detected, false);
+  assert.equal(status.enabled, false);
+
+  fs.writeFileSync(path.join(settingsDir, "settings.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@lumi-harness-data": true },
+  }));
+  status = detectWorkBuddyPluginEnabled({ homeDir: home });
+  assert.equal(status.detected, true);
+  assert.equal(status.configured, true);
+  assert.equal(status.enabled, true);
+
+  const otherHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-other-home-"));
+  fs.mkdirSync(path.join(otherHome, ".workbuddy"), { recursive: true });
+  fs.writeFileSync(path.join(otherHome, ".workbuddy", "settings.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@old-marketplace": true },
+  }));
+  const otherStatus = detectWorkBuddyPluginEnabled({ homeDir: otherHome });
+  assert.equal(otherStatus.detected, true);
+  assert.equal(otherStatus.configured, false);
+  assert.equal(otherStatus.enabled, false);
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-workspace-"));
+  fs.mkdirSync(path.join(workspace, ".codebuddy"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".codebuddy", "settings.local.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@team-marketplace": false },
+  }));
+  status = detectWorkBuddyPluginEnabled({ homeDir: home, workspace });
+  assert.equal(status.configured, true);
+  assert.equal(status.enabled, true);
+  assert.equal(status.explicitlyDisabled, false);
+  assert.equal(status.settingsPath, path.join(settingsDir, "settings.json"));
+
+  fs.writeFileSync(path.join(workspace, ".codebuddy", "settings.local.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
+  }));
+  status = detectWorkBuddyPluginEnabled({ homeDir: home, workspace });
+  assert.equal(status.configured, true);
+  assert.equal(status.enabled, false);
+  assert.equal(status.explicitlyDisabled, true);
+  assert.match(status.settingsPath, /settings\.local\.json$/);
+});
+
+test("WorkBuddy version detection reads the cross-platform product manifest", () => {
+  const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-app-"));
+  const productDir = path.join(appRoot, "resources", "app.asar.unpacked", "cli");
+  fs.mkdirSync(productDir, { recursive: true });
+  fs.writeFileSync(path.join(productDir, "product.json"), JSON.stringify({ genieVersion: "5.3.8" }));
+  assert.equal(detectWorkBuddyVersion({ workBuddyAppPath: appRoot }), "5.3.8");
+});
+
+test("codex agent template includes authz PreToolUse hook and guidance", () => {
+  const hooksPath = path.join(root, "..", ".agents", "codex", "hooks.json");
+  const hooksConfig = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+  const preToolUse = hooksConfig.hooks.PreToolUse;
+  assert.ok(Array.isArray(preToolUse), "missing PreToolUse hooks");
+  const bashHook = preToolUse.find((entry) => entry.matcher === "Bash");
+  assert.ok(bashHook, "missing Bash PreToolUse hook");
+  const commands = bashHook.hooks.map((hook) => hook.command).join("\n");
+  assert.match(commands, /authz-hook --agent codex/);
+  assert.match(commands, /exit 2/);
+  const instructions = fs.readFileSync(path.join(root, "..", ".agents", "codex", "AGENTS.md"), "utf8");
+  assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
 });
 
 test("Windows Codex hook patch targets the final CLI invocation", () => {
@@ -1254,6 +1472,10 @@ test("links selected agent templates", () => {
   assert.deepEqual(hermes, [["agents/hermes", ".hermes"]]);
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
 
+  const workbuddy = linkAgents(workspace, "workbuddy");
+  assert.deepEqual(workbuddy, []);
+  assert.equal(fs.existsSync(path.join(workspace, ".workbuddy")), false);
+
   const both = linkAgents(workspace, "both");
   assert.deepEqual(both, [["agents/claude", ".claude"], ["agents/codex", ".codex"]]);
   assert.equal(fs.realpathSync(path.join(workspace, ".claude")), fs.realpathSync(path.join(workspace, "agents", "claude")));
@@ -1271,6 +1493,12 @@ test("links selected agent templates", () => {
   assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
   assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
 });
+
+function copyWorkBuddyPlugin(workspace) {
+  fs.mkdirSync(path.join(workspace, "agents"), { recursive: true });
+  fs.cpSync(path.join(root, "..", ".agents", "workbuddy"), path.join(workspace, "agents", "workbuddy"), { recursive: true });
+  fs.cpSync(path.join(root, "..", ".agents", ".codebuddy-plugin"), path.join(workspace, "agents", ".codebuddy-plugin"), { recursive: true });
+}
 
 function createAgentWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
@@ -1309,6 +1537,14 @@ test("update restore recreates agent hooks only when all are missing", async () 
   assert.equal(fs.existsSync(path.join(existingWorkspace, ".claude")), false);
 });
 
+test("update recognizes a prepared WorkBuddy plugin without creating a symlink", async () => {
+  const workspace = createAgentWorkspace();
+  copyWorkBuddyPlugin(workspace);
+  const restored = await restoreAgentHooksIfMissing(workspace, { agent: "workbuddy" });
+  assert.equal(restored, null);
+  assert.equal(fs.existsSync(path.join(workspace, ".workbuddy")), false);
+});
+
 function createDoctorWorkspace(agent) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   for (const dir of [
@@ -1344,6 +1580,46 @@ test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
     assert.ok(agentChecks.length > 0);
     assert.equal(agentChecks.every((check) => check.ok), true, agent);
   }
+});
+
+test("doctor validates WorkBuddy package, version, and enablement separately", async () => {
+  const workspace = createDoctorWorkspace("workbuddy");
+  copyWorkBuddyPlugin(workspace);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-home-"));
+  fs.mkdirSync(path.join(home, ".workbuddy"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@lumi-harness-data": true },
+  }));
+
+  const report = await collectDoctor(workspace, {
+    agent: "workbuddy",
+    workBuddyVersion: "5.3.8",
+    homeDir: home,
+  });
+  const byName = new Map(report.checks.map((check) => [check.name, check]));
+  assert.equal(byName.get("WorkBuddy plugin package")?.ok, true);
+  assert.equal(byName.get("WorkBuddy version >= 5.3.5")?.ok, true);
+  assert.match(byName.get("WorkBuddy plugin enablement")?.detail || "", /enabled/);
+  assert.equal(byName.get("Agent hook")?.ok, true);
+
+  const oldClient = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.4", homeDir: home });
+  assert.equal(oldClient.checks.find((check) => check.name === "WorkBuddy version >= 5.3.5")?.ok, false);
+
+  const unknownHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-unknown-home-"));
+  const unknown = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: unknownHome });
+  const unknownEnablement = unknown.checks.find((check) => check.name === "WorkBuddy plugin enablement");
+  assert.equal(unknownEnablement?.ok, true);
+  assert.equal(unknownEnablement?.status, "warning");
+
+  fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
+    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
+  }));
+  const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
+  assert.equal(disabled.checks.find((check) => check.name === "WorkBuddy plugin enablement")?.ok, false);
+
+  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+  const authzOn = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy authz.mode=off")?.ok, false);
 });
 
 test("update doctor treats missing agent hooks as non-blocking only", async () => {
@@ -1509,7 +1785,7 @@ test("update wikis discards local commits, tracked changes, and untracked files"
   fs.writeFileSync(path.join(seed, "index.md"), "remote-v2\n");
   git(["add", "index.md"], seed);
   git(["commit", "-m", "remote update"], seed);
-  git(["push", "origin", "master"], seed);
+  git(["push", "origin", "HEAD:master"], seed);
 
   const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
 

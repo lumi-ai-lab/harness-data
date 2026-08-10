@@ -17,6 +17,7 @@ Claude Code 的 `PostToolUse` hook 调用：
 Codex 使用 `.codex/hooks.json` 配置同等事件：
 
 - `UserPromptSubmit` 调用 `bin/data-harness-cli context --format codex-hook`
+- `PreToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli authz-hook --agent codex` 授权 `qdm-metric-cli` gated 命令
 - `PostToolUse` 仅匹配 `Bash`，调用 `bin/data-harness-cli posttool --format codex-hook`
 
 Pi 使用 `.pi/settings.json` 加载项目扩展：
@@ -34,7 +35,15 @@ Hermes-Agent 使用 `.hermes` 加载项目上下文、skill 和 hook：
 - 优先使用 Hermes Python plugin 的 `pre_llm_call` / `post_tool_call`
 - `agent-hooks/qdm-pre-llm-call.sh` 和 `agent-hooks/qdm-post-tool-call.sh` 作为 shell hook fallback，同样复用 `agent-hook` 格式
 
-本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
+WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
+
+- `UserPromptSubmit` 通过零依赖 `harness-hook.mjs` 调用 `context --format workbuddy-hook`
+- `PostToolUse` 匹配 `Bash|PowerShell|execute_command`，归一化为 `Bash` 后调用 `posttool --format workbuddy-hook`
+- 插件清单位于 `agents/workbuddy/.codebuddy-plugin/plugin.json`，本地 Marketplace 清单位于 `agents/.codebuddy-plugin/marketplace.json`；目录存在不等于插件已经安装或启用
+- 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
+- WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
+
+本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
 `context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
 
@@ -76,6 +85,14 @@ npx @lumi-ai-lab/harness-data install \
   --agent codex
 ```
 
+WorkBuddy 安装会准备本地 Marketplace；完成后在 WorkBuddy 插件管理中选择 **Add Marketplace**，添加 runtime 的 `agents` 目录，再安装并启用 `qdm-harness@lumi-harness-data`、reload plugins：
+
+```bash
+npx @lumi-ai-lab/harness-data install \
+  --yes \
+  --agent workbuddy
+```
+
 CI 或非交互环境可用 token 环境变量完成 HTTPS 访问；同一个 token 也会用于下载私有 qdm CLI Release asset。token 不会写入 remote URL、安装状态或项目配置。
 
 ```bash
@@ -86,9 +103,9 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
   --github-token-env GITHUB_TOKEN
 ```
 
-`--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`both` 和 `all`。其中 `both` 表示 Claude + Codex，`all` 表示 Claude + Codex + Pi + OpenClaw + Hermes。
+`--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。metric-cli 使用 auth-blob / data-auth 做数据权限（可用 `--data-auth` 开启本地测试）。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 使用 auth-blob / data-auth 做数据权限（可用 `--data-auth` 开启本地测试），但 `--agent workbuddy` 与 `--data-auth` 当前不兼容，安装器会直接拒绝该组合。
 
 更新工作目录：
 
@@ -195,6 +212,8 @@ Wikis 索引。因此，指标、报告、维度、规则或模板等普通知�
 ./bin/data-harness-cli wikis recall-debug --question "会员复购为什么下降？"
 printf '{"prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format claude-hook
 printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli inject-template"}}' | ./bin/data-harness-cli posttool --format claude-hook
+printf '{"session_id":"workbuddy-debug","prompt":"会员复购为什么下降？"}' | ./bin/data-harness-cli context --format workbuddy-hook
+printf '{"session_id":"workbuddy-debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli stage template"}}' | ./bin/data-harness-cli posttool --format workbuddy-hook
 ./bin/data-harness-cli show member-repurchase --json
 ```
 
@@ -202,7 +221,7 @@ printf '{"session_id":"debug","tool_name":"Bash","tool_input":{"command":"bin/da
 
 ## 目录结构
 
-- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`。
+- `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`，WorkBuddy 则使用 `.agents/workbuddy` 原生插件包。
 - `bootstrap/cli-manifest.json`：npm 安装器下载 5 个 CLI 的版本、平台包 URL 和 sha256 配置。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。
@@ -245,19 +264,75 @@ authz:
   mode: off
   # blob_file: config/dev-auth.blob          # local only
   # dev_user_id: local-test-user             # required with blob_file; no code default
-  allow_local_blob: true                     # production: set false
+  allow_local_blob: true                     # admin-distributed local blob requires true
 ```
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
 ### 数据权限（qdm-metric-cli，默认关闭）
 
-`authz.mode` 默认 `off`，不影响现有行为。设为 `on` 后，PI 扩展在 `tool_call` 中保证：
+WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下 Agent authz 能力目前适用于 Pi 和 Codex，不适用于 WorkBuddy。
+
+`authz.mode` 默认 `off`。Hook 读取配置后立即退出，不识别或改写任何 Bash 命令。设为 `on` 后，Agent authz 适配器才会进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
 - 模型自带的 `--data-auth` / `--auth-blob` / `--auth-json` 会被剥掉并替换
 - 当前 turn 没有有效 blob / userId 时直接 **block** 上述调用
+
+Pi 的实现基于扩展 `tool_call` 事件读取授权信息，并在 tool call 阶段直接改写 Bash command。Codex 适配按同一思路实现：`PreToolUse matcher=Bash` 每次读取本地 blob 来源（环境变量或配置文件），然后直接把 gated `qdm-metric-cli` 命令改写成带 runtime auth flags 的命令。MVP 不接入 Host `_auth`，不读取 Lumi Envelope。
+
+无 wrapper 模式下，Codex `updatedInput.command` 这个必要传输面会承载完整 `qdm1enc...`，因为 `qdm-metric-cli` 当前只通过 `--auth-blob` 接收权限 blob。约束边界是：除 `updatedInput.command` 中执行所必需的 argv 外，hook 不额外在 stderr、诊断文案、context 文案或普通日志中输出完整 blob。模型自带的 `--auth-blob` / `--auth-json` / `--data-auth` 会先被剥离并替换成 runtime blob。
+
+`authz.mode=on` 时启用第二层 blob 来源隔离：
+
+```text
+普通 Bash
+  -> Codex PreToolUse
+  -> unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR
+  -> 执行原 Bash 命令
+
+qdm-metric-cli gated Bash
+  -> Codex PreToolUse
+  -> hook 读取本地 blob（env / config file）
+  -> hook strip 模型自带 auth flags
+  -> hook 直接返回 qdm-metric-cli --data-auth --auth-blob ...
+  -> 返回命令前 unset auth 来源 env
+```
+
+当前目标使用场景是：用户在 Codex App 或终端里使用 Harness，权限 blob 由管理员预先生成并分发到用户本机。Harness 只负责验证本地是否绑定了有效 blob，并在执行 `qdm-metric-cli analysis execute` / `qdm-metric-cli auth describe` 前注入权限参数；不负责生成、加密或解密 blob。
+
+管理员分发 blob 的推荐接入方式：
+
+```text
+管理员
+  -> 生成 qdm1enc... blob
+  -> 分发到用户本机 workspace 外，例如 ~/.qdm/auth/qdm-auth.blob
+  -> 文件权限 0600
+
+用户 Codex App
+  -> 启动 Codex 时提供 HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID
+  -> Codex PreToolUse hook 改写 gated qdm-metric-cli 命令
+  -> hook 直接注入 --auth-blob
+  -> qdm-metric-cli 做真实权限验证
+
+用户终端
+  -> 提供同一组 HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID
+  -> 在 Codex hook 生效的终端里直接执行 qdm-metric-cli 命令
+  -> qdm-metric-cli 做真实权限验证
+```
+
+配置要求：
+
+```yaml
+authz:
+  mode: on
+  allow_local_blob: true
+```
+
+`allow_local_blob=true` 是管理员分发本地 blob 场景的必要开关；若设为 `false`，Harness 会禁用所有本地 blob 来源（`HARNESS_AUTH_BLOB*` 和 `authz.blob_file`）。
+
+安全约束：管理员分发的 blob 文件建议放在 workspace 外，不提交、不让模型通过项目文件直接读取。`authz.mode=on` 时，Codex hook 会对普通 Bash 注入 `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR`，避免普通 Bash 继承 auth 来源 env；gated command 也会在直接注入 runtime blob 后先 unset 这些来源 env。`LUMI_REQUESTER_CONTEXT_DIR` 虽已不再读取，但为兼容旧运行环境仍一并清理。当前 Codex 没有 hook-only env 通道，因此该隔离依赖 Codex `PreToolUse` hook 被启用且可信。
 
 **安装器开关**（不必手改配置）：
 
@@ -283,23 +358,21 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 | 来源 | 说明 |
 | --- | --- |
-| Host `event._auth` + `_auth_user_id` | 理想旁路（需 ACP/Pi 透传；当前常不可用） |
-| **Lumi 文件信封** `LUMI_REQUESTER_CONTEXT_DIR` + `sha256(sessionId).json` | **当前生产可用 Host 旁路（方案 A）**；不受 `allow_local_blob` 屏蔽 |
-| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件；`allow_local_blob: false` 时禁用 |
-| `authz.blob_file` + `authz.dev_user_id` | **仅本地**：预生成密文；`dev_user_id` 必须显式配置；`allow_local_blob: false` 时禁用 |
+| Host `event._auth` + `_auth_user_id` | Pi 主路径；Codex MVP 不接入 Host `_auth` |
+| `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID` | **管理员分发 blob 的推荐路径**：blob 文件放 workspace 外，文件权限建议 `0600`；`allow_local_blob: false` 时禁用。`authz.mode=on` 时普通 Bash 会被 PreToolUse 改写为先 unset 这些变量 |
+| `HARNESS_AUTH_BLOB` + `HARNESS_AUTH_USER_ID` | 本地/调试 env，优先于文件；`allow_local_blob: false` 时禁用。`authz.mode=on` 时普通 Bash 会被 PreToolUse 改写为先 unset 这些变量 |
+| `authz.blob_file` + `authz.dev_user_id` | 本地文件配置；`dev_user_id` 必须显式配置；`allow_local_blob: false` 时禁用。若用于管理员分发 blob，建议配置 workspace 外绝对路径 |
 
-解析优先级：`event._auth` → Lumi 信封 → `HARNESS_AUTH_*` → `blob_file`。  
-Lumi 仍会写 ACP `_meta`（供未来方案 B）；Harness 现在不依赖它。信封文件名与 Lumi 一致：`hex(sha256(utf8(rawSessionId))) + ".json"`，按 session 精确 open，不枚举目录。
+解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-无上游（如未接 Lumi）时：默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。  
-生产若只信 Host（事件或 Lumi 信封）：装完后可把 `allow_local_blob` 改为 `false`。
+默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。管理员分发 blob 的正式使用场景保持 `allow_local_blob: true`，并把 blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 
 - `config/harness-config.yaml` → `cli.qdm_metric_cli`（安装器写 `…/bin/qdm-metric-cli`）
 - `config/qdm-cli-paths.env` → `export QDM_METRIC_CLI="..."`
 - 回退：仓库根下 `bin/qdm-metric-cli`
-- PI Hook 会把裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
+- `authz.mode=on` 时，Agent authz 会把受控命令中的裸名 / `$QDM_METRIC_CLI` 改写成解析到的绝对路径
 
 仓库已提交 fixture 密文（`config/fixtures/`）；也可自行再生成工作副本（gitignored，勿提交 `config/dev-auth.blob`）：
 
@@ -310,7 +383,7 @@ go run ./scripts/auth_blob_encrypt.go \
   > /path/to/harness-data/config/dev-auth.blob
 ```
 
-分槽 key 为 `sessionId::userId`；userId 来自 Host `_auth_user_id`、Lumi 信封 `_auth_user_id`，或本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
+分槽 key 为 `sessionId::userId`；userId 来自本地显式 `dev_user_id` / `HARNESS_AUTH_USER_ID`。
 
 ## Context 输出
 
