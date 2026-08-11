@@ -164,7 +164,7 @@ func TestRunWorkBuddyHookRejectsMetricResultWhenConfigIsInvalid(t *testing.T) {
 	}
 }
 
-func TestRunWorkBuddyHookRejectsAuthzOn(t *testing.T) {
+func TestRunWorkBuddyHookAllowsTemplateFlowWithAuthzOn(t *testing.T) {
 	root := t.TempDir()
 	writeInjectFile(t, root, "config/harness-config.yaml", `paths:
   knowledge: wikis
@@ -176,15 +176,12 @@ authz:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") {
+	if !ok || strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") {
 		t.Fatalf("unexpected authz output: ok=%v output=%+v", ok, output)
-	}
-	if output.SystemMessage != output.HookSpecificOutput.AdditionalContext {
-		t.Fatalf("authz refusal must also be host-visible: %+v", output)
 	}
 }
 
-func TestRunWorkBuddyHookRejectsAuthzOnMetricResult(t *testing.T) {
+func TestRunWorkBuddyHookLeavesAuthorizedMetricResultToPreToolBoundary(t *testing.T) {
 	root := t.TempDir()
 	writeInjectFile(t, root, "config/harness-config.yaml", `paths:
   knowledge: wikis
@@ -197,8 +194,7 @@ authz:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "Discard the qdm-metric-cli result") {
+	if ok || output.HookSpecificOutput.AdditionalContext != "" {
 		t.Fatalf("unexpected metric authz output: ok=%v output=%+v", ok, output)
 	}
 }

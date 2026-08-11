@@ -27,6 +27,7 @@ authz:
   "tool_name": "Bash",
   "tool_input": {
     "command": "qdm-metric-cli analysis execute --metric saleAmt",
+	"shell": "bash",
     "timeout_ms": 10000,
     "large_number": 92233720368547758070,
     "unknown": "kept"
@@ -323,6 +324,327 @@ authz:
 	}
 }
 
+func TestWorkBuddyPowerShellHookDeniesGatedCommandBeforeResolvingAuthorization(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+cli:
+  qdm_metric_cli: C:\Harness Runtime\bin\qdm-metric-cli.exe
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	input, err := json.Marshal(map[string]any{
+		"session_id":      "workbuddy-session",
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input": map[string]any{
+			"command":    `& '.\bin\qdm-metric-cli.exe' analysis execute --metric saleAmt`,
+			"timeout_ms": 10000,
+			"unknown":    "kept",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("expected WorkBuddy PowerShell deny output: ok=%v output=%+v", ok, output)
+	}
+	if reason := output.HookSpecificOutput.PermissionDecisionReason; !strings.Contains(reason, "QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED") || !strings.Contains(reason, "Bash tool") {
+		t.Fatalf("unexpected WorkBuddy PowerShell deny reason: %s", reason)
+	}
+	if output.HookSpecificOutput.UpdatedInput != nil {
+		t.Fatalf("deny must not return updatedInput: %#v", output.HookSpecificOutput.UpdatedInput)
+	}
+}
+
+func TestWorkBuddyPowerShellHookDeniesOutputCaptureAssignment(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	command := `$out = & '.\original\qdm-metric-cli.exe' auth describe 2>&1; $code = $LASTEXITCODE; Write-Output "=== STDOUT+STDERR ==="; $out | Out-String; Write-Output "=== EXIT CODE ==="; $code`
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input": map[string]any{
+			"command":     command,
+			"description": "capture qdm output",
+		},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED") {
+		t.Fatalf("expected unsupported WorkBuddy PowerShell host deny: ok=%v output=%+v", ok, output)
+	}
+	if output.HookSpecificOutput.UpdatedInput != nil {
+		t.Fatalf("deny must not return updatedInput: %#v", output.HookSpecificOutput.UpdatedInput)
+	}
+}
+
+func TestWorkBuddyExecuteCommandPowerShellExecutorDeniesGatedCommand(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "execute_command",
+		"tool_input": map[string]any{
+			"command":  `.\original\qdm-metric-cli.exe auth describe`,
+			"executor": "pwsh.exe",
+		},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED") {
+		t.Fatalf("expected execute_command PowerShell host deny: ok=%v output=%+v", ok, output)
+	}
+	if output.HookSpecificOutput.UpdatedInput != nil {
+		t.Fatalf("deny must not return updatedInput: %#v", output.HookSpecificOutput.UpdatedInput)
+	}
+}
+
+func TestWorkBuddyBashHookRewritesRelativeSubdirectoryToSecretFreeBroker(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "Bash",
+		"tool_input": map[string]any{
+			"command":     `./original/qdm-metric-cli.exe auth describe --auth-blob qdm1enc.model --resolve-labels=false`,
+			"description": "describe effective authorization",
+		},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected WorkBuddy Bash allow output: ok=%v output=%+v", ok, output)
+	}
+	updated := output.HookSpecificOutput.UpdatedInput
+	rewritten, _ := updated["command"].(string)
+	if !strings.Contains(rewritten, "authz-exec --agent 'workbuddy' -- auth describe --resolve-labels=false") {
+		t.Fatalf("relative-subdirectory invocation was not brokered: %s", rewritten)
+	}
+	for _, secret := range []string{testBlob, "qdm1enc.model", "--auth-blob"} {
+		if strings.Contains(rewritten, secret) {
+			t.Fatalf("broker rewrite leaked %q: %s", secret, rewritten)
+		}
+	}
+	if updated["description"] != "describe effective authorization" {
+		t.Fatalf("non-command tool input was not preserved: %#v", updated)
+	}
+}
+
+func TestWorkBuddyPowerShellHookDeniesUnrecognizedGatedShapeDeterministically(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input": map[string]any{
+			"command": `$out = (& '.\original\qdm-metric-cli.exe' auth describe)`,
+		},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_COMMAND_UNSUPPORTED") {
+		t.Fatalf("expected deterministic unsupported-command deny: ok=%v output=%+v", ok, output)
+	}
+}
+
+func TestWorkBuddyPowerShellHookDeniesMultipleGatedInvocations(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input": map[string]any{
+			"command": `qdm-metric-cli.exe auth describe; qdm-metric-cli.exe analysis execute --metric saleAmt`,
+		},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_COMMAND_AMBIGUOUS") {
+		t.Fatalf("expected ambiguous multi-command deny: ok=%v output=%+v", ok, output)
+	}
+}
+
+func TestWorkBuddyPowerShellNonGatedCommandScrubsAuthEnvironment(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input":      map[string]any{"command": `Get-ChildItem Env:`},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, _ := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" ||
+		!strings.HasPrefix(command, "Remove-Item Env:HARNESS_AUTH_BLOB") || strings.Contains(command, testBlob) {
+		t.Fatalf("expected sanitized PowerShell command: ok=%v output=%+v", ok, output)
+	}
+}
+
+func TestWorkBuddyDenyReasonDoesNotLeakBlobPath(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  blob_file: private/secret-user-auth.blob
+  dev_user_id: workbuddy-user
+  allow_local_blob: true
+`)
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "PowerShell",
+		"tool_input":      map[string]any{"command": `.\bin\qdm-metric-cli.exe auth describe`},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason := output.HookSpecificOutput.PermissionDecisionReason
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		strings.Contains(reason, "secret-user-auth.blob") || strings.Contains(reason, root) {
+		t.Fatalf("deny reason leaked a path: ok=%v reason=%s", ok, reason)
+	}
+}
+
+func TestResolveDialectRequiresExplicitExecuteCommandExecutor(t *testing.T) {
+	tests := []struct {
+		name     string
+		tool     string
+		input    map[string]any
+		want     CommandDialect
+		accepted bool
+	}{
+		{name: "bash tool", tool: "Bash", input: map[string]any{}, want: DialectBash, accepted: true},
+		{name: "powershell tool", tool: "PowerShell", input: map[string]any{}, want: DialectPowerShell, accepted: true},
+		{name: "execute without hint", tool: "execute_command", input: map[string]any{}, want: "", accepted: true},
+		{name: "execute powershell", tool: "execute_command", input: map[string]any{"executor": "pwsh.exe"}, want: DialectPowerShell, accepted: true},
+		{name: "execute bash", tool: "execute_command", input: map[string]any{"shell_name": "git-bash"}, want: DialectBash, accepted: true},
+		{name: "execute cmd", tool: "execute_command", input: map[string]any{"shell": "cmd.exe"}, want: "", accepted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, accepted := resolveDialect("workbuddy", tt.tool, tt.input)
+			if got != tt.want || accepted != tt.accepted {
+				t.Fatalf("resolveDialect() = (%q, %v), want (%q, %v)", got, accepted, tt.want, tt.accepted)
+			}
+		})
+	}
+}
+
+func TestWorkBuddyExecuteCommandWithoutExecutorFailsClosedForPotentialGatedCommands(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	commands := []string{
+		`qdm-metric-cli.exe analysis execute --metric saleAmt`,
+		`%QDM_METRIC_CLI% auth describe`,
+		`$env:QDM_METRIC_CLI analysis execute --metric saleAmt`,
+	}
+	for _, command := range commands {
+		input, _ := json.Marshal(map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "execute_command",
+			"tool_input":      map[string]any{"command": command},
+		})
+		ok, output, err := Run(root, "workbuddy", input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+			!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_DIALECT_UNSUPPORTED") {
+			t.Fatalf("expected unsupported dialect deny for %q: ok=%v output=%+v", command, ok, output)
+		}
+	}
+}
+
+func TestWorkBuddyExecuteCommandWithoutExecutorLeavesOrdinaryCommandAlone(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	input, _ := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "execute_command",
+		"tool_input":      map[string]any{"command": "whoami"},
+	})
+	ok, output, err := Run(root, "workbuddy", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("ordinary command should be a no-op, got %+v", output)
+	}
+}
+
 func hookInput(command string) []byte {
 	body, _ := json.Marshal(map[string]any{
 		"session_id":      "session-1",
@@ -330,6 +652,7 @@ func hookInput(command string) []byte {
 		"tool_name":       "Bash",
 		"tool_input": map[string]any{
 			"command": command,
+			"shell":   "bash",
 		},
 	})
 	return body
@@ -342,6 +665,14 @@ func writeHarnessConfig(t *testing.T, body string) string {
 		t.Setenv(key, "")
 	}
 	root := t.TempDir()
+	broker := filepath.Join(root, "bin", "data-harness-cli-test")
+	if err := os.MkdirAll(filepath.Dir(broker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broker, []byte("test broker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("QDM_HARNESS_CLI", broker)
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}

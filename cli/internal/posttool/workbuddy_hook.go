@@ -45,22 +45,13 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 		return true, workBuddySafetyOutput(message), nil
 	}
 
-	cfg, err := harness.LoadConfig(root)
+	_, err := harness.LoadConfig(root)
 	if err != nil {
 		message := "QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded after the template tool call. " +
 			"Do not guess, read, or use a template."
 		if metricCommand {
 			message = "QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded after a qdm-metric-cli tool call. " +
 				"Discard the data result and do not produce numeric or permission-scoped conclusions."
-		}
-		return true, workBuddySafetyOutput(message), nil
-	}
-	if cfg.Authz.AuthzEnabled() {
-		message := "QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-			"Do not inject a report template or produce permission-scoped conclusions."
-		if metricCommand {
-			message = "QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-				"Discard the qdm-metric-cli result from this tool call and do not produce permission-scoped conclusions."
 		}
 		return true, workBuddySafetyOutput(message), nil
 	}

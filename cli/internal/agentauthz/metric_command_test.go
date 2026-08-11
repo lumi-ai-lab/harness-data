@@ -9,6 +9,9 @@ func TestMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
 	commands := []string{
 		"qdm-metric-cli analysis execute --metric saleAmt",
 		"./bin/qdm-metric-cli analysis execute --metric saleAmt",
+		"./original/qdm-metric-cli.exe auth describe --resolve-labels=false",
+		"../fixtures/qdm-metric-cli analysis execute --metric saleAmt",
+		"real/qdm-metric-cli.exe auth describe --resolve-labels=false",
 		"$QDM_METRIC_CLI analysis execute --metric saleAmt",
 		"${QDM_METRIC_CLI} auth describe",
 		"FOO=bar /opt/qdm/bin/qdm-metric-cli auth describe",
@@ -17,6 +20,33 @@ func TestMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
 	for _, command := range commands {
 		if !IsMetricAuthzGatedCommand(command) {
 			t.Fatalf("expected gated command match: %s", command)
+		}
+	}
+}
+
+func TestRewriteMetricCLIToBrokerReplacesRelativeSubdirectoryExecutableOnly(t *testing.T) {
+	got := RewriteMetricCLIToBroker(
+		`./real/qdm-metric-cli.exe analysis execute --auth-blob qdm1enc.model --metric saleAmt`,
+		`D:\Harness Runtime\bin\data-harness-cli.exe`,
+		"workbuddy",
+	)
+	if !strings.HasPrefix(got, `'D:\Harness Runtime\bin\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- analysis execute`) {
+		t.Fatalf("expected relative executable to be replaced by broker: %s", got)
+	}
+	if strings.Contains(got, "./real/qdm-metric-cli.exe") || strings.Contains(got, "qdm1enc.model") || strings.Contains(got, "--auth-blob") {
+		t.Fatalf("rewrite retained original executable or authorization input: %s", got)
+	}
+}
+
+func TestRelativeSubdirectoryDetectionRequiresExactMetricCLIBaseName(t *testing.T) {
+	commands := []string{
+		`./original/not-qdm-metric-cli.exe auth describe`,
+		`./original/qdm-metric-cli-helper.exe auth describe`,
+		`relative/qdm-metric-cli.exe.bak analysis execute --metric saleAmt`,
+	}
+	for _, command := range commands {
+		if IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("non-exact executable basename must not be gated: %s", command)
 		}
 	}
 }
@@ -108,5 +138,88 @@ func TestMetricCommandDetectionMatchesDefaultExpansionSyntax(t *testing.T) {
 "$QDM_METRIC_CLI" auth describe`
 	if !IsMetricAuthDescribe(multiLine) {
 		t.Fatalf("expected auth describe match for multi-line assignment: %q", multiLine)
+	}
+}
+
+func TestPowerShellMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
+	commands := []string{
+		`qdm-metric-cli.exe analysis execute --metric saleAmt`,
+		`.\bin\qdm-metric-cli.exe auth describe`,
+		`& '.\bin\qdm-metric-cli.exe' analysis execute --metric saleAmt`,
+		`& 'C:\Harness Runtime\bin\qdm-metric-cli.exe' auth describe`,
+		`& $env:QDM_METRIC_CLI analysis execute --metric saleAmt`,
+	}
+	for _, command := range commands {
+		if !IsPowerShellMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected PowerShell gated command match: %s", command)
+		}
+		if PowerShellMetricInvocationCount(command) != 1 {
+			t.Fatalf("expected one PowerShell invocation: %s", command)
+		}
+	}
+}
+
+func TestPowerShellMetricCommandDetectionIgnoresTextCommentsAndHereStrings(t *testing.T) {
+	commands := []string{
+		`Write-Output "qdm-metric-cli.exe analysis execute --metric saleAmt"`,
+		`# qdm-metric-cli.exe auth describe`,
+		"@'\nqdm-metric-cli.exe analysis execute --metric saleAmt\n'@",
+		"@\"\nqdm-metric-cli.exe auth describe\n\"@",
+	}
+	for _, command := range commands {
+		if IsPowerShellMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected PowerShell text to be ignored: %s", command)
+		}
+	}
+}
+
+func TestInjectPowerShellDataAuthRewritesPathAndPreservesPipeline(t *testing.T) {
+	got := InjectPowerShellDataAuth(
+		`& '.\bin\qdm-metric-cli.exe' analysis execute --auth-blob 'qdm1enc.model' --metric saleAmt | ConvertTo-Json`,
+		"qdm1enc.runtime",
+		`C:\Harness Runtime\bin\qdm-metric-cli.exe`,
+	)
+	if !strings.HasPrefix(got, `& 'C:\Harness Runtime\bin\qdm-metric-cli.exe' analysis execute`) {
+		t.Fatalf("expected PowerShell metric path rewrite: %s", got)
+	}
+	if !strings.Contains(got, `--metric saleAmt --data-auth --auth-blob 'qdm1enc.runtime' | ConvertTo-Json`) {
+		t.Fatalf("expected PowerShell auth flags before pipeline: %s", got)
+	}
+	if strings.Contains(got, "qdm1enc.model") {
+		t.Fatalf("expected model blob to be removed: %s", got)
+	}
+}
+
+func TestPowerShellCaptureAssignmentIsRecognizedAndBrokered(t *testing.T) {
+	command := `$out = & '.\original\qdm-metric-cli.exe' auth describe 2>&1; $code = $LASTEXITCODE; $out | Out-String`
+	if !IsPowerShellMetricAuthDescribe(command) || PowerShellMetricInvocationCount(command) != 1 {
+		t.Fatalf("expected one auth describe invocation in capture assignment: %s", command)
+	}
+	got := RewritePowerShellMetricCLIToBroker(command, `C:\Harness Runtime\bin\data-harness-cli.exe`, "workbuddy")
+	if !strings.Contains(got, `$out = & 'C:\Harness Runtime\bin\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- auth describe 2>&1`) {
+		t.Fatalf("expected capture assignment broker rewrite: %s", got)
+	}
+	if strings.Contains(got, "qdm1enc.") || strings.Contains(got, "--auth-blob") {
+		t.Fatalf("broker rewrite must not contain authorization material: %s", got)
+	}
+}
+
+func TestPowerShellQuoteEscapesSingleQuotes(t *testing.T) {
+	if got := PowerShellQuote(`C:\QDM's Runtime\qdm-metric-cli.exe`); got != `'C:\QDM''s Runtime\qdm-metric-cli.exe'` {
+		t.Fatalf("unexpected PowerShell quote: %s", got)
+	}
+}
+
+func TestStripPowerShellAuthFlagsPreservesQuotedPathsAndHereStrings(t *testing.T) {
+	command := "& 'C:\\Harness  Runtime\\bin\\qdm-metric-cli.exe' analysis execute --auth-json '{\"fake\":true}' --data-auth --auth-blob 'qdm1enc.model' --metric saleAmt\n@'\n--auth-blob qdm1enc.documentation\n'@"
+	got := StripPowerShellAuthFlags(command)
+	if !strings.Contains(got, `'C:\Harness  Runtime\bin\qdm-metric-cli.exe'`) {
+		t.Fatalf("quoted executable path was changed: %s", got)
+	}
+	if strings.Contains(got, "qdm1enc.model") || strings.Contains(got, `'{\"fake\":true}'`) {
+		t.Fatalf("model authorization flags were not removed: %s", got)
+	}
+	if !strings.Contains(got, "--auth-blob qdm1enc.documentation") {
+		t.Fatalf("PowerShell here-string content was changed: %s", got)
 	}
 }

@@ -24,10 +24,13 @@ export async function confirm(message, options = {}) {
 }
 
 export async function chooseAgent(options = {}) {
-  // Windows only supports Codex — skip the prompt entirely
+  // Windows defaults to Codex but also supports an explicit WorkBuddy plugin.
   if (process.platform === "win32") {
-    if (options.agent && options.agent !== "codex") {
-      warn(`Windows 仅支持 Codex Agent,已忽略 --agent ${options.agent}`);
+    if (options.agent) {
+      const value = String(options.agent).trim().toLowerCase();
+      if (!agentChoices.includes(value)) throw new Error(`agent must be ${agentChoiceText}`);
+      if (value === "codex" || value === "workbuddy") return value;
+      warn(`Windows 当前支持 Codex 或显式 WorkBuddy，已忽略 --agent ${options.agent}`);
     }
     return "codex";
   }

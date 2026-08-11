@@ -9,6 +9,8 @@ import {
   detectWorkBuddyVersion,
   inspectWorkBuddyPlugin,
   versionAtLeast,
+  workBuddyAuthzHostContractDetail,
+  workBuddyAuthzHostContractValidated,
   workBuddyMinimumVersion,
   workBuddyPluginRel,
 } from "../lib/workbuddy.js";
@@ -44,6 +46,41 @@ function selectedAgent(workspace, options = {}) {
   return String(state.agent || "").toLowerCase();
 }
 
+function workBuddyAuthReadiness(workspace, authz, env = process.env) {
+  if (authz?.mode !== "on") {
+    return { sourceOK: true, source: "authz.mode=off", userOK: true, user: "not required" };
+  }
+  if (authz.allowLocalBlob === false) {
+    return { sourceOK: false, source: "allow_local_blob=false", userOK: false, user: "local authorization disabled" };
+  }
+  const inline = String(env.HARNESS_AUTH_BLOB || "").trim();
+  const envFile = String(env.HARNESS_AUTH_BLOB_FILE || "").trim();
+  const configuredFile = String(authz.blobFile || "").trim();
+  const readValidBlob = (value) => {
+    if (!value) return false;
+    const file = path.isAbsolute(value) ? value : path.join(workspace, value);
+    try {
+      return fs.readFileSync(file, "utf8").trim().startsWith("qdm1enc.");
+    } catch {
+      return false;
+    }
+  };
+  let sourceOK = false;
+  let source = "missing";
+  if (inline) {
+    sourceOK = inline.startsWith("qdm1enc.");
+    source = sourceOK ? "HARNESS_AUTH_BLOB" : "HARNESS_AUTH_BLOB invalid";
+  } else if (envFile) {
+    sourceOK = readValidBlob(envFile);
+    source = sourceOK ? "HARNESS_AUTH_BLOB_FILE" : "HARNESS_AUTH_BLOB_FILE missing or invalid";
+  } else if (configuredFile) {
+    sourceOK = readValidBlob(configuredFile);
+    source = sourceOK ? `authz.blob_file=${configuredFile}` : "authz.blob_file missing or invalid";
+  }
+  const user = String(env.HARNESS_AUTH_USER_ID || authz.devUserId || "").trim();
+  return { sourceOK, source, userOK: Boolean(user), user: user ? "explicit user ID configured" : "missing explicit user ID" };
+}
+
 export async function collectDoctor(workspace, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
@@ -73,11 +110,8 @@ export async function collectDoctor(workspace, options = {}) {
 
   const configuredAgent = selectedAgent(workspace, options);
   const workBuddySelected = configuredAgent === "workbuddy";
-  if (workBuddySelected) {
-    add("WorkBuddy authz.mode=off", authz?.mode !== "on", authz?.mode === "on" ? "data-auth is not supported" : "off");
-  }
   let workBuddy = null;
-  if (fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
+  if (workBuddySelected || fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
     workBuddy = inspectWorkBuddyPlugin(workspace);
     add("WorkBuddy plugin package", workBuddy.prepared, workBuddy.prepared ? `${workBuddyPluginRel} v${workBuddy.version}; marketplace=${workBuddy.marketplaceName}` : workBuddy.errors.join("; "));
     add(
@@ -88,6 +122,16 @@ export async function collectDoctor(workspace, options = {}) {
         : `${workBuddy.version || "missing"}; installer=${packageVersion()} (update runtime before selecting WorkBuddy)`,
     );
     if (workBuddySelected) {
+      const readiness = workBuddyAuthReadiness(workspace, authz, options.env || process.env);
+      add("WorkBuddy auth source", readiness.sourceOK, readiness.source);
+      add("WorkBuddy auth user", readiness.userOK, readiness.user);
+      if (authz?.mode === "on") {
+        add(
+          "WorkBuddy authz host contract",
+          workBuddyAuthzHostContractValidated,
+          workBuddyAuthzHostContractDetail,
+        );
+      }
       const clientVersion = detectWorkBuddyVersion(options);
       if (clientVersion) {
         const supported = versionAtLeast(clientVersion);

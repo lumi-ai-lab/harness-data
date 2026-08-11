@@ -3,7 +3,6 @@ package tests
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,34 +77,6 @@ func TestWorkBuddyContextMissingSessionFailsSafelyWithoutState(t *testing.T) {
 	}
 }
 
-func TestWorkBuddyContextRejectsAuthzOn(t *testing.T) {
-	root := t.TempDir()
-	writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", `paths:
-  knowledge: wikis
-
-authz:
-  mode: on
-`)
-	payload := []byte(`{"session_id":"authz-session","prompt":"销售额是多少？"}`)
-	ok, output, err := dhcontext.RunWorkBuddyHook(root, payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || !output.Continue {
-		t.Fatalf("expected authz safety output, ok=%v continue=%v", ok, output.Continue)
-	}
-	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "authz.mode=off") {
-		t.Fatalf("unexpected authz context: %s", output.HookSpecificOutput.AdditionalContext)
-	}
-	if output.SystemMessage != output.HookSpecificOutput.AdditionalContext {
-		t.Fatalf("authz refusal must also be host-visible: %+v", output)
-	}
-	if _, err := os.Stat(sessionstate.Dir(root)); !os.IsNotExist(err) {
-		t.Fatalf("authz refusal must not create state, err=%v", err)
-	}
-}
-
 func TestGenericHarnessContextIsAgentNeutral(t *testing.T) {
 	response, err := dhcontext.Build(currentRootWithIndex(t), "销售额最近怎么样？")
 	if err != nil {
@@ -116,16 +87,5 @@ func TestGenericHarnessContextIsAgentNeutral(t *testing.T) {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("generic context contains host-specific auth guidance %q: %s", unwanted, text)
 		}
-	}
-}
-
-func writeWorkBuddyTestFile(t *testing.T, root, rel, content string) {
-	t.Helper()
-	full := filepath.Join(root, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`
+var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|[A-Za-z]:[\\/](?:[^\s;|&'"]+[\\/])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?|(?:[^\s;|&'"]+[\\/])*qdm-metric-cli(?:\.exe)?)`
 
 func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
@@ -17,6 +17,16 @@ func IsMetricAuthDescribe(command string) bool {
 
 func IsMetricAuthzGatedCommand(command string) bool {
 	return IsMetricAnalysisExecute(command) || IsMetricAuthDescribe(command)
+}
+
+func MetricInvocationCount(command string) int {
+	return len(metricInvocationRegexp(`(?:analysis\s+execute|auth\s+describe)`).FindAllStringIndex(MaskQuotedAndHeredocRegions(command), -1))
+}
+
+func looksLikeGatedMetricCommand(command string) bool {
+	marker := regexp.MustCompile(`(?i)(?:qdm-metric-cli(?:\.exe)?|%QDM_METRIC_CLI%|\$env:QDM_METRIC_CLI|\$\{?QDM_METRIC_CLI(?:\:-[^}]*)?\}?)`)
+	subcommand := regexp.MustCompile(`(?i)(?:analysis\s+execute|auth\s+describe)`)
+	return marker.MatchString(command) && subcommand.MatchString(command)
 }
 
 func CommandHasModelAuthFlags(command string) bool {
@@ -183,7 +193,19 @@ func RewriteMetricCliInvocation(command, metricCliPath string) string {
 	if strings.TrimSpace(metricCliPath) == "" || command == "" {
 		return command
 	}
-	quoted := ShellQuote(metricCliPath)
+	return rewriteMetricCLIExecutable(command, ShellQuote(metricCliPath))
+}
+
+func RewriteMetricCLIToBroker(command, brokerPath, agent string) string {
+	if strings.TrimSpace(brokerPath) == "" || command == "" {
+		return command
+	}
+	cleaned := StripAuthFlags(command)
+	replacement := ShellQuote(brokerPath) + " authz-exec --agent " + ShellQuote(agent) + " --"
+	return rewriteMetricCLIExecutable(cleaned, replacement)
+}
+
+func rewriteMetricCLIExecutable(command, replacement string) string {
 	skeleton := MaskQuotedAndHeredocRegions(command)
 	binRe := regexp.MustCompile(`(?:'|")?` + metricBinPattern + `(?:'|")?`)
 	matches := binRe.FindAllStringIndex(skeleton, -1)
@@ -198,7 +220,7 @@ func RewriteMetricCliInvocation(command, metricCliPath string) string {
 			continue
 		}
 		out.WriteString(command[last:match[0]])
-		out.WriteString(quoted)
+		out.WriteString(replacement)
 		last = match[1]
 	}
 	out.WriteString(command[last:])
@@ -206,11 +228,23 @@ func RewriteMetricCliInvocation(command, metricCliPath string) string {
 }
 
 func StripAuthFlags(command string) string {
-	out := command
-	out = regexp.MustCompile(`(^|\s)--data-auth\b`).ReplaceAllString(out, " ")
-	out = regexp.MustCompile(`(^|\s)--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)`).ReplaceAllString(out, " ")
-	out = regexp.MustCompile(`(^|\s)--auth-json(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)`).ReplaceAllString(out, " ")
-	return strings.TrimSpace(regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(out, " "))
+	return stripAuthFlagsWithSkeleton(command, MaskQuotedAndHeredocRegions(command))
+}
+
+func stripAuthFlagsWithSkeleton(command, skeleton string) string {
+	re := regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth\b|(?:auth-blob|auth-json)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
+	matches := re.FindAllStringIndex(skeleton, -1)
+	if len(matches) == 0 {
+		return strings.TrimSpace(command)
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		out.WriteString(command[last:match[0]])
+		last = match[1]
+	}
+	out.WriteString(command[last:])
+	return strings.TrimSpace(out.String())
 }
 
 func InjectDataAuth(command, blob, metricCliPath string) string {

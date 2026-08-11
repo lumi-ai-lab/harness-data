@@ -3,21 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import { packageVersion } from "./package.js";
 
-export const workBuddyMinimumVersion = "5.3.5";
+export const workBuddyMinimumVersion = "5.3.8";
+// This is intentionally independent from the minimum client version. A newer
+// WorkBuddy build is not considered authz-safe until the real-host regression
+// matrix has verified stdout/stderr delivery, updatedInput replacement, deny
+// zero-side-effects, and session/history redaction.
+export const workBuddyAuthzHostContractValidated = true;
+export const workBuddyAuthzHostContractDetail =
+  "validated on Windows WorkBuddy 5.3.8 with the fix2 real-host regression matrix";
 export const workBuddyMarketplaceName = "lumi-harness-data";
 export const workBuddyMarketplaceRel = "agents";
 export const workBuddyPluginRel = "agents/workbuddy";
 
 export function agentIncludesWorkBuddy(agent) {
-  // WorkBuddy remains explicit until the project-owned desktop E2E matrix has
-  // passed. `both` and the existing `all` selection keep their old semantics.
+  // WorkBuddy remains an explicit selection. `both` and the existing `all`
+  // selection keep their old semantics independently of authz readiness.
   return String(agent || "").toLowerCase() === "workbuddy";
 }
 
 export function assertWorkBuddyAuthCompatibility(agent, dataAuth) {
-  if (dataAuth && agentIncludesWorkBuddy(agent)) {
-    throw new Error("WorkBuddy integration does not support --data-auth yet; install with authz.mode=off");
+  if (agentIncludesWorkBuddy(agent) && dataAuth && !workBuddyAuthzHostContractValidated) {
+    throw new Error(`WorkBuddy data-auth is not production-ready (${workBuddyAuthzHostContractDetail})`);
   }
+  return true;
 }
 
 export function inspectWorkBuddyPlugin(workspace) {
@@ -78,17 +86,23 @@ export function inspectWorkBuddyPlugin(workspace) {
 
   if (hooks) {
     const userPrompt = hooks.hooks?.UserPromptSubmit;
+    const preTool = hooks.hooks?.PreToolUse;
     const postTool = hooks.hooks?.PostToolUse;
     if (!Array.isArray(userPrompt) || userPrompt.length !== 1) errors.push("UserPromptSubmit hook must be declared once");
+    if (!Array.isArray(preTool) || preTool.length !== 1) errors.push("PreToolUse hook must be declared once");
     if (!Array.isArray(postTool) || postTool.length !== 1) errors.push("PostToolUse hook must be declared once");
-    const matcher = postTool?.[0]?.matcher || "";
-    if (matcher !== "Bash|PowerShell|execute_command") errors.push("PostToolUse matcher must be Bash|PowerShell|execute_command");
+    const preMatcher = preTool?.[0]?.matcher || "";
+    const postMatcher = postTool?.[0]?.matcher || "";
+    if (preMatcher !== "Bash|PowerShell|execute_command") errors.push("PreToolUse matcher must be Bash|PowerShell|execute_command");
+    if (postMatcher !== "Bash|PowerShell|execute_command") errors.push("PostToolUse matcher must be Bash|PowerShell|execute_command");
     const commands = [
       userPrompt?.[0]?.hooks?.[0]?.command || "",
+      preTool?.[0]?.hooks?.[0]?.command || "",
       postTool?.[0]?.hooks?.[0]?.command || "",
     ];
     if (!commands[0].includes("harness-hook.mjs\" context")) errors.push("UserPromptSubmit must call adapter context mode");
-    if (!commands[1].includes("harness-hook.mjs\" posttool")) errors.push("PostToolUse must call adapter posttool mode");
+    if (!commands[1].includes("harness-hook.mjs\" authz")) errors.push("PreToolUse must call adapter authz mode");
+    if (!commands[2].includes("harness-hook.mjs\" posttool")) errors.push("PostToolUse must call adapter posttool mode");
     if (commands.some((command) => !command.includes("bin/run-node"))) errors.push("hooks must use the managed Node launcher");
   }
 

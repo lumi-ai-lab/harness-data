@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, readAuthzFromHarnessConfig, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -13,7 +13,12 @@ import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
-import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
+import {
+  agentIncludesWorkBuddy,
+  assertWorkBuddyAuthCompatibility,
+  inspectWorkBuddyPlugin,
+  workBuddyMinimumVersion,
+} from "../lib/workbuddy.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
@@ -246,10 +251,9 @@ export async function installCommand(options = {}) {
   ]);
 
   const selectedAgent = await chooseAgent(options);
-  const existingAuthz = readAuthzFromHarnessConfig(path.join(targetRuntimeDir, "config", "harness-config.yaml"));
-  const effectiveDataAuth = options.dataAuth === true || (options.dataAuth === undefined && existingAuthz?.mode === "on");
-  assertWorkBuddyAuthCompatibility(selectedAgent, effectiveDataAuth);
-
+  // Keep the compatibility assertion before downloading or writing anything.
+  // WorkBuddy 5.3.8+ passed the fix2 real-client host-contract matrix.
+  assertWorkBuddyAuthCompatibility(selectedAgent, options.dataAuth);
   step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
@@ -300,9 +304,11 @@ export async function installCommand(options = {}) {
   const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
-  if (authz.mode === "on") {
+  if (authz.mode === "on" && authz.allowLocalBlob) {
     const blob = ensureLocalAuthBlob(runtimeDir);
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+  } else if (authz.mode === "on") {
+    warn("authz.mode: on，但 allow_local_blob=false；保留现有权限边界，doctor 将报告当前无可用本地凭证来源");
   } else {
     ok("authz.mode: off");
   }

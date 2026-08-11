@@ -26,3 +26,11 @@ func AuthSourceEnvPresent(env map[string]string) bool {
 func ScrubAuthSourceEnvCommand(command string) string {
 	return "unset " + strings.Join(AuthSourceEnvKeys, " ") + "; " + command
 }
+
+func ScrubAuthSourceEnvPowerShellCommand(command string) string {
+	paths := make([]string, 0, len(AuthSourceEnvKeys))
+	for _, key := range AuthSourceEnvKeys {
+		paths = append(paths, "Env:"+key)
+	}
+	return "Remove-Item " + strings.Join(paths, ",") + " -ErrorAction SilentlyContinue; " + command
+}

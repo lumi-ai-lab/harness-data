@@ -125,18 +125,13 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
   }
   if (existing) {
     const mode = existing.mode === "on" ? "on" : "off";
-    let allowLocalBlob = existing.allowLocalBlob !== false;
-    // MVP convergence: Host/Lumi auth fallback has been removed, so
-    // allow_local_blob=false with mode=on is a dead-end config that can
-    // never authorize any gated command. Migrate it to true on update.
-    if (mode === "on" && !allowLocalBlob) {
-      allowLocalBlob = true;
-    }
     return {
       mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      allowLocalBlob,
+      // This is an authorization boundary, not a compatibility default.
+      // Updates must never broaden an explicit local-credential opt-out.
+      allowLocalBlob: existing.allowLocalBlob !== false,
     };
   }
   return {
@@ -247,17 +242,16 @@ export function patchCodexHooksForWindows(workspace) {
   if (!fs.existsSync(shimPath)) return; // cli-shim.mjs ships in the runtime bundle
 
   const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
-  for (const event of Object.keys(hooks.hooks || {})) {
-    for (const entry of hooks.hooks[event]) {
+  const eventArgs = {
+    UserPromptSubmit: ["context", "--format", "codex-hook"],
+    PreToolUse: ["authz-hook", "--agent", "codex"],
+    PostToolUse: ["posttool", "--format", "codex-hook"],
+  };
+  for (const [event, args] of Object.entries(eventArgs)) {
+    for (const entry of hooks.hooks?.[event] || []) {
       for (const hook of entry.hooks || []) {
-        if (typeof hook.command !== "string") continue;
-        // Extract only the final CLI invocation from:
-        // bash -c '... [ -z "$cli" ]; ...; "$cli" context --format codex-hook'
-        const invocationStart = hook.command.lastIndexOf('"$cli"');
-        if (invocationStart < 0) continue;
-        const m = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
-        if (!m) continue;
-        hook.command = `node "${shimPath}" ${m[1]}`;
+        if (hook?.type !== "command" || typeof hook.command !== "string") continue;
+        hook.command = `node "${shimPath}" ${args.join(" ")}`;
       }
     }
   }

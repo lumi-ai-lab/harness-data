@@ -35,6 +35,7 @@ import {
   writeLocalConfig,
 } from "../src/lib/config.js";
 import { run } from "../src/lib/exec.js";
+import { chooseAgent } from "../src/lib/prompt.js";
 import {
   agentIncludesWorkBuddy,
   assertWorkBuddyAuthCompatibility,
@@ -1210,17 +1211,17 @@ test("local config overwrite preserves existing authz when dataAuth omitted", ()
   assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
 });
 
-test("resolveAuthzForWrite migrates allow_local_blob:false to true when mode=on", () => {
-  const migrated = resolveAuthzForWrite({}, {
+test("resolveAuthzForWrite preserves allow_local_blob:false when mode=on", () => {
+  const preserved = resolveAuthzForWrite({}, {
     mode: "on",
     blobFile: "config/dev-auth.blob",
     devUserId: "local-test-user",
     allowLocalBlob: false,
   });
-  assert.equal(migrated.mode, "on");
-  assert.equal(migrated.allowLocalBlob, true);
-  assert.equal(migrated.blobFile, "config/dev-auth.blob");
-  assert.equal(migrated.devUserId, "local-test-user");
+  assert.equal(preserved.mode, "on");
+  assert.equal(preserved.allowLocalBlob, false);
+  assert.equal(preserved.blobFile, "config/dev-auth.blob");
+  assert.equal(preserved.devUserId, "local-test-user");
 });
 
 test("resolveAuthzForWrite preserves allow_local_blob:false when mode=off", () => {
@@ -1234,7 +1235,7 @@ test("resolveAuthzForWrite preserves allow_local_blob:false when mode=off", () =
   assert.equal(preserved.allowLocalBlob, false);
 });
 
-test("writeLocalConfig overwrites and migrates allow_local_blob:false to true", () => {
+test("writeLocalConfig overwrites without broadening allow_local_blob:false", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
   // Simulate old production config with allow_local_blob: false
@@ -1245,7 +1246,7 @@ test("writeLocalConfig overwrites and migrates allow_local_blob:false to true", 
   writeLocalConfig(workspace, { overwrite: true });
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
   assert.match(harnessConfig, /mode: on/);
-  assert.match(harnessConfig, /allow_local_blob: true/);
+  assert.match(harnessConfig, /allow_local_blob: false/);
 });
 
 test("doctor fails on authz mode=on with allow_local_blob=false", async () => {
@@ -1338,10 +1339,22 @@ test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
   assert.equal(agentIncludesWorkBuddy("both"), false);
 });
 
-test("WorkBuddy rejects data-auth while preserving existing all semantics", () => {
-  assert.throws(() => assertWorkBuddyAuthCompatibility("workbuddy", true), /does not support --data-auth/);
+test("WorkBuddy production install allows data-auth after the host contract is validated", () => {
+  assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("workbuddy", true));
   assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("workbuddy", false));
   assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("all", true));
+});
+
+test("Windows agent selection allows explicit WorkBuddy and keeps Codex default", async () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+  try {
+    assert.equal(await chooseAgent({ agent: "workbuddy" }), "workbuddy");
+    assert.equal(await chooseAgent({ agent: "codex" }), "codex");
+    assert.equal(await chooseAgent({}), "codex");
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
 });
 
 test("WorkBuddy plugin package matches npm version and native hook contract", () => {
@@ -1353,9 +1366,9 @@ test("WorkBuddy plugin package matches npm version and native hook contract", ()
   assert.equal(plugin.marketplaceVersion, packageVersion());
   assert.equal(plugin.marketplaceName, "lumi-harness-data");
   assert.equal(plugin.marketplaceRoot, path.join(workspace, "agents"));
-  assert.equal(versionAtLeast("5.3.5"), true);
+  assert.equal(versionAtLeast("5.3.5"), false);
   assert.equal(versionAtLeast("5.3.8"), true);
-  assert.equal(versionAtLeast("5.3.4"), false);
+  assert.equal(versionAtLeast("5.3.7"), false);
 });
 
 test("WorkBuddy enablement detection distinguishes package from enabled plugin", () => {
@@ -1427,7 +1440,7 @@ test("codex agent template includes authz PreToolUse hook and guidance", () => {
   assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
 });
 
-test("Windows Codex hook patch targets the final CLI invocation", () => {
+test("Windows Codex hook patch maps all three events through the shim idempotently", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const codexDir = path.join(workspace, "agents", "codex");
   const hooksDir = path.join(codexDir, "hooks");
@@ -1437,6 +1450,8 @@ test("Windows Codex hook patch targets the final CLI invocation", () => {
   const hooks = {
     hooks: {
       UserPromptSubmit: [{ hooks: [{ type: "command", command: originalCommand }] }],
+      PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: '"$root/bin/data-harness-cli" authz-hook --agent codex' }] }],
+      PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: originalCommand.replace("context", "posttool") }] }],
     },
   };
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -1447,6 +1462,7 @@ test("Windows Codex hook patch targets the final CLI invocation", () => {
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
   try {
     patchCodexHooksForWindows(workspace);
+    patchCodexHooksForWindows(workspace);
   } finally {
     Object.defineProperty(process, "platform", platformDescriptor);
   }
@@ -1455,6 +1471,14 @@ test("Windows Codex hook patch targets the final CLI invocation", () => {
   assert.equal(
     patched.hooks.UserPromptSubmit[0].hooks[0].command,
     `node "${shimPath}" context --format codex-hook`,
+  );
+  assert.equal(
+    patched.hooks.PreToolUse[0].hooks[0].command,
+    `node "${shimPath}" authz-hook --agent codex`,
+  );
+  assert.equal(
+    patched.hooks.PostToolUse[0].hooks[0].command,
+    `node "${shimPath}" posttool --format codex-hook`,
   );
 });
 
@@ -1598,12 +1622,12 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   });
   const byName = new Map(report.checks.map((check) => [check.name, check]));
   assert.equal(byName.get("WorkBuddy plugin package")?.ok, true);
-  assert.equal(byName.get("WorkBuddy version >= 5.3.5")?.ok, true);
+  assert.equal(byName.get("WorkBuddy version >= 5.3.8")?.ok, true);
   assert.match(byName.get("WorkBuddy plugin enablement")?.detail || "", /enabled/);
   assert.equal(byName.get("Agent hook")?.ok, true);
 
-  const oldClient = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.4", homeDir: home });
-  assert.equal(oldClient.checks.find((check) => check.name === "WorkBuddy version >= 5.3.5")?.ok, false);
+  const oldClient = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.7", homeDir: home });
+  assert.equal(oldClient.checks.find((check) => check.name === "WorkBuddy version >= 5.3.8")?.ok, false);
 
   const unknownHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-unknown-home-"));
   const unknown = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: unknownHome });
@@ -1619,7 +1643,15 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
 
   writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
   const authzOn = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
-  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy authz.mode=off")?.ok, false);
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth source")?.ok, false);
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth user")?.ok, true);
+  const hostContract = authzOn.checks.find((check) => check.name === "WorkBuddy authz host contract");
+  assert.equal(hostContract?.ok, true);
+  assert.match(hostContract?.detail || "", /WorkBuddy 5\.3\.8/);
+  fs.writeFileSync(path.join(workspace, localTestAuthBlobRel), "qdm1enc.workbuddy-test\n");
+  const authzReady = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
+  assert.equal(authzReady.checks.find((check) => check.name === "WorkBuddy auth source")?.ok, true);
+  assert.equal(authzReady.checks.find((check) => check.name === "WorkBuddy authz host contract")?.ok, true);
 });
 
 test("update doctor treats missing agent hooks as non-blocking only", async () => {

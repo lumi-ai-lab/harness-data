@@ -48,6 +48,197 @@ test("WorkBuddy adapter canonicalizes shell tool names", () => {
   }), null);
 });
 
+test("WorkBuddy authz adapter preserves the original tool contract", () => {
+  const payload = adapter.normalizePayload("authz", {
+    session_id: " authz-session ",
+    hook_event_name: "PreToolUse",
+    tool_name: "PowerShell",
+    tool_input: {
+      command: ".\\bin\\qdm-metric-cli.exe auth describe",
+      timeout_ms: 10000,
+      unknown_host_field: { keep: true },
+    },
+    cwd: "C:\\Harness Runtime",
+  });
+  assert.deepEqual(payload, {
+    session_id: "authz-session",
+    hook_event_name: "PreToolUse",
+    tool_name: "PowerShell",
+    tool_input: {
+      command: ".\\bin\\qdm-metric-cli.exe auth describe",
+      timeout_ms: 10000,
+      unknown_host_field: { keep: true },
+    },
+    cwd: "C:\\Harness Runtime",
+  });
+});
+
+test("WorkBuddy authz failures use a real PreToolUse deny", () => {
+  const output = adapter.safeOutput("authz", "QDM_AUTHZ_HOOK_UNAVAILABLE: unavailable");
+  assert.deepEqual(output, {
+    systemMessage: "QDM_AUTHZ_HOOK_UNAVAILABLE: unavailable",
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "QDM_AUTHZ_HOOK_UNAVAILABLE: unavailable",
+    },
+  });
+});
+
+test("WorkBuddy authz output validator preserves non-command fields", () => {
+  const canonical = {
+    tool_input: { command: "original", timeout_ms: 10000, unknown: "kept" },
+  };
+  const valid = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { command: "updated", timeout_ms: 10000, unknown: "kept" },
+    },
+  });
+  assert.ok(adapter.validateHookOutput("authz", valid, canonical));
+  const lossy = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { command: "updated", timeout_ms: 10000 },
+    },
+  });
+  assert.equal(adapter.validateHookOutput("authz", lossy, canonical), null);
+});
+
+test("WorkBuddy authz output validator rejects authorization material in updatedInput", () => {
+  const canonical = { tool_input: { command: ".\\bin\\qdm-metric-cli.exe auth describe" } };
+  const leaked = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: {
+        command: "& '.\\bin\\qdm-metric-cli.exe' auth describe --auth-blob 'qdm1enc.must-not-cross-host-contract'",
+      },
+    },
+  });
+  assert.equal(adapter.validateHookOutput("authz", leaked, canonical), null);
+  const leakedDataAuth = leaked.replace(
+    "auth describe --auth-blob 'qdm1enc.must-not-cross-host-contract'",
+    "analysis execute --data-auth",
+  );
+  assert.equal(adapter.validateHookOutput("authz", leakedDataAuth, canonical), null);
+
+  const brokered = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: {
+        command: "& '.\\bin\\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- auth describe",
+      },
+    },
+  });
+  assert.ok(adapter.validateHookOutput("authz", brokered, canonical));
+});
+
+test("WorkBuddy adapter preserves JSON numbers beyond JavaScript safe integer range", () => {
+  const input = '{"tool_input":{"command":"original","large_number":92233720368547758070,"decimal":1.2300e+40}}';
+  const parsed = adapter.parseLosslessJSON(input);
+  assert.equal(adapter.stringifyLosslessJSON(parsed), input);
+
+  const validOutput = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"updated","large_number":92233720368547758070,"decimal":1.2300e+40}}}';
+  assert.ok(adapter.validateHookOutput("authz", validOutput, parsed));
+  const roundedOutput = validOutput.replace("92233720368547758070", "92233720368547760000");
+  assert.equal(adapter.validateHookOutput("authz", roundedOutput, parsed), null);
+});
+
+test("WorkBuddy adapter reads authz mode without reading credentials", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-mode-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "paths:\n  knowledge: wikis\n\nauthz:\n  mode: on # enabled\n");
+  assert.equal(adapter.readAuthzMode(root), "on");
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
+  assert.equal(adapter.readAuthzMode(root), "off");
+});
+
+test("WorkBuddy authz adapter fails closed on invalid input", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-invalid-authz-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: on\n");
+  const result = runAdapter("authz", {
+    session_id: "invalid",
+    tool_name: "PowerShell",
+    tool_input: {},
+    cwd: root,
+  }, { CODEBUDDY_PROJECT_DIR: root });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /QDM_AUTHZ_INPUT_INVALID/);
+});
+
+test("WorkBuddy authz adapter keeps authz-off no-op when CLI is missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
+  const result = runAdapter("authz", {
+    session_id: "off",
+    tool_name: "PowerShell",
+    tool_input: { command: ".\\bin\\qdm-metric-cli.exe auth describe" },
+    cwd: root,
+  }, {
+    CODEBUDDY_PROJECT_DIR: root,
+    QDM_HARNESS_CLI: path.join(root, "bin", "missing-data-harness-cli.exe"),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+});
+
+test("WorkBuddy authz adapter keeps authz-off no-op for an incomplete payload", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-invalid-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
+  const result = runAdapter("authz", {
+    session_id: "off-invalid",
+    tool_name: "execute_command",
+    tool_input: {},
+    cwd: root,
+  }, { CODEBUDDY_PROJECT_DIR: root });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+});
+
+test("WorkBuddy authz adapter keeps authz-off no-op for invalid JSON", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-json-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
+  const result = runAdapterRaw("authz", "{invalid", { CODEBUDDY_PROJECT_DIR: root });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+});
+
+test("WorkBuddy authz adapter is a no-op outside Harness projects even for incomplete payloads", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ordinary-workbuddy-authz-"));
+  const result = runAdapter("authz", {
+    session_id: "ordinary",
+    tool_name: "execute_command",
+    tool_input: {},
+    cwd: root,
+  }, { CODEBUDDY_PROJECT_DIR: root });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+});
+
+test("WorkBuddy authz adapter ignores non-shell tools", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-non-shell-"));
+  fs.mkdirSync(path.join(root, "config"), { recursive: true });
+  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: on\n");
+  const result = runAdapter("authz", {
+    session_id: "non-shell",
+    tool_name: "Read",
+    tool_input: { file_path: "README.md" },
+    cwd: root,
+  }, { CODEBUDDY_PROJECT_DIR: root });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {});
+});
+
 test("WorkBuddy adapter finds a Harness root through directories with spaces", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness workbuddy root "));
   const nested = path.join(root, "nested folder", "child");
@@ -155,8 +346,12 @@ test("WorkBuddy adapter is a silent semantic no-op outside Harness projects", in
 });
 
 function runAdapter(mode, payload, env = {}) {
+  return runAdapterRaw(mode, JSON.stringify(payload), env);
+}
+
+function runAdapterRaw(mode, input, env = {}) {
   return spawnSync(process.execPath, [adapterPath, mode], {
-    input: JSON.stringify(payload),
+    input,
     encoding: "utf8",
     env: { ...process.env, ...env },
     timeout: 5_000,

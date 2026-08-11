@@ -476,6 +476,36 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	}
 }
 
+func TestRunWorkBuddyHookAddsAuthorizationGuidanceWhenEnabled(t *testing.T) {
+	root := testContextWikiRoot(t)
+	configPath := filepath.Join(root, "config", "harness-config.yaml")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = append(config, []byte("\nauthz:\n  mode: on\n  allow_local_blob: true\n")...)
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"session_id":"workbuddy-authz","prompt":"销售额最近怎么样？"}`)
+	ok, output, err := RunWorkBuddyHook(root, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected WorkBuddy hook output")
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, expected := range []string{"PreToolUse", "Never add or override --data-auth", "qdm-metric-cli auth describe"} {
+		if !strings.Contains(context, expected) {
+			t.Fatalf("missing WorkBuddy authorization guidance %q: %s", expected, context)
+		}
+	}
+	if strings.Contains(context, "qdm1enc.") || strings.Contains(context, "AUTHZ_UNSUPPORTED") {
+		t.Fatalf("authorization context leaked a blob or retained the old block: %s", context)
+	}
+}
+
 func TestBuildWithWikisIndexReferenceSpecDoesNotSelectPlaybook(t *testing.T) {
 	root := t.TempDir()
 	writeContextFile(t, root, "config/harness-config.yaml", `paths:
