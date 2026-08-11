@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, readAuthzFromHarnessConfig, removeLegacyDataCLIs } from "../lib/config.js";
-import { ask, chooseAgent } from "../lib/prompt.js";
+import { AUTH_OFF_PASSWORD, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, readAuthzFromHarnessConfig, removeLegacyDataCLIs } from "../lib/config.js";
+import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
@@ -306,14 +306,48 @@ export async function installCommand(options = {}) {
   blank();
 
   step(5, 7, "生成本地配置");
-  const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
-  ok("config/harness-config.yaml");
-  ok("config/qdm-cli-paths.env");
-  if (authz.mode === "on") {
-    const blob = ensureLocalAuthBlob(runtimeDir);
+  if (options.noAuth) {
+    // —— 关闭权限:验证密码（所有 agent 通用）——
+    const password = options.authOffPassword || await askSecret("请输入关闭权限密码：", options);
+    if (password !== AUTH_OFF_PASSWORD) {
+      throw new Error("关闭权限密码错误，安装中止");
+    }
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (密码已验证)");
+  } else if (options.dataAuth) {
+    // —— 内置 fixture（开发/测试）——
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+  } else if (agentIncludesWorkBuddy(selectedAgent)) {
+    // —— WorkBuddy 默认无权限（避免权限意识冲突，无需密码）——
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: false });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (WorkBuddy 默认无权限)");
   } else {
-    ok("authz.mode: off");
+    // —— 默认:带权限,输入 blob + dev_user_id（恢复 v0.0.43 契约）——
+    // 优先级: flag > env > 交互输入；--yes 非交互时无 blob 会抛 "is required"
+    const blobContent = options.authBlob
+      || process.env.HARNESS_AUTH_BLOB
+      || await askSecret("请输入权限 BLOB（加密 JSON，qdm1enc...）：", options);
+    if (!blobContent) throw new Error("auth blob is required; use --no-auth to skip");
+
+    const devUserId = options.authUserId
+      || process.env.HARNESS_AUTH_USER_ID
+      || await ask("请输入 dev_user_id：", options);
+    if (!devUserId) throw new Error("dev_user_id is required; use --no-auth to skip");
+
+    writeAuthBlob(runtimeDir, blobContent);
+    writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: on + user-provided blob");
+    ok(`dev_user_id: ${devUserId}`);
   }
   blank();
 
