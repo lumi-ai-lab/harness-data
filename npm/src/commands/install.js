@@ -241,6 +241,9 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
+  if (options.authUserId && !options.authBlob) {
+    throw new Error("--auth-user-id requires --auth-blob");
+  }
   const key = platformKey();
   header("Harness Data 安装器", packageVersion(), [
     `安装目录：${resolveWorkspaceDir(options.dir || process.cwd())}`,
@@ -294,11 +297,18 @@ export async function installCommand(options = {}) {
   blank();
 
   step(5, 7, "生成本地配置");
-  const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
+  const authBlob = String(options.authBlob || "").trim();
+  const dataAuth = options.dataAuth === true || Boolean(authBlob);
+  const { authz } = writeLocalConfig(runtimeDir, {
+    overwrite: true,
+    dataAuth,
+    authBlob,
+    authUserId: options.authUserId,
+  });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
   if (authz.mode === "on") {
-    const blob = ensureLocalAuthBlob(runtimeDir);
+    const blob = ensureLocalAuthBlob(runtimeDir, { blob: authBlob });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
   } else {
     ok("authz.mode: off");

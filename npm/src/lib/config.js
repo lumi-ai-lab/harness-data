@@ -104,11 +104,11 @@ export function readAuthzFromHarnessConfig(harnessPath) {
  * Priority: explicit dataAuth true/false → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
-  if (options.dataAuth === true) {
+  if (options.dataAuth === true || String(options.authBlob || "").trim()) {
     return {
       mode: "on",
       blobFile: localTestAuthBlobRel,
-      devUserId: localTestAuthUserId,
+      devUserId: options.authUserId || localTestAuthUserId,
       allowLocalBlob: true,
     };
   }
@@ -179,6 +179,15 @@ export function writeLocalConfig(workspace, options = {}) {
  */
 export function ensureLocalAuthBlob(workspace, options = {}) {
   const target = path.join(workspace, localTestAuthBlobRel);
+  const supplied = String(options.blob || "").trim();
+  if (supplied) {
+    if (!supplied.startsWith("qdm1enc.")) {
+      throw new Error("auth blob must be an encrypted qdm1enc blob");
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `${supplied}\n`, { mode: 0o600 });
+    return { copied: true, path: target };
+  }
   const fixture = path.join(workspace, localTestAuthFixtureRel);
   if (fs.existsSync(target) && !options.force) {
     return { copied: false, path: target };

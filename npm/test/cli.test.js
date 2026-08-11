@@ -1148,9 +1148,9 @@ test("local config exports metric cli path only", () => {
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli"/);
+  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli(?:\.exe)?"/);
   assert.doesNotMatch(env, /QDM_SQL_CLI|QDM_CAS_CLI|QDM_CAS_CONFIG_DIR|QDM_CMR_CLI|QDM_INDICATORS_CLI/);
-  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
+  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli(?:\.exe)?/);
   assert.doesNotMatch(harnessConfig, /qdm_sql_cli|qdm_cas_cli|qdm_cmr_cli|qdm_indicators_cli/);
   assert.match(harnessConfig, /authz:\n  mode: off/);
   assert.match(harnessConfig, /allow_local_blob: true/);
@@ -1237,6 +1237,52 @@ test("Windows Codex hook patch targets the final CLI invocation", () => {
   assert.equal(
     patched.hooks.UserPromptSubmit[0].hooks[0].command,
     `node "${shimPath}" context --format codex-hook`,
+  );
+});
+
+test("local config accepts supplied auth blob and user id", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const supplied = "qdm1enc.supplied-blob";
+  const { authz } = writeLocalConfig(workspace, {
+    overwrite: true,
+    authBlob: supplied,
+    authUserId: "yanjianhao",
+  });
+  ensureLocalAuthBlob(workspace, { blob: supplied });
+
+  assert.equal(authz.mode, "on");
+  assert.equal(authz.devUserId, "yanjianhao");
+  assert.equal(fs.readFileSync(path.join(workspace, localTestAuthBlobRel), "utf8"), `${supplied}\n`);
+});
+
+test("Windows Codex hook patch also rewrites PreToolUse", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const codexDir = path.join(workspace, "agents", "codex");
+  const hooksDir = path.join(codexDir, "hooks");
+  const hooksFile = path.join(codexDir, "hooks.json");
+  const shimPath = path.join(hooksDir, "cli-shim.mjs").replaceAll("\\", "/");
+  const command = "bash -c 'root=\"$PWD\"; cli=\"$root/bin/data-harness-cli\"; \"$cli\" authz-hook --agent codex'";
+  const hooks = {
+    hooks: {
+      PreToolUse: [{ hooks: [{ type: "command", command }] }],
+    },
+  };
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(path.join(hooksDir, "cli-shim.mjs"), "");
+  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
+
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+  try {
+    patchCodexHooksForWindows(workspace);
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
+
+  const patched = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  assert.equal(
+    patched.hooks.PreToolUse[0].hooks[0].command,
+    `node "${shimPath}" authz-hook --agent codex`,
   );
 });
 

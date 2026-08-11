@@ -10,3 +10,4 @@ Read `README.md` before running QDM data commands.
 - Do not write final results or intermediate analysis results to files unless the user explicitly asks to export, save, or generate a file.
 - Do not read or use template files directly unless `bin/data-harness-cli inject-template` has been requested by the harness flow and the hook injects the template.
 - Data queries use only `qdm-metric-cli`. Do not call `qdm-cmr-cli`, `qdm-indicators-cli`, `qdm-sql-cli`, or `cas-cli`.
+- Do not invent or pass `--data-auth`, `--auth-blob`, or `--auth-json`; the Codex `PreToolUse` authz hook injects authorization for permitted metric commands.

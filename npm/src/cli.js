@@ -45,6 +45,8 @@ Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --agent NAME                       claude, codex, pi, openclaw, hermes, both, or all
   --github-token TOKEN               GitHub token for private Release assets
-  --data-auth                        Enable metric data-auth (authz.mode=on + local test blob)`);
+  --data-auth                        Enable metric data-auth (authz.mode=on + local test blob)
+  --auth-blob BLOB                   Install a supplied qdm1enc authorization blob
+  --auth-user-id USER                Principal for --auth-blob`);
   if (unknown) process.exitCode = 1;
 }
