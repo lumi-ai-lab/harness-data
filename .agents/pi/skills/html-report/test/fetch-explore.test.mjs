@@ -12,6 +12,8 @@ import {
   materialQueryDelta,
   reusableExplore,
   semanticQueryShape,
+  computeQueryPatch,
+  applyQueryPatch,
 } from "../scripts/fetch-explore.mjs";
 import { normalizeEntryPayload } from "../scripts/fetch-entry.mjs";
 import {
@@ -476,7 +478,7 @@ test("fetch-explore Metric CLI success persists rows with derived provenance", a
   assert.equal(meta.argsSummary.singlePage, false);
   assert.equal(meta.queryDelta.material, true);
   assert.deepEqual(meta.queryDelta.changedKeys, ["metrics"]);
-  assert.deepEqual(meta.queryPatch, { metrics: ["profitAmt", "saleAmt"] });
+  assert.deepEqual(meta.queryPatch, { metrics: ["profitAmt", "saleAmt"], orderBy: { field: "profitAmt", direction: "DESC" } });
   assert.match(meta.queryPatchSha256, /^[a-f0-9]{64}$/);
   assert.match(meta.sourceQuerySha256, /^[a-f0-9]{64}$/);
   assert.match(meta.executedQuerySha256, /^[a-f0-9]{64}$/);
@@ -805,4 +807,41 @@ test("fetch-explore authz on fails closed before Metric CLI when no blob exists"
   assert.equal(meta.errorCode, "METRIC_FETCH_FAILED");
   assert.match(meta.failedMessage, /METRIC_AUTH_CONTEXT_REQUIRED/);
   assert.deepEqual(meta.attempts, []);
+});
+
+test("computeQueryPatch captures non-semantic field changes (pageSize)", () => {
+  const source = normalizeEntryPayload(metricQuery());
+  const candidate = normalizeEntryPayload({ ...metricQuery(), pageSize: 1000 });
+  const patch = computeQueryPatch(source, candidate);
+  assert.ok(patch.pageSize !== undefined, "pageSize change must be in the patch");
+  assert.equal(patch.pageSize, 1000);
+  const reconstructed = applyQueryPatch(source, patch);
+  assert.equal(reconstructed.pageSize, 1000);
+  assert.deepEqual(reconstructed, candidate);
+});
+
+test("computeQueryPatch uses null for field deletion and applyQueryPatch respects it", () => {
+  const source = normalizeEntryPayload({
+    ...metricQuery(),
+    scopes: { region: "CN01" },
+  });
+  const candidate = normalizeEntryPayload(metricQuery());
+  const patch = computeQueryPatch(source, candidate);
+  assert.ok(Object.prototype.hasOwnProperty.call(patch, "scopes"), "deleted field must be in patch");
+  assert.equal(patch.scopes, null, "deleted field must use null marker");
+  const reconstructed = applyQueryPatch(source, patch);
+  assert.equal(Object.prototype.hasOwnProperty.call(reconstructed, "scopes"), false, "deleted field must not exist in reconstruction");
+  assert.deepEqual(reconstructed, candidate);
+});
+
+test("computeQueryPatch survives JSON round-trip for field deletions", () => {
+  const source = normalizeEntryPayload({
+    ...metricQuery(),
+    scopes: { region: "CN01" },
+  });
+  const candidate = normalizeEntryPayload(metricQuery());
+  const patch = computeQueryPatch(source, candidate);
+  const serialized = JSON.parse(JSON.stringify(patch));
+  const reconstructed = applyQueryPatch(source, serialized);
+  assert.deepEqual(reconstructed, candidate, "reconstruction must match after JSON round-trip");
 });

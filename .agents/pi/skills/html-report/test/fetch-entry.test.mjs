@@ -126,6 +126,28 @@ test("legacy requestBody and queryProof are rejected", () => {
   );
 });
 
+test("non-array query.comparisons is rejected (fail-closed)", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: "YOY" } }),
+    /card\.query\.comparisons must be an array/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: 42 } }),
+    /card\.query\.comparisons must be an array/
+  );
+});
+
+test("unknown query wrapper fields are rejected (fail-closed)", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: [], foo: "bar" } }),
+    /unsupported fields.*foo/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), typo: 123 } }),
+    /unsupported fields.*typo/
+  );
+});
+
 test("Writer timeout classifier stops backend timeouts but preserves fast retries", () => {
   assert.equal(isMetricTimeout({ errorCode: "ETIMEDOUT" }), true);
   assert.equal(isMetricTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);

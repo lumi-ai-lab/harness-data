@@ -1337,14 +1337,16 @@ function inline(value) {
 function scopeLine(card) {
   const coverage = card.queryCoverage || {};
   const parts = [];
-  if (coverage.startDate || coverage.endDate) parts.push(`日期 ${inline(coverage.startDate || "未指定")} 至 ${inline(coverage.endDate || "未指定")}`);
+  // Read time as an object (new compactQueryCoverage structure).
+  const time = isPlainObject(coverage.time) ? coverage.time : {};
+  if (time.startDate || time.endDate) parts.push(`日期 ${inline(time.startDate || "未指定")} 至 ${inline(time.endDate || "未指定")}`);
   if (Array.isArray(coverage.dimensions) && coverage.dimensions.length) parts.push(`维度 ${coverage.dimensions.map(inline).join("、")}`);
-  if (Array.isArray(coverage.filters) && coverage.filters.length) {
-    const filters = coverage.filters.map((filter) => {
-      if (!isPlainObject(filter)) return inline(filter);
-      const code = inline(filter.dimUniqueCode || filter.field || "筛选");
-      const values = Array.isArray(filter.dimFieldIdList) ? filter.dimFieldIdList.map(inline).join("、") : "已确认";
-      return `${code}=${values}`;
+  // Read filters as a map object { field: [values] } (new compactQueryCoverage structure).
+  if (isPlainObject(coverage.filters) && Object.keys(coverage.filters).length) {
+    const filters = Object.entries(coverage.filters).map(([field, values]) => {
+      const code = inline(field || "筛选");
+      const valueList = Array.isArray(values) ? values.map(inline).join("、") : "已确认";
+      return `${code}=${valueList}`;
     });
     parts.push(`筛选 ${filters.join("；")}`);
   }

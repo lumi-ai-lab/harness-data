@@ -197,12 +197,22 @@ export function metricQueryFromCard(card) {
   if (!isPlainObject(query)) {
     throw new Error("card.query must be an object with request and comparisons");
   }
+  // Fail-closed: reject unknown wrapper fields beyond request and comparisons.
+  const ALLOWED_QUERY_KEYS = new Set(["request", "comparisons"]);
+  const unknownWrapperKeys = Object.keys(query).filter((key) => !ALLOWED_QUERY_KEYS.has(key));
+  if (unknownWrapperKeys.length) {
+    throw new Error(`card.query contains unsupported fields: ${unknownWrapperKeys.sort().join(", ")}`);
+  }
   const request = query.request;
   if (!isPlainObject(request)) {
     throw new Error("card.query.request must be a strict Metric QueryRequest object");
   }
-  // comparisons is optional; default to empty.
-  const comparisons = Array.isArray(query.comparisons) ? query.comparisons : [];
+  // Fail-closed: comparisons must be an array if present; non-array values are rejected.
+  const hasComparisons = Object.prototype.hasOwnProperty.call(query, "comparisons");
+  if (hasComparisons && !Array.isArray(query.comparisons)) {
+    throw new Error("card.query.comparisons must be an array when present");
+  }
+  const comparisons = hasComparisons ? query.comparisons : [];
   return normalizeMetricQuery(request, { defaultComparisons: comparisons });
 }
 

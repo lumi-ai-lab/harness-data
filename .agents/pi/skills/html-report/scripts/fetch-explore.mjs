@@ -355,13 +355,20 @@ export function materialQueryDelta(originalPayload, candidatePayload) {
  * between source and candidate, with the candidate's new values.  This patch
  * plus the source query (recomputed from the card) is sufficient to reconstruct
  * the full candidate without persisting a second complete query copy.
+ *
+ * Deleted optional fields (present in source but absent in candidate) are
+ * stored as `null` — an explicit deletion marker that survives JSON
+ * serialization.  Non-semantic fields (requestId, orderBy, pageNo, pageSize)
+ * are NOT skipped: if they differ, they are captured so the reconstructed
+ * candidate matches the executed query exactly.
  */
 export function computeQueryPatch(sourceQuery, candidateQuery) {
   const patch = {};
   for (const key of new Set([...Object.keys(sourceQuery), ...Object.keys(candidateQuery)])) {
-    if (NON_SEMANTIC_QUERY_KEYS.has(key)) continue;
     if (canonicalQueryJson(sourceQuery[key]) !== canonicalQueryJson(candidateQuery[key])) {
-      patch[key] = structuredClone(candidateQuery[key]);
+      // Use null as an explicit deletion marker for keys absent from the candidate.
+      // This survives JSON serialization, unlike `undefined`.
+      patch[key] = candidateQuery[key] === undefined ? null : structuredClone(candidateQuery[key]);
     }
   }
   return patch;
@@ -369,12 +376,21 @@ export function computeQueryPatch(sourceQuery, candidateQuery) {
 
 /**
  * Reconstruct the candidate query by shallow-merging the source query with
- * the persisted patch, then re-normalizing.  The result is the exact candidate
- * that was executed, derived from the single card query plus the minimal
- * authorized delta.
+ * the persisted patch, then re-normalizing.  `null` values in the patch are
+ * treated as explicit deletions (the key is removed before normalization).
+ * The result is the exact candidate that was executed, derived from the
+ * single card query plus the minimal authorized delta.
  */
 export function applyQueryPatch(sourceQuery, queryPatch) {
-  return normalizeMetricQuery({ ...sourceQuery, ...queryPatch });
+  const merged = { ...sourceQuery };
+  for (const [key, value] of Object.entries(queryPatch)) {
+    if (value === null) {
+      delete merged[key];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return normalizeMetricQuery(merged);
 }
 
 /** Safe task id for filesystem paths. */

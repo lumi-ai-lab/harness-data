@@ -1083,6 +1083,10 @@ test("materializer validates before writing and delegates one deterministic fina
   assert.deepEqual(output.researchTasks[0].task, persistedTask);
   assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /待 B3 Researcher 结论/);
 
+  // P2-2 regression: main.md must render date and filter scope from new queryCoverage structure
+  assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /日期 2026-01-01 至 2026-01-31/);
+  assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /筛选 entity-key=entity-a/);
+
   const newQuerySession = await mkdtemp(join(tmpdir(), "html-report-editor-materialize-new-query-"));
   const newQueryResult = join(newQuerySession, "result.json");
   await writeFile(newQueryResult, "{}\n");
