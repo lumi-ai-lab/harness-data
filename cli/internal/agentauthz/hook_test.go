@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,16 @@ authz:
 		t.Fatal("expected hook output")
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
-	if updated["command"] != `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; '/abs/bin/qdm-metric-cli' analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'` {
+	metricPath := "/abs/bin/qdm-metric-cli"
+	if runtime.GOOS == "windows" {
+		metricPath = filepath.Join(root, "abs", "bin", "qdm-metric-cli")
+	}
+	prefix := ""
+	if runtime.GOOS != "windows" {
+		prefix = "unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; "
+	}
+	expected := prefix + "'" + metricPath + "' analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'"
+	if updated["command"] != expected {
 		t.Fatalf("unexpected command: %v", updated["command"])
 	}
 	if updated["timeout_ms"] != json.Number("10000") {
@@ -51,6 +61,40 @@ authz:
 	}
 	if updated["unknown"] != "kept" {
 		t.Fatalf("unknown field not preserved: %#v", updated["unknown"])
+	}
+}
+
+func TestHookAuthzOnDoesNotDependOnToolName(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-user
+  allow_local_blob: true
+`)
+	if err := os.WriteFile(filepath.Join(root, "config", "dev-auth.blob"), []byte(testBlob+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "PowerShell",
+  "tool_input": {
+    "command": "qdm-metric-cli.exe analysis execute --metric saleAmt"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if !strings.Contains(command, "--data-auth") || !strings.Contains(command, "--auth-blob '"+testBlob+"'") {
+		t.Fatalf("expected auth injection: %s", command)
 	}
 }
 
@@ -135,6 +179,12 @@ authz:
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
 	}
 	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if runtime.GOOS == "windows" {
+		if strings.HasPrefix(command, "unset ") {
+			t.Fatalf("Windows command must not use POSIX unset: %s", command)
+		}
+		return
+	}
 	if !strings.HasPrefix(command, "unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ") {
 		t.Fatalf("expected auth source env scrub prefix: %s", command)
 	}
@@ -159,6 +209,12 @@ authz:
 	ok, output, err := Run(root, "codex", hookInput(`env | sort`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if ok {
+			t.Fatalf("Windows non-gated command must not be rewritten for env scrubbing: %+v", output)
+		}
+		return
 	}
 	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
@@ -211,6 +267,12 @@ authz:
 	ok, output, err := Run(root, "codex", hookInput(`cat /etc/hosts`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if ok {
+			t.Fatalf("Windows non-gated command must not be rewritten for env scrubbing: %+v", output)
+		}
+		return
 	}
 	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)

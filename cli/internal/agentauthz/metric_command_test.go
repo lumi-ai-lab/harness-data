@@ -1,6 +1,7 @@
 package agentauthz
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -8,16 +9,51 @@ import (
 func TestMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
 	commands := []string{
 		"qdm-metric-cli analysis execute --metric saleAmt",
+		"qdm-metric-cli.exe analysis execute --metric saleAmt",
 		"./bin/qdm-metric-cli analysis execute --metric saleAmt",
+		".\\bin\\qdm-metric-cli.exe analysis execute --metric saleAmt",
 		"$QDM_METRIC_CLI analysis execute --metric saleAmt",
 		"${QDM_METRIC_CLI} auth describe",
 		"FOO=bar /opt/qdm/bin/qdm-metric-cli auth describe",
+		`C:\\harness\\bin\\qdm-metric-cli.exe auth describe`,
 		"source config/qdm-cli-paths.env && qdm-metric-cli analysis execute --metric saleAmt",
 	}
 	for _, command := range commands {
 		if !IsMetricAuthzGatedCommand(command) {
 			t.Fatalf("expected gated command match: %s", command)
 		}
+	}
+}
+
+func TestMetricCommandDetectionMatchesPowerShellQuotedPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell command syntax")
+	}
+
+	commands := []string{
+		`& 'E:\Harness Data\bin\qdm-metric-cli.exe' auth describe`,
+		`& "E:\Harness Data\bin\qdm-metric-cli.exe" analysis execute --metric saleAmt`,
+		`& '.\bin\qdm-metric-cli.exe' auth describe`,
+	}
+	for _, command := range commands {
+		if !IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected PowerShell command to be gated: %s", command)
+		}
+	}
+}
+
+func TestInjectAuthDescribeSupportsPowerShellQuotedPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell command syntax")
+	}
+
+	got := InjectAuthDescribeBlob(
+		`& 'E:\Harness Data\bin\qdm-metric-cli.exe' auth describe`,
+		"qdm1enc.runtime",
+		`E:\Harness Data\bin\qdm-metric-cli.exe`,
+	)
+	if !strings.Contains(got, "auth describe --auth-blob 'qdm1enc.runtime'") {
+		t.Fatalf("expected auth blob injection: %s", got)
 	}
 }
 

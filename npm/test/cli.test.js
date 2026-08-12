@@ -1176,9 +1176,9 @@ test("local config exports metric cli path only", () => {
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli"/);
+  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli(?:\.exe)?"/);
   assert.doesNotMatch(env, /QDM_SQL_CLI|QDM_CAS_CLI|QDM_CAS_CONFIG_DIR|QDM_CMR_CLI|QDM_INDICATORS_CLI/);
-  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
+  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli(?:\.exe)?/);
   assert.doesNotMatch(harnessConfig, /qdm_sql_cli|qdm_cas_cli|qdm_cmr_cli|qdm_indicators_cli/);
   assert.match(harnessConfig, /authz:\n  mode: off/);
   assert.match(harnessConfig, /allow_local_blob: true/);
@@ -1477,13 +1477,13 @@ test("codex agent template includes authz PreToolUse hook and guidance", () => {
   const hooksConfig = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
   const preToolUse = hooksConfig.hooks.PreToolUse;
   assert.ok(Array.isArray(preToolUse), "missing PreToolUse hooks");
-  const bashHook = preToolUse.find((entry) => entry.matcher === "Bash");
-  assert.ok(bashHook, "missing Bash PreToolUse hook");
-  const commands = bashHook.hooks.map((hook) => hook.command).join("\n");
+  const authzHook = preToolUse.find((entry) => !entry.matcher || entry.matcher === "Bash");
+  assert.ok(authzHook, "missing PreToolUse authz hook");
+  const commands = authzHook.hooks.map((hook) => hook.command).join("\n");
   assert.match(commands, /authz-hook --agent codex/);
   assert.match(commands, /exit 2/);
   const instructions = fs.readFileSync(path.join(root, "..", ".agents", "codex", "AGENTS.md"), "utf8");
-  assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
+  assert.match(instructions, /PreToolUse.*authz hook injects authorization/);
 });
 
 test("writeAuthBlob writes user blob to config/dev-auth.blob", () => {

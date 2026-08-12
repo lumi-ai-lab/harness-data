@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { AUTH_OFF_PASSWORD, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, readAuthzFromHarnessConfig, removeLegacyDataCLIs } from "../lib/config.js";
+import { AUTH_OFF_PASSWORD, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, removeLegacyDataCLIs } from "../lib/config.js";
 import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
@@ -360,6 +360,7 @@ export async function installCommand(options = {}) {
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
+  patchCodexHooksForWindows(runtimeDir);
   if (agentIncludesWorkBuddy(selectedAgent)) {
     const plugin = inspectWorkBuddyPlugin(runtimeDir);
     if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);

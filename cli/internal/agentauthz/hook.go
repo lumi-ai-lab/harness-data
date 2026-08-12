@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"harness-data/cli/internal/harness"
@@ -44,9 +45,6 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	if payload.HookEventName != "" && payload.HookEventName != "PreToolUse" {
 		return false, HookOutput{}, nil
 	}
-	if !strings.EqualFold(payload.ToolName, "Bash") {
-		return false, HookOutput{}, nil
-	}
 	command, ok := payload.ToolInput["command"].(string)
 	if !ok || strings.TrimSpace(command) == "" {
 		return false, HookOutput{}, nil
@@ -61,8 +59,8 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	}
 
 	if !IsMetricAuthzGatedCommand(command) {
-		if AuthSourceEnvPresent(nil) {
-			return true, allowOutput(replaceCommand(payload.ToolInput, ScrubAuthSourceEnvCommand(command)), "Auth source environment scrubbed for non-gated Bash command"), nil
+		if runtime.GOOS != "windows" && AuthSourceEnvPresent(nil) {
+			return true, allowOutput(replaceCommand(payload.ToolInput, ScrubAuthSourceEnvCommand(command)), "Auth source environment scrubbed for non-gated shell command"), nil
 		}
 		return false, HookOutput{}, nil
 	}
@@ -77,7 +75,7 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	}
 
 	rewritten := injectAuthForCommand(command, resolved.Blob, metricCliPath)
-	if AuthSourceEnvPresent(nil) {
+	if runtime.GOOS != "windows" && AuthSourceEnvPresent(nil) {
 		rewritten = ScrubAuthSourceEnvCommand(rewritten)
 	}
 	return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Current requester authorization is bound to this QDM data command"), nil
@@ -155,7 +153,11 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) string {
 	if cfg.CLI.QDMMetricCLI != "" {
 		candidates = append(candidates, resolveProjectPath(root, cfg.CLI.QDMMetricCLI))
 	}
-	candidates = append(candidates, filepath.Join(root, "bin", "qdm-metric-cli"))
+	metricName := "qdm-metric-cli"
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+	}
+	candidates = append(candidates, filepath.Join(root, "bin", metricName))
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate

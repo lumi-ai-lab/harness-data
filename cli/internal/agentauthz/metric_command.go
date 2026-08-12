@@ -2,10 +2,15 @@ package agentauthz
 
 import (
 	"regexp"
+	"runtime"
 	"strings"
 )
 
-var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`
+// Windows PowerShell may invoke a quoted absolute path with `&`.
+// This pattern is used only on Windows; Bash parsing remains unchanged.
+var windowsMetricBinPattern = `(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^;|&'"\r\n]*[/\\]qdm-metric-cli(?:\.exe)?`
+
+var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./|\.\\)?(?:bin[/\\])?qdm-metric-cli(?:\.exe)?|[A-Za-z]:[/\\](?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?)`
 
 func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
@@ -33,10 +38,14 @@ func matchesMetricInvocation(command, subcmd string) bool {
 }
 
 func metricInvocationRegexp(subcmd string) *regexp.Regexp {
+	binPattern := metricBinPattern
+	if runtime.GOOS == "windows" {
+		binPattern = `(?:` + metricBinPattern + `|` + windowsMetricBinPattern + `)`
+	}
 	return regexp.MustCompile(`(?m)(?:^|[\n;|&]|\b(?:then|do|if|elif|else)\b)\s*` +
 		`(?:(?:source|\.)\s+[^\s;|&]+\s*(?:&&\s*)?)*` +
 		`(?:[A-Za-z_][\w]*=(?:'[^\n']*'|"[^\n"]*"|\S+)\s+)*` +
-		`(?:'|")?` + metricBinPattern + `(?:'|")?\s+` + subcmd + `\b`)
+		`(?:'|")?` + binPattern + `(?:'|")?\s+` + subcmd + `\b`)
 }
 
 func MaskQuotedAndHeredocRegions(command string) string {
@@ -55,6 +64,12 @@ func MaskQuotedAndHeredocRegions(command string) string {
 	}
 	isProtectedVarQuote := func(inner string) bool {
 		return regexp.MustCompile(`^\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?$`).MatchString(strings.TrimSpace(inner))
+	}
+	isWindowsMetricCLIPath := func(inner string) bool {
+		if runtime.GOOS != "windows" {
+			return false
+		}
+		return regexp.MustCompile(`(?i)^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$`).MatchString(strings.TrimSpace(inner))
 	}
 
 	for i < n {
@@ -121,7 +136,8 @@ func MaskQuotedAndHeredocRegions(command string) string {
 				j++
 			}
 			if j < n {
-				if !isProtectedVarQuote(string(chars[i+1 : j])) {
+				inner := string(chars[i+1 : j])
+				if !isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) {
 					spaceOut(i+1, j)
 				}
 				i = j + 1
@@ -165,7 +181,8 @@ func MaskQuotedAndHeredocRegions(command string) string {
 				j++
 			}
 			if j < n {
-				if !isProtectedVarQuote(string(chars[i+1 : j])) {
+				inner := string(chars[i+1 : j])
+				if !isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) {
 					spaceOut(i+1, j)
 				}
 				i = j + 1

@@ -262,6 +262,35 @@ export function linkAgents(workspace, agent) {
   return pairs;
 }
 
+/**
+ * On Windows, replace Codex's bash hook commands with the Node shim.
+ * The shim starts data-harness-cli directly, so hook execution does not
+ * depend on PowerShell/CMD quoting or a POSIX shell being installed.
+ */
+export function patchCodexHooksForWindows(workspace) {
+  if (process.platform !== "win32") return;
+  const codexDir = path.join(workspace, "agents", "codex");
+  const hooksFile = path.join(codexDir, "hooks.json");
+  if (!fs.existsSync(hooksFile)) return;
+  const shimPath = path.join(codexDir, "hooks", "cli-shim.mjs").replaceAll("\\", "/");
+  if (!fs.existsSync(shimPath)) return;
+
+  const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  for (const event of Object.keys(hooks.hooks || {})) {
+    for (const entry of hooks.hooks[event]) {
+      for (const hook of entry.hooks || []) {
+        if (typeof hook.command !== "string") continue;
+        const invocationStart = hook.command.lastIndexOf('"$cli"');
+        if (invocationStart < 0) continue;
+        const match = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
+        if (!match) continue;
+        hook.command = `node "${shimPath}" ${match[1]}`;
+      }
+    }
+  }
+  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
+}
+
 function parseConfigBool(value, fallback) {
   switch (String(value).toLowerCase()) {
     case "true":
