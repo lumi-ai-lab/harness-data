@@ -5,6 +5,7 @@ import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { sha256Text } from "./compile-report-content.mjs";
+import { screenshotSpecsForSession } from "./design-artifact-contract.mjs";
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -37,10 +38,7 @@ export async function captureReport(sessionDir, { playwright = process.env.PLAYW
   await mkdir(screenshotDir, { recursive: true });
   const url = pathToFileURL(htmlPath).href;
   const channel = process.env.HTML_REPORT_BROWSER_CHANNEL ?? "chrome";
-  const targets = [
-    { id: "desktop", viewport: "1440,1000", path: join(screenshotDir, "desktop-1440x1000.png") },
-    { id: "mobile", viewport: "390,844", path: join(screenshotDir, "mobile-390x844.png") },
-  ];
+  const targets = screenshotSpecsForSession(abs);
   const screenshots = [];
   for (const target of targets) {
     const started = Date.now();

@@ -952,6 +952,13 @@ Only when `verdict.pass === true` and `report/report.md` exists.
 
 以下 Designer 流程**仅适用于动态推荐模式**（`HTML_REPORT_A_CONFIG_MODE=dynamic`）：
 
+`compile-report-content.mjs` 会先把当前 `report.md` 与
+`render-manifest.json` 的 fingerprints 及完整表 marker 做精确绑定，再生成
+immutable content 与 `design-input.json`；任何缺失、重复、乱序或跨 Session
+元数据都会 hard fail。截图必须且只能是当前 Session 固定路径的
+1440×1000 与 390×844 两项，`finalize-design.mjs` 会校验实际 PNG、viewport、
+bytes/hash，并只接受当前 Session 的 `design-result.draft.json`。
+
 **Report Editor must spawn**:
 
 ```text

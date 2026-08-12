@@ -347,12 +347,12 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 1. 前置：`quality/verdict.json` 为 `pass: true` 且 `assemble-report.mjs` 已生成 `report/report.md`
 2. Editor 只 spawn 一次 `report-designer`；Designer 不继承项目上下文或普通扩展，只注入 `html-report-design`。
 3. Designer 单次自治运行：
-   - `compile-report-content.mjs`：MD → 不可修改语义内容 + design brief；
+   - `compile-report-content.mjs`：先精确绑定 MD、render manifest 与全部 full-table/full-explore-table markers，再生成不可修改语义内容 + design brief；
    - 创建 `report.design.html`：负责页面骨架、CSS、响应式、交互与打印；
    - `compose-report.mjs`：确定性注入语义内容；
    - `capture-report.mjs`：1440x1000 + 390x844；内部最多修复两轮；
-   - `finalize-design.mjs`：把视觉判断签章到当前 HTML/截图。
-4. `check-session-layout --phase html` 重新校验内容、模板、HTML、截图 fingerprints 与 full-table markers。
+   - `finalize-design.mjs`：只接受当前 Session draft，把视觉判断签章到固定 HTML 和恰好两张真实 PNG 截图。
+4. `check-session-layout --phase html` 重新校验 B4 已完成/批准、B2.5 内部阶段完成、内容/模板/HTML fingerprints、marker exactly-once，以及固定路径截图的 viewport、bytes/hash 和 PNG 结构。
 5. 向用户给出 HTML 和截图绝对路径。
 
 `render-report.mjs` 不再处于正常路径，只保留显式 fallback。内容正确性由脚本保证，视觉设计由隔离的 Designer SubAgent 决定。

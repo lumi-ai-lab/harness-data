@@ -42,6 +42,17 @@ import {
   validateResearcherAnalysisRequirements,
   validateResearcherArtifacts,
 } from "./researcher-return.mjs";
+import {
+  compileContentBinding,
+  markerComment,
+  sha256Text,
+  validateDesignInputBinding,
+  validateReportManifestBinding,
+} from "./report-content-binding.mjs";
+import {
+  validateStampedDesignResult,
+  validateVisualCheck,
+} from "./design-artifact-contract.mjs";
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -72,10 +83,6 @@ function scoreOf(cell) {
 
 function fingerprintScanText(text) {
   return createHash("sha256").update(String(text), "utf8").digest("hex");
-}
-
-function fingerprintData(data) {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 function sanitizeCardId(raw) {
@@ -1015,7 +1022,7 @@ async function checkReportAssembly(abs, errors) {
   }
 }
 
-async function checkStepGateApprovals(abs, phase, errors) {
+async function checkPipelineGateState(abs, phase, errors) {
   const statePath = join(abs, "debug", "pipeline-state.json");
   if (!(await exists(statePath))) return;
   let state;
@@ -1029,21 +1036,79 @@ async function checkStepGateApprovals(abs, phase, errors) {
     errors.push("debug/pipeline-state.json producer must be stage-gate.mjs");
     return;
   }
-  if (state.mode !== "step") return;
+  if (!new Set(["step", "auto"]).has(state.mode)) {
+    errors.push("debug/pipeline-state.json mode must be step or auto");
+    return;
+  }
+  if (state.mode === "auto" && phase !== "html") return;
+  if (phase === "html" &&
+      (state.currentStage !== "B5_DESIGN" || !new Set(["running", "completed"]).has(state.status))) {
+    errors.push("Gate must be running or completed at B5_DESIGN before --phase html");
+  }
 
   const required =
     phase === "html"
       ? ["A_CONFIG", "B0_PREFLIGHT", "B2_WRITER", "B3_RESEARCH", "B4_REVIEW"]
       : ["A_CONFIG", "B0_PREFLIGHT", "B2_WRITER", "B3_RESEARCH"];
-  const approved = new Set(
-    (Array.isArray(state.approvals) ? state.approvals : []).map((item) => item?.stage)
-  );
+  const approvals = Array.isArray(state.approvals) ? state.approvals : [];
+  const nextStage = {
+    A_CONFIG: "B0_PREFLIGHT",
+    B0_PREFLIGHT: "B2_WRITER",
+    B2_WRITER: "B25_EDITOR",
+    B3_RESEARCH: "B4_REVIEW",
+    B4_REVIEW: "B5_DESIGN",
+  };
   for (const stageId of required) {
-    if (!approved.has(stageId)) {
+    const stage = state.stages?.[stageId];
+    const attempts = Array.isArray(stage?.attempts) ? stage.attempts : [];
+    const lastAttempt = attempts.at(-1);
+    const completedAtMs = Date.parse(stage?.completedAt || "");
+    const attemptEndedAtMs = Date.parse(lastAttempt?.endedAt || "");
+    const completed =
+      stage?.status === "completed" &&
+      Number.isFinite(completedAtMs) &&
+      Number.isFinite(attemptEndedAtMs) &&
+      completedAtMs === attemptEndedAtMs &&
+      lastAttempt?.status === "completed" &&
+      Number.isSafeInteger(lastAttempt?.number) &&
+      lastAttempt.number === attempts.length;
+    if (!completed) {
       errors.push(
-        `step Gate prerequisite ${stageId} is not approved before --phase ${phase}`
+        state.mode === "step"
+          ? `step Gate prerequisite ${stageId} is not validly completed and approved before --phase ${phase}`
+          : `auto Gate prerequisite ${stageId} is not validly completed before --phase ${phase}`
       );
+      continue;
     }
+    if (state.mode === "step") {
+      const matches = approvals.filter((item) => item?.stage === stageId);
+      const approval = matches[0];
+      const approvedAtMs = Date.parse(approval?.approvedAt || "");
+      const approved =
+        matches.length === 1 &&
+        stage.approvedAt === approval?.approvedAt &&
+        Number.isFinite(approvedAtMs) &&
+        approvedAtMs >= completedAtMs &&
+        approval?.humanGate === stageId &&
+        approval?.actor === "user" &&
+        approval?.phrase === "继续" &&
+        approval?.nextStage === nextStage[stageId];
+      if (!approved) {
+        errors.push(
+          `step Gate prerequisite ${stageId} is not validly completed and approved before --phase ${phase}`
+        );
+      }
+    }
+  }
+  const editor = state.stages?.B25_EDITOR;
+  const editorAttempt = Array.isArray(editor?.attempts) ? editor.attempts.at(-1) : null;
+  if (editor?.status !== "completed" ||
+      editorAttempt?.status !== "completed" ||
+      !Number.isSafeInteger(editorAttempt?.number) ||
+      editorAttempt.number !== editor.attempts.length ||
+      editor?.completedAt !== editorAttempt?.endedAt ||
+      !Number.isFinite(Date.parse(editor?.completedAt || ""))) {
+    errors.push(`${state.mode} Gate internal prerequisite B25_EDITOR is not validly completed before --phase ${phase}`);
   }
 }
 
@@ -1117,16 +1182,29 @@ async function checkHtmlArtifacts(abs, errors, warnings) {
         const input = JSON.parse(await readFile(designInputPath, "utf8"));
         const template = await readFile(templatePath, "utf8");
         const meta = JSON.parse(await readFile(renderMetaPath, "utf8"));
-        if (input.producer !== "compile-report-content.mjs") {
-          errors.push("report/design-input.json producer must be compile-report-content.mjs");
-        }
+        const manifestText = await readFile(manifestPath, "utf8");
+        const manifest = JSON.parse(manifestText);
+        const binding = compileContentBinding(markdown);
+        errors.push(...validateReportManifestBinding(markdown, manifest));
+        errors.push(...validateDesignInputBinding(input, binding, {
+          sessionDir: abs,
+          markdownPath,
+          contentPath,
+        }));
         if (meta.producer !== "compose-report.mjs") {
           errors.push("report/render.meta.json producer must be compose-report.mjs");
         }
-        if (fingerprintScanText(markdown) !== input.markdownSha256 || meta.markdownSha256 !== input.markdownSha256) {
+        if (input.renderManifestPath !== manifestPath ||
+            input.renderManifestSha256 !== sha256Text(manifestText) ||
+            meta.renderManifestSha256 !== input.renderManifestSha256) {
+          errors.push("report design artifacts are not bound to the current render-manifest.json");
+        }
+        if (fingerprintScanText(markdown) !== binding.markdownSha256 || meta.markdownSha256 !== binding.markdownSha256) {
           errors.push("report Markdown changed after content compilation");
         }
-        if (fingerprintScanText(content) !== input.contentFileSha256 || meta.contentFileSha256 !== input.contentFileSha256) {
+        if (content !== binding.content ||
+            fingerprintScanText(content) !== binding.contentFileSha256 ||
+            meta.contentFileSha256 !== binding.contentFileSha256) {
           errors.push("compiled report content fingerprint mismatch");
         }
         if (fingerprintScanText(template) !== meta.templateSha256) {
@@ -1135,14 +1213,25 @@ async function checkHtmlArtifacts(abs, errors, warnings) {
         if (fingerprintScanText(html) !== meta.htmlSha256) {
           errors.push("report.html changed after compose-report.mjs");
         }
-        const boundary = /<!-- html-report:content-start sha256="([a-f0-9]{64})" -->\n([\s\S]*?)\n<!-- html-report:content-end -->/.exec(html);
-        if (!boundary) {
-          errors.push("report.html missing immutable content boundary");
-        } else if (fingerprintScanText(boundary[2]) !== boundary[1] || boundary[1] !== input.contentSha256) {
+        const boundaries = [...html.matchAll(/<!-- html-report:content-start sha256="([a-f0-9]{64})" -->\n([\s\S]*?)\n<!-- html-report:content-end -->/g)];
+        if (boundaries.length !== 1) {
+          errors.push("report.html must contain exactly one immutable content boundary");
+        } else if (fingerprintScanText(boundaries[0][2]) !== boundaries[0][1] ||
+                   boundaries[0][1] !== binding.contentSha256 ||
+                   boundaries[0][2] !== binding.body) {
           errors.push("report.html immutable content hash mismatch");
         }
-        if (!html.includes(content.trimEnd())) {
-          errors.push("report.html does not contain the exact compiled content fragment");
+        if (html.split(content.trimEnd()).length - 1 !== 1) {
+          errors.push("report.html must contain the exact compiled content fragment exactly once");
+        }
+        const immutableArticles = html.match(/data-html-report-content\s*=\s*["']immutable["']/gi) || [];
+        if (immutableArticles.length !== 1) {
+          errors.push("report.html must contain exactly one immutable report content article");
+        }
+        for (const marker of binding.fullTableMarkers) {
+          if (html.split(markerComment(marker)).length - 1 !== 1) {
+            errors.push(`report.html must contain exactly one ${marker.kind} marker`);
+          }
         }
       }
 
@@ -1150,29 +1239,8 @@ async function checkHtmlArtifacts(abs, errors, warnings) {
         const visualText = await readFile(visualPath, "utf8");
         const visual = JSON.parse(visualText);
         const designResult = JSON.parse(await readFile(designResultPath, "utf8"));
-        const htmlHash = fingerprintScanText(html);
-        if (visual.producer !== "capture-report.mjs" || visual.htmlSha256 !== htmlHash) {
-          errors.push("visual-check.json is not bound to the current report.html");
-        }
-        const screenshots = Array.isArray(visual.screenshots) ? visual.screenshots : [];
-        for (const id of ["desktop", "mobile"]) {
-          const shot = screenshots.find((item) => item.id === id);
-          if (!shot?.path || !(await exists(shot.path))) {
-            errors.push(`missing ${id} report screenshot`);
-          } else if (fingerprintData(await readFile(shot.path)) !== shot.sha256) {
-            errors.push(`${id} screenshot fingerprint mismatch`);
-          }
-        }
-        if (
-          designResult.producer !== "finalize-design.mjs" ||
-          designResult.status !== "pass" ||
-          designResult.htmlSha256 !== htmlHash ||
-          designResult.visualCheckSha256 !== fingerprintScanText(visualText) ||
-          designResult.viewports?.desktop?.pass !== true ||
-          designResult.viewports?.mobile?.pass !== true
-        ) {
-          errors.push("design-result.json is missing a stamped desktop/mobile visual pass");
-        }
+        errors.push(...await validateVisualCheck(abs, visual, html));
+        errors.push(...validateStampedDesignResult(abs, designResult, visual, visualText, html));
       }
     } catch (e) {
       errors.push(`cannot read report/report.html: ${e.message || e}`);
@@ -1245,7 +1313,7 @@ export async function checkSessionLayout(sessionDir, { phase = "b2" } = {}) {
 
   if (phase === "quality" || phase === "html") {
     await checkExploreArtifacts(abs, errors, warnings);
-    await checkStepGateApprovals(abs, phase, errors);
+    await checkPipelineGateState(abs, phase, errors);
     await checkQualityArtifacts(abs, errors, warnings);
     await checkReportAssembly(abs, errors);
   }

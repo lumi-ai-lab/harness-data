@@ -4,7 +4,13 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { escapeHtml } from "./render-report.mjs";
-import { sha256Text } from "./compile-report-content.mjs";
+import {
+  compileContentBinding,
+  markerComment,
+  sha256Text,
+  validateDesignInputBinding,
+  validateReportManifestBinding,
+} from "./report-content-binding.mjs";
 
 const CONTENT_SLOT = "<!-- HTML_REPORT_CONTENT -->";
 const argv = process.argv.slice(2);
@@ -34,7 +40,7 @@ export function validateDesignTemplate(template) {
   }
   const slots = template.split(CONTENT_SLOT).length - 1;
   if (slots !== 1) errors.push(`template must contain exactly one ${CONTENT_SLOT} slot`);
-  if (/html-report:full-table/.test(template)) errors.push("template must not copy report business content or full-table markers");
+  if (/html-report:full-(?:explore-)?table/.test(template)) errors.push("template must not copy report business content or full-table markers");
   if (/html-report:content-(?:start|end)|data-html-report-content\s*=\s*["']immutable["']/i.test(template)) {
     errors.push("template must not embed immutable report.content.html; compose-report.mjs owns content insertion");
   }
@@ -46,24 +52,33 @@ export async function composeReport(sessionDir, { templatePath } = {}) {
   const reportDir = join(abs, "report");
   const inputPath = join(reportDir, "design-input.json");
   const contentPath = join(reportDir, "report.content.html");
+  const markdownPath = join(reportDir, "report.md");
+  const manifestPath = join(reportDir, "render-manifest.json");
   const shellPath = resolve(templatePath || join(reportDir, "report.design.html"));
   const htmlPath = join(reportDir, "report.html");
   const metaPath = join(reportDir, "render.meta.json");
-  for (const required of [inputPath, contentPath, shellPath]) {
+  for (const required of [inputPath, contentPath, markdownPath, manifestPath, shellPath]) {
     if (!(await exists(required))) throw new Error(`missing required design artifact: ${required}`);
   }
 
   const input = JSON.parse(await readFile(inputPath, "utf8"));
-  if (input.producer !== "compile-report-content.mjs") {
-    throw new Error("design-input.json producer must be compile-report-content.mjs");
-  }
+  const markdown = await readFile(markdownPath, "utf8");
+  const manifestText = await readFile(manifestPath, "utf8");
+  const manifest = JSON.parse(manifestText);
+  const binding = compileContentBinding(markdown);
   const content = await readFile(contentPath, "utf8");
   const template = await readFile(shellPath, "utf8");
   const templateErrors = validateDesignTemplate(template);
   if (templateErrors.length) throw new Error(templateErrors.join("; "));
-  if (sha256Text(content) !== input.contentFileSha256) {
-    throw new Error("report.content.html fingerprint mismatch; re-run compile-report-content.mjs");
+  const bindingErrors = [
+    ...validateReportManifestBinding(markdown, manifest),
+    ...validateDesignInputBinding(input, binding, { sessionDir: abs, markdownPath, contentPath }),
+  ];
+  if (input.renderManifestPath !== manifestPath || input.renderManifestSha256 !== sha256Text(manifestText)) {
+    bindingErrors.push("report/design-input.json render manifest binding mismatch");
   }
+  if (content !== binding.content) bindingErrors.push("report.content.html is not the deterministic compilation of report.md");
+  if (bindingErrors.length) throw new Error(bindingErrors.join("; "));
 
   let html = template.replace(CONTENT_SLOT, content.trimEnd());
   html = replaceAll(html, "{{HTML_REPORT_TITLE}}", escapeHtml(input.title));
@@ -73,9 +88,11 @@ export async function composeReport(sessionDir, { templatePath } = {}) {
   if (/\{\{HTML_REPORT_[A-Z_]+\}\}/.test(html)) {
     throw new Error("design template contains an unsupported or unresolved HTML_REPORT token");
   }
-  for (const marker of input.fullTableMarkers || []) {
-    const expected = `html-report:full-table card="${marker.cardId}" rows="${marker.rows}"`;
-    if (!html.includes(expected)) throw new Error(`composed HTML lost full-table marker for ${marker.cardId}`);
+  for (const marker of binding.fullTableMarkers) {
+    const expected = markerComment(marker);
+    if (html.split(expected).length - 1 !== 1) {
+      throw new Error(`composed HTML must contain exactly one ${marker.kind} marker`);
+    }
   }
 
   await mkdir(reportDir, { recursive: true });
@@ -91,6 +108,7 @@ export async function composeReport(sessionDir, { templatePath } = {}) {
     contentFileSha256: sha256Text(content),
     contentSha256: input.contentSha256,
     markdownSha256: input.markdownSha256,
+    renderManifestSha256: input.renderManifestSha256,
     htmlPath,
     htmlSha256: sha256Text(html),
     generatedAt: new Date().toISOString(),

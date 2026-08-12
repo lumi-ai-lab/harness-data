@@ -3,11 +3,16 @@
  * Compile frozen report.md into an immutable semantic HTML fragment and a
  * compact design brief. This script makes no visual design decisions.
  */
-import { createHash } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractTitle, markdownToHtml } from "./render-report.mjs";
+import {
+  compileContentBinding,
+  sha256Text,
+  validateReportManifestBinding,
+} from "./report-content-binding.mjs";
+
+export { sha256Text } from "./report-content-binding.mjs";
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -24,22 +29,12 @@ async function exists(path) {
   }
 }
 
-export function sha256Text(text) {
-  const value = Buffer.isBuffer(text) || text instanceof Uint8Array ? text : Buffer.from(String(text), "utf8");
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function outlineFromMarkdown(markdown) {
   return String(markdown)
     .split(/\r?\n/)
     .map((line) => /^(#{1,4})\s+(.+)$/.exec(line.trim()))
     .filter(Boolean)
     .map((match) => ({ level: match[1].length, text: match[2].trim() }));
-}
-
-function tableMarkers(markdown) {
-  return [...String(markdown).matchAll(/<!--\s*html-report:full-table\s+card="([^"]+)"\s+rows="(\d+)"\s*-->/g)]
-    .map((match) => ({ cardId: match[1], rows: Number(match[2]) }));
 }
 
 async function requireQualityPass(sessionDir) {
@@ -60,20 +55,17 @@ export async function compileReportContent(sessionDir) {
   await requireQualityPass(abs);
   const reportDir = join(abs, "report");
   const markdownPath = join(reportDir, "report.md");
+  const manifestPath = join(reportDir, "render-manifest.json");
   const contentPath = join(reportDir, "report.content.html");
   const inputPath = join(reportDir, "design-input.json");
   if (!(await exists(markdownPath))) throw new Error("missing report/report.md");
+  if (!(await exists(manifestPath))) throw new Error("missing report/render-manifest.json");
 
   const markdown = await readFile(markdownPath, "utf8");
-  const title = extractTitle(markdown);
-  const body = `<article class="report-content" data-html-report-content="immutable">\n${markdownToHtml(markdown)}\n</article>`;
-  const contentSha256 = sha256Text(body);
-  const content = [
-    `<!-- html-report:content-start sha256="${contentSha256}" -->`,
-    body,
-    "<!-- html-report:content-end -->",
-    "",
-  ].join("\n");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const manifestErrors = validateReportManifestBinding(markdown, manifest);
+  if (manifestErrors.length) throw new Error(manifestErrors.join("; "));
+  const binding = compileContentBinding(markdown);
 
   let sessionId = basename(abs);
   try {
@@ -88,16 +80,18 @@ export async function compileReportContent(sessionDir) {
     version: 1,
     producer: "compile-report-content.mjs",
     sessionDir: abs,
-    title,
+    title: binding.title,
     sessionId,
     generatedAt,
     markdownPath,
     contentPath,
-    markdownSha256: sha256Text(markdown),
-    contentSha256,
-    contentFileSha256: sha256Text(content),
+    markdownSha256: binding.markdownSha256,
+    contentSha256: binding.contentSha256,
+    contentFileSha256: binding.contentFileSha256,
+    renderManifestPath: manifestPath,
+    renderManifestSha256: sha256Text(await readFile(manifestPath)),
     outline: outlineFromMarkdown(markdown),
-    fullTableMarkers: tableMarkers(markdown),
+    fullTableMarkers: binding.fullTableMarkers,
     designContract: {
       contentIsImmutable: true,
       templateSlot: "<!-- HTML_REPORT_CONTENT -->",
@@ -107,7 +101,7 @@ export async function compileReportContent(sessionDir) {
   };
 
   await mkdir(reportDir, { recursive: true });
-  await writeFile(contentPath, content);
+  await writeFile(contentPath, binding.content);
   await writeFile(inputPath, `${JSON.stringify(input, null, 2)}\n`);
   return { contentPath, inputPath, input };
 }

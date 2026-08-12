@@ -340,6 +340,8 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",
   ".agents/pi/skills/html-report/scripts/render-report.mjs",
+  ".agents/pi/skills/html-report/scripts/report-content-binding.mjs",
+  ".agents/pi/skills/html-report/scripts/design-artifact-contract.mjs",
   ".agents/pi/skills/html-report/scripts/compile-report-content.mjs",
   ".agents/pi/skills/html-report/scripts/compose-report.mjs",
   ".agents/pi/skills/html-report/scripts/capture-report.mjs",

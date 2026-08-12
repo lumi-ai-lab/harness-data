@@ -456,6 +456,7 @@ function resultText(event) {
 
 function resultFailed(event) {
   if (event?.isError === true) return true;
+  if (event?.isError !== false) return true;
   const details = event?.details;
   if (!details || typeof details !== "object") return false;
   return ["exitCode", "code", "statusCode"].some((key) => Number.isInteger(details[key]) && details[key] !== 0);

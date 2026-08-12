@@ -15,6 +15,12 @@ import {
 import { normalizeEntryPayload } from "../scripts/fetch-entry.mjs";
 import { materialQueryDelta, semanticQueryShape } from "../scripts/fetch-explore.mjs";
 import { submitResearchFindings } from "../scripts/submit-research-findings.mjs";
+import {
+  approvePipelineStage,
+  finishPipelineStage,
+  initPipeline,
+  startPipelineStage,
+} from "../scripts/stage-gate.mjs";
 
 function fingerprintJson(value) {
   return createHash("sha256").update(canonicalizeJson(value), "utf8").digest("hex");
@@ -336,27 +342,30 @@ test("quality phase requires preceding approvals when the session is in step mod
   const session = join(root, ".harness", "state", "html-report", "sess-qgate");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await seedQualitySession(session);
-  await mkdir(join(session, "debug"), { recursive: true });
-  const state = {
-    version: 1,
-    producer: "stage-gate.mjs",
-    mode: "step",
-    approvals: ["A_CONFIG", "B0_PREFLIGHT", "B2_WRITER"].map((stage) => ({ stage })),
-  };
-  await writeFile(join(session, "debug", "pipeline-state.json"), JSON.stringify(state));
+  await initPipeline(session, { mode: "step", sessionId: "sess-qgate" });
+  await startPipelineStage(session, "A_CONFIG");
+  await finishPipelineStage(session, "A_CONFIG");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B0_PREFLIGHT");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B2_WRITER");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B25_EDITOR");
+  await finishPipelineStage(session, "B3_RESEARCH");
 
   let report = await checkSessionLayout(session, { phase: "quality" });
   assert.equal(report.ok, false);
-  assert.ok(report.errors.some((error) => /B3_RESEARCH.*not approved/.test(error)));
+  assert.ok(report.errors.some((error) => /B3_RESEARCH.*not validly completed and approved/.test(error)));
 
-  state.approvals.push({ stage: "B3_RESEARCH" });
-  await writeFile(join(session, "debug", "pipeline-state.json"), JSON.stringify(state));
+  await approvePipelineStage(session);
   report = await checkSessionLayout(session, { phase: "quality" });
   assert.equal(report.ok, true, report.errors.join("; "));
 
+  const statePath = join(session, "debug", "pipeline-state.json");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
   state.mode = "auto";
   state.approvals = [];
-  await writeFile(join(session, "debug", "pipeline-state.json"), JSON.stringify(state));
+  await writeFile(statePath, JSON.stringify(state));
   report = await checkSessionLayout(session, { phase: "quality" });
   assert.equal(report.ok, true, report.errors.join("; "));
 });

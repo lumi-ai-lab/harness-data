@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /** Stamp the Designer's visual assessment to the exact HTML and screenshots. */
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256Text } from "./compile-report-content.mjs";
+import { validateVisualCheck } from "./design-artifact-contract.mjs";
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -23,11 +24,19 @@ async function exists(path) {
 export async function finalizeDesign(sessionDir, assessmentPath) {
   const abs = resolve(sessionDir);
   const reportDir = join(abs, "report");
-  const draftPath = resolve(assessmentPath || join(reportDir, "design-result.draft.json"));
+  const expectedDraftPath = join(reportDir, "design-result.draft.json");
+  const draftPath = resolve(assessmentPath || expectedDraftPath);
+  if (draftPath !== expectedDraftPath) {
+    throw new Error(`assessment file must be the current session draft: ${expectedDraftPath}`);
+  }
   const visualPath = join(reportDir, "visual-check.json");
   const htmlPath = join(reportDir, "report.html");
   for (const path of [draftPath, visualPath, htmlPath]) {
     if (!(await exists(path))) throw new Error(`missing design finalization input: ${path}`);
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error(`design finalization input must be a regular non-symlink file: ${path}`);
+    }
   }
 
   const draft = JSON.parse(await readFile(draftPath, "utf8"));
@@ -42,9 +51,8 @@ export async function finalizeDesign(sessionDir, assessmentPath) {
   }
   const html = await readFile(htmlPath, "utf8");
   const htmlSha256 = sha256Text(html);
-  if (visual.htmlSha256 !== htmlSha256) {
-    throw new Error("HTML changed after screenshots; capture again before finalizing");
-  }
+  const visualErrors = await validateVisualCheck(abs, visual, html);
+  if (visualErrors.length) throw new Error(visualErrors.join("; "));
 
   const result = {
     version: 1,

@@ -414,6 +414,28 @@ test("any tool failure forbids retry and permits only one failed structured_outp
   );
 });
 
+test("tool results without an explicit success signal fail closed", () => {
+  const contract = parseDesignerAssignment(assignment(), { projectRoot });
+  const called = decide(
+    contract,
+    initialDesignerGuardState(),
+    "bash",
+    { command: command(contract, "compile") },
+    "compile-ambiguous"
+  );
+  assert.equal(called.decision, undefined);
+  const failed = designerToolResultState(contract, called.state, {
+    toolName: "bash",
+    toolCallId: "compile-ambiguous",
+    content: [{ type: "text", text: "bridge omitted exit status" }],
+  });
+  assert.deepEqual(failed.terminalFailure, {
+    failedStep: "compile",
+    error: "bridge omitted exit status",
+  });
+  assert.equal(failed.compileSuccess, false);
+});
+
 test("Designer allows at most two complete screenshot-driven edit-compose-capture repair rounds", () => {
   const contract = parseDesignerAssignment(assignment(), { projectRoot });
   let state = stateAfterVisualRead(contract);

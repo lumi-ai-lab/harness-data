@@ -31,7 +31,9 @@ then materially adapt its structure and CSS to the actual report outline.
 Complete the whole workflow in one SubAgent run. Do not ask the Report Editor
 for intermediate approval.
 
-1. Run `compile-report-content.mjs` for the assigned result.
+1. Run `compile-report-content.mjs` for the assigned result. It verifies that
+   `report.md`, `render-manifest.json`, full-table markers, and their hashes are
+   one current immutable bundle; never repair a binding failure by hand.
 2. Inspect only the exact `design-input.json`, immutable content, design
    reference, and starter paths injected by the parent. Do not re-read this
    `SKILL.md`, discover directories, or inspect workflow script source.
@@ -90,4 +92,6 @@ Write this draft before finalization:
 }
 ```
 
-`finalize-design.mjs` binds this assessment to the exact HTML and screenshots.
+`finalize-design.mjs` accepts only the current Session draft and binds it to the
+fixed HTML plus exactly two real PNG screenshots at the required viewport widths
+and minimum viewport heights.
