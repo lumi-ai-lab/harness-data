@@ -78,8 +78,18 @@ func TestWorkBuddyContextMissingSessionFailsSafelyWithoutState(t *testing.T) {
 	}
 }
 
-func TestWorkBuddyContextRejectsAuthzOn(t *testing.T) {
+func TestWorkBuddyContextSupportsAuthzOn(t *testing.T) {
+	sourceRoot := currentRootWithIndex(t)
 	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index")); err != nil {
+		t.Fatal(err)
+	}
 	writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", `paths:
   knowledge: wikis
 
@@ -92,17 +102,14 @@ authz:
 		t.Fatal(err)
 	}
 	if !ok || !output.Continue {
-		t.Fatalf("expected authz safety output, ok=%v continue=%v", ok, output.Continue)
+		t.Fatalf("expected WorkBuddy context, ok=%v continue=%v", ok, output.Continue)
 	}
-	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "authz.mode=off") {
-		t.Fatalf("unexpected authz context: %s", output.HookSpecificOutput.AdditionalContext)
+	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "# Data Harness Context") ||
+		strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") {
+		t.Fatalf("unexpected authz-on context: %s", output.HookSpecificOutput.AdditionalContext)
 	}
-	if output.SystemMessage != output.HookSpecificOutput.AdditionalContext {
-		t.Fatalf("authz refusal must also be host-visible: %+v", output)
-	}
-	if _, err := os.Stat(sessionstate.Dir(root)); !os.IsNotExist(err) {
-		t.Fatalf("authz refusal must not create state, err=%v", err)
+	if _, err := os.Stat(sessionstate.Path(root, "workbuddy:authz-session")); err != nil {
+		t.Fatalf("authz-on context must keep namespaced session state: %v", err)
 	}
 }
 

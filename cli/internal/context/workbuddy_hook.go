@@ -33,17 +33,10 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 		), nil
 	}
 
-	cfg, err := harness.LoadConfig(root)
-	if err != nil {
+	if _, err := harness.LoadConfig(root); err != nil {
 		return true, workBuddySafetyOutput(
 			"QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded. " +
 				"Do not run qdm-metric-cli or estimate data until the runtime configuration is repaired.",
-		), nil
-	}
-	if cfg.Authz.AuthzEnabled() {
-		return true, workBuddySafetyOutput(
-			"QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-				"Do not run qdm-metric-cli or infer permission-scoped results in this session.",
 		), nil
 	}
 
