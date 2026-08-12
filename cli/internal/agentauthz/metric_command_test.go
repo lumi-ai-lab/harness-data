@@ -110,3 +110,20 @@ func TestMetricCommandDetectionMatchesDefaultExpansionSyntax(t *testing.T) {
 		t.Fatalf("expected auth describe match for multi-line assignment: %q", multiLine)
 	}
 }
+
+func TestRewriteGatedMetricCommandsRewritesMixedInvocations(t *testing.T) {
+	command := `qdm-metric-cli auth describe --data-auth --auth-blob old | jq .; qdm-metric-cli analysis execute --auth-json fake --metric saleAmt > result.json`
+	got, err := RewriteGatedMetricCommands(command, "qdm1enc.runtime", "/abs/bin/qdm-metric-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(got, `'/abs/bin/qdm-metric-cli'`) != 2 || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 2 {
+		t.Fatalf("expected both invocations rewritten: %s", got)
+	}
+	if strings.Count(got, "--data-auth") != 1 || strings.Contains(got, "--auth-json") || strings.Contains(got, "--auth-blob old") {
+		t.Fatalf("unexpected auth flags after rewrite: %s", got)
+	}
+	if !strings.Contains(got, "--auth-blob 'qdm1enc.runtime' | jq") || !strings.Contains(got, "--auth-blob 'qdm1enc.runtime' > result.json") {
+		t.Fatalf("auth flags must precede shell tails: %s", got)
+	}
+}

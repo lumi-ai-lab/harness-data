@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"harness-data/cli/internal/harness"
@@ -34,7 +35,7 @@ func ReadHookStdin() ([]byte, error) {
 }
 
 func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
-	if agent != "codex" {
+	if agent != "codex" && agent != "workbuddy" {
 		return false, HookOutput{}, fmt.Errorf("unsupported authz agent: %s", agent)
 	}
 	payload, ok := parseHookPayload(input)
@@ -67,7 +68,6 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		return false, HookOutput{}, nil
 	}
 
-	metricCliPath := ResolveMetricCLIPath(root, cfg)
 	resolved, err := ResolveAuthBlob(ResolveOptions{
 		ProjectRoot: root,
 		Config:      cfg.Authz,
@@ -75,11 +75,15 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	if err != nil {
 		return true, denyOutput(missingAuthReason(command, cfg.Authz, err)), nil
 	}
-
-	rewritten := injectAuthForCommand(command, resolved.Blob, metricCliPath)
-	if AuthSourceEnvPresent(nil) {
-		rewritten = ScrubAuthSourceEnvCommand(rewritten)
+	metricCliPath, err := ResolveMetricCLIPath(root, cfg)
+	if err != nil {
+		return true, denyOutput("authz mode is on but no trusted qdm-metric-cli is available: " + err.Error()), nil
 	}
+	rewritten, err := RewriteGatedMetricCommands(command, resolved.Blob, metricCliPath)
+	if err != nil {
+		return true, denyOutput("authz could not safely rewrite every gated qdm-metric-cli invocation: " + err.Error()), nil
+	}
+	rewritten = ScrubAuthSourceEnvCommand(rewritten)
 	return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Current requester authorization is bound to this QDM data command"), nil
 }
 
@@ -140,14 +144,7 @@ func missingAuthReason(command string, cfg harness.AuthzConfig, err error) strin
 	return "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute: " + message
 }
 
-func injectAuthForCommand(command, blob, metricCliPath string) string {
-	if IsMetricAuthDescribe(command) {
-		return InjectAuthDescribeBlob(command, blob, metricCliPath)
-	}
-	return InjectDataAuth(command, blob, metricCliPath)
-}
-
-func ResolveMetricCLIPath(root string, cfg harness.Config) string {
+func ResolveMetricCLIPath(root string, cfg harness.Config) (string, error) {
 	candidates := []string{}
 	if envPath := strings.TrimSpace(os.Getenv("QDM_METRIC_CLI")); envPath != "" {
 		candidates = append(candidates, envPath)
@@ -157,11 +154,20 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) string {
 	}
 	candidates = append(candidates, filepath.Join(root, "bin", "qdm-metric-cli"))
 	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		info, err := os.Stat(candidate)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
 		}
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		absolute, err := filepath.Abs(candidate)
+		if err == nil {
+			return filepath.Clean(absolute), nil
+		}
+		return filepath.Clean(candidate), nil
 	}
-	return candidates[0]
+	return "", fmt.Errorf("configured and runtime CLI paths are missing or not executable")
 }
 
 func resolveProjectPath(root, value string) string {

@@ -202,6 +202,9 @@ func runAuthzHook(root string, args []string) error {
 	if ok {
 		return printCompactJSON(output)
 	}
+	if *agent == "workbuddy" {
+		return printCompactJSON(map[string]any{})
+	}
 	return nil
 }
 

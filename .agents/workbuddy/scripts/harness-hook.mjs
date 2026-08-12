@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -10,12 +10,25 @@ const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_TIMEOUT_MS = 8_500;
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const SHELL_TOOL_NAMES = new Set(["Bash", "PowerShell", "execute_command"]);
+const AUTHZ_SHELL_TOOL_NAMES = new Set(["Bash", "execute_command"]);
+export const WORKBUDDY_AUTH_MINIMUM_VERSION = "5.3.11";
+export const CODEBUDDY_AUTH_MINIMUM_VERSION = "2.115.0";
 
 function expectedEvent(mode) {
+  if (mode === "authz") return "PreToolUse";
   return mode === "posttool" ? "PostToolUse" : "UserPromptSubmit";
 }
 
 export function safeOutput(mode, message) {
+  if (mode === "authz") {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: message,
+      },
+    };
+  }
   return {
     continue: true,
     systemMessage: message,
@@ -50,6 +63,21 @@ export function normalizePayload(mode, payload) {
       session_id: sessionID,
       tool_name: "Bash",
       tool_input: { command },
+    };
+  }
+
+  if (mode === "authz") {
+    if (payload.hook_event_name !== "PreToolUse") return null;
+    const rawToolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
+    if (!AUTHZ_SHELL_TOOL_NAMES.has(rawToolName)) return null;
+    const toolInput = payload.tool_input && typeof payload.tool_input === "object" && !Array.isArray(payload.tool_input)
+      ? payload.tool_input
+      : null;
+    if (!toolInput || typeof toolInput.command !== "string" || !toolInput.command.trim()) return null;
+    return {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { ...toolInput },
     };
   }
 
@@ -113,15 +141,68 @@ export function resolveHarnessCLI(root, env = process.env) {
   return candidates.find((candidate) => candidate && existsSync(candidate)) || "";
 }
 
+function readJSON(pathname) {
+  try {
+    return JSON.parse(readFileSync(pathname, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function versionAtLeast(actual, minimum) {
+  const parseVersion = (value) => String(value || "").trim().replace(/^v(?=\d)/i, "")
+    .split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const current = parseVersion(actual);
+  const required = parseVersion(minimum);
+  for (let index = 0; index < Math.max(current.length, required.length); index += 1) {
+    if ((current[index] || 0) > (required[index] || 0)) return true;
+    if ((current[index] || 0) < (required[index] || 0)) return false;
+  }
+  return true;
+}
+
+function normalizeWorkBuddyAppRoot(value) {
+  const candidate = resolve(value);
+  const resources = dirname(candidate);
+  const contents = dirname(resources);
+  if (parse(candidate).base.toLowerCase() === "app.asar" &&
+      parse(resources).base.toLowerCase() === "resources" &&
+      parse(contents).base.toLowerCase() === "contents") {
+    return dirname(contents);
+  }
+  return candidate;
+}
+
+export function detectAuthRuntime(env = process.env, platform = process.platform) {
+  if (platform !== "darwin") return { supported: false, workBuddyVersion: "", codeBuddyVersion: "" };
+  const appRoot = typeof env.WORKBUDDY_APP_PATH === "string" && env.WORKBUDDY_APP_PATH.trim()
+    ? normalizeWorkBuddyAppRoot(env.WORKBUDDY_APP_PATH)
+    : "/Applications/WorkBuddy.app";
+  const cliRoot = join(appRoot, "Contents", "Resources", "app.asar.unpacked", "cli");
+  const product = readJSON(join(cliRoot, "product.json"));
+  const packageJSON = readJSON(join(cliRoot, "package.json"));
+  const workBuddyVersion = String(env.WORKBUDDY_VERSION || product?.genieVersion || "").trim();
+  const codeBuddyVersion = String(
+    env.CODEBUDDY_CLI_VERSION || packageJSON?.publishConfig?.customPackage?.version || "",
+  ).trim();
+  return {
+    supported: Boolean(workBuddyVersion && codeBuddyVersion &&
+      versionAtLeast(workBuddyVersion, WORKBUDDY_AUTH_MINIMUM_VERSION) &&
+      versionAtLeast(codeBuddyVersion, CODEBUDDY_AUTH_MINIMUM_VERSION)),
+    workBuddyVersion,
+    codeBuddyVersion,
+  };
+}
+
 function hookTimeout(env = process.env) {
   const parsed = Number.parseInt(env.QDM_HARNESS_HOOK_TIMEOUT_MS || "", 10);
   if (!Number.isFinite(parsed) || parsed < 10) return DEFAULT_TIMEOUT_MS;
   return Math.min(parsed, DEFAULT_TIMEOUT_MS);
 }
 
-function validateHookOutput(mode, stdout) {
+export function validateHookOutput(mode, stdout, canonicalPayload = null) {
   const text = String(stdout || "").trim();
-  if (!text) return {};
+  if (!text) return mode === "authz" ? null : {};
   let output;
   try {
     output = JSON.parse(text);
@@ -130,6 +211,24 @@ function validateHookOutput(mode, stdout) {
   }
   if (!output || typeof output !== "object" || Array.isArray(output)) return null;
   if (Object.keys(output).length === 0) return {};
+  if (mode === "authz") {
+    const hook = output.hookSpecificOutput;
+    if (!hook || typeof hook !== "object" || hook.hookEventName !== "PreToolUse") return null;
+    if (hook.permissionDecision !== "allow" && hook.permissionDecision !== "deny") return null;
+    if (hook.permissionDecisionReason !== undefined && typeof hook.permissionDecisionReason !== "string") return null;
+    if (hook.permissionDecision === "deny") {
+      return typeof hook.permissionDecisionReason === "string" && hook.permissionDecisionReason.trim() ? output : null;
+    }
+    const updatedInput = hook.updatedInput;
+    if (!updatedInput || typeof updatedInput !== "object" || Array.isArray(updatedInput) ||
+      typeof updatedInput.command !== "string" || !updatedInput.command.trim()) return null;
+    const originalInput = canonicalPayload?.tool_input || {};
+    for (const [key, value] of Object.entries(originalInput)) {
+      if (key === "command") continue;
+      if (!(key in updatedInput) || JSON.stringify(updatedInput[key]) !== JSON.stringify(value)) return null;
+    }
+    return output;
+  }
   if (typeof output.continue !== "boolean") return null;
   if (output.systemMessage !== undefined && typeof output.systemMessage !== "string") return null;
   const hook = output.hookSpecificOutput;
@@ -148,8 +247,9 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
     );
   }
 
-  const command = mode === "posttool" ? "posttool" : "context";
-  const result = spawnSync(cli, [command, "--format", "workbuddy-hook"], {
+  const command = mode === "authz" ? "authz-hook" : (mode === "posttool" ? "posttool" : "context");
+  const args = mode === "authz" ? [command, "--agent", "workbuddy"] : [command, "--format", "workbuddy-hook"];
+  const result = spawnSync(cli, args, {
     cwd: root,
     env: { ...env, CODEBUDDY_PROJECT_DIR: root },
     input: `${JSON.stringify(canonicalPayload)}\n`,
@@ -169,7 +269,7 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
     );
   }
 
-  const output = validateHookOutput(mode, result.stdout);
+  const output = validateHookOutput(mode, result.stdout, canonicalPayload);
   if (output) return output;
   process.stderr.write(`[qdm-harness] data-harness-cli ${command} returned invalid JSON\n`);
   return safeOutput(
@@ -188,11 +288,15 @@ async function readStdin() {
 
 function emit(output) {
   process.stdout.write(`${JSON.stringify(output)}\n`);
+  if (output?.hookSpecificOutput?.hookEventName === "PreToolUse" &&
+      output.hookSpecificOutput.permissionDecision === "deny") {
+    process.exitCode = 2;
+  }
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const mode = argv[0];
-  if (mode !== "context" && mode !== "posttool") {
+  if (mode !== "context" && mode !== "posttool" && mode !== "authz") {
     emit({});
     return;
   }
@@ -202,15 +306,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const raw = await readStdin();
     payload = raw.trim() ? JSON.parse(raw) : {};
   } catch {
-    emit({});
+    const root = resolveWorkspace({}, env);
+    emit(mode === "authz" && root
+      ? safeOutput(mode, "QDM_HARNESS_AUTHZ_DENIED: WorkBuddy provided invalid PreToolUse JSON; the command was blocked.")
+      : {});
     return;
   }
 
-  const canonical = normalizePayload(mode, payload);
-  if (!canonical) {
-    emit({});
-    return;
-  }
   const root = resolveWorkspace(payload, env);
   if (!root) {
     // The plugin may be enabled globally; outside a Harness workspace it must
@@ -218,13 +320,28 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     emit({});
     return;
   }
-  emit(runCanonicalHook(mode, canonical, root, env));
+  const canonical = normalizePayload(mode, payload);
+  if (!canonical) {
+    emit(mode === "authz"
+      ? safeOutput(mode, "QDM_HARNESS_AUTHZ_DENIED: WorkBuddy provided an invalid PreToolUse payload; the command was blocked.")
+      : {});
+    return;
+  }
+  const output = runCanonicalHook(mode, canonical, root, env);
+  if (mode === "authz" && Object.keys(output).length > 0 && !detectAuthRuntime(env).supported) {
+    emit(safeOutput(
+      mode,
+      `QDM_HARNESS_AUTHZ_DENIED: WorkBuddy ${WORKBUDDY_AUTH_MINIMUM_VERSION}+ with CodeBuddy CLI ${CODEBUDDY_AUTH_MINIMUM_VERSION}+ is required for auth command rewriting.`,
+    ));
+    return;
+  }
+  emit(output);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
 if (entry === import.meta.url) {
   main().catch(() => emit(safeOutput(
-    process.argv[2] === "posttool" ? "posttool" : "context",
+    process.argv[2] === "authz" ? "authz" : (process.argv[2] === "posttool" ? "posttool" : "context"),
     "QDM_HARNESS_UNAVAILABLE: The WorkBuddy Harness adapter failed unexpectedly. " +
       "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
   )));

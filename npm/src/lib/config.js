@@ -107,7 +107,7 @@ export function readAuthzFromHarnessConfig(harnessPath) {
 
 /**
  * Resolve authz block for writeLocalConfig.
- * Priority: explicit dataAuth true/false → preserve existing → default off.
+ * Priority: explicit noAuth/dataAuth/authBlob → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
   // --no-auth: 关闭权限（密码由 install.js 验证）
@@ -212,6 +212,7 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   const target = path.join(workspace, localTestAuthBlobRel);
   const fixture = path.join(workspace, localTestAuthFixtureRel);
   if (fs.existsSync(target) && !options.force) {
+    fs.chmodSync(target, 0o600);
     return { copied: false, path: target };
   }
   if (!fs.existsSync(fixture)) {
@@ -222,6 +223,7 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(fixture, target);
+  fs.chmodSync(target, 0o600);
   return { copied: true, path: target };
 }
 
@@ -234,7 +236,8 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
 export function writeAuthBlob(workspace, blobContent) {
   const target = path.join(workspace, localTestAuthBlobRel);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, blobContent + "\n", "utf8");
+  fs.writeFileSync(target, `${blobContent}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(target, 0o600);
   return { path: target };
 }
 

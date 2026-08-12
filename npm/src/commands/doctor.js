@@ -5,10 +5,14 @@ import { binaryName } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
 import {
+  codeBuddyMinimumVersion,
+  detectCodeBuddyVersion,
   detectWorkBuddyPluginEnabled,
   detectWorkBuddyVersion,
+  inspectWorkBuddyAuth,
   inspectWorkBuddyPlugin,
   versionAtLeast,
+  workBuddyAuthMinimumVersion,
   workBuddyMinimumVersion,
   workBuddyPluginRel,
 } from "../lib/workbuddy.js";
@@ -77,8 +81,11 @@ export async function collectDoctor(workspace, options = {}) {
 
   const configuredAgent = selectedAgent(workspace, options);
   const workBuddySelected = configuredAgent === "workbuddy";
-  if (workBuddySelected) {
-    add("WorkBuddy authz.mode=off", authz?.mode !== "on", authz?.mode === "on" ? "data-auth is not supported" : "off");
+  if (workBuddySelected && authz?.mode === "on") {
+    const platform = options.platform || process.platform;
+    add("WorkBuddy auth platform", platform === "darwin", platform === "darwin" ? "macOS" : `${platform}; auth hook currently supports macOS only`);
+    const auth = inspectWorkBuddyAuth(workspace, authz, { ...options, platform });
+    add("WorkBuddy auth source", auth.ok, auth.detail);
   }
   let workBuddy = null;
   if (fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
@@ -102,6 +109,24 @@ export async function collectDoctor(workspace, options = {}) {
         );
       } else {
         add(`WorkBuddy version >= ${workBuddyMinimumVersion}`, true, "client not detected; verify manually", "warning");
+      }
+      if (authz?.mode === "on") {
+        add(
+          `WorkBuddy auth version >= ${workBuddyAuthMinimumVersion}`,
+          Boolean(clientVersion && versionAtLeast(clientVersion, workBuddyAuthMinimumVersion)),
+          clientVersion || "client not detected",
+        );
+        const codeBuddyVersion = detectCodeBuddyVersion(options);
+        if (codeBuddyVersion) {
+          const supported = versionAtLeast(codeBuddyVersion, codeBuddyMinimumVersion);
+          add(
+            `CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`,
+            supported,
+            supported ? codeBuddyVersion : `${codeBuddyVersion}; upgrade WorkBuddy before enabling authz`,
+          );
+        } else {
+          add(`CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`, false, "embedded CLI not detected");
+        }
       }
       const enablement = detectWorkBuddyPluginEnabled({ ...options, workspace });
       if (enablement.enabled) {

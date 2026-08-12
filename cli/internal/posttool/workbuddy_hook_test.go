@@ -139,32 +139,30 @@ func TestTemplateAndMetricCommandDetectionRespectsShellSyntax(t *testing.T) {
 	}
 }
 
-func TestRunWorkBuddyHookRejectsMetricResultWithoutSession(t *testing.T) {
+func TestRunWorkBuddyHookMetricResultIsNoopWithoutSession(t *testing.T) {
 	root := testInjectRoot(t)
 	ok, output, err := RunWorkBuddyHook(root, workBuddyPosttoolPayload(t, "", "Bash", `"$QDM_METRIC_CLI" analysis execute`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Discard the data result") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "stable session_id") {
-		t.Fatalf("unexpected missing-session metric output: ok=%v output=%+v", ok, output)
+	if ok || output.HookSpecificOutput.AdditionalContext != "" {
+		t.Fatalf("metric PostToolUse must be a silent no-op: ok=%v output=%+v", ok, output)
 	}
 }
 
-func TestRunWorkBuddyHookRejectsMetricResultWhenConfigIsInvalid(t *testing.T) {
+func TestRunWorkBuddyHookMetricResultIsNoopWhenConfigIsInvalid(t *testing.T) {
 	root := t.TempDir()
 	writeInjectFile(t, root, "config/harness-config.yaml", "invalid: true\n")
 	ok, output, err := RunWorkBuddyHook(root, workBuddyPosttoolPayload(t, "metric-config", "Bash", `"$QDM_METRIC_CLI" analysis execute`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Discard the data result") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "configuration could not be loaded") {
-		t.Fatalf("unexpected invalid-config metric output: ok=%v output=%+v", ok, output)
+	if ok || output.HookSpecificOutput.AdditionalContext != "" {
+		t.Fatalf("metric PostToolUse must not reload config: ok=%v output=%+v", ok, output)
 	}
 }
 
-func TestRunWorkBuddyHookRejectsAuthzOn(t *testing.T) {
+func TestRunWorkBuddyHookDoesNotRejectTemplateForAuthzOn(t *testing.T) {
 	root := t.TempDir()
 	writeInjectFile(t, root, "config/harness-config.yaml", `paths:
   knowledge: wikis
@@ -176,15 +174,12 @@ authz:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") {
-		t.Fatalf("unexpected authz output: ok=%v output=%+v", ok, output)
-	}
-	if output.SystemMessage != output.HookSpecificOutput.AdditionalContext {
-		t.Fatalf("authz refusal must also be host-visible: %+v", output)
+	if strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") || strings.Contains(output.SystemMessage, "AUTHZ_UNSUPPORTED") {
+		t.Fatalf("template PostToolUse must not reject authz.mode=on: ok=%v output=%+v", ok, output)
 	}
 }
 
-func TestRunWorkBuddyHookRejectsAuthzOnMetricResult(t *testing.T) {
+func TestRunWorkBuddyHookAuthzOnMetricResultIsNoop(t *testing.T) {
 	root := t.TempDir()
 	writeInjectFile(t, root, "config/harness-config.yaml", `paths:
   knowledge: wikis
@@ -197,9 +192,8 @@ authz:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") ||
-		!strings.Contains(output.HookSpecificOutput.AdditionalContext, "Discard the qdm-metric-cli result") {
-		t.Fatalf("unexpected metric authz output: ok=%v output=%+v", ok, output)
+	if ok || output.HookSpecificOutput.AdditionalContext != "" {
+		t.Fatalf("authorized metric result must be a silent no-op: ok=%v output=%+v", ok, output)
 	}
 }
 

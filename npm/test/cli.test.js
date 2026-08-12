@@ -38,9 +38,12 @@ import {
 import { run } from "../src/lib/exec.js";
 import {
   agentIncludesWorkBuddy,
-  assertWorkBuddyAuthCompatibility,
+  assertWorkBuddyAuthPlatform,
+  codeBuddyMinimumVersion,
+  detectCodeBuddyVersion,
   detectWorkBuddyPluginEnabled,
   detectWorkBuddyVersion,
+  inspectWorkBuddyAuth,
   inspectWorkBuddyPlugin,
   versionAtLeast,
 } from "../src/lib/workbuddy.js";
@@ -94,7 +97,11 @@ test("prints help", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
   assert.doesNotMatch(result.stdout, /\bauth\b.*CAS/);
+  assert.match(result.stdout, /--auth-blob/);
+  assert.match(result.stdout, /--auth-user-id/);
   assert.match(result.stdout, /--data-auth/);
+  assert.match(result.stdout, /--no-auth/);
+  assert.match(result.stdout, /--auth-off-password/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -1397,10 +1404,11 @@ test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
   assert.equal(agentIncludesWorkBuddy("both"), false);
 });
 
-test("WorkBuddy rejects data-auth while preserving existing all semantics", () => {
-  assert.throws(() => assertWorkBuddyAuthCompatibility("workbuddy", true), /does not support --data-auth/);
-  assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("workbuddy", false));
-  assert.doesNotThrow(() => assertWorkBuddyAuthCompatibility("all", true));
+test("WorkBuddy auth installer parameters are macOS-only", () => {
+  assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "darwin"));
+  assert.throws(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"), /supports macOS only/);
+  assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", false, "win32"));
+  assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("all", true, "win32"));
 });
 
 test("WorkBuddy plugin package matches npm version and native hook contract", () => {
@@ -1414,6 +1422,7 @@ test("WorkBuddy plugin package matches npm version and native hook contract", ()
   assert.equal(plugin.marketplaceRoot, path.join(workspace, "agents"));
   assert.equal(versionAtLeast("5.3.5"), true);
   assert.equal(versionAtLeast("5.3.8"), true);
+  assert.equal(versionAtLeast("v5.3.11", "5.3.11"), true);
   assert.equal(versionAtLeast("5.3.4"), false);
 });
 
@@ -1468,8 +1477,61 @@ test("WorkBuddy version detection reads the cross-platform product manifest", ()
   const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-app-"));
   const productDir = path.join(appRoot, "resources", "app.asar.unpacked", "cli");
   fs.mkdirSync(productDir, { recursive: true });
-  fs.writeFileSync(path.join(productDir, "product.json"), JSON.stringify({ genieVersion: "5.3.8" }));
-  assert.equal(detectWorkBuddyVersion({ workBuddyAppPath: appRoot }), "5.3.8");
+  fs.writeFileSync(path.join(productDir, "product.json"), JSON.stringify({ genieVersion: "5.3.11" }));
+  fs.writeFileSync(path.join(productDir, "package.json"), JSON.stringify({ publishConfig: { customPackage: { version: "2.115.0" } } }));
+  assert.equal(detectWorkBuddyVersion({ workBuddyAppPath: appRoot }), "5.3.11");
+  assert.equal(detectCodeBuddyVersion({ workBuddyAppPath: appRoot }), "2.115.0");
+  assert.equal(codeBuddyMinimumVersion, "2.115.0");
+});
+
+test("WorkBuddy version detection accepts a macOS app.asar path", () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-macos-app-"));
+  const appRoot = path.join(parent, "WorkBuddy.app");
+  const resources = path.join(appRoot, "Contents", "Resources");
+  const productDir = path.join(resources, "app.asar.unpacked", "cli");
+  fs.mkdirSync(productDir, { recursive: true });
+  fs.writeFileSync(path.join(resources, "app.asar"), "fixture asar");
+  fs.writeFileSync(path.join(productDir, "product.json"), JSON.stringify({ genieVersion: "5.3.11" }));
+  fs.writeFileSync(path.join(productDir, "package.json"), JSON.stringify({ publishConfig: { customPackage: { version: "2.115.0" } } }));
+
+  const asarPath = path.join(resources, "app.asar");
+  assert.equal(detectWorkBuddyVersion({ workBuddyAppPath: asarPath }), "5.3.11");
+  assert.equal(detectCodeBuddyVersion({ workBuddyAppPath: asarPath }), "2.115.0");
+});
+
+test("WorkBuddy auth inspection accepts launchctl file source outside workspace", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-runtime-"));
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-auth-"));
+  const blobFile = path.join(authDir, "qdm-auth.blob");
+  fs.writeFileSync(blobFile, "qdm1enc.runtime\n", { mode: 0o600 });
+  const authz = { mode: "on", allowLocalBlob: true, blobFile: "", devUserId: "" };
+  const inspected = inspectWorkBuddyAuth(workspace, authz, {
+    env: {},
+    platform: "darwin",
+    launchctlEnv: {
+      HARNESS_AUTH_BLOB_FILE: blobFile,
+      HARNESS_AUTH_USER_ID: "admin-user",
+    },
+  });
+  assert.equal(inspected.ok, true, inspected.detail);
+  assert.match(inspected.detail, /launchctl file/);
+
+  const insideFile = path.join(workspace, "auth.blob");
+  fs.writeFileSync(insideFile, "qdm1enc.runtime\n", { mode: 0o600 });
+  const inside = inspectWorkBuddyAuth(workspace, authz, {
+    env: { HARNESS_AUTH_BLOB_FILE: insideFile, HARNESS_AUTH_USER_ID: "admin-user" },
+    platform: "darwin",
+  });
+  assert.equal(inside.ok, false);
+  assert.match(inside.detail, /outside the Harness workspace/);
+
+  fs.chmodSync(blobFile, 0o644);
+  const insecure = inspectWorkBuddyAuth(workspace, authz, {
+    env: { HARNESS_AUTH_BLOB_FILE: blobFile, HARNESS_AUTH_USER_ID: "admin-user" },
+    platform: "darwin",
+  });
+  assert.equal(insecure.ok, false);
+  assert.match(insecure.detail, /mode 0600/);
 });
 
 test("codex agent template includes authz PreToolUse hook and guidance", () => {
@@ -1489,8 +1551,10 @@ test("codex agent template includes authz PreToolUse hook and guidance", () => {
 test("writeAuthBlob writes user blob to config/dev-auth.blob", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   writeAuthBlob(workspace, "qdm1enc.test-blob-content");
-  const blob = fs.readFileSync(path.join(workspace, "config", "dev-auth.blob"), "utf8").trim();
+  const target = path.join(workspace, "config", "dev-auth.blob");
+  const blob = fs.readFileSync(target, "utf8").trim();
   assert.equal(blob, "qdm1enc.test-blob-content");
+  if (process.platform !== "win32") assert.equal(fs.statSync(target).mode & 0o777, 0o600);
 });
 
 test("resolveAuthzForWrite with authBlob=true sets mode on with devUserId", () => {
@@ -1700,7 +1764,8 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
 
   const report = await collectDoctor(workspace, {
     agent: "workbuddy",
-    workBuddyVersion: "5.3.8",
+    workBuddyVersion: "5.3.11",
+    codeBuddyVersion: "2.115.0",
     homeDir: home,
   });
   const byName = new Map(report.checks.map((check) => [check.name, check]));
@@ -1709,11 +1774,11 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   assert.match(byName.get("WorkBuddy plugin enablement")?.detail || "", /enabled/);
   assert.equal(byName.get("Agent hook")?.ok, true);
 
-  const oldClient = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.4", homeDir: home });
+  const oldClient = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.4", codeBuddyVersion: "2.115.0", homeDir: home });
   assert.equal(oldClient.checks.find((check) => check.name === "WorkBuddy version >= 5.3.5")?.ok, false);
 
   const unknownHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-unknown-home-"));
-  const unknown = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: unknownHome });
+  const unknown = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.11", codeBuddyVersion: "2.115.0", homeDir: unknownHome });
   const unknownEnablement = unknown.checks.find((check) => check.name === "WorkBuddy plugin enablement");
   assert.equal(unknownEnablement?.ok, true);
   assert.equal(unknownEnablement?.status, "warning");
@@ -1721,12 +1786,33 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
     enabledPlugins: { "qdm-harness@lumi-harness-data": false },
   }));
-  const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
+  const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.11", codeBuddyVersion: "2.115.0", homeDir: home });
   assert.equal(disabled.checks.find((check) => check.name === "WorkBuddy plugin enablement")?.ok, false);
 
   writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
-  const authzOn = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.8", homeDir: home });
-  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy authz.mode=off")?.ok, false);
+  fs.writeFileSync(path.join(workspace, localTestAuthBlobRel), "qdm1enc.local\n", { mode: 0o600 });
+  const authzOn = await collectDoctor(workspace, {
+    agent: "workbuddy",
+    workBuddyVersion: "5.3.11",
+    codeBuddyVersion: "2.115.0",
+    homeDir: home,
+    platform: "darwin",
+    env: {},
+  });
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth platform")?.ok, true);
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth source")?.ok, true);
+  assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth version >= 5.3.11")?.ok, true);
+  assert.equal(authzOn.checks.find((check) => check.name === "CodeBuddy CLI version >= 2.115.0")?.ok, true);
+
+  const oldAuthClient = await collectDoctor(workspace, {
+    agent: "workbuddy",
+    workBuddyVersion: "5.3.10",
+    codeBuddyVersion: "2.115.0",
+    homeDir: home,
+    platform: "darwin",
+    env: {},
+  });
+  assert.equal(oldAuthClient.checks.find((check) => check.name === "WorkBuddy auth version >= 5.3.11")?.ok, false);
 });
 
 test("update doctor treats missing agent hooks as non-blocking only", async () => {
