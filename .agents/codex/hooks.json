@@ -11,6 +11,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$cli\" authz-hook --agent codex'",
+            "statusMessage": "Authorizing QDM data command"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Bash",

@@ -26,7 +26,8 @@ export async function confirm(message, options = {}) {
 export async function chooseAgent(options = {}) {
   // Windows only supports Codex — skip the prompt entirely
   if (process.platform === "win32") {
-    if (options.agent && options.agent !== "codex") {
+    const requested = options.agent ? String(options.agent).trim().toLowerCase() : "";
+    if (requested && requested !== "codex") {
       warn(`Windows 仅支持 Codex Agent,已忽略 --agent ${options.agent}`);
     }
     return "codex";

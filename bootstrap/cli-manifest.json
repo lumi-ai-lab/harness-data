@@ -41,6 +41,9 @@
         },
         "windows-amd64": {
           "archive": "zip"
+        },
+        "windows-arm64": {
+          "archive": "zip"
         }
       }
     }

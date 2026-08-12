@@ -1,10 +1,13 @@
 package sessionstate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -114,11 +117,34 @@ func Path(root, sessionID string) string {
 	return filepath.Join(Dir(root), SafeSessionID(sessionID)+".json")
 }
 
+const maxPlainSessionIDLength = 120
+
+var unsafeSessionIDPattern = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+
 func SafeSessionID(sessionID string) string {
-	re := regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
-	safe := re.ReplaceAllString(sessionID, "_")
-	if safe == "" {
+	if sessionID == "" {
 		return "unknown"
 	}
-	return safe
+	if len(sessionID) <= maxPlainSessionIDLength &&
+		!unsafeSessionIDPattern.MatchString(sessionID) &&
+		!isWindowsReservedFilename(sessionID) {
+		return sessionID
+	}
+
+	digest := sha256.Sum256([]byte(sessionID))
+	// The '~' marker cannot occur in an unchanged plain session ID, so hashed
+	// names cannot collide with a caller-provided safe ID that resembles a hash.
+	return "sha256~" + hex.EncodeToString(digest[:])
+}
+
+func isWindowsReservedFilename(name string) bool {
+	base := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CLOCK$":
+		return true
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+		return base[3] >= '1' && base[3] <= '9'
+	}
+	return false
 }

@@ -70,7 +70,10 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if sessionID == "" {
 		sessionID = "unknown"
 	}
-	command := payload.ToolInput.Command
+	return runTemplateHook(root, payload.ToolInput.Command, sessionID)
+}
+
+func runTemplateHook(root, command, sessionID string) (bool, Output, error) {
 	if !isTemplateStageCommand(command) && !isTemplateInjectionCommand(command) {
 		return false, Output{}, nil
 	}
@@ -218,21 +221,185 @@ func financialTableCommand(normalized, lowered string) bool {
 }
 
 func isTemplateInjectionCommand(command string) bool {
-	normalized := normalizeCommand(command)
-	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "inject-template") {
-		return false
-	}
-	return regexp.MustCompile(`(^|\s)["']?(\.[/\\])?(bin[/\\])?data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`[/\\]data-harness-cli(\.exe)?["']?\s+inject-template(\s|$)`).MatchString(normalized)
+	return hasHarnessCLICommand(command, "inject-template")
 }
 
 func isTemplateStageCommand(command string) bool {
-	normalized := normalizeCommand(command)
-	if !strings.Contains(normalized, "data-harness-cli") || !strings.Contains(normalized, "stage template") {
+	return hasHarnessCLICommand(command, "stage", "template")
+}
+
+func isQDMMetricCommand(command string) bool {
+	for _, segment := range shellCommandSegments(command) {
+		invocation := unwrapShellCommand(segment)
+		if len(invocation) > 0 && isQDMMetricExecutable(invocation[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHarnessCLICommand(command string, expectedArgs ...string) bool {
+	for _, segment := range shellCommandSegments(command) {
+		invocation := unwrapShellCommand(segment)
+		if len(invocation) < len(expectedArgs)+1 || !isExecutableNamed(invocation[0], "data-harness-cli") {
+			continue
+		}
+		matched := true
+		for i, expected := range expectedArgs {
+			if !strings.EqualFold(invocation[i+1], expected) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func isQDMMetricExecutable(word string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(word))
+	if normalized == "$qdm_metric_cli" || normalized == "$env:qdm_metric_cli" ||
+		(strings.HasPrefix(normalized, "${qdm_metric_cli") && strings.HasSuffix(normalized, "}")) {
+		return true
+	}
+	return isExecutableNamed(word, "qdm-metric-cli")
+}
+
+func isExecutableNamed(word, name string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(word), `\`, "/")
+	base := strings.ToLower(path.Base(normalized))
+	return base == name || base == name+".exe"
+}
+
+func shellCommandSegments(command string) [][]string {
+	var segments [][]string
+	var words []string
+	var word strings.Builder
+	var quote byte
+
+	flushWord := func() {
+		if word.Len() == 0 {
+			return
+		}
+		words = append(words, word.String())
+		word.Reset()
+	}
+	flushSegment := func() {
+		flushWord()
+		if len(words) == 0 {
+			return
+		}
+		segments = append(segments, words)
+		words = nil
+	}
+
+	for i := 0; i < len(command); i++ {
+		current := command[i]
+		if quote != 0 {
+			if current == quote {
+				quote = 0
+				continue
+			}
+			if current == '\\' {
+				if quote == '"' && i+1 < len(command) && (command[i+1] == '"' || command[i+1] == '\\') {
+					word.WriteByte(command[i+1])
+					i++
+					continue
+				}
+				word.WriteByte('/')
+				continue
+			}
+			word.WriteByte(current)
+			continue
+		}
+
+		if current == '$' && i+1 < len(command) && command[i+1] == '{' {
+			word.WriteString("${")
+			i += 2
+			for ; i < len(command); i++ {
+				word.WriteByte(command[i])
+				if command[i] == '}' {
+					break
+				}
+			}
+			continue
+		}
+		if current == '$' && i+1 < len(command) && command[i+1] == '(' {
+			flushSegment()
+			i++
+			continue
+		}
+		switch current {
+		case '\'', '"':
+			quote = current
+		case '\\':
+			if i+1 < len(command) && (command[i+1] == ' ' || command[i+1] == '\t' || command[i+1] == '\n') {
+				word.WriteByte(command[i+1])
+				i++
+			} else {
+				word.WriteByte('/')
+			}
+		case ' ', '\t', '\r':
+			flushWord()
+		case '\n', ';', '|', '&', '(', ')', '{', '}':
+			flushSegment()
+		default:
+			word.WriteByte(current)
+		}
+	}
+	flushSegment()
+	return segments
+}
+
+func unwrapShellCommand(words []string) []string {
+	i := 0
+	for i < len(words) && (isShellAssignment(words[i]) || isShellControlWord(words[i])) {
+		i++
+	}
+	for i < len(words) {
+		switch strings.ToLower(words[i]) {
+		case "command", "exec", "nohup", "builtin", "time":
+			i++
+		case "sudo":
+			i++
+			for i < len(words) && strings.HasPrefix(words[i], "-") {
+				i++
+			}
+		case "env":
+			i++
+			for i < len(words) && (strings.HasPrefix(words[i], "-") || isShellAssignment(words[i])) {
+				i++
+			}
+		default:
+			return words[i:]
+		}
+	}
+	return nil
+}
+
+func isShellControlWord(word string) bool {
+	switch strings.ToLower(word) {
+	case "if", "then", "elif", "else", "while", "until", "do":
+		return true
+	default:
 		return false
 	}
-	return regexp.MustCompile(`(^|\s)["']?(\.[/\\])?(bin[/\\])?data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized) ||
-		regexp.MustCompile(`[/\\]data-harness-cli(\.exe)?["']?\s+stage\s+template(\s|$)`).MatchString(normalized)
+}
+
+func isShellAssignment(word string) bool {
+	name, _, ok := strings.Cut(word, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for i, current := range name {
+		if (current < 'A' || current > 'Z') && (current < 'a' || current > 'z') && current != '_' &&
+			(i == 0 || current < '0' || current > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func selectedTemplatePath(root string, state sessionstate.File) (string, string) {
@@ -275,6 +442,7 @@ func stripMarkdownFrontmatter(data []byte) []byte {
 }
 
 func normalizeCommand(command string) string {
+	command = strings.ReplaceAll(command, `\`, "/")
 	return strings.Join(strings.Fields(command), " ")
 }
 
