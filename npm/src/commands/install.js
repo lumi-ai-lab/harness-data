@@ -1,29 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
-import { ask, chooseAgent } from "../lib/prompt.js";
-import { readUserState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
+import { AUTH_OFF_PASSWORD, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, removeLegacyDataCLIs } from "../lib/config.js";
+import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
+import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
-import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
+import { binaryName, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
-
-function readInstallState(runtimeDir) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(runtimeDir, ".harness", "installer-state.json"), "utf8"));
-  } catch {
-    return readUserState();
-  }
-}
 
 async function requireCommands(commands) {
   for (const command of commands) {
@@ -76,7 +69,11 @@ function mergeRuntimeConfig(runtimeDir, sourceDir) {
 export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
-      fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json"))) {
+      fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json")) &&
+      (!options.requireWorkBuddy || (
+        fs.existsSync(path.join(runtimeDir, "agents", "workbuddy", ".codebuddy-plugin", "plugin.json")) &&
+        fs.existsSync(path.join(runtimeDir, "agents", ".codebuddy-plugin", "marketplace.json"))
+      ))) {
     skip("runtime bundle 已存在");
     return { tag: "", skipped: true };
   }
@@ -132,15 +129,24 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   return { tag, skipped: false };
 }
 
+function executable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function promptExecutable(runtimeDir, name, options = {}) {
   const auto = path.join(runtimeDir, "bin", binaryName(name));
-  if (isExecutable(auto)) {
+  if (executable(auto)) {
     ok(`自动识别 ${name}: ${auto}`);
     return auto;
   }
   const value = await ask(`请输入 ${name} 的绝对路径：`, options);
   const file = path.resolve(value);
-  if (!isExecutable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
+  if (!executable(file)) throw new Error(`${name} path is missing or not executable: ${file}`);
   return file;
 }
 
@@ -153,7 +159,7 @@ async function installLocalTools(runtimeDir, options = {}) {
     const target = path.join(binDir, binaryName(name));
     if (path.resolve(source) !== path.resolve(target)) {
       fs.copyFileSync(source, target);
-      if (process.platform !== "win32") fs.chmodSync(target, 0o755);
+      fs.chmodSync(target, 0o755);
     }
     installed[name] = { mode: "local-path", source };
   }
@@ -222,7 +228,7 @@ export async function buildAndCheck(runtimeDir, options = {}) {
 export function printDoctorSummary(doctor, options = {}) {
   const nonBlocking = options.nonBlocking || (() => false);
   const failed = doctor.checks.filter((check) => !check.ok && !nonBlocking(check));
-  const warnings = doctor.checks.filter((check) => !check.ok && nonBlocking(check));
+  const warnings = doctor.checks.filter((check) => (!check.ok && nonBlocking(check)) || check.status === "warning");
   if (!failed.length) {
     ok("runtime");
     ok("wikis/metrics");
@@ -241,14 +247,17 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
-  if (options.authUserId && !options.authBlob) {
-    throw new Error("--auth-user-id requires --auth-blob");
-  }
   const key = platformKey();
+  const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [
-    `安装目录：${resolveWorkspaceDir(options.dir || process.cwd())}`,
+    `安装目录：${targetRuntimeDir}`,
     `平台：${key}`
   ]);
+
+  const selectedAgent = await chooseAgent(options);
+  const existingAuthz = readAuthzFromHarnessConfig(path.join(targetRuntimeDir, "config", "harness-config.yaml"));
+  const effectiveDataAuth = options.dataAuth === true || (options.dataAuth === undefined && existingAuthz?.mode === "on");
+  assertWorkBuddyAuthCompatibility(selectedAgent, effectiveDataAuth);
 
   step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
@@ -256,13 +265,13 @@ export async function installCommand(options = {}) {
 
   step(2, 7, "安装 runtime bundle");
   const runtimeDir = await prepareRuntimeDir(options);
-  const bundle = await installRuntimeBundle(runtimeDir, options);
+  const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
   blank();
 
   step(3, 7, "安装 CLI 工具");
   const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
   const tokenMode = await hasGithubAuth(options);
-  const installState = readInstallState(runtimeDir);
+  const installState = readWorkspaceState(runtimeDir);
 
   let manifest;
   let localTools = {};
@@ -297,21 +306,48 @@ export async function installCommand(options = {}) {
   blank();
 
   step(5, 7, "生成本地配置");
-  const authBlob = String(options.authBlob || "").trim();
-  const dataAuth = options.dataAuth === true || Boolean(authBlob);
-  const { authz } = writeLocalConfig(runtimeDir, {
-    overwrite: true,
-    dataAuth,
-    authBlob,
-    authUserId: options.authUserId,
-  });
-  ok("config/harness-config.yaml");
-  ok("config/qdm-cli-paths.env");
-  if (authz.mode === "on") {
-    const blob = ensureLocalAuthBlob(runtimeDir, { blob: authBlob });
+  if (options.noAuth) {
+    // —— 关闭权限:验证密码（所有 agent 通用）——
+    const password = options.authOffPassword || await askSecret("请输入关闭权限密码：", options);
+    if (password !== AUTH_OFF_PASSWORD) {
+      throw new Error("关闭权限密码错误，安装中止");
+    }
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (密码已验证)");
+  } else if (options.dataAuth) {
+    // —— 内置 fixture（开发/测试）——
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+  } else if (agentIncludesWorkBuddy(selectedAgent)) {
+    // —— WorkBuddy 默认无权限（避免权限意识冲突，无需密码）——
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: false });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (WorkBuddy 默认无权限)");
   } else {
-    ok("authz.mode: off");
+    // —— 默认:带权限,输入 blob + dev_user_id（恢复 v0.0.43 契约）——
+    // 优先级: flag > env > 交互输入；--yes 非交互时无 blob 会抛 "is required"
+    const blobContent = options.authBlob
+      || process.env.HARNESS_AUTH_BLOB
+      || await askSecret("请输入权限 BLOB（加密 JSON，qdm1enc...）：", options);
+    if (!blobContent) throw new Error("auth blob is required; use --no-auth to skip");
+
+    const devUserId = options.authUserId
+      || process.env.HARNESS_AUTH_USER_ID
+      || await ask("请输入 dev_user_id：", options);
+    if (!devUserId) throw new Error("dev_user_id is required; use --no-auth to skip");
+
+    writeAuthBlob(runtimeDir, blobContent);
+    writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: on + user-provided blob");
+    ok(`dev_user_id: ${devUserId}`);
   }
   blank();
 
@@ -320,16 +356,25 @@ export async function installCommand(options = {}) {
   blank();
 
   step(7, 7, "配置 Agent Hook");
-  const selectedAgent = await chooseAgent(options);
   const linkedAgents = linkAgents(runtimeDir, selectedAgent);
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
   patchCodexHooksForWindows(runtimeDir);
+  if (agentIncludesWorkBuddy(selectedAgent)) {
+    const plugin = inspectWorkBuddyPlugin(runtimeDir);
+    if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
+    if (!plugin.versionMatchesPackage) {
+      throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}; update the runtime bundle`);
+    }
+    ok(`WorkBuddy Marketplace prepared: ${path.relative(runtimeDir, plugin.marketplaceRoot)}`);
+    action(`需要 WorkBuddy ${workBuddyMinimumVersion}+；在插件管理中 Add Marketplace：${plugin.marketplaceRoot}`);
+    action(`安装并启用 qdm-harness@${plugin.marketplaceName}，reload plugins 后在 Harness runtime workspace 中新建会话`);
+  }
   blank();
 
   console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, options);
+  const doctor = await collectDoctor(runtimeDir, { ...options, agent: selectedAgent });
   printDoctorSummary(doctor);
   if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
   blank();

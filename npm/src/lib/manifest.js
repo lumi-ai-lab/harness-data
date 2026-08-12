@@ -4,7 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import readline from "node:readline";
 import { commandExists, run } from "./exec.js";
-import { binaryName, isExecutable, platformKey } from "./platform.js";
+import { binaryName, platformKey } from "./platform.js";
 import { action, skip, warn } from "./log.js";
 
 export function readManifest(file) {
@@ -299,12 +299,21 @@ function fileSha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function executable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function reusableInstalledTool(workspace, tool, asset, options = {}) {
   const current = tool.version ? optionsStateTool(options, tool.name) : null;
   if (!current?.version || current.version !== tool.version) return null;
   if (!current.sha256) return null;
   const binary = path.join(workspace, "bin", binaryName(tool.binary));
-  if (!isExecutable(binary)) return null;
+  if (!executable(binary)) return null;
   const actualSha = fileSha256(binary);
   if (actualSha !== current.sha256) return null;
   return {
@@ -329,7 +338,7 @@ async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) 
     }
     const extracted = path.join(extractDir, binaryName(tool.binary));
     if (!fs.existsSync(extracted)) throw new Error(`${tool.binary} was not extracted to archive root`);
-    if (process.platform !== "win32") fs.chmodSync(extracted, 0o755);
+    fs.chmodSync(extracted, 0o755);
     const binary = path.join(binDir, binaryName(tool.binary));
     fs.renameSync(extracted, binary);
     return binary;

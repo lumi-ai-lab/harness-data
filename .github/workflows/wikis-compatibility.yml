@@ -11,6 +11,7 @@ on:
       - config/**
       - bootstrap/**
       - .agents/**
+      - npm/**
   push:
     branches:
       - master
@@ -21,6 +22,7 @@ on:
       - config/**
       - bootstrap/**
       - .agents/**
+      - npm/**
 
 permissions:
   contents: read
@@ -64,3 +66,12 @@ jobs:
       - name: Test Go CLI
         working-directory: cli
         run: go test ./...
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test npm installer and Agent adapters
+        working-directory: npm
+        run: npm test -- --test-concurrency=1

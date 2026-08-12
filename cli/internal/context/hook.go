@@ -1,10 +1,10 @@
 package context
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,7 +41,10 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if !ok || payload.Prompt == "" {
 		return false, Output{}, nil
 	}
-	prompt := payload.Prompt
+	return runPromptHook(root, payload.Prompt, hookSessionID(payload))
+}
+
+func runPromptHook(root, prompt, sessionID string) (bool, Output, error) {
 	resolver, err := harness.NewPathResolver(root)
 	if err != nil {
 		return false, Output{}, err
@@ -56,7 +59,6 @@ func RunClaudeHook(root string, input []byte) (bool, Output, error) {
 	if err != nil {
 		return false, Output{}, err
 	}
-	sessionID := hookSessionID(payload)
 	if err := writeWikiPlanState(root, sessionID, prompt, plan); err != nil {
 		return false, Output{}, err
 	}
@@ -336,11 +338,13 @@ func keywordHits(refs []harness.FileRef) []map[string]string {
 }
 
 func ReadHookStdin() ([]byte, error) {
-	var buf bytes.Buffer
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		buf.Write(scanner.Bytes())
-		buf.WriteByte('\n')
+	const maxHookInputBytes = 4 * 1024 * 1024
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxHookInputBytes+1))
+	if err != nil {
+		return nil, err
 	}
-	return buf.Bytes(), scanner.Err()
+	if len(data) > maxHookInputBytes {
+		return nil, fmt.Errorf("hook input exceeds %d bytes", maxHookInputBytes)
+	}
+	return data, nil
 }

@@ -3,7 +3,6 @@ import { stdin as input, stdout as output } from "node:process";
 import { Writable } from "node:stream";
 import { agentChoices, agentChoiceText } from "./config.js";
 import { run } from "./exec.js";
-import { warn } from "./log.js";
 
 export async function confirm(message, options = {}) {
   if (options.yes) return true;
@@ -24,13 +23,6 @@ export async function confirm(message, options = {}) {
 }
 
 export async function chooseAgent(options = {}) {
-  // Windows only supports Codex — skip the prompt entirely
-  if (process.platform === "win32") {
-    if (options.agent && options.agent !== "codex") {
-      warn(`Windows 仅支持 Codex Agent,已忽略 --agent ${options.agent}`);
-    }
-    return "codex";
-  }
   if (options.agent) {
     const value = String(options.agent).trim().toLowerCase();
     if (!agentChoices.includes(value)) throw new Error(`agent must be ${agentChoiceText}`);

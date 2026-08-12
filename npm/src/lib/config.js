@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { binaryName } from "./platform.js";
 
-export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "both", "all"];
+export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"];
 export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
 export const agentLinks = {
   claude: [["agents/claude", ".claude"]],
@@ -10,6 +10,9 @@ export const agentLinks = {
   pi: [["agents/pi", ".pi"]],
   openclaw: [["agents/openclaw", ".openclaw"]],
   hermes: [["agents/hermes", ".hermes"]],
+  // WorkBuddy uses its plugin package directly; it must not be represented by
+  // a misleading project symlink such as .workbuddy.
+  workbuddy: [],
   both: [["agents/claude", ".claude"], ["agents/codex", ".codex"]],
   all: [
     ["agents/claude", ".claude"],
@@ -33,6 +36,9 @@ export const removedDataCliBinaries = [
   "qdm-sql-cli",
   "cas-cli",
 ];
+
+/** Hardcoded password for --no-auth install (临时硬编码). */
+export const AUTH_OFF_PASSWORD = "qdmzt@2026";
 
 /** Relative path of the committed local-test encrypted auth blob fixture. */
 export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
@@ -104,11 +110,21 @@ export function readAuthzFromHarnessConfig(harnessPath) {
  * Priority: explicit dataAuth true/false → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
-  if (options.dataAuth === true || String(options.authBlob || "").trim()) {
+  // --no-auth: 关闭权限（密码由 install.js 验证）
+  if (options.noAuth === true) {
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
+  }
+  // --data-auth: 用内置 fixture（向后兼容，开发/测试用）
+  if (options.dataAuth === true) {
     return {
       mode: "on",
       blobFile: localTestAuthBlobRel,
-      devUserId: options.authUserId || localTestAuthUserId,
+      devUserId: localTestAuthUserId,
       allowLocalBlob: true,
     };
   }
@@ -120,12 +136,30 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
       allowLocalBlob: true,
     };
   }
-  if (existing) {
+  // 用户提供了 blob（默认 install 路径）
+  if (options.authBlob === true) {
     return {
-      mode: existing.mode === "on" ? "on" : "off",
+      mode: "on",
+      blobFile: localTestAuthBlobRel,
+      devUserId: options.devUserId || "",
+      allowLocalBlob: true,
+    };
+  }
+  // 无显式 flag 时：有 existing 则沿用，否则默认 off
+  if (existing) {
+    const mode = existing.mode === "on" ? "on" : "off";
+    let allowLocalBlob = existing.allowLocalBlob !== false;
+    // MVP convergence: Host/Lumi auth fallback has been removed, so
+    // allow_local_blob=false with mode=on is a dead-end config that can
+    // never authorize any gated command. Migrate it to true on update.
+    if (mode === "on" && !allowLocalBlob) {
+      allowLocalBlob = true;
+    }
+    return {
+      mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      allowLocalBlob: existing.allowLocalBlob !== false,
+      allowLocalBlob,
     };
   }
   return {
@@ -159,16 +193,13 @@ export function writeLocalConfig(workspace, options = {}) {
   const existing = options.overwrite ? readAuthzFromHarnessConfig(harness) : null;
   const authz = resolveAuthzForWrite(options, existing);
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
-  const metricPath = bin("qdm-metric-cli");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${metricPath}\n\n${formatAuthzYaml(authz)}`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n\n${formatAuthzYaml(authz)}`,
   );
-  // .env — POSIX export format (all platforms; Codex hooks use cli-shim.mjs which
-  // directly spawns the CLI, so this file is only for interactive shell usage)
   fs.writeFileSync(
     env,
-    `export QDM_METRIC_CLI="${metricPath}"\n`,
+    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\n`,
   );
   return { authz };
 }
@@ -179,15 +210,6 @@ export function writeLocalConfig(workspace, options = {}) {
  */
 export function ensureLocalAuthBlob(workspace, options = {}) {
   const target = path.join(workspace, localTestAuthBlobRel);
-  const supplied = String(options.blob || "").trim();
-  if (supplied) {
-    if (!supplied.startsWith("qdm1enc.")) {
-      throw new Error("auth blob must be an encrypted qdm1enc blob");
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, `${supplied}\n`, { mode: 0o600 });
-    return { copied: true, path: target };
-  }
   const fixture = path.join(workspace, localTestAuthFixtureRel);
   if (fs.existsSync(target) && !options.force) {
     return { copied: false, path: target };
@@ -201,6 +223,19 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(fixture, target);
   return { copied: true, path: target };
+}
+
+/**
+ * Write user-provided auth blob string to config/dev-auth.blob.
+ * @param {string} workspace - runtime dir
+ * @param {string} blobContent - the encrypted blob string (qdm1enc...)
+ * @returns {{ path: string }}
+ */
+export function writeAuthBlob(workspace, blobContent) {
+  const target = path.join(workspace, localTestAuthBlobRel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, blobContent + "\n", "utf8");
+  return { path: target };
 }
 
 export function removeLegacyDataCLIs(runtimeDir) {
@@ -228,13 +263,9 @@ export function linkAgents(workspace, agent) {
 }
 
 /**
- * On Windows, patch agents/codex/hooks.json: replace each `bash -c '...'`
- * command with `node "cli-shim.mjs" <args>`. The shim directly spawns
- * data-harness-cli via spawnSync with shell:false, bypassing all Windows
- * shells (PowerShell/CMD) and their incompatible quoting rules.
- *
- * `node` is a bare executable name in PATH (required by the npm package),
- * recognised as a command — not a string expression — by every shell.
+ * On Windows, replace Codex's bash hook commands with the Node shim.
+ * The shim starts data-harness-cli directly, so hook execution does not
+ * depend on PowerShell/CMD quoting or a POSIX shell being installed.
  */
 export function patchCodexHooksForWindows(workspace) {
   if (process.platform !== "win32") return;
@@ -242,20 +273,18 @@ export function patchCodexHooksForWindows(workspace) {
   const hooksFile = path.join(codexDir, "hooks.json");
   if (!fs.existsSync(hooksFile)) return;
   const shimPath = path.join(codexDir, "hooks", "cli-shim.mjs").replaceAll("\\", "/");
-  if (!fs.existsSync(shimPath)) return; // cli-shim.mjs ships in the runtime bundle
+  if (!fs.existsSync(shimPath)) return;
 
   const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
   for (const event of Object.keys(hooks.hooks || {})) {
     for (const entry of hooks.hooks[event]) {
       for (const hook of entry.hooks || []) {
         if (typeof hook.command !== "string") continue;
-        // Extract only the final CLI invocation from:
-        // bash -c '... [ -z "$cli" ]; ...; "$cli" context --format codex-hook'
         const invocationStart = hook.command.lastIndexOf('"$cli"');
         if (invocationStart < 0) continue;
-        const m = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
-        if (!m) continue;
-        hook.command = `node "${shimPath}" ${m[1]}`;
+        const match = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
+        if (!match) continue;
+        hook.command = `node "${shimPath}" ${match[1]}`;
       }
     }
   }
