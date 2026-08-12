@@ -13,7 +13,7 @@ import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./insta
 import { collectDoctor } from "./doctor.js";
 import { hasAnyAgentHook, linkAgents, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
-import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -143,7 +143,7 @@ export async function updateCommand(options = {}) {
   const state = readWorkspaceState(runtimeDir);
   const configuredAgent = options.agent || state.agent;
   const existingAuthz = readAuthzFromHarnessConfig(path.join(runtimeDir, "config", "harness-config.yaml"));
-  assertWorkBuddyAuthCompatibility(configuredAgent, existingAuthz?.mode === "on");
+  assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
   let changed = false;
