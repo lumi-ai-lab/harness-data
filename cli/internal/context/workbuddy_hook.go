@@ -40,12 +40,6 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 				"Do not run qdm-metric-cli or estimate data until the runtime configuration is repaired.",
 		), nil
 	}
-	if cfg.Authz.AuthzEnabled() {
-		return true, workBuddySafetyOutput(
-			"QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-				"Do not run qdm-metric-cli or infer permission-scoped results in this session.",
-		), nil
-	}
 
 	ok, output, err := runPromptHook(root, payload.Prompt, workBuddySessionPrefix+sessionID)
 	if err != nil {
@@ -57,6 +51,7 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 	if !ok {
 		return false, WorkBuddyOutput{}, nil
 	}
+	output.HookSpecificOutput.AdditionalContext = "authzMode: " + cfg.Authz.Mode + "\n\n" + output.HookSpecificOutput.AdditionalContext
 	return true, WorkBuddyOutput{
 		Continue:           true,
 		HookSpecificOutput: output.HookSpecificOutput,

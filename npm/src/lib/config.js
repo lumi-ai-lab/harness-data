@@ -47,6 +47,11 @@ export const localTestAuthBlobRel = "config/dev-auth.blob";
 /** Slot user id for the local-test fixture; must match blob userId. */
 export const localTestAuthUserId = "local-test-user";
 
+export function assertCodexAuthPlatform(_agent, authEnabled, platform = process.platform) {
+  // Codex authz is cross-platform. Windows uses the Node hook shim while
+  // macOS/Linux keep the existing shell hook path.
+}
+
 export function hasAnyAgentHook(workspace) {
   return concreteAgentNames.some((name) => fs.existsSync(path.join(workspace, `.${name}`)));
 }
@@ -107,7 +112,7 @@ export function readAuthzFromHarnessConfig(harnessPath) {
 
 /**
  * Resolve authz block for writeLocalConfig.
- * Priority: explicit dataAuth true/false → preserve existing → default off.
+ * Priority: explicit noAuth/dataAuth/authBlob → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
   // --no-auth: 关闭权限（密码由 install.js 验证）
@@ -193,13 +198,16 @@ export function writeLocalConfig(workspace, options = {}) {
   const existing = options.overwrite ? readAuthzFromHarnessConfig(harness) : null;
   const authz = resolveAuthzForWrite(options, existing);
   const bin = (name) => path.join(workspace, "bin", binaryName(name)).replaceAll("\\", "/");
+  const metricPath = bin("qdm-metric-cli");
   fs.writeFileSync(
     harness,
-    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${bin("qdm-metric-cli")}\n\n${formatAuthzYaml(authz)}`,
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${metricPath}\n\n${formatAuthzYaml(authz)}`,
   );
+  // .env — POSIX export format (all platforms; Codex hooks use cli-shim.mjs which
+  // directly spawns the CLI, so this file is only for interactive shell usage)
   fs.writeFileSync(
     env,
-    `export QDM_METRIC_CLI="${bin("qdm-metric-cli")}"\n`,
+    `export QDM_METRIC_CLI="${metricPath}"\n`,
   );
   return { authz };
 }
@@ -212,6 +220,7 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   const target = path.join(workspace, localTestAuthBlobRel);
   const fixture = path.join(workspace, localTestAuthFixtureRel);
   if (fs.existsSync(target) && !options.force) {
+    fs.chmodSync(target, 0o600);
     return { copied: false, path: target };
   }
   if (!fs.existsSync(fixture)) {
@@ -222,6 +231,7 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(fixture, target);
+  fs.chmodSync(target, 0o600);
   return { copied: true, path: target };
 }
 
@@ -234,7 +244,8 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
 export function writeAuthBlob(workspace, blobContent) {
   const target = path.join(workspace, localTestAuthBlobRel);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, blobContent + "\n", "utf8");
+  fs.writeFileSync(target, `${blobContent}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(target, 0o600);
   return { path: target };
 }
 
@@ -263,32 +274,60 @@ export function linkAgents(workspace, agent) {
 }
 
 /**
- * On Windows, replace Codex's bash hook commands with the Node shim.
- * The shim starts data-harness-cli directly, so hook execution does not
- * depend on PowerShell/CMD quoting or a POSIX shell being installed.
+ * On Windows, patch agents/codex/hooks.json: replace each `bash -c '...'`
+ * command with `node "cli-shim.mjs" <args>`. The shim directly spawns
+ * data-harness-cli via spawnSync with shell:false, bypassing all Windows
+ * shells (PowerShell/CMD) and their incompatible quoting rules.
+ *
+ * `node` is a bare executable name in PATH (required by the npm package),
+ * recognised as a command — not a string expression — by every shell.
  */
 export function patchCodexHooksForWindows(workspace) {
   if (process.platform !== "win32") return;
   const codexDir = path.join(workspace, "agents", "codex");
   const hooksFile = path.join(codexDir, "hooks.json");
-  if (!fs.existsSync(hooksFile)) return;
+  if (!fs.existsSync(hooksFile)) throw new Error("Windows Codex hooks are missing: agents/codex/hooks.json");
   const shimPath = path.join(codexDir, "hooks", "cli-shim.mjs").replaceAll("\\", "/");
-  if (!fs.existsSync(shimPath)) return;
+  if (!fs.existsSync(shimPath)) throw new Error("Windows Codex hook shim is missing: agents/codex/hooks/cli-shim.mjs");
 
   const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
-  for (const event of Object.keys(hooks.hooks || {})) {
-    for (const entry of hooks.hooks[event]) {
+  const requiredHooks = new Map([
+    ["UserPromptSubmit", "context --format codex-hook"],
+    ["PreToolUse", "authz-hook --agent codex"],
+    ["PostToolUse", "posttool --format codex-hook"],
+  ]);
+  for (const [event, expectedArgs] of requiredHooks) {
+    let ready = false;
+    for (const entry of hooks.hooks?.[event] || []) {
       for (const hook of entry.hooks || []) {
         if (typeof hook.command !== "string") continue;
+        const shimCommand = `node "${shimPath}" ${expectedArgs}`;
+        if (hook.command === shimCommand) {
+          if (ready) throw new Error(`Windows Codex hook patch found duplicate commands for ${event}`);
+          ready = true;
+          continue;
+        }
+        // Extract only the final CLI invocation from:
+        // bash -c '... [ -z "$cli" ]; ...; "$cli" context --format codex-hook'
         const invocationStart = hook.command.lastIndexOf('"$cli"');
         if (invocationStart < 0) continue;
-        const match = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
-        if (!match) continue;
-        hook.command = `node "${shimPath}" ${match[1]}`;
+        const m = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
+        if (!m || m[1] !== expectedArgs) continue;
+        if (ready) throw new Error(`Windows Codex hook patch found duplicate commands for ${event}`);
+        hook.command = shimCommand;
+        ready = true;
       }
     }
+    if (!ready) throw new Error(`Windows Codex hook patch failed for ${event}`);
   }
-  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
+  const tempDir = fs.mkdtempSync(path.join(codexDir, ".hooks-update-"));
+  const tempFile = path.join(tempDir, "hooks.json");
+  try {
+    fs.writeFileSync(tempFile, `${JSON.stringify(hooks, null, 2)}\n`, { flag: "wx" });
+    fs.renameSync(tempFile, hooksFile);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function parseConfigBool(value, fallback) {

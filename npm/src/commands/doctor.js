@@ -1,26 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
-import { binaryName } from "../lib/platform.js";
+import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
 import {
+  codeBuddyMinimumVersion,
+  detectCodeBuddyVersion,
   detectWorkBuddyPluginEnabled,
   detectWorkBuddyVersion,
+  inspectWorkBuddyAuth,
   inspectWorkBuddyPlugin,
   versionAtLeast,
+  workBuddyAuthMinimumVersion,
   workBuddyMinimumVersion,
   workBuddyPluginRel,
 } from "../lib/workbuddy.js";
-
-function existsExecutable(file) {
-  try {
-    fs.accessSync(file, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function agentOk(workspace, name) {
   const target = path.join(workspace, `.${name}`);
@@ -34,12 +29,17 @@ function agentOk(workspace, name) {
 }
 
 function configPathsValid(workspace) {
-  const file = path.join(workspace, "config", "qdm-cli-paths.env");
-  if (!fs.existsSync(file)) return false;
-  const content = fs.readFileSync(file, "utf8");
-  const required = ["QDM_METRIC_CLI"];
-  const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((match) => [match[1], match[2]]));
-  return required.every((name) => values.has(name) && fs.existsSync(values.get(name)));
+  const configDir = path.join(workspace, "config");
+
+  // .env (POSIX export — all platforms)
+  const envFile = path.join(configDir, "qdm-cli-paths.env");
+  if (fs.existsSync(envFile)) {
+    const content = fs.readFileSync(envFile, "utf8");
+    const values = new Map([...content.matchAll(/^export\s+([A-Z0-9_]+)="([^"]+)"/gm)].map((m) => [m[1], m[2]]));
+    if (values.has("QDM_METRIC_CLI") && fs.existsSync(values.get("QDM_METRIC_CLI"))) return true;
+  }
+
+  return false;
 }
 
 function selectedAgent(workspace, options = {}) {
@@ -59,7 +59,7 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   for (const binary of qdmCliBinaries) {
-    add(`bin/${binary}`, existsExecutable(path.join(workspace, "bin", binaryName(binary))));
+    add(`bin/${binary}`, isExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   const authz = readAuthzFromHarnessConfig(path.join(workspace, "config", "harness-config.yaml"));
@@ -70,15 +70,18 @@ export async function collectDoctor(workspace, options = {}) {
   }
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
-  add("legacy qdm-cmr-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
-  add("legacy qdm-indicators-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
-  add("legacy qdm-sql-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("qdm-sql-cli"))));
-  add("legacy cas-cli absent", !existsExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
+  add("legacy qdm-cmr-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
+  add("legacy qdm-indicators-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-indicators-cli"))));
+  add("legacy qdm-sql-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-sql-cli"))));
+  add("legacy cas-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
 
   const configuredAgent = selectedAgent(workspace, options);
   const workBuddySelected = configuredAgent === "workbuddy";
-  if (workBuddySelected) {
-    add("WorkBuddy authz.mode=off", authz?.mode !== "on", authz?.mode === "on" ? "data-auth is not supported" : "off");
+  if (workBuddySelected && authz?.mode === "on") {
+    const platform = options.platform || process.platform;
+    add("WorkBuddy auth platform", platform === "darwin", platform === "darwin" ? "macOS" : `${platform}; auth hook currently supports macOS only`);
+    const auth = inspectWorkBuddyAuth(workspace, authz, { ...options, platform });
+    add("WorkBuddy auth source", auth.ok, auth.detail);
   }
   let workBuddy = null;
   if (fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
@@ -102,6 +105,24 @@ export async function collectDoctor(workspace, options = {}) {
         );
       } else {
         add(`WorkBuddy version >= ${workBuddyMinimumVersion}`, true, "client not detected; verify manually", "warning");
+      }
+      if (authz?.mode === "on") {
+        add(
+          `WorkBuddy auth version >= ${workBuddyAuthMinimumVersion}`,
+          Boolean(clientVersion && versionAtLeast(clientVersion, workBuddyAuthMinimumVersion)),
+          clientVersion || "client not detected",
+        );
+        const codeBuddyVersion = detectCodeBuddyVersion(options);
+        if (codeBuddyVersion) {
+          const supported = versionAtLeast(codeBuddyVersion, codeBuddyMinimumVersion);
+          add(
+            `CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`,
+            supported,
+            supported ? codeBuddyVersion : `${codeBuddyVersion}; upgrade WorkBuddy before enabling authz`,
+          );
+        } else {
+          add(`CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`, false, "embedded CLI not detected");
+        }
       }
       const enablement = detectWorkBuddyPluginEnabled({ ...options, workspace });
       if (enablement.enabled) {

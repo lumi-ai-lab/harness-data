@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"harness-data/cli/internal/harness"
@@ -104,6 +105,16 @@ func readBlobFile(projectRoot, pathValue string) (string, error) {
 	absolute := pathValue
 	if !filepath.IsAbs(absolute) {
 		absolute = filepath.Join(projectRoot, filepath.FromSlash(pathValue))
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("auth blob file not found: %s", absolute)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("auth blob file must be a regular file: %s", absolute)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		return "", fmt.Errorf("auth blob file permissions must be 0600: %s", absolute)
 	}
 	data, err := os.ReadFile(absolute)
 	if err != nil {

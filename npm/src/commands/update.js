@@ -11,9 +11,9 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
+import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
-import { agentIncludesWorkBuddy, assertWorkBuddyAuthCompatibility, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -110,6 +110,9 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
     return null;
   }
   if (hasAnyAgentHook(runtimeDir)) {
+    // A runtime bundle update restores hooks.json to the original bash form.
+    // Patch the freshly installed file even when the agent junction exists.
+    patchCodexHooksForWindows(runtimeDir);
     ok("Agent Hook 已配置");
     return null;
   }
@@ -119,6 +122,7 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
   for (const [source, target] of linkedAgents) {
     if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
   }
+  patchCodexHooksForWindows(runtimeDir);
   return { agent, linkedAgents };
 }
 
@@ -143,7 +147,8 @@ export async function updateCommand(options = {}) {
   const state = readWorkspaceState(runtimeDir);
   const configuredAgent = options.agent || state.agent;
   const existingAuthz = readAuthzFromHarnessConfig(path.join(runtimeDir, "config", "harness-config.yaml"));
-  assertWorkBuddyAuthCompatibility(configuredAgent, existingAuthz?.mode === "on");
+  assertCodexAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
+  assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
   let changed = false;

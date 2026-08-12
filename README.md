@@ -105,7 +105,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 使用 auth-blob / data-auth 做数据权限（可用 `--data-auth` 开启本地测试），但 `--agent workbuddy` 与 `--data-auth` 当前不兼容，安装器会直接拒绝该组合。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；macOS WorkBuddy 支持同一套 auth 参数，其他平台需使用 `--no-auth`。
 
 更新工作目录：
 
@@ -269,11 +269,11 @@ authz:
 
 未配置时会自动识别 `wikis/` 下的新知识结构。Wiki 检查和索引使用 `metrics/...`、`reports/...`、`dims/...`、`rules/...` 逻辑路径；读取层仍兼容旧 `spec/...`、`playbooks/...`、`templates/...` 布局。
 
-### 数据权限（qdm-metric-cli，默认关闭）
+### 数据权限（qdm-metric-cli，默认开启）
 
-WorkBuddy 第一阶段不接入数据权限：仅允许 `authz.mode=off`。当配置为 `on` 时，`workbuddy-hook` 会注入安全阻断上下文；安装器也会拒绝 `--agent workbuddy --data-auth`。以下 Agent authz 能力目前适用于 Pi 和 Codex，不适用于 WorkBuddy。
+macOS WorkBuddy 与 Codex 共用本地 Blob auth 流程。WorkBuddy auth 要求 Desktop `5.3.11+`、内置 CodeBuddy CLI `2.115.0+`；非 macOS 平台安装 WorkBuddy 时仅支持 `--no-auth`。
 
-`authz.mode` 默认 `off`。Hook 读取配置后立即退出，不识别或改写任何 Bash 命令。设为 `on` 后，Agent authz 适配器才会进入命令识别与授权流程，并保证：
+安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`；使用 `--no-auth` 并通过密码验证后才写入 `off`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
@@ -337,21 +337,38 @@ authz:
 **安装器开关**（不必手改配置）：
 
 ```bash
-# 开启权限模式 + 落盘本地测试 blob（无 Host 时可用）
+# ① 默认安装（带权限）——交互输入 blob + dev_user_id
+npx @lumi-ai-lab/harness-data install
+
+# ② 带权限 + flag 直传 blob（非交互，适合 CI）
+npx @lumi-ai-lab/harness-data install \
+  --auth-blob 'qdm1enc...' --auth-user-id 'your-user-id' --yes
+
+# ③ 带权限 + env 传入 blob
+HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
+npx @lumi-ai-lab/harness-data install --yes
+
+# ④ 关闭权限（需密码）
+npx @lumi-ai-lab/harness-data install --no-auth
+# 或非交互：
+npx @lumi-ai-lab/harness-data install --no-auth \
+  --auth-off-password 'qdmzt@2026' --yes
+
+# ⑤ 开发/测试快捷方式（用内置 fixture blob）
 npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
-会写入：
+默认安装会写入：
 
 ```yaml
 authz:
   mode: on
   blob_file: config/dev-auth.blob
-  dev_user_id: local-test-user
+  dev_user_id: <用户输入>
   allow_local_blob: true
 ```
 
-并从 runtime 内置的 `config/fixtures/local-test-auth.blob` 复制到 `config/dev-auth.blob`（工作副本 gitignore）。  
+并将用户提供的 Blob 写入权限为 `0600` 的 `config/dev-auth.blob`（工作副本 gitignore）。`--data-auth` 会用 runtime 内置的 `config/fixtures/local-test-auth.blob` 覆盖该文件，并使用 `dev_user_id: local-test-user`。
 说明：`harness-data auth` 是 **CAS** 子命令，与 metric data-auth **无关**。
 
 Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness context 默认 always inject）。权限内容全程是 **已加密** 的 `qdm1enc...` blob（Harness 不解密；metric-cli 内过滤）。
@@ -365,7 +382,7 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-默认 install（`mode: off`）即可测主链路；要测权限注入/拦截用 `--data-auth` + 内置 fixture。管理员分发 blob 的正式使用场景保持 `allow_local_blob: true`，并把 blob 文件放在 workspace 外。
+默认 install 为 `mode: on`；开发测试可用 `--data-auth` + 内置 fixture，关闭权限测试必须使用 `--no-auth` 并通过密码验证。管理员分发 Blob 的正式使用场景保持 `allow_local_blob: true`，并把 Blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 

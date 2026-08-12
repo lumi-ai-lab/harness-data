@@ -1,6 +1,6 @@
 {
   "name": "qdm-harness",
-  "version": "0.0.45",
+  "version": "0.0.46",
   "description": "为 WorkBuddy 注入 QDM Harness 上下文、运行约束和报告模板。",
   "author": {
     "name": "Lumi AI Lab"

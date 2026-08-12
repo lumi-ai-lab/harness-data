@@ -17,8 +17,8 @@ type WorkBuddyOutput struct {
 
 // RunWorkBuddyHook consumes the canonical PostToolUse payload emitted by the
 // WorkBuddy JavaScript adapter. Template staging/injection commands are
-// stateful. Metric commands are otherwise no-ops, but still pass through the
-// WorkBuddy session and authz safety checks so unsupported results are not used.
+// stateful. Metric commands are no-ops because authorization is enforced by
+// the WorkBuddy PreToolUse hook before the command executes.
 func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) {
 	var payload Payload
 	if err := json.Unmarshal(input, &payload); err != nil {
@@ -33,39 +33,21 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 	if !templateCommand && !metricCommand {
 		return false, WorkBuddyOutput{}, nil
 	}
+	if metricCommand && !templateCommand {
+		return false, WorkBuddyOutput{}, nil
+	}
 
 	sessionID := strings.TrimSpace(payload.SessionID)
 	if sessionID == "" {
 		message := "QDM_HARNESS_BLOCKED: WorkBuddy did not provide a stable session_id for template injection. " +
 			"Do not guess, read, or use any template; run context in a new WorkBuddy session first."
-		if metricCommand {
-			message = "QDM_HARNESS_BLOCKED: WorkBuddy did not provide a stable session_id after a qdm-metric-cli tool call. " +
-				"Discard the data result and do not produce numeric or permission-scoped conclusions; retry in a new WorkBuddy session."
-		}
 		return true, workBuddySafetyOutput(message), nil
 	}
 
-	cfg, err := harness.LoadConfig(root)
-	if err != nil {
+	if _, err := harness.LoadConfig(root); err != nil {
 		message := "QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded after the template tool call. " +
 			"Do not guess, read, or use a template."
-		if metricCommand {
-			message = "QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded after a qdm-metric-cli tool call. " +
-				"Discard the data result and do not produce numeric or permission-scoped conclusions."
-		}
 		return true, workBuddySafetyOutput(message), nil
-	}
-	if cfg.Authz.AuthzEnabled() {
-		message := "QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-			"Do not inject a report template or produce permission-scoped conclusions."
-		if metricCommand {
-			message = "QDM_HARNESS_AUTHZ_UNSUPPORTED: WorkBuddy integration currently supports authz.mode=off only. " +
-				"Discard the qdm-metric-cli result from this tool call and do not produce permission-scoped conclusions."
-		}
-		return true, workBuddySafetyOutput(message), nil
-	}
-	if !templateCommand {
-		return false, WorkBuddyOutput{}, nil
 	}
 
 	ok, output, err := runTemplateHook(root, command, workBuddySessionPrefix+sessionID)
