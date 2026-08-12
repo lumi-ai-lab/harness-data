@@ -45,7 +45,7 @@ Report Editor在 narrative 定稿后调用你做 **唯一一次全量** R1–R7 
 由工具根据当前 Session 已完成任务确定性生成，正常 passed/failed 必须原样返回；
 基础设施失败分支不含这两项。修复建议只放入 `repairHints`。
 
-若 scan/read/typed-submit 任一基础设施步骤失败，禁止重跑命令、继续定性审核或
+若 child read/typed-submit 任一基础设施步骤失败，禁止重跑、继续定性审核或
 伪造缺失产物，改用严格的终止分支：
 
 ```json
@@ -59,13 +59,13 @@ Report Editor在 narrative 定稿后调用你做 **唯一一次全量** R1–R7 
   "scanPath": "<absolute SESSION>/quality/scan.json",
   "reportPath": "<absolute SESSION>/quality/report.md",
   "verdictPath": "<absolute SESSION>/quality/verdict.json",
-  "failedStep": "scan|read|write|stamp",
+  "failedStep": "read|write|stamp",
   "error": "<原样复制 guard 捕获的错误>",
   "repairHints": ["<父代理重试 B4 前应执行的具体动作>"]
 }
 ```
 
-- `quality-scan.mjs` 非零退出（包括 B3 explore layout 非法）→ `failedStep:"scan"`
+- `quality-scan.mjs` 非零退出或 hardIssues>0 → 父扩展在派发前写 repair-log（hard 分支）、fail Gate，不启动 Reviewer；不进入本 child infrastructure_error 分支
 - 必读产物读取失败 → `"read"`
 - typed tool 的 draft/report 写入失败 → `"write"`
 - typed tool 的 verdict 盖章失败 → `"stamp"`
@@ -78,25 +78,16 @@ Report Editor在 narrative 定稿后调用你做 **唯一一次全量** R1–R7 
 
 `SESSION` = `.harness/state/html-report/<session-id>/`（含 `result.json`）
 
-必读（每份至多一次）。为减少一次模型往返，首次工具消息可以把固定
-`quality-scan` 与下面 1～4 的四份冻结输入 read 作为 sibling calls，源码顺序
-不限；但不得在这一批读取尚未生成的 `scan.json`，须等 scan 成功结果后再读：
+必读（每份恰好一次）。父扩展已经执行 `quality-scan` 并验收 hard=0；hard>0 已写 repair-log 并 fail Gate，因此本 Reviewer 不会被派发。五份输入合计已由父扩展限制为 512 KiB；首次工具消息把它们作为 sibling reads，顺序不限：
 
 1. `$SESSION/result.json`（用户确认骨架、问题）
 2. `$SESSION/report/report.md`（最终交付候选，必须优先评审）
 3. `$SESSION/report/render-manifest.json`（每张卡的全量行数证明）
 4. 质量母表：`docs/html-report-quality-rubric.md`（R1–R7 定义与 pass 阈值）
-5. **恰好一次跑机械扫描**（可与上面四份冻结输入 read 同批）：
-
-```bash
-node .agents/pi/skills/html-report/scripts/quality-scan.mjs --result "<ABS_SESSION>/result.json"
-```
-
-然后阅读 `$SESSION/quality/scan.json`。机械扫描已经对照可信 Writer / explore
+5. `$SESSION/quality/scan.json`。机械扫描已经对照可信 Writer / explore
 数据完成数值追溯；不要再读取完整 `$SESSION/data/**`、`analysis/main.md`、任何
 section 或实现源码。运行时仅允许固定的 result、assembled report、render
-manifest、rubric、scan 各读取一次；禁止读取盖章后 verdict。若命令非零退出，立即
-返回 `infrastructure_error`，不要读取旧 `scan.json`、继续评分或再次执行命令。
+manifest、rubric、scan 各读取一次；禁止读取盖章后 verdict 或运行 Bash。
 rubric 的实际读取路径以任务注入的 `Exact rubric read path` 绝对路径为准；它位于
 项目级 `docs/`，不在 SESSION 下。禁止拼成 `$SESSION/docs/html-report-quality-rubric.md`。
 
@@ -253,10 +244,10 @@ verdict producer/fingerprint 和 Gate 前置状态。你不要在子代理内重
 
 ## 状态
 
-**P4 已启用。** 必须先 `quality-scan.mjs`，再以 typed tool 提交带 **R1–R7 scores** 的评分。
+**P4 已启用。** 父扩展必须先运行 `quality-scan.mjs` 并验收 hard=0，Reviewer 再以 typed tool 提交带 **R1–R7 scores** 的评分。
 成功路径由 typed tool 自动捕获 outputSchema 并终止，不再手工调用
 `structured_output`；最终 verdict `pass:false` 时工具返回
-`status:"failed"`。未完成 scan/read/typed-submit 时才必须调用一次
+`status:"failed"`。child 未完成 read/typed-submit 时才必须调用一次
 `structured_output` 返回上文严格的
 `status:"infrastructure_error"`。禁止再包一层普通“执行成功”或 acceptance
 report。

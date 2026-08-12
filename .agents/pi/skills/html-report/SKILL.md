@@ -816,10 +816,23 @@ For the current Gate attempt:
 1. On a retry attempt, first execute the previously logged repair actions. If
    they change sections, explore results or `analysis/main.md`, re-run
    `assemble-report.mjs` before Reviewer. On the first attempt, continue.
-2. **Spawn Reviewer as one structured chain step** (do not write verdict
-   yourself). `qdm-harness` owns and replaces the exact `outputSchema`,
-   foreground lifecycle and tool budget; do not hand-write a schema and do not
-   use a free-text `agent: "report-reviewer"` call:
+2. **Request Reviewer as one structured chain step** (do not write verdict
+   yourself). Before admitting that dispatch, `qdm-harness` synchronously runs
+   `quality-scan.mjs` against the final assembled `report/report.md`:
+   - scan infrastructure/input failure → fail the current B4 Gate, do not dispatch Reviewer;
+   - `hardIssues.length > 0` → append `quality/repair-log.json`, fail the current
+     B4 Gate, and do not dispatch Reviewer;
+   - `hardIssues.length === 0` → freeze exactly five inputs (`result.json`,
+     `report/report.md`, `report/render-manifest.json`, the project rubric and
+     `quality/scan.json`), enforce their combined **512 KiB** limit, persist the
+     attempt-bound preflight fingerprint, and only then dispatch Reviewer.
+
+   `qdm-harness` owns and replaces the exact `outputSchema`, foreground
+   lifecycle, model and budgets. The fixed Reviewer configuration is
+   `qdm-market/deepseek-v4-flash`, `maxRuntimeMs=150000`,
+   `turnBudget={maxTurns:4,graceTurns:1}`, and six tool calls total: five
+   whitelisted reads plus one `submit_review_scorecard`. Do not hand-write a
+   schema and do not use a free-text `agent: "report-reviewer"` call:
 
 ```text
 subagent({
@@ -829,18 +842,19 @@ subagent({
     task: `B4 scorecard for SESSION=<ABS_SESSION>
 result.json=<ABS_RESULT_JSON>
 The B3 report is already assembled and frozen; do not run assemble-report.mjs.
-1) First tool batch: quality-scan.mjs --result <ABS_RESULT_JSON> plus optional sibling reads
-   of frozen result/report/render-manifest/rubric in any source order. Wait for
-   scan success before reading scan.json; do not include submission in this batch.
-2) read scan.json once, then call submit_review_scorecard exactly once with typed
+1) The parent has already completed quality-scan with hardIssues=0. Do not run Bash
+   or scan. In the first and only read batch, read each of the five frozen inputs
+   exactly once; do not include submission in this batch.
+2) call submit_review_scorecard exactly once with typed
    R1–R7 scores (0–2), notes, summary, structured issues and repairHints. Do not
    pass paths/pass/total/max/timestamps/fingerprint or serialized JSON. The tool
    owns safe draft serialization, verdict stamping, dynamic target-rubric gates
    derived from completed tasks, and quality/report.md rendering. Score from the
    report evidence; never inflate a score merely to satisfy a task target.
-3) wait for tool success, then copy its returned object unchanged to structured_output;
-   parent extension performs authoritative phase-quality layout
-If scan/read/submit fails: do not retry or continue scoring; return the strict
+3) On success the tool captures the attached structured return and terminates the
+   child; never call structured_output afterward. The parent extension performs
+   authoritative phase-quality layout.
+If read/submit persistence fails: do not retry or continue scoring; return the strict
 status=infrastructure_error branch with pass=false, total=0, failedStep, verbatim error,
 and at least one actionable repairHint. A normal status=failed also requires a
 non-empty repairHints array.
@@ -858,8 +872,9 @@ In addition to the base threshold, the stamped verdict may expose
 `targetRubric` / `analysisRequirements[].targetRubric`, never from business
 field names. Any unmet declared minimum keeps `pass=false` and enters the same
 repair loop.
-`status=infrastructure_error` means scan/read/write/stamp stopped before a
-scorecard and must terminate the current Gate attempt immediately. Never
+`status=infrastructure_error` means child read/write/stamp stopped before a
+scorecard and must terminate the current Gate attempt immediately. Parent scan
+failures and hard issues have already failed the Gate without dispatch. Never
 interpret a generic acceptance report or “steps completed successfully” as a
 quality pass.
 

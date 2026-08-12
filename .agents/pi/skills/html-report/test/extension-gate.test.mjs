@@ -31,6 +31,7 @@ import { reviewerReturnPaths } from "../scripts/reviewer-return.mjs";
 import { designerReturnPaths } from "../scripts/designer-return.mjs";
 import { assembleReport } from "../scripts/assemble-report.mjs";
 import { writeVerdict } from "../scripts/write-verdict.mjs";
+import { runQualityScan } from "../scripts/quality-scan.mjs";
 import { rowsSha256 } from "../scripts/fetch-entry.mjs";
 import {
   persistEditorSourceInventory,
@@ -583,6 +584,25 @@ function contractResult(call, overrides = {}) {
     input: call.input,
     ...overrides,
   };
+}
+
+async function seedMinimalReviewerInputs(session) {
+  await mkdir(join(session, "analysis"), { recursive: true });
+  await writeFile(
+    join(session, "result.json"),
+    JSON.stringify({ status: "confirmed", cards: [] })
+  );
+  await writeFile(
+    join(session, "analysis", "main.md"),
+    "# 报告结论\n\n当前证据不足，待质量审核。\n"
+  );
+  await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
+    version: 2,
+    round: 0,
+    maxRounds: 2,
+    tasks: [],
+  }));
+  await assembleReport(session);
 }
 
 test("only explicit gate phrases are classified", () => {
@@ -3163,6 +3183,7 @@ test("Reviewer runs once per Gate attempt and a user retry opens a new attempt",
   await mkdir(dirname(statePath), { recursive: true });
   await writeFile(statePath, JSON.stringify(persistedGateState(state, sid)));
   writeHtmlReportRuntimeContract(repoRoot, sid);
+  await seedMinimalReviewerInputs(session);
   t.after(async () => rm(session, { recursive: true, force: true }));
 
   const task = `B4 scorecard\nSESSION=${session}\nresult.json=${session}/result.json`;
@@ -3203,9 +3224,9 @@ test("Reviewer runs once per Gate attempt and a user retry opens a new attempt",
     scanPath: paths.scanPath,
     reportPath: paths.reportPath,
     verdictPath: paths.verdictPath,
-    failedStep: "scan",
-    error: "quality-scan process exited before producing scan.json",
-    repairHints: ["检查 quality-scan 运行环境后，由用户重试当前阶段。"],
+    failedStep: "read",
+    error: "Reviewer failed while reading the frozen report inputs",
+    repairHints: ["检查冻结输入读取环境后，由用户重试当前阶段。"],
   };
   const forgedReviewerResult = await toolResult({
     ...contractResult(retriedCall, {
@@ -3253,34 +3274,10 @@ test("accepted failed Reviewer terminal survives an extension restart", async (t
       },
     },
   };
-  await mkdir(dirname(paths.scanPath), { recursive: true });
-  await mkdir(join(session, "analysis"), { recursive: true });
   await mkdir(dirname(statePath), { recursive: true });
   await writeFile(statePath, JSON.stringify(persistedGateState(state, sid)));
   writeHtmlReportRuntimeContract(repoRoot, sid);
-  await writeFile(paths.resultPath, JSON.stringify({ status: "confirmed", cards: [] }));
-  await writeFile(join(session, "analysis", "main.md"), "# 报告结论\n\n当前证据不足。\n");
-  await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
-    version: 2,
-    round: 0,
-    maxRounds: 2,
-    tasks: [],
-  }));
-  await assembleReport(session);
-  await writeFile(paths.scanPath, JSON.stringify({
-    version: 1,
-    hardIssues: [{ code: "DATA_UNTRACEABLE", message: "存在不可追溯数字" }],
-  }));
-  await writeFile(paths.reportPath, "# 质量审核\n\n存在不可追溯数字。\n");
-  const scores = Object.fromEntries(
-    ["R1", "R2", "R3", "R4", "R5", "R6", "R7"].map((id) => [id, { score: 1 }])
-  );
-  const { verdict } = await writeVerdict(session, {
-    pass: false,
-    scores,
-    hardBlockers: [{ code: "DATA_UNTRACEABLE" }],
-    issues: [],
-  });
+  await seedMinimalReviewerInputs(session);
   t.after(async () => rm(session, { recursive: true, force: true }));
 
   const task = `B4 scorecard\nSESSION=${session}\nresult.json=${paths.resultPath}`;
@@ -3291,6 +3288,16 @@ test("accepted failed Reviewer terminal survives an extension restart", async (t
     await firstHandlers.get("tool_call")[0](reviewerCall, ctx),
     undefined
   );
+  await writeFile(paths.reportPath, "# 质量审核\n\nR1 存在硬阻断，需修复。\n");
+  const scores = Object.fromEntries(
+    ["R1", "R2", "R3", "R4", "R5", "R6", "R7"].map((id) => [id, { score: 1 }])
+  );
+  const { verdict } = await writeVerdict(session, {
+    pass: false,
+    scores,
+    hardBlockers: [{ code: "R1_HARD_BLOCKER" }],
+    issues: [],
+  });
   const failed = {
     status: "failed",
     pass: false,
@@ -3377,6 +3384,7 @@ test("Reviewer contract_error parent terminal survives an extension restart", as
     },
   }, sid)));
   writeHtmlReportRuntimeContract(repoRoot, sid);
+  await seedMinimalReviewerInputs(session);
   t.after(async () => rm(session, { recursive: true, force: true }));
 
   const task = `B4 scorecard\nSESSION=${session}\nresult.json=${paths.resultPath}`;
@@ -4234,6 +4242,69 @@ test("parent normalizes only the observed Chinese evidencePath label drift befor
   assert.match(rejectedUnsupported.reason, /必须包含 taskId、SESSION、result\.json 与 evidencePath/);
 });
 
+test("B4 parent scan hard issues fail the Gate before Reviewer dispatch", async (t) => {
+  const handlers = registerHarnessExtension();
+  const toolCall = handlers.get("tool_call")[0];
+  const sid = `reviewer-hard-preflight-${process.pid}-${Date.now()}`;
+  const session = htmlReportSessionDir(repoRoot, sid);
+  const statePath = pipelineStatePath(session);
+  const ctx = { sessionManager: { getSessionId: () => sid } };
+  const state = persistedGateState({
+    version: 1,
+    producer: "stage-gate.mjs",
+    mode: "auto",
+    status: "running",
+    currentStage: "B4_REVIEW",
+    nextStage: "B5_DESIGN",
+    stages: {
+      B4_REVIEW: {
+        status: "running",
+        attempts: [{ number: 1, status: "running", startedAt: "2026-08-12T06:00:00.000Z" }],
+      },
+    },
+  }, sid);
+  await mkdir(dirname(statePath), { recursive: true });
+  await mkdir(join(session, "analysis"), { recursive: true });
+  await writeFile(statePath, JSON.stringify(state));
+  writeHtmlReportRuntimeContract(repoRoot, sid);
+  await writeFile(join(session, "result.json"), JSON.stringify({ status: "confirmed", cards: [] }));
+  await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
+    version: 2,
+    round: 0,
+    maxRounds: 2,
+    tasks: [],
+  }));
+  await writeFile(
+    join(session, "analysis", "main.md"),
+    "# 质量门禁\n\n报告声称销售额达到 888888 元，但没有任何行级数据支持。\n"
+  );
+  await assembleReport(session);
+  t.after(async () => rm(session, { recursive: true, force: true }));
+
+  const input = {
+    context: "fresh",
+    chain: [{
+      agent: "report-reviewer",
+      task: `B4 scorecard\nSESSION=${session}\nresult.json=${session}/result.json`,
+      outputSchema: { type: "object" },
+    }],
+  };
+  const decision = await toolCall(contractCall(input, "reviewer-hard-preflight"), ctx);
+  assert.equal(decision.block, true);
+  assert.match(decision.reason, /quality-scan hard > 0.*不得派发 Reviewer/);
+  const after = readGateState(repoRoot, sid);
+  assert.equal(after.status, "failed");
+  assert.equal(after.stages.B4_REVIEW.status, "failed");
+  const repairLog = JSON.parse(await readFile(join(session, "quality", "repair-log.json"), "utf8"));
+  assert.equal(repairLog.maxRepairRounds, 2);
+  assert.equal(repairLog.rounds.length, 1);
+  assert.ok(repairLog.rounds[0].scan.hard > 0);
+  await assert.rejects(
+    () => readdir(join(session, "debug", "contract-runtime", "dispatches")),
+    /ENOENT/
+  );
+});
+
 test("parent binds Report Reviewer structured status to the stamped verdict", async (t) => {
   const handlers = new Map();
   const pi = {
@@ -4279,18 +4350,12 @@ test("parent binds Report Reviewer structured status to the stamped verdict", as
     tasks: [],
   }));
   await assembleReport(session);
-  await writeFile(paths.scanPath, JSON.stringify({ version: 1, hardIssues: [{ code: "DATA_UNTRACEABLE" }] }));
+  const { scan } = await runQualityScan(session);
+  assert.equal(scan.hardIssues.length, 0, JSON.stringify(scan.hardIssues));
   await writeFile(paths.reportPath, "# 质量审核\n\n存在不可追溯数字。\n");
   const reviewerScores = Object.fromEntries(
     ["R1", "R2", "R3", "R4", "R5", "R6", "R7"].map((id) => [id, { score: id === "R1" ? 2 : 1 }])
   );
-  const { verdict } = await writeVerdict(session, {
-    pass: true,
-    scores: reviewerScores,
-    hardBlockers: [{ code: "DATA_UNTRACEABLE" }],
-    issues: [],
-  });
-  assert.equal(verdict.pass, false);
   t.after(async () => rm(session, { recursive: true, force: true }));
 
   const task = `B4 scorecard for SESSION=${session}\nresult.json=${paths.resultPath}\nrun fixed quality workflow`;
@@ -4312,23 +4377,29 @@ test("parent binds Report Reviewer structured status to the stamped verdict", as
   };
   const reviewerCall = contractCall(input, "reviewer-valid-failed");
   assert.equal(await toolCall(reviewerCall, ctx), undefined);
-  assertFixedContractEnvelope(input);
+  const { verdict } = await writeVerdict(session, {
+    pass: true,
+    scores: reviewerScores,
+    hardBlockers: [{ code: "DATA_UNTRACEABLE" }],
+    issues: [],
+  });
+  assert.equal(verdict.pass, false);
+  assertFixedContractEnvelope(input, { stepModel: "qdm-market/deepseek-v4-flash" });
   assert.equal(input.async, false);
   assert.equal(input.clarify, false);
-  assert.deepEqual(input.turnBudget, { maxTurns: 10, graceTurns: 1 });
-  assert.equal(input.maxRuntimeMs, 360_000);
+  assert.deepEqual(input.turnBudget, { maxTurns: 4, graceTurns: 1 });
+  assert.equal(input.maxRuntimeMs, 150_000);
   assert.equal(input.timeoutMs, undefined);
   assert.match(input.chain[0].task, /REVIEWER FIRST BATCH RULE \(machine contract\)/);
   assert.match(
     input.chain[0].task,
-    new RegExp(`Exact scan command: node \\.agents/pi/skills/html-report/scripts/quality-scan\\.mjs --result "${paths.resultPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)
+    /PARENT QUALITY SCAN: passed with hardIssues=0/
   );
   assert.match(input.chain[0].task, /call submit_review_scorecard once/);
   assert.match(input.chain[0].task, /captures the attached structured output and terminates the child/);
   assert.match(input.chain[0].task, /do not call structured_output afterward/);
   assert.match(input.chain[0].task, /Never hand-write verdict\.draft\.json, verdict\.json, or quality\/report\.md/);
-  assert.match(input.chain[0].task, /--result means the declared result\.json file above; it never means the SESSION directory/);
-  assert.match(input.chain[0].task, /Do not read quality\/scan\.json in that message/);
+  assert.match(input.chain[0].task, /first and only read batch contains result\.json.*quality\/scan\.json/);
   assert.match(input.chain[0].task, new RegExp(`Exact rubric read path: ${repoRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\/docs\/html-report-quality-rubric\\.md`));
   assert.match(input.chain[0].task, /never prefix SESSION or resolve it as SESSION\/docs/);
   assert.match(input.chain[0].task, /Base pass formula: no scan\/draft hard issues/);
@@ -4338,8 +4409,8 @@ test("parent binds Report Reviewer structured status to the stamped verdict", as
   assert.equal(input.chain[0].outputSchema.oneOf[1].properties.status.const, "failed");
   assert.equal(input.chain[0].outputSchema.oneOf[1].properties.pass.const, false);
   assert.deepEqual(input.chain[0].toolBudget, {
-    hard: 10,
-    block: ["read", "bash", "write", "submit_review_scorecard"],
+    hard: 6,
+    block: ["read", "submit_review_scorecard"],
   });
 
   const failed = {
@@ -4407,47 +4478,6 @@ test("parent binds Report Reviewer structured status to the stamped verdict", as
     assert.equal(await toolCall(call, ctx), undefined);
     return call;
   };
-
-  const { verdict: scanOnlyVerdict } = await writeVerdict(session, {
-    pass: true,
-    scores: reviewerScores,
-    hardBlockers: [],
-    issues: [],
-  });
-  assert.equal(scanOnlyVerdict.pass, false, "write-verdict must honor scan-only hard issues");
-  scanOnlyVerdict.pass = true;
-  await writeFile(paths.verdictPath, JSON.stringify(scanOnlyVerdict));
-  const scanOnlyPass = {
-    ...failed,
-    status: "passed",
-    pass: true,
-    total: scanOnlyVerdict.total,
-    repairHints: [],
-  };
-  const scanOnlyCall = await nextReviewerCall("reviewer-scan-only-pass");
-  const scanOnlyRejected = await toolResult(contractResult(scanOnlyCall, {
-    isError: false,
-    details: { results: [{ exitCode: 0, structuredOutput: scanOnlyPass }] },
-  }), ctx);
-  assert.equal(scanOnlyRejected.isError, true);
-  assert.match(scanOnlyRejected.content[0].text, /scan\.json has hardIssues/);
-
-  await writeVerdict(session, {
-    pass: true,
-    scores: reviewerScores,
-    hardBlockers: [{ code: "DATA_UNTRACEABLE" }],
-    issues: [],
-  });
-
-  await unlink(join(session, "report", "render-manifest.json"));
-  const staleLayoutCall = await nextReviewerCall("reviewer-stale-layout");
-  const staleLayout = await toolResult(contractResult(staleLayoutCall, {
-    isError: false,
-    details: { results: [{ exitCode: 0, structuredOutput: failed }] },
-  }), ctx);
-  assert.equal(staleLayout.isError, true);
-  assert.match(staleLayout.content[0].text, /quality 布局不合法/);
-  assert.match(staleLayout.content[0].text, /render-manifest\.json/);
 
   const fakeSuccess = { ...failed, status: "passed", pass: true };
   const fakeSuccessCall = await nextReviewerCall("reviewer-fake-success");

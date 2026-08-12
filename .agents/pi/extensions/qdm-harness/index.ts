@@ -47,6 +47,10 @@ import {
 } from "../../skills/html-report/scripts/designer-return.mjs";
 import { checkSessionLayout } from "../../skills/html-report/scripts/check-session-layout.mjs";
 import {
+  PARENT_REVIEWER_SCAN_MARKER,
+  REVIEWER_INPUT_MAX_BYTES,
+} from "../report-reviewer-guard/guard.mjs";
+import {
   EDITOR_PLANNER_MARKER,
   buildEditorPlanSchema,
   editorPlannerExpectedFromAssignment,
@@ -250,6 +254,11 @@ const EDITOR_PLANNER_MAX_RUNTIME_MS = 75_000;
 // must not inherit an arbitrary parent model. This is role infrastructure,
 // independent of the user's question, indicators, dimensions, or card data.
 const EDITOR_PLANNER_MODEL = "qdm-market/deepseek-v4-flash";
+// B4 is a bounded qualitative judgment over five frozen inputs. The fast role
+// model avoids the observed long reasoning stalls while the deterministic scan,
+// typed scorecard tool and parent layout remain the authority for artifacts.
+const REPORT_REVIEWER_MODEL = "qdm-market/deepseek-v4-flash";
+const REPORT_REVIEWER_MAX_RUNTIME_MS = 150_000;
 const REQUIRED_REPORT_AGENTS = [
   "report-writer",
   "report-researcher",
@@ -2758,6 +2767,234 @@ function reviewerExpected(
   });
 }
 
+function reviewerScanPreflightPath(projectRoot: string, sid: string, attempt: string): string {
+  const digest = createHash("sha256")
+    .update(`${sid}|${attempt}|reviewer-scan-preflight`, "utf8")
+    .digest("hex");
+  return join(contractRuntimeStateDir(projectRoot, sid), "reviewer-scans", `${digest}.json`);
+}
+
+function reviewerFrozenInputPaths(projectRoot: string, sessionDir: string): string[] {
+  return [
+    join(sessionDir, "result.json"),
+    join(sessionDir, "report", "report.md"),
+    join(sessionDir, "report", "render-manifest.json"),
+    join(projectRoot, "docs", "html-report-quality-rubric.md"),
+    join(sessionDir, "quality", "scan.json"),
+  ];
+}
+
+function reviewerInputSnapshot(paths: string[]): { bytes: number; fingerprint: string } {
+  let bytes = 0;
+  const hash = createHash("sha256");
+  for (const path of paths) {
+    const content = readFileSync(path);
+    bytes += content.byteLength;
+    hash.update(path, "utf8");
+    hash.update("\0", "utf8");
+    hash.update(content);
+    hash.update("\0", "utf8");
+  }
+  return { bytes, fingerprint: hash.digest("hex") };
+}
+
+function appendReviewerScanRepairLog(
+  sessionDir: string,
+  attempt: string,
+  scan: JsonObject
+): void {
+  const repairLogPath = join(sessionDir, "quality", "repair-log.json");
+  let document: JsonObject = { version: 1, maxRepairRounds: 2, rounds: [] };
+  if (existsSync(repairLogPath)) {
+    const parsed = JSON.parse(readFileSync(repairLogPath, "utf8"));
+    if (!isObject(parsed) || parsed.version !== 1 || !Array.isArray(parsed.rounds)) {
+      throw new Error("quality/repair-log.json schema is invalid");
+    }
+    document = parsed;
+  }
+  const hardIssues = Array.isArray(scan.hardIssues) ? scan.hardIssues : [];
+  const codes = hardIssues
+    .map((issue) => isObject(issue) && typeof issue.code === "string" ? issue.code : "DATA_UNTRACEABLE")
+    .filter((code, index, all) => all.indexOf(code) === index);
+  const rounds = Array.isArray(document.rounds) ? document.rounds : [];
+  rounds.push({
+    at: new Date().toISOString(),
+    attempt,
+    source: "quality-scan.mjs",
+    pass: false,
+    total: 0,
+    diagnosis: codes,
+    actions: ["reconcile_or_remove_untraceable_claims", "retry_current_stage_after_repair"],
+    scan: {
+      hard: hardIssues.length,
+      soft: Array.isArray(scan.softIssues) ? scan.softIssues.length : 0,
+      unmatched: isObject(scan.report) && Number.isSafeInteger(scan.report.unmatchedCount)
+        ? scan.report.unmatchedCount
+        : 0,
+      matched: isObject(scan.report) && Number.isSafeInteger(scan.report.matchedCount)
+        ? scan.report.matchedCount
+        : 0,
+    },
+  });
+  mkdirSync(dirname(repairLogPath), { recursive: true });
+  const tempPath = `${repairLogPath}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify({ ...document, rounds }, null, 2)}\n`, "utf8");
+  renameSync(tempPath, repairLogPath);
+}
+
+function failReviewerScanPreflight(
+  projectRoot: string,
+  sid: string,
+  reason: string
+): string {
+  const failed = runStageGate(projectRoot, sid, "fail", [
+    "--stage",
+    "B4_REVIEW",
+    "--reason",
+    reason.slice(0, 500),
+  ]);
+  return failed.ok ? reason : `${reason}；自动 fail B4_REVIEW 失败：${failed.error || "unknown error"}`;
+}
+
+function runReviewerScanPreflight(
+  projectRoot: string,
+  sid: string,
+  attempt: string
+): { ok: true } | { ok: false; reason: string } {
+  const sessionDir = htmlReportSessionDir(projectRoot, sid);
+  const scanPath = join(sessionDir, "quality", "scan.json");
+  const frozenPaths = reviewerFrozenInputPaths(projectRoot, sessionDir);
+  const markerPath = reviewerScanPreflightPath(projectRoot, sid, attempt);
+  if (existsSync(markerPath)) {
+    try {
+      const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+      const current = reviewerInputSnapshot(frozenPaths);
+      if (
+        !isObject(marker) ||
+        marker.version !== CONTRACT_RUNTIME_STATE_VERSION ||
+        marker.producer !== CONTRACT_RUNTIME_STATE_PRODUCER ||
+        marker.sessionId !== sid ||
+        marker.attempt !== attempt ||
+        marker.status !== "passed" ||
+        marker.inputFingerprint !== current.fingerprint ||
+        marker.inputBytes !== current.bytes
+      ) throw new Error("persisted Reviewer scan preflight does not match the frozen inputs");
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: failReviewerScanPreflight(
+          projectRoot,
+          sid,
+          `Reviewer scan preflight marker invalid: ${error instanceof Error ? error.message : String(error)}`
+        ),
+      };
+    }
+  }
+
+  const scanScript = join(projectRoot, ".agents", "pi", "skills", "html-report", "scripts", "quality-scan.mjs");
+  const resultPath = join(sessionDir, "result.json");
+  const execution = spawnSync(process.execPath, [scanScript, "--result", resultPath], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (execution.status !== 0) {
+    const detail = String(execution.stderr || execution.stdout || "quality-scan failed").trim().slice(0, 1000);
+    return {
+      ok: false,
+      reason: failReviewerScanPreflight(projectRoot, sid, `quality-scan infrastructure failure: ${detail}`),
+    };
+  }
+
+  let scan: JsonObject;
+  let input: { bytes: number; fingerprint: string };
+  try {
+    const parsed = JSON.parse(readFileSync(scanPath, "utf8"));
+    if (!isObject(parsed) || !Array.isArray(parsed.hardIssues) || !Array.isArray(parsed.softIssues)) {
+      throw new Error("quality/scan.json is missing hardIssues/softIssues arrays");
+    }
+    scan = parsed;
+    input = reviewerInputSnapshot(frozenPaths);
+    if (input.bytes > REVIEWER_INPUT_MAX_BYTES) {
+      throw new Error(`Reviewer frozen input ${input.bytes} bytes exceeds ${REVIEWER_INPUT_MAX_BYTES}-byte budget`);
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: failReviewerScanPreflight(
+        projectRoot,
+        sid,
+        `Reviewer scan/input contract failure: ${error instanceof Error ? error.message : String(error)}`
+      ),
+    };
+  }
+
+  if (scan.hardIssues.length > 0) {
+    let repairError = "";
+    try {
+      appendReviewerScanRepairLog(sessionDir, attempt, scan);
+    } catch (error) {
+      repairError = `；repair-log 写入失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+    const codes = scan.hardIssues
+      .map((issue) => isObject(issue) && typeof issue.code === "string" ? issue.code : "DATA_UNTRACEABLE")
+      .filter((code, index, all) => all.indexOf(code) === index)
+      .join(",");
+    return {
+      ok: false,
+      reason: failReviewerScanPreflight(
+        projectRoot,
+        sid,
+        `quality-scan hard > 0 (${scan.hardIssues.length}; ${codes || "DATA_UNTRACEABLE"})；不得派发 Reviewer${repairError}`
+      ),
+    };
+  }
+
+  const marker = {
+    version: CONTRACT_RUNTIME_STATE_VERSION,
+    producer: CONTRACT_RUNTIME_STATE_PRODUCER,
+    sessionId: sid,
+    attempt,
+    status: "passed",
+    inputBytes: input.bytes,
+    inputFingerprint: input.fingerprint,
+    completedAt: new Date().toISOString(),
+  };
+  try {
+    mkdirSync(dirname(markerPath), { recursive: true });
+    writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    const code = isObject(error) && typeof error.code === "string" ? error.code : "unknown";
+    if (code === "EEXIST") {
+      try {
+        const existing = JSON.parse(readFileSync(markerPath, "utf8"));
+        if (
+          isObject(existing) &&
+          existing.version === CONTRACT_RUNTIME_STATE_VERSION &&
+          existing.producer === CONTRACT_RUNTIME_STATE_PRODUCER &&
+          existing.sessionId === sid &&
+          existing.attempt === attempt &&
+          existing.status === "passed" &&
+          existing.inputFingerprint === input.fingerprint &&
+          existing.inputBytes === input.bytes
+        ) return { ok: true };
+      } catch {
+        // Fall through to the deterministic Gate failure below.
+      }
+    }
+    return {
+      ok: false,
+      reason: failReviewerScanPreflight(
+        projectRoot,
+        sid,
+        `cannot persist Reviewer scan preflight: ${error instanceof Error ? error.message : String(error)}`
+      ),
+    };
+  }
+  return { ok: true };
+}
+
 function reviewerFirstBatchRule(
   projectRoot: string,
   resultPath: string
@@ -2765,14 +3002,15 @@ function reviewerFirstBatchRule(
   const rubricPath = join(projectRoot, "docs", "html-report-quality-rubric.md");
   return [
     "REVIEWER FIRST BATCH RULE (machine contract):",
-    `- Exact scan command: node .agents/pi/skills/html-report/scripts/quality-scan.mjs --result "${resultPath}"`,
-    "- In that command, --result means the declared result.json file above; it never means the SESSION directory.",
-    "- The first tool message may contain the fixed quality-scan Bash call and reads of only the four frozen inputs: result.json, report/report.md, report/render-manifest.json, and the exact rubric path below.",
+    PARENT_REVIEWER_SCAN_MARKER,
+    `- Parent scan path: ${join(dirname(resultPath), "quality", "scan.json")}`,
+    `- The parent extension already ran quality-scan and rejected hard issues before this child was dispatched. Do not run Bash or re-run the scan.`,
+    `- Input budget: exactly five frozen files with a combined on-disk limit of ${REVIEWER_INPUT_MAX_BYTES} bytes. The parent already enforced this limit.`,
+    "- The first and only read batch contains result.json, report/report.md, report/render-manifest.json, the rubric, and quality/scan.json. Read each exactly once; no directory discovery or data/analysis reads.",
     `- Exact rubric read path: ${rubricPath}`,
     "- The rubric is a project-level frozen input outside SESSION. Use that exact absolute path; never prefix SESSION or resolve it as SESSION/docs/html-report-quality-rubric.md.",
-    "- Those sibling calls may appear in any source order because B3 froze the inputs. Do not read quality/scan.json in that message. Wait for quality-scan to succeed, then read quality/scan.json exactly once in the next tool message.",
-    "- No submit_review_scorecard, scan.json read, or structured_output may share the first batch. Never retry a rejected or failed call.",
-    "- After scan succeeds, read scan.json once, then call submit_review_scorecard once with only typed scores/notes/summary/issues/repairHints. On success it captures the attached structured output and terminates the child; do not call structured_output afterward.",
+    "- No submit_review_scorecard or structured_output may share the read batch. Never retry a rejected or failed call.",
+    "- After all five reads succeed, call submit_review_scorecard once with only typed scores/notes/summary/issues/repairHints. On success it captures the attached structured output and terminates the child; do not call structured_output afterward.",
     "- quality-scan is authoritative for numeric traceability. Do not recalculate table rows, means, medians, ranges, or totals, and do not narrate a number-by-number verification.",
     "- Submission shape is exactly {scores:{R1:{score,note},...,R7:{score,note}},summary,hardBlockers,issues,repairHints}. Close scores immediately after R7; the last four fields are top-level siblings. Emit only that tool call.",
     "- Never hand-write verdict.draft.json, verdict.json, or quality/report.md; never run write-verdict.mjs or read stamped verdict.json in the child. The typed tool owns serialization, stamping, and report rendering.",
@@ -2818,13 +3056,14 @@ function attachReviewerOutputSchema(
   reviewer.outputSchema = buildReviewerReturnSchema(expected);
   // B3 owns assembly and the parent performs the authoritative quality layout.
   // Keep bounded headroom for frozen reads, one typed submission, and return.
-  input.turnBudget = { maxTurns: 10, graceTurns: 1 };
-  input.maxRuntimeMs = 360_000;
+  reviewer.model = REPORT_REVIEWER_MODEL;
+  input.turnBudget = { maxTurns: 4, graceTurns: 1 };
+  input.maxRuntimeMs = REPORT_REVIEWER_MAX_RUNTIME_MS;
   delete input.toolBudget;
   delete input.timeoutMs;
   reviewer.toolBudget = {
-    hard: 10,
-    block: ["read", "bash", "write", "submit_review_scorecard"],
+    hard: 6,
+    block: ["read", "submit_review_scorecard"],
   };
   delete reviewer.async;
   delete reviewer.turnBudget;
@@ -6022,6 +6261,12 @@ export default function qdmHarnessExtension(pi: {
       if (reviewerInvocation.invocation) {
         const expected = reviewerExpected(reviewerInvocation.invocation.task, projectRoot, sid);
         if ("error" in expected) return { block: true, reason: expected.error };
+        const preflightAttempt = gateAttemptToken(gateState);
+        if (!preflightAttempt) {
+          return { block: true, reason: "Report Reviewer 只能在 running B4_REVIEW Gate attempt 内派发。" };
+        }
+        const scanPreflight = runReviewerScanPreflight(projectRoot, sid, preflightAttempt);
+        if (!scanPreflight.ok) return { block: true, reason: scanPreflight.reason };
       }
       const designerInvocation = designerInvocationFromSubagentInput(toolCall.input);
       if (designerInvocation.error) return { block: true, reason: designerInvocation.error };

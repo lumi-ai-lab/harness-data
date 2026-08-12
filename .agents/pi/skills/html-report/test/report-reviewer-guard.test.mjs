@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  PARENT_REVIEWER_SCAN_MARKER,
   classifyReviewerCommand,
   initialReviewerGuardState,
   parseReviewerAssignment,
@@ -23,7 +24,8 @@ function assignment(overrides = {}) {
     `B4 scorecard for SESSION=${assignedSession}`,
     `result.json=${resultPath}`,
     "The B3 report is already assembled and frozen; do not run assemble-report.mjs.",
-    `1) quality-scan.mjs --result ${resultPath}`,
+    PARENT_REVIEWER_SCAN_MARKER,
+    "1) read the parent-produced quality/scan.json",
     "2) draft scores R1–R7 → quality/verdict.draft.json",
     "3) write-verdict.mjs",
     "4) write quality/report.md",
@@ -121,9 +123,8 @@ function stampCommand(contract) {
 }
 
 function successfulScan(contract, state = initialReviewerGuardState()) {
-  const called = decide(contract, state, "bash", { command: scanCommand(contract) }, "scan-1");
-  assert.equal(called.decision, undefined);
-  return result(contract, called.state, "bash", "scan-1");
+  assert.equal(contract.ok, true, contract.errors?.join("; "));
+  return state;
 }
 
 function successfulReviewReads(contract, state) {
@@ -217,24 +218,13 @@ test("Reviewer assignment pins all writable and readable paths to one current SE
   assert.match(redirectedReport.errors.join("\n"), /reportPath 与 SESSION/);
 });
 
-test("Reviewer Bash whitelist accepts only one exact scan and one exact stamp command", () => {
+test("Reviewer Bash whitelist rejects scan reruns and accepts only the legacy stamp command", () => {
   const contract = parseReviewerAssignment(assignment(), { projectRoot });
-  assert.deepEqual(classifyReviewerCommand(scanCommand(contract), contract), {
-    kind: "scan",
-    failedStep: "scan",
-  });
+  assert.equal(classifyReviewerCommand(scanCommand(contract), contract), null);
   assert.deepEqual(classifyReviewerCommand(stampCommand(contract), contract), {
     kind: "stamp",
     failedStep: "stamp",
   });
-  assert.deepEqual(
-    classifyReviewerCommand(
-      `node .agents/pi/skills/html-report/scripts/quality-scan.mjs \\\n  --result "${contract.resultPath}"`,
-      contract
-    ),
-    { kind: "scan", failedStep: "scan" },
-    "a pure shell line continuation is the same fixed command"
-  );
 
   for (const command of [
     `node .agents/pi/skills/html-report/scripts/assemble-report.mjs --session-dir "${contract.sessionDir}"`,
@@ -250,7 +240,7 @@ test("Reviewer Bash whitelist accepts only one exact scan and one exact stamp co
     assert.equal(classifyReviewerCommand(command, contract), null, command);
     const blocked = decide(contract, initialReviewerGuardState(), "bash", { command }, "bad-command");
     assert.equal(blocked.decision.block, true, command);
-    assert.match(blocked.decision.reason, /只允许固定 quality-scan 与 write-verdict/);
+    assert.match(blocked.decision.reason, /父扩展已完成 quality-scan/);
     assert.ok(blocked.state.terminalFailure, "forbidden command must terminate the child run");
   }
 });
@@ -261,8 +251,8 @@ test("Reviewer successful path is a fixed one-shot state machine", () => {
 
   const duplicateScan = decide(contract, state, "bash", { command: scanCommand(contract) }, "scan-2");
   assert.equal(duplicateScan.decision.block, true);
-  assert.match(duplicateScan.decision.reason, /最多调用一次/);
-  assert.equal(duplicateScan.state.terminalFailure.failedStep, "scan");
+  assert.match(duplicateScan.decision.reason, /父扩展已完成 quality-scan/);
+  assert.equal(duplicateScan.state.terminalFailure.failedStep, "read");
 
   state = successfulReviewReads(contract, state);
   const duplicateRead = decide(contract, state, "read", { path: contract.scanPath }, "read-again");
@@ -377,7 +367,7 @@ test("typed scorecard cannot run before scan reads or mix with legacy draft writ
     "typed-early"
   );
   assert.equal(blocked.decision.block, true);
-  assert.match(blocked.decision.reason, /必须完成 quality-scan/);
+  assert.match(blocked.decision.reason, /必须完成父级 scan 标记约束下的全部固定读取/);
 
   let state = successfulReviewReads(contract, successfulScan(contract));
   state = successfulDraft(contract, state);
@@ -392,7 +382,7 @@ test("typed scorecard cannot run before scan reads or mix with legacy draft writ
   assert.match(blocked.decision.reason, /禁止与旧.*流程混用/);
 });
 
-test("Reviewer first batch accepts frozen reads beside scan but defers scan.json", () => {
+test("Reviewer first batch reads all five frozen inputs after parent scan", () => {
   const contract = parseReviewerAssignment(assignment(), { projectRoot });
   let state = initialReviewerGuardState();
   const resultRead = {
@@ -412,27 +402,20 @@ test("Reviewer first batch accepts frozen reads beside scan but defers scan.json
   called = reviewerToolDecision(contract, state, reportRead);
   assert.equal(called.decision, undefined);
   state = called.state;
-  called = decide(contract, state, "bash", { command: scanCommand(contract) }, "first-scan");
-  assert.equal(called.decision, undefined, "scan may be preflighted after frozen sibling reads");
-  state = called.state;
-
-  const earlyScanRead = decide(
+  const scanRead = decide(
     contract,
     initialReviewerGuardState(),
     "read",
     { path: contract.scanPath },
     "early-scan-json"
   );
-  assert.equal(earlyScanRead.decision.block, true);
-  assert.match(earlyScanRead.decision.reason, /scan\.json 必须等待 scan 结果/);
+  assert.equal(scanRead.decision, undefined);
 
   // Parallel tool results may complete out of order. Once scan succeeds, the
   // generated scan.json becomes readable while the frozen reads stay valid.
-  state = result(contract, state, "bash", "first-scan");
   state = result(contract, state, "read", "first-report");
   state = result(contract, state, "read", "first-result");
-  called = decide(contract, state, "read", { path: contract.scanPath }, "scan-json-after");
-  assert.equal(called.decision, undefined);
+  state = result(contract, scanRead.state, "read", "early-scan-json");
 });
 
 test("Reviewer requires successful fixed reads before draft and validates draft JSON before I/O", () => {
@@ -475,23 +458,16 @@ test("Reviewer requires successful fixed reads before draft and validates draft 
   assert.match(blocked.decision.reason, /R4.*0\|1\|2/);
 });
 
-test("any scan/read/write/stamp failure terminally blocks later I/O and permits only matching infrastructure_error", () => {
+test("any read/write/stamp failure terminally blocks later I/O and permits only matching infrastructure_error", () => {
   const contract = parseReviewerAssignment(assignment(), { projectRoot });
 
-  let called = decide(
-    contract,
-    initialReviewerGuardState(),
-    "bash",
-    { command: scanCommand(contract) },
-    "scan-fail"
-  );
-  let failed = result(contract, called.state, "bash", "scan-fail", {
-    isError: false,
-    details: { exitCode: 1 },
-    content: [{ type: "text", text: "B3_EXPLORE_LAYOUT_INVALID" }],
+  let called = decide(contract, initialReviewerGuardState(), "read", { path: contract.resultPath }, "read-fail");
+  let failed = result(contract, called.state, "read", "read-fail", {
+    isError: true,
+    content: [{ type: "text", text: "ENOENT result.json" }],
   });
-  assert.equal(failed.terminalFailure.failedStep, "scan");
-  assert.match(failed.terminalFailure.error, /B3_EXPLORE_LAYOUT_INVALID/);
+  assert.equal(failed.terminalFailure.failedStep, "read");
+  assert.match(failed.terminalFailure.error, /ENOENT/);
   for (const [toolName, input] of [
     ["read", { path: contract.resultPath }],
     ["write", { path: contract.reportPath, content: "retry" }],
@@ -541,7 +517,7 @@ test("any scan/read/write/stamp failure terminally blocks later I/O and permits 
     "wrong-step"
   );
   assert.equal(final.decision.block, true);
-  assert.match(final.decision.reason, /failedStep 必须是 scan/);
+  assert.match(final.decision.reason, /failedStep 必须是 read/);
 
   final = decide(
     contract,
@@ -660,19 +636,6 @@ test("child-only extension captures assignment from context and enforces the gua
     messages: [{ role: "user", content: [{ type: "text", text: assignment() }] }],
   });
 
-  const scan = handlers.get("tool_call")({
-    toolName: "bash",
-    toolCallId: "runtime-scan",
-    input: { command: scanCommand(parseReviewerAssignment(assignment(), { projectRoot })) },
-  });
-  assert.equal(scan, undefined);
-  handlers.get("tool_result")({
-    toolName: "bash",
-    toolCallId: "runtime-scan",
-    isError: false,
-    content: [{ type: "text", text: "ok" }],
-  });
-
   const forbidden = handlers.get("tool_call")({ toolName: "ls", input: { path: session } });
   assert.equal(forbidden.block, true);
   assert.match(forbidden.reason, /未授权工具：ls/);
@@ -728,18 +691,7 @@ test("typed Reviewer submit captures outputSchema and terminates without a secon
     messages: [{ role: "user", content: [{ type: "text", text: assigned }] }],
   });
 
-  let transition = handlers.get("tool_call")({
-    toolName: "bash",
-    toolCallId: "capture-scan",
-    input: { command: scanCommand(contract) },
-  });
-  assert.equal(transition, undefined);
-  handlers.get("tool_result")({
-    toolName: "bash",
-    toolCallId: "capture-scan",
-    isError: false,
-    content: [{ type: "text", text: "ok" }],
-  });
+  let transition;
   for (const [index, path] of [
     contract.resultPath,
     contract.candidateReportPath,
@@ -775,7 +727,7 @@ test("typed Reviewer submit captures outputSchema and terminates without a secon
 
 test("report-reviewer registration loads only the child guard", async () => {
   const runtime = await readFile(join(projectRoot, ".agents/pi/agents/report-reviewer.md"), "utf8");
-  assert.match(runtime, /^tools:\s*read, bash, submit_review_scorecard$/m);
+  assert.match(runtime, /^tools:\s*read, submit_review_scorecard$/m);
   assert.match(runtime, /^extensions:\s*$/m);
   assert.match(
     runtime,

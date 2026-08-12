@@ -146,9 +146,9 @@ async function checkOne(name) {
           .split(",")
           .map((tool) => tool.trim())
           .filter(Boolean);
-        if (reviewerTools.join(",") !== "read,bash,submit_review_scorecard") {
+        if (reviewerTools.join(",") !== "read,submit_review_scorecard") {
           item.ok = false;
-          item.messages.push("report-reviewer tools must be exactly read, bash, submit_review_scorecard");
+          item.messages.push("report-reviewer tools must be exactly read, submit_review_scorecard (parent owns quality-scan and layout)");
         }
         if (frontmatter.extensions !== "") {
           item.ok = false;

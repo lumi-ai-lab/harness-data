@@ -197,7 +197,7 @@ function reviewerInfrastructureErrorBranch(expected) {
       scanPath: { const: expected.scanPath },
       reportPath: { const: expected.reportPath },
       verdictPath: { const: expected.verdictPath },
-      failedStep: { enum: ["scan", "read", "write", "stamp"] },
+      failedStep: { enum: ["read", "write", "stamp"] },
       error: { type: "string", minLength: 1, maxLength: 2000 },
       repairHints: repairHintsSchema({ minItems: 1 }),
     },
@@ -285,8 +285,8 @@ export function validateReviewerReturn(value, expected) {
     errors.push(`${value.status} return requires at least one actionable repair hint`);
   }
   if (infrastructureError) {
-    if (!["scan", "read", "write", "stamp"].includes(value.failedStep)) {
-      errors.push("infrastructure_error failedStep must be scan, read, write, or stamp");
+    if (!["read", "write", "stamp"].includes(value.failedStep)) {
+      errors.push("infrastructure_error failedStep must be read, write, or stamp");
     }
     if (typeof value.error !== "string" || !value.error.trim() || value.error.length > 2000) {
       errors.push("infrastructure_error requires a non-empty error of at most 2000 characters");
@@ -386,8 +386,8 @@ function requireFile(path, label, errors) {
 export function validateReviewerArtifacts(value, expected) {
   const envelope = validateReviewerReturn(value, expected);
   if (!envelope.ok) return envelope;
-  // Infrastructure failures intentionally stop before a complete scan/report/
-  // verdict set exists.  Their strict structured envelope is the artifact;
+  // Child infrastructure failures intentionally stop before a complete scorecard
+  // artifact set exists. The parent scan has already succeeded; their strict envelope is the artifact;
   // the parent must terminate this Gate attempt without running quality layout.
   if (isReviewerInfrastructureError(value)) return envelope;
 

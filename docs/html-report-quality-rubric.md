@@ -107,10 +107,11 @@
 
 ### 3.4 B4 · Report Reviewer 评委（唯一全量 R1–R7）
 
-1. `quality-scan.mjs`
-2. 逐项 typed scores/notes + issues + repairHints，调用一次 `submit_review_scorecard`
-3. 工具确定性计算 total/pass 与 done-task 动态门禁，安全序列化 draft/verdict，并生成 report.md 评分表
-4. fail → Report Editor 按失分项建立 Researcher task（见 §1）
+1. 父扩展对最终 `report/report.md` 运行 `quality-scan.mjs`；hard>0 写 repair-log、fail Gate 且不派 Reviewer，hard=0 才冻结五输入
+2. Reviewer 在固定模型/150 秒/4+1 turns/六次工具预算内，禁止 Bash 与重复 scan；五输入各读一次
+3. 逐项 typed scores/notes + issues + repairHints，调用一次 `submit_review_scorecard`
+4. 工具确定性计算 total/pass 与 done-task 动态门禁，安全序列化 draft/verdict，并生成 report.md 评分表；父扩展唯一运行 `--phase quality`
+5. fail → Report Editor 按失分项建立 Researcher task（见 §1），写 repair-log 并等待用户“重试当前阶段”
 
 ---
 

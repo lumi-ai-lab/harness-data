@@ -627,6 +627,12 @@ export async function runQualityScan(sessionDir) {
       matchedCount: matchedForReport.length,
       unmatchedCount: unmatched.length,
     },
+    summary: {
+      hard: hardFromData.length,
+      soft: softUnique.length,
+      unmatched: unmatched.length,
+      matched: matchedForReport.length,
+    },
     matched: matchedForReport.slice(0, 100),
     unmatched,
     hardIssues: hardFromData,

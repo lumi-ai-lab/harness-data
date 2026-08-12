@@ -2,9 +2,10 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const FINAL_TOOLS = new Set(["structured_output", "structured-output"]);
 const SUBMIT_TOOL = "submit_review_scorecard";
-const SCAN_SCRIPT = ".agents/pi/skills/html-report/scripts/quality-scan.mjs";
 const VERDICT_SCRIPT = ".agents/pi/skills/html-report/scripts/write-verdict.mjs";
 const RUBRIC_IDS = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
+export const PARENT_REVIEWER_SCAN_MARKER = "PARENT QUALITY SCAN: passed with hardIssues=0.";
+export const REVIEWER_INPUT_MAX_BYTES = 512 * 1024;
 
 function allow(state) {
   return { decision: undefined, state };
@@ -57,6 +58,9 @@ export function parseReviewerAssignment(prompt, { projectRoot } = {}) {
   if (!root) errors.push("projectRoot 不是规范绝对路径");
   if (typeof prompt !== "string" || !prompt.trim()) {
     return { ok: false, errors: [...errors, "缺少子代理任务文本"] };
+  }
+  if (!prompt.includes(PARENT_REVIEWER_SCAN_MARKER)) {
+    errors.push("任务缺少父扩展 hard=0 quality-scan 前置标记");
   }
 
   const sessionValues = assignmentValues(prompt, "SESSION");
@@ -221,21 +225,11 @@ function optionsFrom(tokens, start, valueOptions) {
   return values;
 }
 
-/** Return one of the only two authorized Reviewer commands, or null. */
+/** Return the only legacy stamping command; parent owns quality-scan. */
 export function classifyReviewerCommand(command, contract) {
   if (!contract?.ok) return null;
   const tokens = tokenizeStandaloneShell(command);
   if (!tokens || tokens[0] !== "node") return null;
-
-  if (tokens[1] === SCAN_SCRIPT) {
-    const options = optionsFrom(tokens, 2, new Set(["--result"]));
-    if (
-      options &&
-      Object.keys(options).length === 1 &&
-      options["--result"] === contract.resultPath
-    ) return { kind: "scan", failedStep: "scan" };
-    return null;
-  }
 
   if (tokens[1] === VERDICT_SCRIPT) {
     const options = optionsFrom(tokens, 2, new Set(["--result", "--verdict-file"]));
@@ -257,15 +251,6 @@ function requiredReviewReads(contract) {
     contract.rubricPath,
     contract.scanPath,
   ];
-}
-
-function immutablePreScanReads(contract) {
-  return new Set([
-    contract.resultPath,
-    contract.candidateReportPath,
-    contract.renderManifestPath,
-    contract.rubricPath,
-  ]);
 }
 
 function missingSuccessfulReads(contract, state) {
@@ -390,7 +375,6 @@ function conciseError(event, fallback) {
 }
 
 function currentFailedStep(contract, state) {
-  if (!state.commandSuccess.scan) return "scan";
   if (missingSuccessfulReads(contract, state).length) return "read";
   if (state.submissions[SUBMIT_TOOL] && !state.submissionSuccess) return "write";
   if (!state.writeSuccess[contract.draftPath]) return "write";
@@ -448,7 +432,6 @@ export function reviewerToolDecision(contract, state, event) {
       }
       return allow(next);
     }
-    if (!current.commandSuccess.scan) missing.push("quality-scan success");
     if (missingSuccessfulReads(contract, current).length) missing.push("fixed review reads");
     if (!current.writeSuccess[contract.draftPath]) missing.push("verdict draft write");
     if (!current.commandSuccess.stamp) missing.push("write-verdict success");
@@ -471,8 +454,8 @@ export function reviewerToolDecision(contract, state, event) {
     if (current.submissions[SUBMIT_TOOL]) {
       return terminalBlock(contract, current, "submit_review_scorecard 最多调用一次，不允许重试", "write");
     }
-    if (!current.commandSuccess.scan || missingSuccessfulReads(contract, current).length) {
-      return terminalBlock(contract, current, "submit_review_scorecard 前必须完成 quality-scan 与全部固定读取", "write");
+    if (missingSuccessfulReads(contract, current).length) {
+      return terminalBlock(contract, current, "submit_review_scorecard 前必须完成父级 scan 标记约束下的全部固定读取", "write");
     }
     if (
       Object.keys(current.writes).length ||
@@ -496,15 +479,12 @@ export function reviewerToolDecision(contract, state, event) {
       return terminalBlock(
         contract,
         current,
-        "只允许固定 quality-scan 与 write-verdict 命令；assemble、check-session-layout、cat、临时 Node/Python、ls/find/grep 与 shell 组合均禁止"
+        "父扩展已完成 quality-scan；Reviewer 禁止 Bash。assemble、check-session-layout、重复 scan、write-verdict、cat、临时 Node/Python、ls/find/grep 与 shell 组合均禁止"
       );
     }
     const { kind, failedStep } = classified;
     if (current.commands[kind]) {
       return terminalBlock(contract, current, `${kind} 固定命令最多调用一次，不允许失败重试`, failedStep);
-    }
-    if (kind === "scan" && Object.keys(current.writes).length > 0) {
-      return terminalBlock(contract, current, "quality-scan 必须在任何 Reviewer write 之前执行", "scan");
     }
     if (kind === "stamp" && !current.writeSuccess[contract.draftPath]) {
       return terminalBlock(contract, current, "write-verdict 前必须成功写入固定 verdict.draft.json", "stamp");
@@ -523,17 +503,6 @@ export function reviewerToolDecision(contract, state, event) {
         contract,
         current,
         "read 只能访问固定 result、assembled report、render manifest、rubric、scan 与 stamped verdict；禁止扫描 data、analysis、临时目录或源码",
-        "read"
-      );
-    }
-    if (
-      !current.commandSuccess.scan &&
-      !immutablePreScanReads(contract).has(path)
-    ) {
-      return terminalBlock(
-        contract,
-        current,
-        "scan 成功前只能读取冻结的 result、assembled report、render manifest 与 rubric；scan.json 必须等待 scan 结果",
         "read"
       );
     }

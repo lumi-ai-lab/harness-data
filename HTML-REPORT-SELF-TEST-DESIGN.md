@@ -313,7 +313,7 @@ recommendations.json
 | B0_PREFLIGHT | `awaiting_approval` | 四个 `report-*` Agent 注册完整、Session 与输入合法 | 输入“继续” |
 | B2_WRITER | `awaiting_approval` | 每卡一次 Writer、结构化返回合法、entry/meta 完整、`phase=writer` | 输入“继续” |
 | B25_EDITOR + B3_RESEARCH | B25 `completed` 且 B3 `awaiting_approval` | tasks/main/evidence/section/summary 合法、`phase=b2` 和 `phase=explore` | 输入“继续” |
-| B4_REVIEW | `awaiting_approval` | Reviewer 一次、scan/verdict 签章一致、`phase=quality` | 输入“继续” |
+| B4_REVIEW | `awaiting_approval` | 父 scan hard=0 后 Reviewer 一次、五输入/typed submit/预算固定、scan/verdict 签章一致、父级唯一 `phase=quality` | 输入“继续” |
 | B5_DESIGN | Pipeline `completed` | HTML、内容 Hash、双视口截图、`phase=html` | 完成 |
 
 ### 8.1 A_CONFIG
@@ -370,11 +370,14 @@ B25 Editor 完成业务判断并写出 `tasks.json` / `main.md` 后，只调用�
 检查：
 
 - Reviewer 每个 Gate attempt 只执行一次。
-- `quality-scan`、草稿、签章 verdict 顺序正确。
+- 父扩展先对最终 assembled report 运行 `quality-scan`；hard>0 写 repair-log、fail Gate 且没有 Reviewer dispatch。
+- hard=0 后冻结五输入并各读一次；Reviewer 不运行 Bash/scan，只调用一次 typed `submit_review_scorecard`。
+- Reviewer 固定模型 `qdm-market/deepseek-v4-flash`、150 秒、4+1 turns、五 read + 一 submit，冻结输入总量不超过 512 KiB。
+- 父 scan、typed 草稿、签章 verdict 顺序正确。
 - R1–R7 分数范围和总分正确。
 - `verdict.json` 的 producer 和 scan fingerprint 匹配。
 - 失败审核不能被父代理手工改成通过。
-- `check-session-layout --phase quality` 通过。
+- 仅父扩展执行的 `check-session-layout --phase quality` 通过。
 
 ### 8.6 B5_DESIGN
 

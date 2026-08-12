@@ -123,7 +123,7 @@ Session/阶段/attempt 绑定作为完成信号，不等待不存在的 `agent_s
 | `report/design-result.json` | `finalize-design.mjs` + screenshot/HTML hashes | html |
 
 - bare `qdm-indicators-cli`、手写 Writer 数据文件、Editor 手改 verdict **过不了** `check-session-layout`。
-- Reviewer 必须：`quality-scan` → 读 scan → `submit_review_scorecard` typed object → 原样 structured return；禁止模型手写 JSON。
+- 父扩展必须先运行 `quality-scan`：hard>0 写 repair-log、fail Gate 且不派 Reviewer；hard=0 才冻结五输入并派发。Reviewer 各读一次后只调用一次 `submit_review_scorecard` typed object；禁止 Bash、重复 scan 或模型手写 JSON。
 - Report Editor **禁止** 写 `quality/verdict.json` 或 `data/explore/*` 冒充通过。
 - `reuse_entry` Researcher 只能读取一次固定 evidence，并各写一次固定 section/summary；
   Bash、完整 entry、临时脚本、Markdown 样例表和 evidence 中不存在的数字都会被
@@ -304,11 +304,16 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 ### 7.3 P4 Report Reviewer 门禁（已落地 · Report Reviewer）
 
 1. `assemble-report.mjs` 已生成最终 `report/report.md` 与 `render-manifest.json`
-2. `node .../quality-scan.mjs --result <result.json>`（优先扫描最终 report.md，而不是只扫描 analysis/main.md）
-3. Report Reviewer（`agents/report-reviewer.md`）按 **`docs/html-report-quality-rubric.md`** 对 **R1–R7 逐项 0–2 打分**，调用一次 `submit_review_scorecard`；工具写：
+2. 父扩展在派发前运行 `quality-scan.mjs --result <result.json>`，只扫描最终
+   `report/report.md`：基础设施失败直接 fail；hard>0 写 repair-log、fail Gate 且
+   **绝不派发 Reviewer**；hard=0 才冻结五输入并落 attempt-bound fingerprint
+3. 冻结输入合计不超过 512 KiB 后，父扩展以固定模型
+   `qdm-market/deepseek-v4-flash`、150 秒、4+1 turns、五次 read + 一次 typed submit
+   派发 Report Reviewer。Reviewer（`agents/report-reviewer.md`）禁止 Bash/重复 scan，
+   五输入各读一次，按 **`docs/html-report-quality-rubric.md`** 对 **R1–R7 逐项 0–2 打分**，调用一次 `submit_review_scorecard`；工具写：
    - `quality/report.md`（含评分表）
    - `quality/verdict.json`（`draft: false`；`scores` + `total`；hard 一票否决）
-4. Reviewer 返回时由父扩展自动执行唯一一次 authoritative
+4. Reviewer 正常返回时由父扩展自动执行唯一一次 authoritative
    `check-session-layout --phase quality`（校验 assembled report、manifest、scores）；
    Reviewer 子代理和 Editor 都不重复运行
 5. pass → 完成 B4 Gate；fail → 写 repair-log 后 `stage-gate fail`，等待用户「重试当前阶段」才修复并重跑 Reviewer

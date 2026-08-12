@@ -34,7 +34,7 @@ async function seedReviewerSession(t) {
   const assignment = [
     `B4 scorecard for SESSION=${session}`,
     `result.json=${paths.resultPath}`,
-    "run quality scan and write the stamped verdict",
+    "review the parent-produced scan and submit the stamped verdict",
   ].join("\n");
   t.after(async () => rm(root, { recursive: true, force: true }));
   return { root, session, paths, assignment };
@@ -73,9 +73,9 @@ function infrastructureErrorReturn(expected, overrides = {}) {
     scanPath: expected.scanPath,
     reportPath: expected.reportPath,
     verdictPath: expected.verdictPath,
-    failedStep: "scan",
-    error: "B3_EXPLORE_LAYOUT_INVALID: render manifest is stale",
-    repairHints: ["重新完成 B3 assemble/layout 后再重试 B4"],
+    failedStep: "read",
+    error: "ENOENT: frozen report input is unavailable",
+    repairHints: ["恢复冻结输入后再重试 B4"],
     ...overrides,
   };
 }
@@ -124,7 +124,7 @@ test("Reviewer schema is exact and binds failed status to pass=false", async (t)
   assert.equal(infrastructureError.properties.status.const, "infrastructure_error");
   assert.equal(infrastructureError.properties.pass.const, false);
   assert.equal(infrastructureError.properties.total.const, 0);
-  assert.deepEqual(infrastructureError.properties.failedStep.enum, ["scan", "read", "write", "stamp"]);
+  assert.deepEqual(infrastructureError.properties.failedStep.enum, ["read", "write", "stamp"]);
   assert.equal(infrastructureError.properties.repairHints.minItems, 1);
 });
 
@@ -176,7 +176,7 @@ test("Reviewer infrastructure_error is strict, actionable, and does not require 
     expected
   );
   assert.equal(checked.ok, false);
-  assert.ok(checked.errors.some((error) => /failedStep must be scan, read, write, or stamp/.test(error)));
+  assert.ok(checked.errors.some((error) => /failedStep must be read, write, or stamp/.test(error)));
   assert.ok(checked.errors.some((error) => /at least one actionable repair hint/.test(error)));
 
   checked = validateReviewerReturn(infrastructureErrorReturn(expected, { total: 7 }), expected);

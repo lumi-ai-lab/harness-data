@@ -654,7 +654,7 @@ test("report-reviewer and report-designer are subagent roles", async () => {
   assert.doesNotMatch(rev, /"lowRubric"\s*:/);
   assert.doesNotMatch(rev, /"suggestedDrill"\s*:/);
   const reviewerRuntime = await readFile(join(root, ".pi/agents/report-reviewer.md"), "utf8");
-  assert.match(reviewerRuntime, /^tools:\s*read, bash, submit_review_scorecard$/m);
+  assert.match(reviewerRuntime, /^tools:\s*read, submit_review_scorecard$/m);
   assert.match(reviewerRuntime, /typed scorecard[\s\S]*JSON serialization[\s\S]*verdict stamping/i);
   assert.match(reviewerRuntime, /^extensions:\s*$/m);
   assert.match(reviewerRuntime, /^inheritProjectContext:\s*false$/m);
@@ -709,5 +709,5 @@ test("skill uses Report Editor and four agent ids", async () => {
   assert.ok(reviewerTask, "B4 Reviewer task must be present");
   assert.doesNotMatch(reviewerTask, /^\d+\).*assemble-report\.mjs/m);
   assert.doesNotMatch(reviewerTask, /check-session-layout\s+--phase\s+quality/);
-  assert.match(reviewerTask, /parent extension performs authoritative/i);
+  assert.match(reviewerTask, /parent extension performs[\s\S]*authoritative/i);
 });
