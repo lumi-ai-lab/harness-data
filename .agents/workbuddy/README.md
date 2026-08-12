@@ -1,16 +1,24 @@
 # QDM Harness WorkBuddy Plugin
 
-This package connects WorkBuddy 5.3.8+ to the existing Harness runtime through native plugin hooks.
+This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through native plugin hooks. Auth command rewriting on macOS and Windows requires WorkBuddy 5.3.11+ with embedded CodeBuddy CLI 2.115.0+.
 
 ## Runtime flow
 
 ```text
-UserPromptSubmit / PreToolUse / PostToolUse
-        -> scripts/harness-hook.mjs
-        -> data-harness-cli context/posttool/authz-hook
-        -> (authorized QDM commands only) data-harness-cli authz-exec
-        -> Harness context/session/template core
-        -> hookSpecificOutput.additionalContext
+PreToolUse
+  -> scripts/harness-hook.mjs authz
+  -> data-harness-cli authz-hook --agent workbuddy
+  -> shared authz core
+
+UserPromptSubmit
+  -> scripts/harness-hook.mjs context
+  -> data-harness-cli context --format workbuddy-hook
+  -> shared context/session core
+
+PostToolUse
+  -> scripts/harness-hook.mjs posttool
+  -> data-harness-cli posttool --format workbuddy-hook
+  -> shared session/template core
 ```
 
 The JavaScript adapter only normalizes WorkBuddy transport fields and tool names. Wikis recall, plan selection, session state, and template injection remain in the Go CLI.
@@ -33,20 +41,26 @@ The npm installer deliberately does not edit WorkBuddy settings or Marketplace r
 
 ## Hooks
 
-- `UserPromptSubmit` calls `context --format workbuddy-hook`.
-- `PreToolUse` matches `Bash|PowerShell|execute_command` and calls `authz-hook --agent workbuddy`. For authz-on gated QDM commands, Bash is replaced with a trusted `authz-exec` broker command while PowerShell is denied with `QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED`; authz-off remains a no-op.
+- `PreToolUse` matches `Bash|PowerShell|execute_command` and calls `authz-hook --agent workbuddy`. macOS uses Bash-compatible executors; Windows gated PowerShell commands fail closed before credentials are resolved and must be retried with Bash.
+- `UserPromptSubmit` calls `context --format workbuddy-hook` and injects the current `authzMode`.
 - `PostToolUse` matches `Bash|PowerShell|execute_command`, normalizes the tool name to `Bash`, and calls `posttool --format workbuddy-hook`.
 - Outside a Harness workspace, all hooks return an empty object and do not alter normal WorkBuddy behavior.
-- Adapter and CLI failures return the same safety message through model-visible `additionalContext` and host-visible `systemMessage`, so failures are explicit without guessing data or templates.
+- Context/PostToolUse failures return model-visible `additionalContext` and host-visible `systemMessage`; auth failures return an explicit `permissionDecision=deny` reason and exit with status `2` so hosts that cannot enforce the JSON decision still fail closed.
 - WorkBuddy requires a stable `session_id`; its namespaced session key is stored under a collision-resistant SHA-256 filename and never falls back to shared `unknown` state.
 
-## Authorization
+## macOS auth
 
-When `authz.mode=on`, `qdm-metric-cli analysis execute` and `qdm-metric-cli auth describe` must use WorkBuddy's Bash tool. The execution-time hook removes model-supplied authorization flags and replaces the Bash invocation with the trusted `data-harness-cli authz-exec --agent workbuddy -- ...` broker. The broker resolves the configured Local Blob internally, launches the real metric CLI, and scrubs authorization-source environment variables from the child process. The blob is never placed in WorkBuddy's `updatedInput`, context, or Harness session state. Missing or invalid authorization denies the gated command.
+`authz.mode=on` gates only `qdm-metric-cli analysis execute` and `qdm-metric-cli auth describe`. The hook removes model-provided auth flags, binds the runtime encrypted Blob, fixes the CLI path, and scrubs auth source environment variables before execution.
 
-WorkBuddy 5.3.8's sandboxed PowerShell/ConPTY path does not return command stdout/stderr. Gated QDM commands submitted to PowerShell therefore fail closed before credentials are resolved and instruct the model to retry with Bash. The plugin does not disable WorkBuddy's sandbox or set `dangerouslyDisableSandbox`.
+For managed distribution, keep the Blob outside the workspace with mode `0600`, inject its path and user id into the GUI session, then restart WorkBuddy:
 
-The model must not invoke `authz-exec` directly. Windows WorkBuddy 5.3.8 passed the fix2 real-host regression matrix for stdout/stderr delivery, command replacement, deny zero side effects, and session/history redaction. Production installation may therefore explicitly select `--agent workbuddy --data-auth`; `doctor` still verifies the host contract, minimum client version, plugin package, authorization source, and user binding.
+```bash
+install -m 600 qdm-auth.blob "$HOME/.qdm/auth/qdm-auth.blob"
+launchctl setenv HARNESS_AUTH_BLOB_FILE "$HOME/.qdm/auth/qdm-auth.blob"
+launchctl setenv HARNESS_AUTH_USER_ID "<user-id>"
+```
+
+PowerShell auth rewriting is not supported in this milestone. Direct injection exposes the encrypted Blob in `updatedInput.command` and may persist it in WorkBuddy session history; use only for local validation or controlled pilots until a credential-isolated integration removes it from command text.
 
 ## Manual transport smoke
 
@@ -59,7 +73,7 @@ printf '%s' '{"session_id":"workbuddy-debug","tool_name":"Bash","tool_input":{"c
   | CODEBUDDY_PROJECT_DIR="$PWD" \
     node agents/workbuddy/scripts/harness-hook.mjs posttool
 
-printf '%s' '{"session_id":"workbuddy-debug","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"./bin/qdm-metric-cli.exe auth describe --resolve-labels=false"},"cwd":"'"$PWD"'"}' \
-  | CODEBUDDY_PROJECT_DIR="$PWD" \
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"qdm-metric-cli auth describe"},"cwd":"'"$PWD"'"}' \
+  | CODEBUDDY_PROJECT_DIR="$PWD" WORKBUDDY_APP_PATH="/Applications/WorkBuddy.app" \
     node agents/workbuddy/scripts/harness-hook.mjs authz
 ```

@@ -422,7 +422,7 @@ authz:
 	}
 }
 
-func TestWorkBuddyBashHookRewritesRelativeSubdirectoryToSecretFreeBroker(t *testing.T) {
+func TestWorkBuddyBashHookRewritesRelativeSubdirectoryWithDirectAuthorization(t *testing.T) {
 	root := writeHarnessConfig(t, `paths:
   knowledge: wikis
 
@@ -449,12 +449,12 @@ authz:
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
 	rewritten, _ := updated["command"].(string)
-	if !strings.Contains(rewritten, "authz-exec --agent 'workbuddy' -- auth describe --resolve-labels=false") {
-		t.Fatalf("relative-subdirectory invocation was not brokered: %s", rewritten)
+	if !strings.Contains(rewritten, "auth describe --resolve-labels=false --auth-blob '"+testBlob+"'") {
+		t.Fatalf("relative-subdirectory invocation was not directly authorized: %s", rewritten)
 	}
-	for _, secret := range []string{testBlob, "qdm1enc.model", "--auth-blob"} {
+	for _, secret := range []string{"qdm1enc.model"} {
 		if strings.Contains(rewritten, secret) {
-			t.Fatalf("broker rewrite leaked %q: %s", secret, rewritten)
+			t.Fatalf("direct rewrite retained model authorization %q: %s", secret, rewritten)
 		}
 	}
 	if updated["description"] != "describe effective authorization" {
@@ -665,14 +665,9 @@ func writeHarnessConfig(t *testing.T, body string) string {
 		t.Setenv(key, "")
 	}
 	root := t.TempDir()
-	broker := filepath.Join(root, "bin", "data-harness-cli-test")
-	if err := os.MkdirAll(filepath.Dir(broker), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(broker, []byte("test broker"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("QDM_HARNESS_CLI", broker)
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}

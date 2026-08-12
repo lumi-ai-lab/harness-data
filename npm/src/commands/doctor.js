@@ -5,12 +5,14 @@ import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
 import {
+  codeBuddyMinimumVersion,
+  detectCodeBuddyVersion,
   detectWorkBuddyPluginEnabled,
   detectWorkBuddyVersion,
+  inspectWorkBuddyAuth,
   inspectWorkBuddyPlugin,
   versionAtLeast,
-  workBuddyAuthzHostContractDetail,
-  workBuddyAuthzHostContractValidated,
+  workBuddyAuthMinimumVersion,
   workBuddyMinimumVersion,
   workBuddyPluginRel,
 } from "../lib/workbuddy.js";
@@ -46,41 +48,6 @@ function selectedAgent(workspace, options = {}) {
   return String(state.agent || "").toLowerCase();
 }
 
-function workBuddyAuthReadiness(workspace, authz, env = process.env) {
-  if (authz?.mode !== "on") {
-    return { sourceOK: true, source: "authz.mode=off", userOK: true, user: "not required" };
-  }
-  if (authz.allowLocalBlob === false) {
-    return { sourceOK: false, source: "allow_local_blob=false", userOK: false, user: "local authorization disabled" };
-  }
-  const inline = String(env.HARNESS_AUTH_BLOB || "").trim();
-  const envFile = String(env.HARNESS_AUTH_BLOB_FILE || "").trim();
-  const configuredFile = String(authz.blobFile || "").trim();
-  const readValidBlob = (value) => {
-    if (!value) return false;
-    const file = path.isAbsolute(value) ? value : path.join(workspace, value);
-    try {
-      return fs.readFileSync(file, "utf8").trim().startsWith("qdm1enc.");
-    } catch {
-      return false;
-    }
-  };
-  let sourceOK = false;
-  let source = "missing";
-  if (inline) {
-    sourceOK = inline.startsWith("qdm1enc.");
-    source = sourceOK ? "HARNESS_AUTH_BLOB" : "HARNESS_AUTH_BLOB invalid";
-  } else if (envFile) {
-    sourceOK = readValidBlob(envFile);
-    source = sourceOK ? "HARNESS_AUTH_BLOB_FILE" : "HARNESS_AUTH_BLOB_FILE missing or invalid";
-  } else if (configuredFile) {
-    sourceOK = readValidBlob(configuredFile);
-    source = sourceOK ? `authz.blob_file=${configuredFile}` : "authz.blob_file missing or invalid";
-  }
-  const user = String(env.HARNESS_AUTH_USER_ID || authz.devUserId || "").trim();
-  return { sourceOK, source, userOK: Boolean(user), user: user ? "explicit user ID configured" : "missing explicit user ID" };
-}
-
 export async function collectDoctor(workspace, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
@@ -110,8 +77,16 @@ export async function collectDoctor(workspace, options = {}) {
 
   const configuredAgent = selectedAgent(workspace, options);
   const workBuddySelected = configuredAgent === "workbuddy";
+  if (workBuddySelected && authz?.mode === "on") {
+    const platform = options.platform || process.platform;
+    const supported = platform === "darwin" || platform === "win32";
+    const platformName = platform === "darwin" ? "macOS" : (platform === "win32" ? "Windows" : platform);
+    add("WorkBuddy auth platform", supported, supported ? platformName : `${platform}; auth hook supports macOS and Windows only`);
+    const auth = inspectWorkBuddyAuth(workspace, authz, { ...options, platform });
+    add("WorkBuddy auth source", auth.ok, auth.detail);
+  }
   let workBuddy = null;
-  if (workBuddySelected || fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
+  if (fs.existsSync(path.join(workspace, workBuddyPluginRel))) {
     workBuddy = inspectWorkBuddyPlugin(workspace);
     add("WorkBuddy plugin package", workBuddy.prepared, workBuddy.prepared ? `${workBuddyPluginRel} v${workBuddy.version}; marketplace=${workBuddy.marketplaceName}` : workBuddy.errors.join("; "));
     add(
@@ -122,16 +97,6 @@ export async function collectDoctor(workspace, options = {}) {
         : `${workBuddy.version || "missing"}; installer=${packageVersion()} (update runtime before selecting WorkBuddy)`,
     );
     if (workBuddySelected) {
-      const readiness = workBuddyAuthReadiness(workspace, authz, options.env || process.env);
-      add("WorkBuddy auth source", readiness.sourceOK, readiness.source);
-      add("WorkBuddy auth user", readiness.userOK, readiness.user);
-      if (authz?.mode === "on") {
-        add(
-          "WorkBuddy authz host contract",
-          workBuddyAuthzHostContractValidated,
-          workBuddyAuthzHostContractDetail,
-        );
-      }
       const clientVersion = detectWorkBuddyVersion(options);
       if (clientVersion) {
         const supported = versionAtLeast(clientVersion);
@@ -142,6 +107,24 @@ export async function collectDoctor(workspace, options = {}) {
         );
       } else {
         add(`WorkBuddy version >= ${workBuddyMinimumVersion}`, true, "client not detected; verify manually", "warning");
+      }
+      if (authz?.mode === "on") {
+        add(
+          `WorkBuddy auth version >= ${workBuddyAuthMinimumVersion}`,
+          Boolean(clientVersion && versionAtLeast(clientVersion, workBuddyAuthMinimumVersion)),
+          clientVersion || "client not detected",
+        );
+        const codeBuddyVersion = detectCodeBuddyVersion(options);
+        if (codeBuddyVersion) {
+          const supported = versionAtLeast(codeBuddyVersion, codeBuddyMinimumVersion);
+          add(
+            `CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`,
+            supported,
+            supported ? codeBuddyVersion : `${codeBuddyVersion}; upgrade WorkBuddy before enabling authz`,
+          );
+        } else {
+          add(`CodeBuddy CLI version >= ${codeBuddyMinimumVersion}`, false, "embedded CLI not detected");
+        }
       }
       const enablement = detectWorkBuddyPluginEnabled({ ...options, workspace });
       if (enablement.enabled) {

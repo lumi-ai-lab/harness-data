@@ -11,9 +11,9 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, writeLocalConfig } from "../lib/config.js";
+import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
-import { agentIncludesWorkBuddy, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -100,11 +100,6 @@ export async function updateWikis(runtimeDir, options, state) {
 }
 
 export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
-  // Unconditionally patch Codex hooks — a runtime bundle update restores
-  // hooks.json to the original `bash -c '...'` form, so we must re-patch
-  // even when agent junctions already exist.
-  patchCodexHooksForWindows(runtimeDir);
-
   if (agentIncludesWorkBuddy(options.agent)) {
     const plugin = inspectWorkBuddyPlugin(runtimeDir);
     if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
@@ -115,6 +110,9 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
     return null;
   }
   if (hasAnyAgentHook(runtimeDir)) {
+    // A runtime bundle update restores hooks.json to the original bash form.
+    // Patch the freshly installed file even when the agent junction exists.
+    patchCodexHooksForWindows(runtimeDir);
     ok("Agent Hook 已配置");
     return null;
   }
@@ -148,6 +146,9 @@ export async function updateCommand(options = {}) {
   ]);
   const state = readWorkspaceState(runtimeDir);
   const configuredAgent = options.agent || state.agent;
+  const existingAuthz = readAuthzFromHarnessConfig(path.join(runtimeDir, "config", "harness-config.yaml"));
+  assertCodexAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
+  assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
   let changed = false;

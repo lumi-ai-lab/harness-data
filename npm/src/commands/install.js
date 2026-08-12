@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
-import { ask, chooseAgent } from "../lib/prompt.js";
+import { AUTH_OFF_PASSWORD, assertCodexAuthPlatform, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
@@ -13,15 +13,31 @@ import { packageVersion } from "../lib/package.js";
 import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
-import {
-  agentIncludesWorkBuddy,
-  assertWorkBuddyAuthCompatibility,
-  inspectWorkBuddyPlugin,
-  workBuddyMinimumVersion,
-} from "../lib/workbuddy.js";
+import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
+
+export function validateInstallAuthOptions(options = {}) {
+  const noAuth = options.noAuth === true;
+  const dataAuth = options.dataAuth === true;
+  const hasBlob = typeof options.authBlob === "string" && options.authBlob.trim() !== "";
+  const hasUserID = typeof options.authUserId === "string" && options.authUserId.trim() !== "";
+  const hasOffPassword = typeof options.authOffPassword === "string" && options.authOffPassword !== "";
+
+  if (noAuth && (dataAuth || hasBlob || hasUserID)) {
+    throw new Error("--no-auth cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
+  }
+  if (dataAuth && (hasBlob || hasUserID)) {
+    throw new Error("--data-auth cannot be combined with --auth-blob or --auth-user-id");
+  }
+  if (hasOffPassword && !noAuth) {
+    throw new Error("--auth-off-password requires --no-auth");
+  }
+  if (hasBlob !== hasUserID) {
+    throw new Error("--auth-blob and --auth-user-id must be provided together");
+  }
+}
 
 async function requireCommands(commands) {
   for (const command of commands) {
@@ -119,6 +135,12 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
     // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
     fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
+
+    if (options.requireWorkBuddy) {
+      const plugin = inspectWorkBuddyPlugin(stagedRoot);
+      if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
+      if (!plugin.versionMatchesPackage) throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}`);
+    }
 
     for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
     mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
@@ -243,6 +265,7 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
+  validateInstallAuthOptions(options);
   const key = platformKey();
   const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [
@@ -251,9 +274,8 @@ export async function installCommand(options = {}) {
   ]);
 
   const selectedAgent = await chooseAgent(options);
-  // Keep the compatibility assertion before downloading or writing anything.
-  // WorkBuddy 5.3.8+ passed the fix2 real-client host-contract matrix.
-  assertWorkBuddyAuthCompatibility(selectedAgent, options.dataAuth);
+  assertCodexAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
+  assertWorkBuddyAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
   step(1, 7, "检查本机依赖");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
   blank();
@@ -301,16 +323,38 @@ export async function installCommand(options = {}) {
   blank();
 
   step(5, 7, "生成本地配置");
-  const { authz } = writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: options.dataAuth });
-  ok("config/harness-config.yaml");
-  ok("config/qdm-cli-paths.env");
-  if (authz.mode === "on" && authz.allowLocalBlob) {
-    const blob = ensureLocalAuthBlob(runtimeDir);
+  if (options.noAuth) {
+    const password = options.authOffPassword || await askSecret("请输入关闭权限密码：", options);
+    if (password !== AUTH_OFF_PASSWORD) throw new Error("关闭权限密码错误，安装中止");
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (密码已验证)");
+  } else if (options.dataAuth) {
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
-  } else if (authz.mode === "on") {
-    warn("authz.mode: on，但 allow_local_blob=false；保留现有权限边界，doctor 将报告当前无可用本地凭证来源");
+    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled (--data-auth)");
   } else {
-    ok("authz.mode: off");
+    const blobContent = options.authBlob
+      || process.env.HARNESS_AUTH_BLOB
+      || await askSecret("请输入权限 BLOB（加密 JSON，qdm1enc...）：", options);
+    if (!blobContent) throw new Error("auth blob is required; use --no-auth to skip");
+
+    const devUserId = options.authUserId
+      || process.env.HARNESS_AUTH_USER_ID
+      || await ask("请输入 dev_user_id：", options);
+    if (!devUserId) throw new Error("dev_user_id is required; use --no-auth to skip");
+
+    writeAuthBlob(runtimeDir, blobContent);
+    writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: on + user-provided blob");
+    ok(`dev_user_id: ${devUserId}`);
+    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled");
   }
   blank();
 

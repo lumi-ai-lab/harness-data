@@ -66,8 +66,6 @@ func run() error {
 	switch os.Args[1] {
 	case "authz-hook":
 		return runAuthzHook(root, os.Args[2:])
-	case "authz-exec":
-		return runAuthzExec(root, os.Args[2:])
 	case "wikis":
 		return runWikis(root, os.Args[2:])
 	case "context":
@@ -180,7 +178,7 @@ func printUsage() {
 }
 
 func usageText() string {
-	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|authz-hook|authz-exec|show>"
+	return "usage: data-harness-cli <wikis|context|stage|inject-template|posttool|authz-hook|show>"
 }
 
 func runAuthzHook(root string, args []string) error {
@@ -204,25 +202,8 @@ func runAuthzHook(root string, args []string) error {
 	if ok {
 		return printCompactJSON(output)
 	}
-	return nil
-}
-
-func runAuthzExec(root string, args []string) error {
-	fs := flag.NewFlagSet("authz-exec", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	agent := fs.String("agent", "", "agent name: workbuddy")
-	if err := fs.Parse(args); err != nil {
-		return exitCodeError{Code: 2, Err: err}
-	}
-	if strings.TrimSpace(*agent) == "" {
-		return exitCodeError{Code: 2, Err: fmt.Errorf("authz-exec requires --agent workbuddy")}
-	}
-	code, err := agentauthz.RunExec(root, *agent, fs.Args(), os.Stdin, os.Stdout, os.Stderr)
-	if err != nil {
-		return exitCodeError{Code: code, Err: err}
-	}
-	if code != 0 {
-		return exitCodeError{Code: code, Err: fmt.Errorf("qdm-metric-cli exited with code %d", code), Silent: true}
+	if *agent == "workbuddy" {
+		return printCompactJSON(map[string]any{})
 	}
 	return nil
 }

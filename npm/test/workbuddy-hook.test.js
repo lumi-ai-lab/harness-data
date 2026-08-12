@@ -107,7 +107,7 @@ test("WorkBuddy authz output validator preserves non-command fields", () => {
   assert.equal(adapter.validateHookOutput("authz", lossy, canonical), null);
 });
 
-test("WorkBuddy authz output validator rejects authorization material in updatedInput", () => {
+test("WorkBuddy authz output validator accepts direct authorization injection", () => {
   const canonical = { tool_input: { command: ".\\bin\\qdm-metric-cli.exe auth describe" } };
   const leaked = JSON.stringify({
     hookSpecificOutput: {
@@ -118,23 +118,12 @@ test("WorkBuddy authz output validator rejects authorization material in updated
       },
     },
   });
-  assert.equal(adapter.validateHookOutput("authz", leaked, canonical), null);
+  assert.ok(adapter.validateHookOutput("authz", leaked, canonical));
   const leakedDataAuth = leaked.replace(
     "auth describe --auth-blob 'qdm1enc.must-not-cross-host-contract'",
     "analysis execute --data-auth",
   );
-  assert.equal(adapter.validateHookOutput("authz", leakedDataAuth, canonical), null);
-
-  const brokered = JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput: {
-        command: "& '.\\bin\\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- auth describe",
-      },
-    },
-  });
-  assert.ok(adapter.validateHookOutput("authz", brokered, canonical));
+  assert.ok(adapter.validateHookOutput("authz", leakedDataAuth, canonical));
 });
 
 test("WorkBuddy adapter preserves JSON numbers beyond JavaScript safe integer range", () => {
@@ -155,6 +144,21 @@ test("WorkBuddy adapter reads authz mode without reading credentials", () => {
   assert.equal(adapter.readAuthzMode(root), "on");
   fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
   assert.equal(adapter.readAuthzMode(root), "off");
+});
+
+test("WorkBuddy adapter accepts the validated Windows auth runtime", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-windows-runtime-"));
+  const cliRoot = path.join(root, "resources", "app.asar.unpacked", "cli");
+  fs.mkdirSync(cliRoot, { recursive: true });
+  fs.writeFileSync(path.join(cliRoot, "product.json"), JSON.stringify({ genieVersion: "5.3.11" }));
+  fs.writeFileSync(path.join(cliRoot, "package.json"), JSON.stringify({
+    publishConfig: { customPackage: { version: "2.115.0" } },
+  }));
+  const detected = adapter.detectAuthRuntime({ WORKBUDDY_APP_PATH: root }, "win32");
+  assert.equal(detected.supported, true);
+  assert.equal(detected.workBuddyVersion, "5.3.11");
+  assert.equal(detected.codeBuddyVersion, "2.115.0");
+  assert.equal(adapter.detectAuthRuntime({}, "linux").supported, false);
 });
 
 test("WorkBuddy authz adapter fails closed on invalid input", () => {

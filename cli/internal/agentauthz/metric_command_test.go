@@ -24,17 +24,17 @@ func TestMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
 	}
 }
 
-func TestRewriteMetricCLIToBrokerReplacesRelativeSubdirectoryExecutableOnly(t *testing.T) {
-	got := RewriteMetricCLIToBroker(
+func TestInjectDataAuthReplacesRelativeSubdirectoryExecutableOnly(t *testing.T) {
+	got := InjectDataAuth(
 		`./real/qdm-metric-cli.exe analysis execute --auth-blob qdm1enc.model --metric saleAmt`,
-		`D:\Harness Runtime\bin\data-harness-cli.exe`,
-		"workbuddy",
+		"qdm1enc.runtime",
+		`D:\Harness Runtime\bin\qdm-metric-cli.exe`,
 	)
-	if !strings.HasPrefix(got, `'D:\Harness Runtime\bin\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- analysis execute`) {
-		t.Fatalf("expected relative executable to be replaced by broker: %s", got)
+	if !strings.HasPrefix(got, `'D:\Harness Runtime\bin\qdm-metric-cli.exe' analysis execute`) {
+		t.Fatalf("expected relative executable to be replaced by trusted CLI: %s", got)
 	}
-	if strings.Contains(got, "./real/qdm-metric-cli.exe") || strings.Contains(got, "qdm1enc.model") || strings.Contains(got, "--auth-blob") {
-		t.Fatalf("rewrite retained original executable or authorization input: %s", got)
+	if strings.Contains(got, "./real/qdm-metric-cli.exe") || strings.Contains(got, "qdm1enc.model") || !strings.Contains(got, "--auth-blob 'qdm1enc.runtime'") {
+		t.Fatalf("rewrite retained original executable/model authorization or missed runtime blob: %s", got)
 	}
 }
 
@@ -190,17 +190,10 @@ func TestInjectPowerShellDataAuthRewritesPathAndPreservesPipeline(t *testing.T) 
 	}
 }
 
-func TestPowerShellCaptureAssignmentIsRecognizedAndBrokered(t *testing.T) {
+func TestPowerShellCaptureAssignmentIsRecognized(t *testing.T) {
 	command := `$out = & '.\original\qdm-metric-cli.exe' auth describe 2>&1; $code = $LASTEXITCODE; $out | Out-String`
 	if !IsPowerShellMetricAuthDescribe(command) || PowerShellMetricInvocationCount(command) != 1 {
 		t.Fatalf("expected one auth describe invocation in capture assignment: %s", command)
-	}
-	got := RewritePowerShellMetricCLIToBroker(command, `C:\Harness Runtime\bin\data-harness-cli.exe`, "workbuddy")
-	if !strings.Contains(got, `$out = & 'C:\Harness Runtime\bin\data-harness-cli.exe' authz-exec --agent 'workbuddy' -- auth describe 2>&1`) {
-		t.Fatalf("expected capture assignment broker rewrite: %s", got)
-	}
-	if strings.Contains(got, "qdm1enc.") || strings.Contains(got, "--auth-blob") {
-		t.Fatalf("broker rewrite must not contain authorization material: %s", got)
 	}
 }
 

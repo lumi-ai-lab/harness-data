@@ -2,7 +2,9 @@ package tests
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,6 +79,60 @@ func TestWorkBuddyContextMissingSessionFailsSafelyWithoutState(t *testing.T) {
 	}
 }
 
+func TestWorkBuddyContextReportsAuthzMode(t *testing.T) {
+	sourceRoot := currentRootWithIndex(t)
+	for _, mode := range []string{"on", "off"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			copyWorkBuddyTestTree(t, filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis"))
+			copyWorkBuddyTestTree(t, filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index"))
+			config := "paths:\n  knowledge: wikis\n\nauthz:\n  mode: " + mode + "\n"
+			writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", config)
+			payload := []byte(`{"session_id":"authz-session","prompt":"销售额是多少？"}`)
+			ok, output, err := dhcontext.RunWorkBuddyHook(root, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || !output.Continue {
+				t.Fatalf("expected WorkBuddy context, ok=%v continue=%v", ok, output.Continue)
+			}
+			context := output.HookSpecificOutput.AdditionalContext
+			if !strings.Contains(context, "# Data Harness Context") ||
+				!strings.Contains(context, "authzMode: "+mode) || strings.Contains(context, "AUTHZ_UNSUPPORTED") {
+				t.Fatalf("unexpected authz context: %s", context)
+			}
+			if _, err := os.Stat(sessionstate.Path(root, "workbuddy:authz-session")); err != nil {
+				t.Fatalf("context must keep namespaced session state: %v", err)
+			}
+		})
+	}
+}
+
+func copyWorkBuddyTestTree(t *testing.T, source, target string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(pathname string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, pathname)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		data, err := os.ReadFile(pathname)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGenericHarnessContextIsAgentNeutral(t *testing.T) {
 	response, err := dhcontext.Build(currentRootWithIndex(t), "销售额最近怎么样？")
 	if err != nil {
@@ -87,5 +143,16 @@ func TestGenericHarnessContextIsAgentNeutral(t *testing.T) {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("generic context contains host-specific auth guidance %q: %s", unwanted, text)
 		}
+	}
+}
+
+func writeWorkBuddyTestFile(t *testing.T, root, rel, content string) {
+	t.Helper()
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

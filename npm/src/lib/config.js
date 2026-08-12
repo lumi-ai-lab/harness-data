@@ -37,12 +37,21 @@ export const removedDataCliBinaries = [
   "cas-cli",
 ];
 
+/** Hardcoded password for --no-auth install (临时硬编码). */
+export const AUTH_OFF_PASSWORD = "qdmzt@2026";
+
 /** Relative path of the committed local-test encrypted auth blob fixture. */
 export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
 /** Working copy path written by install --data-auth (gitignored). */
 export const localTestAuthBlobRel = "config/dev-auth.blob";
 /** Slot user id for the local-test fixture; must match blob userId. */
 export const localTestAuthUserId = "local-test-user";
+
+export function assertCodexAuthPlatform(agent, authEnabled, platform = process.platform) {
+  if (authEnabled && platform === "win32" && String(agent || "").toLowerCase() !== "workbuddy") {
+    throw new Error("Codex auth currently supports macOS/Linux only; use --no-auth on Windows");
+  }
+}
 
 export function hasAnyAgentHook(workspace) {
   return concreteAgentNames.some((name) => fs.existsSync(path.join(workspace, `.${name}`)));
@@ -104,9 +113,19 @@ export function readAuthzFromHarnessConfig(harnessPath) {
 
 /**
  * Resolve authz block for writeLocalConfig.
- * Priority: explicit dataAuth true/false → preserve existing → default off.
+ * Priority: explicit noAuth/dataAuth/authBlob → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
+  // --no-auth: 关闭权限（密码由 install.js 验证）
+  if (options.noAuth === true) {
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
+  }
+  // --data-auth: 用内置 fixture（向后兼容，开发/测试用）
   if (options.dataAuth === true) {
     return {
       mode: "on",
@@ -123,15 +142,30 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
       allowLocalBlob: true,
     };
   }
+  // 用户提供了 blob（默认 install 路径）
+  if (options.authBlob === true) {
+    return {
+      mode: "on",
+      blobFile: localTestAuthBlobRel,
+      devUserId: options.devUserId || "",
+      allowLocalBlob: true,
+    };
+  }
+  // 无显式 flag 时：有 existing 则沿用，否则默认 off
   if (existing) {
     const mode = existing.mode === "on" ? "on" : "off";
+    let allowLocalBlob = existing.allowLocalBlob !== false;
+    // MVP convergence: Host/Lumi auth fallback has been removed, so
+    // allow_local_blob=false with mode=on is a dead-end config that can
+    // never authorize any gated command. Migrate it to true on update.
+    if (mode === "on" && !allowLocalBlob) {
+      allowLocalBlob = true;
+    }
     return {
       mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      // This is an authorization boundary, not a compatibility default.
-      // Updates must never broaden an explicit local-credential opt-out.
-      allowLocalBlob: existing.allowLocalBlob !== false,
+      allowLocalBlob,
     };
   }
   return {
@@ -187,6 +221,7 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   const target = path.join(workspace, localTestAuthBlobRel);
   const fixture = path.join(workspace, localTestAuthFixtureRel);
   if (fs.existsSync(target) && !options.force) {
+    fs.chmodSync(target, 0o600);
     return { copied: false, path: target };
   }
   if (!fs.existsSync(fixture)) {
@@ -197,7 +232,22 @@ export function ensureLocalAuthBlob(workspace, options = {}) {
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(fixture, target);
+  fs.chmodSync(target, 0o600);
   return { copied: true, path: target };
+}
+
+/**
+ * Write user-provided auth blob string to config/dev-auth.blob.
+ * @param {string} workspace - runtime dir
+ * @param {string} blobContent - the encrypted blob string (qdm1enc...)
+ * @returns {{ path: string }}
+ */
+export function writeAuthBlob(workspace, blobContent) {
+  const target = path.join(workspace, localTestAuthBlobRel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${blobContent}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(target, 0o600);
+  return { path: target };
 }
 
 export function removeLegacyDataCLIs(runtimeDir) {
@@ -237,25 +287,48 @@ export function patchCodexHooksForWindows(workspace) {
   if (process.platform !== "win32") return;
   const codexDir = path.join(workspace, "agents", "codex");
   const hooksFile = path.join(codexDir, "hooks.json");
-  if (!fs.existsSync(hooksFile)) return;
+  if (!fs.existsSync(hooksFile)) throw new Error("Windows Codex hooks are missing: agents/codex/hooks.json");
   const shimPath = path.join(codexDir, "hooks", "cli-shim.mjs").replaceAll("\\", "/");
-  if (!fs.existsSync(shimPath)) return; // cli-shim.mjs ships in the runtime bundle
+  if (!fs.existsSync(shimPath)) throw new Error("Windows Codex hook shim is missing: agents/codex/hooks/cli-shim.mjs");
 
   const hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
-  const eventArgs = {
-    UserPromptSubmit: ["context", "--format", "codex-hook"],
-    PreToolUse: ["authz-hook", "--agent", "codex"],
-    PostToolUse: ["posttool", "--format", "codex-hook"],
-  };
-  for (const [event, args] of Object.entries(eventArgs)) {
+  const requiredHooks = new Map([
+    ["UserPromptSubmit", "context --format codex-hook"],
+    ["PreToolUse", "authz-hook --agent codex"],
+    ["PostToolUse", "posttool --format codex-hook"],
+  ]);
+  for (const [event, expectedArgs] of requiredHooks) {
+    let ready = false;
     for (const entry of hooks.hooks?.[event] || []) {
       for (const hook of entry.hooks || []) {
-        if (hook?.type !== "command" || typeof hook.command !== "string") continue;
-        hook.command = `node "${shimPath}" ${args.join(" ")}`;
+        if (typeof hook.command !== "string") continue;
+        const shimCommand = `node "${shimPath}" ${expectedArgs}`;
+        if (hook.command === shimCommand) {
+          if (ready) throw new Error(`Windows Codex hook patch found duplicate commands for ${event}`);
+          ready = true;
+          continue;
+        }
+        // Extract only the final CLI invocation from:
+        // bash -c '... [ -z "$cli" ]; ...; "$cli" context --format codex-hook'
+        const invocationStart = hook.command.lastIndexOf('"$cli"');
+        if (invocationStart < 0) continue;
+        const m = hook.command.slice(invocationStart).match(/^"\$cli"\s+(.+?)'\s*$/);
+        if (!m || m[1] !== expectedArgs) continue;
+        if (ready) throw new Error(`Windows Codex hook patch found duplicate commands for ${event}`);
+        hook.command = shimCommand;
+        ready = true;
       }
     }
+    if (!ready) throw new Error(`Windows Codex hook patch failed for ${event}`);
   }
-  fs.writeFileSync(hooksFile, `${JSON.stringify(hooks, null, 2)}\n`);
+  const tempDir = fs.mkdtempSync(path.join(codexDir, ".hooks-update-"));
+  const tempFile = path.join(tempDir, "hooks.json");
+  try {
+    fs.writeFileSync(tempFile, `${JSON.stringify(hooks, null, 2)}\n`, { flag: "wx" });
+    fs.renameSync(tempFile, hooksFile);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function parseConfigBool(value, fallback) {

@@ -85,7 +85,7 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		return true, denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple or ambiguous QDM data invocations into separate tool calls"), nil
 	}
 	if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && dialect == DialectPowerShell {
-		return true, denyOutput("QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED: WorkBuddy 5.3.8 PowerShell sandbox cannot return command output; retry with the Bash tool"), nil
+		return true, denyOutput("QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED: Windows WorkBuddy PowerShell sandbox cannot return command output reliably; retry with the Bash tool"), nil
 	}
 
 	resolved, err := ResolveAuthBlob(ResolveOptions{
@@ -96,18 +96,8 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		return true, denyOutput(missingAuthReason(dialect, command, cfg.Authz, err)), nil
 	}
 
-	rewritten := ""
-	if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") {
-		brokerPath := ResolveHarnessCLIPath(root)
-		if brokerPath == "" {
-			return true, denyOutput("QDM_AUTHZ_HOOK_UNAVAILABLE: data-harness-cli authz broker is missing"), nil
-		}
-		rewritten = RewriteMetricCLIToBroker(command, brokerPath, "workbuddy")
-		return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Configured authorization broker is bound to this QDM data command"), nil
-	}
-
 	metricCliPath := ResolveMetricCLIPath(root, cfg)
-	rewritten = injectAuthForCommand(dialect, command, resolved.Blob, metricCliPath)
+	rewritten := injectAuthForCommand(dialect, command, resolved.Blob, metricCliPath)
 	if AuthSourceEnvPresent(nil) {
 		rewritten = scrubAuthSourceEnvCommand(dialect, rewritten)
 	}
@@ -265,24 +255,6 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) string {
 		}
 	}
 	return candidates[0]
-}
-
-func ResolveHarnessCLIPath(root string) string {
-	binary := "data-harness-cli"
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	candidates := []string{}
-	if explicit := strings.TrimSpace(os.Getenv("QDM_HARNESS_CLI")); explicit != "" {
-		candidates = append(candidates, resolveProjectPath(root, explicit))
-	}
-	candidates = append(candidates, filepath.Join(root, "bin", binary))
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return ""
 }
 
 func resolveProjectPath(root, value string) string {

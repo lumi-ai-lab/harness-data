@@ -1,31 +1,26 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { packageVersion } from "./package.js";
 
-export const workBuddyMinimumVersion = "5.3.8";
-// This is intentionally independent from the minimum client version. A newer
-// WorkBuddy build is not considered authz-safe until the real-host regression
-// matrix has verified stdout/stderr delivery, updatedInput replacement, deny
-// zero-side-effects, and session/history redaction.
-export const workBuddyAuthzHostContractValidated = true;
-export const workBuddyAuthzHostContractDetail =
-  "validated on Windows WorkBuddy 5.3.8 with the fix2 real-host regression matrix";
+export const workBuddyMinimumVersion = "5.3.5";
+export const workBuddyAuthMinimumVersion = "5.3.11";
+export const codeBuddyMinimumVersion = "2.115.0";
 export const workBuddyMarketplaceName = "lumi-harness-data";
 export const workBuddyMarketplaceRel = "agents";
 export const workBuddyPluginRel = "agents/workbuddy";
 
 export function agentIncludesWorkBuddy(agent) {
-  // WorkBuddy remains an explicit selection. `both` and the existing `all`
-  // selection keep their old semantics independently of authz readiness.
+  // WorkBuddy remains explicit until the project-owned desktop E2E matrix has
+  // passed. `both` and the existing `all` selection keep their old semantics.
   return String(agent || "").toLowerCase() === "workbuddy";
 }
 
-export function assertWorkBuddyAuthCompatibility(agent, dataAuth) {
-  if (agentIncludesWorkBuddy(agent) && dataAuth && !workBuddyAuthzHostContractValidated) {
-    throw new Error(`WorkBuddy data-auth is not production-ready (${workBuddyAuthzHostContractDetail})`);
+export function assertWorkBuddyAuthPlatform(agent, authEnabled, platform = process.platform) {
+  if (authEnabled && agentIncludesWorkBuddy(agent) && !["darwin", "win32"].includes(platform)) {
+    throw new Error("WorkBuddy auth currently supports macOS and Windows only; use --no-auth on this platform");
   }
-  return true;
 }
 
 export function inspectWorkBuddyPlugin(workspace) {
@@ -85,25 +80,34 @@ export function inspectWorkBuddyPlugin(workspace) {
   }
 
   if (hooks) {
-    const userPrompt = hooks.hooks?.UserPromptSubmit;
     const preTool = hooks.hooks?.PreToolUse;
+    const userPrompt = hooks.hooks?.UserPromptSubmit;
     const postTool = hooks.hooks?.PostToolUse;
-    if (!Array.isArray(userPrompt) || userPrompt.length !== 1) errors.push("UserPromptSubmit hook must be declared once");
     if (!Array.isArray(preTool) || preTool.length !== 1) errors.push("PreToolUse hook must be declared once");
+    if (!Array.isArray(userPrompt) || userPrompt.length !== 1) errors.push("UserPromptSubmit hook must be declared once");
     if (!Array.isArray(postTool) || postTool.length !== 1) errors.push("PostToolUse hook must be declared once");
-    const preMatcher = preTool?.[0]?.matcher || "";
-    const postMatcher = postTool?.[0]?.matcher || "";
-    if (preMatcher !== "Bash|PowerShell|execute_command") errors.push("PreToolUse matcher must be Bash|PowerShell|execute_command");
-    if (postMatcher !== "Bash|PowerShell|execute_command") errors.push("PostToolUse matcher must be Bash|PowerShell|execute_command");
+    if ((preTool?.[0]?.matcher || "") !== "Bash|PowerShell|execute_command") errors.push("PreToolUse matcher must be Bash|PowerShell|execute_command");
+    if ((postTool?.[0]?.matcher || "") !== "Bash|PowerShell|execute_command") errors.push("PostToolUse matcher must be Bash|PowerShell|execute_command");
     const commands = [
-      userPrompt?.[0]?.hooks?.[0]?.command || "",
       preTool?.[0]?.hooks?.[0]?.command || "",
+      userPrompt?.[0]?.hooks?.[0]?.command || "",
       postTool?.[0]?.hooks?.[0]?.command || "",
     ];
-    if (!commands[0].includes("harness-hook.mjs\" context")) errors.push("UserPromptSubmit must call adapter context mode");
-    if (!commands[1].includes("harness-hook.mjs\" authz")) errors.push("PreToolUse must call adapter authz mode");
+    if (!commands[0].includes("harness-hook.mjs\" authz")) errors.push("PreToolUse must call adapter authz mode");
+    if (!commands[1].includes("harness-hook.mjs\" context")) errors.push("UserPromptSubmit must call adapter context mode");
     if (!commands[2].includes("harness-hook.mjs\" posttool")) errors.push("PostToolUse must call adapter posttool mode");
     if (commands.some((command) => !command.includes("bin/run-node"))) errors.push("hooks must use the managed Node launcher");
+  }
+  if (fs.existsSync(files.runNode) && process.platform !== "win32") {
+    try {
+      fs.accessSync(files.runNode, fs.constants.X_OK);
+    } catch {
+      errors.push("bin/run-node must be executable");
+    }
+  }
+  if (fs.existsSync(files.adapter)) {
+    const adapter = fs.readFileSync(files.adapter, "utf8");
+    if (!adapter.includes("authz-hook") || !adapter.includes("updatedInput")) errors.push("adapter must validate WorkBuddy authz output");
   }
 
   const version = manifest?.version || "";
@@ -136,12 +140,7 @@ export function detectWorkBuddyVersion(options = {}) {
       : ["/Applications/WorkBuddy.app"];
 
   for (const appRoot of appRoots.filter(Boolean)) {
-    let root = appRoot;
-    try {
-      if (fs.statSync(appRoot).isFile()) root = path.dirname(appRoot);
-    } catch {
-      // Candidate does not exist or is inaccessible; file reads below will skip it.
-    }
+    const root = normalizeWorkBuddyAppRoot(appRoot);
     const productFiles = [
       path.join(root, "Contents", "Resources", "app.asar.unpacked", "cli", "product.json"),
       path.join(root, "resources", "app.asar.unpacked", "cli", "product.json"),
@@ -169,8 +168,58 @@ export function detectWorkBuddyVersion(options = {}) {
   return "";
 }
 
+export function detectCodeBuddyVersion(options = {}) {
+  if (options.codeBuddyVersion) return String(options.codeBuddyVersion);
+  const explicitPath = options.workBuddyAppPath || process.env.WORKBUDDY_APP_PATH;
+  const appRoots = explicitPath
+    ? [explicitPath]
+    : process.platform === "win32"
+      ? [
+          path.join(process.env.LOCALAPPDATA || "", "Programs", "WorkBuddy"),
+          path.join(process.env.LOCALAPPDATA || "", "WorkBuddy"),
+          path.join(process.env.PROGRAMFILES || "", "WorkBuddy"),
+        ]
+      : ["/Applications/WorkBuddy.app"];
+  for (const appRoot of appRoots.filter(Boolean)) {
+    const root = normalizeWorkBuddyAppRoot(appRoot);
+    const packageFiles = [
+      path.join(root, "Contents", "Resources", "app.asar.unpacked", "cli", "package.json"),
+      path.join(root, "resources", "app.asar.unpacked", "cli", "package.json"),
+      path.join(root, "Resources", "app.asar.unpacked", "cli", "package.json"),
+    ];
+    for (const packageFile of packageFiles) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(packageFile, "utf8"));
+        const version = pkg.publishConfig?.customPackage?.version;
+        if (version) return String(version).trim();
+      } catch {
+        // Try the next platform layout.
+      }
+    }
+  }
+  return "";
+}
+
+function normalizeWorkBuddyAppRoot(value) {
+  let root = path.resolve(value);
+  const resources = path.dirname(root);
+  const contents = path.dirname(resources);
+  if (path.basename(root).toLowerCase() === "app.asar" &&
+      path.basename(resources).toLowerCase() === "resources" &&
+      path.basename(contents).toLowerCase() === "contents") {
+    return path.dirname(contents);
+  }
+  try {
+    if (fs.statSync(root).isFile()) root = path.dirname(root);
+  } catch {
+    // Candidate does not exist or is inaccessible; file reads will skip it.
+  }
+  return root;
+}
+
 export function versionAtLeast(actual, minimum = workBuddyMinimumVersion) {
-  const parseVersion = (value) => String(value || "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const parseVersion = (value) => String(value || "").trim().replace(/^v(?=\d)/i, "")
+    .split(".").map((part) => Number.parseInt(part, 10) || 0);
   const a = parseVersion(actual);
   const b = parseVersion(minimum);
   for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
@@ -227,4 +276,73 @@ export function detectWorkBuddyPluginEnabled(options = {}) {
     settingsPath,
     settingsPaths: parsedPaths,
   };
+}
+
+function launchctlValue(name, options) {
+  if (options.launchctlEnv && Object.prototype.hasOwnProperty.call(options.launchctlEnv, name)) {
+    return { value: String(options.launchctlEnv[name] || "").trim(), source: "launchctl" };
+  }
+  if ((options.platform || process.platform) !== "darwin") return { value: "", source: "" };
+  const result = spawnSync(options.launchctlPath || "/bin/launchctl", ["getenv", name], {
+    encoding: "utf8",
+    timeout: 2_000,
+    windowsHide: true,
+  });
+  return result.status === 0
+    ? { value: String(result.stdout || "").trim(), source: "launchctl" }
+    : { value: "", source: "" };
+}
+
+function authEnvironmentValue(name, options) {
+  const env = options.env || process.env;
+  const inherited = typeof env[name] === "string" ? env[name].trim() : "";
+  return inherited ? { value: inherited, source: "environment" } : launchctlValue(name, options);
+}
+
+function validateAuthBlobFile(workspace, file, options = {}) {
+  const absolute = path.isAbsolute(file) ? path.normalize(file) : path.resolve(workspace, file);
+  try {
+    const stat = fs.lstatSync(absolute);
+    if (stat.isSymbolicLink() || !stat.isFile()) return { ok: false, detail: `${absolute} must be a regular file` };
+    if ((options.platform || process.platform) !== "win32" && (stat.mode & 0o777) !== 0o600) {
+      return { ok: false, detail: `${absolute} must use mode 0600` };
+    }
+    if (options.requireOutsideWorkspace) {
+      const relative = path.relative(path.resolve(workspace), absolute);
+      if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return { ok: false, detail: `${absolute} must be outside the Harness workspace` };
+      }
+    }
+    const blob = fs.readFileSync(absolute, "utf8").trim();
+    if (!blob.startsWith("qdm1enc.")) return { ok: false, detail: `${absolute} must contain an encrypted qdm1enc blob` };
+    return { ok: true, detail: absolute };
+  } catch {
+    return { ok: false, detail: `${absolute} is missing or unreadable` };
+  }
+}
+
+export function inspectWorkBuddyAuth(workspace, authz, options = {}) {
+  if (!authz || authz.mode !== "on") return { ok: true, detail: "authz.mode=off", source: "off" };
+  if (!authz.allowLocalBlob) return { ok: false, detail: "authz.mode=on requires allow_local_blob=true", source: "" };
+
+  const blob = authEnvironmentValue("HARNESS_AUTH_BLOB", options);
+  const blobFile = authEnvironmentValue("HARNESS_AUTH_BLOB_FILE", options);
+  const userID = authEnvironmentValue("HARNESS_AUTH_USER_ID", options);
+  const resolvedUserID = userID.value || String(authz.devUserId || "").trim();
+  if (blob.value) {
+    if (!blob.value.startsWith("qdm1enc.")) return { ok: false, detail: "HARNESS_AUTH_BLOB must be an encrypted qdm1enc blob", source: blob.source };
+    if (!resolvedUserID) return { ok: false, detail: "HARNESS_AUTH_USER_ID or authz.dev_user_id is required", source: blob.source };
+    return { ok: true, detail: `${blob.source} encrypted blob; user id configured`, source: blob.source };
+  }
+  if (blobFile.value) {
+    if (!resolvedUserID) return { ok: false, detail: "HARNESS_AUTH_USER_ID or authz.dev_user_id is required", source: blobFile.source };
+    const checked = validateAuthBlobFile(workspace, blobFile.value, { ...options, requireOutsideWorkspace: true });
+    return { ...checked, detail: checked.ok ? `${blobFile.source} file ${checked.detail}; user id configured` : checked.detail, source: blobFile.source };
+  }
+  if (authz.blobFile) {
+    if (!String(authz.devUserId || "").trim()) return { ok: false, detail: "authz.blob_file requires authz.dev_user_id", source: "config" };
+    const checked = validateAuthBlobFile(workspace, authz.blobFile, options);
+    return { ...checked, detail: checked.ok ? `config file ${checked.detail}; dev user id configured` : checked.detail, source: "config" };
+  }
+  return { ok: false, detail: "no HARNESS_AUTH_BLOB, HARNESS_AUTH_BLOB_FILE, or authz.blob_file is configured", source: "" };
 }

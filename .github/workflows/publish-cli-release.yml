@@ -156,6 +156,9 @@ jobs:
           test -f runtime/agents/workbuddy/hooks/hooks.json
           test -f runtime/agents/workbuddy/scripts/harness-hook.mjs
           test -f runtime/agents/workbuddy/skills/qdm-harness/SKILL.md
+          test -f runtime/agents/codex/hooks.json
+          test -f runtime/agents/codex/hooks/cli-shim.mjs
+          node -e 'const fs = require("fs"); const hooks = JSON.parse(fs.readFileSync("runtime/agents/codex/hooks.json", "utf8")).hooks; for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse"]) { if (!hooks[event]?.length) throw new Error(`missing Codex hook: ${event}`); }'
           chmod +x runtime/agents/workbuddy/bin/run-node runtime/agents/workbuddy/scripts/harness-hook.mjs
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example

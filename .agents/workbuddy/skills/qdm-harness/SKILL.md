@@ -8,16 +8,15 @@ Use this skill together with the QDM Harness WorkBuddy hooks.
 
 - Run commands from the Harness runtime workspace root.
 - Read every `contextFiles` path injected by `UserPromptSubmit` before running data commands.
-- On Windows WorkBuddy, use the Bash tool for `qdm-metric-cli auth describe` and `qdm-metric-cli analysis execute`; run them from the runtime root with a Bash path such as `./bin/qdm-metric-cli.exe` or `$QDM_METRIC_CLI` after `source config/qdm-cli-paths.env`.
-- Do not run those gated QDM commands with the PowerShell tool. WorkBuddy 5.3.8's PowerShell sandbox does not return their stdout/stderr. If the hook reports `QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED`, retry once with the Bash tool and otherwise keep the command unchanged.
-- Use only `qdm-metric-cli` for data queries. Do not call `qdm-cmr-cli`, `qdm-indicators-cli`, `qdm-sql-cli`, or `cas-cli`.
+- In Bash, use `source config/qdm-cli-paths.env` before invoking QDM data CLIs. In Windows PowerShell, do not use `source`; invoke `.\\bin\\qdm-metric-cli.exe` from the runtime root.
+- Use only `qdm-metric-cli` (`$QDM_METRIC_CLI` in Bash, `.\\bin\\qdm-metric-cli.exe` in PowerShell) for data queries. Do not call `qdm-cmr-cli`, `qdm-indicators-cli`, `qdm-sql-cli`, or `cas-cli`.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values, fabricate evidence, or replace missing data with examples.
-- Do not add, override, print, or persist `--data-auth`, `--auth-blob`, or `--auth-json`; the `PreToolUse` hook owns authorization injection.
-- Do not call `data-harness-cli authz-exec` directly; it is an internal trusted broker that may only be introduced by `PreToolUse`.
-- If `PreToolUse` denies a command, stop the data flow. Do not read authorization fixtures, retry with model-supplied credentials, or bypass the hook.
-- When the user asks for current account data permissions or scopes, run `qdm-metric-cli auth describe`; permission claims must come only from that command's output.
+- Never supply or alter `--data-auth`, `--auth-blob`, or `--auth-json`; the WorkBuddy `PreToolUse` hook owns these flags. When the injected `authzMode` is `on`, the hook binds the required authorization; when it is `off`, the hook does not inject authorization flags.
+- On macOS and Windows, run QDM data commands through Bash (`Bash` or a Bash-backed `execute_command`), not PowerShell. If the auth hook denies a command, stop the data flow and report the denial without exposing credential values.
+- When `authzMode=on`, obtain the account data scope (`manageAreaId` and `categoryLevel1Id`) from `qdm-metric-cli auth describe` before the first user-facing answer based on metric results. Cache it for the current session, disclose it whenever reporting permission-scoped numbers, and never describe those numbers as unrestricted totals.
+- When `authzMode=off`, do not call `auth describe` solely for a permission-scope notice, and do not add such a notice. When the user asks about permissions, answer only from `auth describe` output and never guess authorization scopes.
 - Deliver analysis, query results, reports, summaries, and diagnostic conclusions in the current conversation by default.
 - Do not write final or intermediate results to files unless the user explicitly asks to export, save, or generate a file.
 - Never read, open, guess, or use a template file directly. A selected template is valid only when the `PostToolUse` hook injects it after `bin/data-harness-cli stage template` or `inject-template` (Windows PowerShell: `.\\bin\\data-harness-cli.exe stage template`).
-- If a hook reports `QDM_HARNESS_UNAVAILABLE` or `QDM_HARNESS_BLOCKED`, do not continue with data queries or guessed conclusions.
+- If a hook denies a command or reports `QDM_HARNESS_UNAVAILABLE` or `QDM_HARNESS_BLOCKED`, stop the affected data flow and briefly report the failure without quoting credential material or local credential paths.

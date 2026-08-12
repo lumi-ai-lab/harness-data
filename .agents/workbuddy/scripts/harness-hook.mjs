@@ -12,6 +12,8 @@ const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_TIMEOUT_MS = 8_500;
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const SHELL_TOOL_NAMES = new Set(["Bash", "PowerShell", "execute_command"]);
+export const WORKBUDDY_AUTH_MINIMUM_VERSION = "5.3.11";
+export const CODEBUDDY_AUTH_MINIMUM_VERSION = "2.115.0";
 
 class RawJSONNumber {
   constructor(value) {
@@ -249,6 +251,80 @@ export function readAuthzMode(root) {
   return "unknown";
 }
 
+function readJSON(pathname) {
+  try {
+    return JSON.parse(readFileSync(pathname, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function versionAtLeast(actual, minimum) {
+  const parseVersion = (value) => String(value || "").trim().replace(/^v(?=\d)/i, "")
+    .split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const current = parseVersion(actual);
+  const required = parseVersion(minimum);
+  for (let index = 0; index < Math.max(current.length, required.length); index += 1) {
+    if ((current[index] || 0) > (required[index] || 0)) return true;
+    if ((current[index] || 0) < (required[index] || 0)) return false;
+  }
+  return true;
+}
+
+function normalizeWorkBuddyAppRoot(value) {
+  let candidate = resolve(value);
+  const resources = dirname(candidate);
+  const parent = dirname(resources);
+  if (parse(candidate).base.toLowerCase() === "app.asar" && parse(resources).base.toLowerCase() === "resources") {
+    return parse(parent).base.toLowerCase() === "contents" ? dirname(parent) : parent;
+  }
+  try {
+    if (statSync(candidate).isFile()) candidate = dirname(candidate);
+  } catch {
+    // Missing candidates are ignored by the caller.
+  }
+  return candidate;
+}
+
+export function detectAuthRuntime(env = process.env, platform = process.platform) {
+  if (!["darwin", "win32"].includes(platform)) {
+    return { supported: false, workBuddyVersion: "", codeBuddyVersion: "" };
+  }
+  const declared = typeof env.WORKBUDDY_APP_PATH === "string" && env.WORKBUDDY_APP_PATH.trim()
+    ? [env.WORKBUDDY_APP_PATH]
+    : platform === "win32"
+      ? [
+          join(env.LOCALAPPDATA || "", "Programs", "WorkBuddy"),
+          join(env.LOCALAPPDATA || "", "WorkBuddy"),
+          join(env.PROGRAMFILES || "", "WorkBuddy"),
+        ]
+      : ["/Applications/WorkBuddy.app"];
+  let workBuddyVersion = String(env.WORKBUDDY_VERSION || "").trim();
+  let codeBuddyVersion = String(env.CODEBUDDY_CLI_VERSION || "").trim();
+  for (const declaredRoot of declared.filter(Boolean)) {
+    const appRoot = normalizeWorkBuddyAppRoot(declaredRoot);
+    const cliRoots = [
+      join(appRoot, "Contents", "Resources", "app.asar.unpacked", "cli"),
+      join(appRoot, "resources", "app.asar.unpacked", "cli"),
+      join(appRoot, "Resources", "app.asar.unpacked", "cli"),
+    ];
+    for (const cliRoot of cliRoots) {
+      const product = readJSON(join(cliRoot, "product.json"));
+      const packageJSON = readJSON(join(cliRoot, "package.json"));
+      workBuddyVersion ||= String(product?.genieVersion || "").trim();
+      codeBuddyVersion ||= String(packageJSON?.publishConfig?.customPackage?.version || "").trim();
+    }
+    if (workBuddyVersion && codeBuddyVersion) break;
+  }
+  return {
+    supported: Boolean(workBuddyVersion && codeBuddyVersion &&
+      versionAtLeast(workBuddyVersion, WORKBUDDY_AUTH_MINIMUM_VERSION) &&
+      versionAtLeast(codeBuddyVersion, CODEBUDDY_AUTH_MINIMUM_VERSION)),
+    workBuddyVersion,
+    codeBuddyVersion,
+  };
+}
+
 function hookTimeout(env = process.env) {
   const parsed = Number.parseInt(env.QDM_HARNESS_HOOK_TIMEOUT_MS || "", 10);
   if (!Number.isFinite(parsed) || parsed < 10) return DEFAULT_TIMEOUT_MS;
@@ -281,11 +357,8 @@ export function validateHookOutput(mode, stdout, canonicalPayload = null) {
     if (hook.updatedInput === undefined) return null;
     if (!hook.updatedInput || typeof hook.updatedInput !== "object" || Array.isArray(hook.updatedInput)) return null;
     if (typeof hook.updatedInput.command !== "string" || !hook.updatedInput.command.trim()) return null;
-    // WorkBuddy persists tool inputs/results. Authorization material must stay
-    // inside the trusted authz-exec broker and never cross updatedInput.
-    if (/qdm1enc\./i.test(hook.updatedInput.command) || /(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b/i.test(hook.updatedInput.command)) {
-      return null;
-    }
+    // Direct injection intentionally matches the merged macOS WorkBuddy
+    // contract. The encrypted Blob is required in updatedInput.command.
     const original = canonicalPayload?.tool_input || {};
     for (const [key, value] of Object.entries(original)) {
       if (key === "command") continue;
@@ -415,7 +488,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     emit({});
     return;
   }
-  emit(runCanonicalHook(mode, canonical, root, env));
+  const output = runCanonicalHook(mode, canonical, root, env);
+  if (mode === "authz" && Object.keys(output).length > 0 && !detectAuthRuntime(env).supported) {
+    emit(safeOutput(
+      mode,
+      `QDM_AUTHZ_RUNTIME_UNSUPPORTED: WorkBuddy ${WORKBUDDY_AUTH_MINIMUM_VERSION}+ with CodeBuddy CLI ${CODEBUDDY_AUTH_MINIMUM_VERSION}+ is required for auth command rewriting.`,
+    ));
+    return;
+  }
+  emit(output);
 }
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

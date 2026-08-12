@@ -40,6 +40,7 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 				"Do not run qdm-metric-cli or estimate data until the runtime configuration is repaired.",
 		), nil
 	}
+
 	ok, output, err := runPromptHook(root, payload.Prompt, workBuddySessionPrefix+sessionID)
 	if err != nil {
 		return true, workBuddySafetyOutput(
@@ -50,13 +51,7 @@ func RunWorkBuddyHook(root string, input []byte) (bool, WorkBuddyOutput, error) 
 	if !ok {
 		return false, WorkBuddyOutput{}, nil
 	}
-	if cfg.Authz.AuthzEnabled() {
-		output.HookSpecificOutput.AdditionalContext += "\n\nWorkBuddy authorization:\n" +
-			"- PreToolUse binds the current runtime authorization to supported qdm-metric-cli commands.\n" +
-			"- Never add or override --data-auth, --auth-blob, or --auth-json.\n" +
-			"- If authorization is denied, stop the data flow; do not bypass the hook or read fixtures.\n" +
-			"- After a successful data query, use qdm-metric-cli auth describe when the user asks for the current account data permission scope."
-	}
+	output.HookSpecificOutput.AdditionalContext = "authzMode: " + cfg.Authz.Mode + "\n\n" + output.HookSpecificOutput.AdditionalContext
 	return true, WorkBuddyOutput{
 		Continue:           true,
 		HookSpecificOutput: output.HookSpecificOutput,

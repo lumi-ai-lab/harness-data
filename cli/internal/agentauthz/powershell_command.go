@@ -40,15 +40,6 @@ func RewritePowerShellMetricCLIInvocation(command, metricCLIPath string) string 
 	return rewritePowerShellMetricCLIExecutable(command, PowerShellQuote(metricCLIPath))
 }
 
-func RewritePowerShellMetricCLIToBroker(command, brokerPath, agent string) string {
-	if strings.TrimSpace(command) == "" || strings.TrimSpace(brokerPath) == "" {
-		return command
-	}
-	cleaned := StripPowerShellAuthFlags(command)
-	replacement := PowerShellQuote(brokerPath) + " authz-exec --agent " + PowerShellQuote(agent) + " --"
-	return rewritePowerShellMetricCLIExecutable(cleaned, replacement)
-}
-
 func rewritePowerShellMetricCLIExecutable(command, replacement string) string {
 	skeleton := MaskPowerShellRegions(command)
 	re := regexp.MustCompile(`(?im)(?:^|[\r\n;|]|&&)(\s*)(?:\$[A-Za-z_][\w]*\s*=\s*)?(&\s*)?(` + powerShellMetricExecutablePattern + `)(\s+)(?:analysis\s+execute|auth\s+describe)\b`)
@@ -70,19 +61,6 @@ func rewritePowerShellMetricCLIExecutable(command, replacement string) string {
 	}
 	out.WriteString(command[last:])
 	return out.String()
-}
-
-// WrapPowerShellHostOutput keeps native-process output in memory and re-emits
-// it through PowerShell. WorkBuddy 5.3.8's sandbox result path otherwise keeps
-// only the native exit code for some updatedInput commands.
-func WrapPowerShellHostOutput(command string) string {
-	if strings.TrimSpace(command) == "" {
-		return command
-	}
-	return "& { $__qdmHarnessOutput = & { " + command +
-		" } 2>&1; $__qdmHarnessExitCode = $LASTEXITCODE; " +
-		"$__qdmHarnessOutput | ForEach-Object { $_ }; " +
-		"if ($__qdmHarnessExitCode -ne 0) { exit $__qdmHarnessExitCode } }"
 }
 
 func StripPowerShellAuthFlags(command string) string {
