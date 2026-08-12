@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * FETCH (Phase B2): fetch one confirmed card's full detail through
- * `analysis execute --meta`.
+ * `qdm-metric-cli analysis execute`.
  *
- * The CLI owns the successful data contract:
+ * qdm-metric-cli owns the row data. This adapter derives rowCount and the
+ * RFC 8785/JCS rows hash so the persisted Writer contract stays unchanged:
  *   { rows, rowCount, rowsSha256 }
  *
  * This adapter only persists that contract, without calculating profiles,
@@ -21,28 +22,26 @@ import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sanitizeCardId } from "./writer-return.mjs";
-import { isIndicatorsTimeout } from "./indicators-timeout.mjs";
+import { normalizeMetricQuery, metricQueryFromCard } from "./metric-query-contract.mjs";
+import { buildMetricExecuteArgs, runMetricQuery } from "./metric-cli-executor.mjs";
+import { isMetricTimeout } from "./metric-timeout.mjs";
 import {
-  indicatorsFetchBudgetMs,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
-} from "./indicators-retry.mjs";
+  metricFetchBudgetMs,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
+} from "./metric-retry.mjs";
 
-export { isIndicatorsTimeout } from "./indicators-timeout.mjs";
+export { isMetricTimeout } from "./metric-timeout.mjs";
 export {
-  indicatorsFetchBudgetMs,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
-} from "./indicators-retry.mjs";
+  metricFetchBudgetMs,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
+} from "./metric-retry.mjs";
+export { buildMetricExecuteArgs as buildExecuteArgs } from "./metric-cli-executor.mjs";
 
 const root = resolve(new URL("../../../../../", import.meta.url).pathname);
-const indicatorsCli = process.env.QDM_INDICATORS_CLI || join(root, "bin/qdm-indicators-cli");
-const casCli = process.env.QDM_CAS_CLI || join(root, "bin/cas-cli");
-
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 5000;
-const PAGE_SIZE_CAP = 5000;
-let tokenResolutionAttempted = false;
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -166,112 +165,24 @@ export async function reusableEntry(outDir, { notBeforeMs }) {
   }
 }
 
-function ensureToken({ timeoutMs = 25000 } = {}) {
-  if (process.env.QDM_INDICATORS_TOKEN) return process.env.QDM_INDICATORS_TOKEN;
-  if (tokenResolutionAttempted) return "";
-  tokenResolutionAttempted = true;
-  const auth = spawnSync(casCli, ["token", "--app", "indicators", "--timeout", "20s"], {
-    encoding: "utf8",
-    timeout: Math.max(1, Math.min(25000, Math.floor(timeoutMs))),
-    killSignal: "SIGKILL",
-  });
-  if (auth.status === 0 && auth.stdout.trim()) {
-    process.env.QDM_INDICATORS_TOKEN = auth.stdout.trim();
-    return process.env.QDM_INDICATORS_TOKEN;
-  }
-  return "";
-}
+/** Normalize the single confirmed-card Metric QueryRequest contract. */
+export const normalizeEntryPayload = normalizeMetricQuery;
 
-/** Normalize a confirmed card request for a full-history entry fetch. */
-export function normalizeEntryPayload(requestBody = {}) {
-  const pageSizeRaw = Number(requestBody.pageSize);
-  const pageSize =
-    Number.isFinite(pageSizeRaw) && pageSizeRaw > 0
-      ? Math.min(Math.floor(pageSizeRaw), PAGE_SIZE_CAP)
-      : PAGE_SIZE_CAP;
-
-  return {
-    ...requestBody,
-    currPage: 1,
-    pageSize,
-    chartType: requestBody.chartType || "table",
-    compareDate: Array.isArray(requestBody.compareDate) ? requestBody.compareDate : [],
-    filterDimUniqueCodeList: Array.isArray(requestBody.filterDimUniqueCodeList)
-      ? requestBody.filterDimUniqueCodeList
-      : [],
-    columnAggDimUniqueCodeList: Array.isArray(requestBody.columnAggDimUniqueCodeList)
-      ? requestBody.columnAggDimUniqueCodeList
-      : [],
-    indicatorFieldList: requestBody.indicatorFieldList || [],
-    aggDimUniqueCodeList: requestBody.aggDimUniqueCodeList || [],
-  };
-}
-
-/**
- * Both Writer and version-2 Researcher fetches opt into --meta so their rows
- * can be persisted with the same rowCount + RFC 8785/JCS hash contract.
- */
-export function buildExecuteArgs(payload, { meta = false } = {}) {
-  const args = ["analysis", "execute", "--payload-json", JSON.stringify(payload)];
-  if (meta) args.push("--meta");
-  return args;
-}
-
-/** Validate the exact successful `analysis execute --meta` contract. */
+/** Parse qdm-metric-cli's default rows-array stdout and derive persisted meta. */
 export function parseEntryMetaResponse(text) {
-  let result;
+  let rows;
   try {
-    result = JSON.parse(text);
+    rows = JSON.parse(text);
   } catch (error) {
-    throw new Error(`analysis execute --meta returned invalid JSON: ${error.message || error}`);
+    throw new Error(`qdm-metric-cli returned invalid JSON: ${error.message || error}`);
   }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new Error("analysis execute --meta must return an object");
-  }
-  const keys = Object.keys(result).sort();
-  const expected = ["rowCount", "rows", "rowsSha256"];
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
-    throw new Error("analysis execute --meta must return exactly rows, rowCount, rowsSha256");
-  }
-  if (!Array.isArray(result.rows)) {
-    throw new Error("analysis execute --meta rows must be an array");
-  }
-  if (!Number.isSafeInteger(result.rowCount) || result.rowCount < 0 || result.rowCount !== result.rows.length) {
-    throw new Error("analysis execute --meta rowCount must equal rows.length");
-  }
-  if (!/^[a-f0-9]{64}$/.test(result.rowsSha256 || "")) {
-    throw new Error("analysis execute --meta rowsSha256 must be 64 lowercase hexadecimal characters");
-  }
-  for (const [index, row] of result.rows.entries()) {
+  if (!Array.isArray(rows)) throw new Error("qdm-metric-cli must return a rows array");
+  for (const [index, row] of rows.entries()) {
     if (!row || typeof row !== "object" || Array.isArray(row)) {
-      throw new Error(`analysis execute --meta rows[${index}] must be an object`);
+      throw new Error(`qdm-metric-cli rows[${index}] must be an object`);
     }
   }
-  return result;
-}
-
-function runExecute(payload, { timeoutMs = 600000 } = {}) {
-  const args = buildExecuteArgs(payload, { meta: true });
-  const env = { ...process.env };
-  const started = Date.now();
-  const out = spawnSync(indicatorsCli, args, {
-    encoding: "utf8",
-    env,
-    timeout: Math.max(1, Math.min(600000, Math.floor(timeoutMs))),
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    cwd: root,
-  });
-  const result = {
-    status: out.status,
-    signal: out.signal,
-    errorCode: out.error?.code || "",
-    error: out.error ? String(out.error.message || out.error) : "",
-    stdout: out.stdout || "",
-    stderr: out.stderr || "",
-    durationMs: Date.now() - started,
-  };
-  return { ...result, timedOut: isIndicatorsTimeout(result) };
+  return { rows, rowCount: rows.length, rowsSha256: rowsSha256(rows) };
 }
 
 function cardResult({ cardId, fetchStatus, dataPath = null, metaPath = null, entry = null, error = "", attempts = [] }) {
@@ -287,17 +198,19 @@ function cardResult({ cardId, fetchStatus, dataPath = null, metaPath = null, ent
   };
 }
 
-async function fetchCard(sessionDir, card, { resultMtimeMs }) {
+async function fetchCard(sessionDir, card, { resultMtimeMs, sessionId }) {
   const cardId = sanitizeCardId(card.id);
   const outDir = join(sessionDir, "data", "cards", cardId);
   await ensureSafeCardDirectory(sessionDir, outDir);
 
-  const requestBody = card.requestBody || {};
-  if (!Array.isArray(requestBody.indicatorFieldList) || !requestBody.indicatorFieldList.length) {
+  let query;
+  try {
+    query = metricQueryFromCard(card);
+  } catch (error) {
     return cardResult({
       cardId,
       fetchStatus: "failed",
-      error: "indicatorFieldList is empty",
+      error: String(error.message || error),
     });
   }
 
@@ -313,31 +226,9 @@ async function fetchCard(sessionDir, card, { resultMtimeMs }) {
     });
   }
 
-  // One adapter invocation must leave enough of the 720-second child envelope
-  // for model setup, evidence reading, and structured return. CAS, retry sleeps,
-  // and every CLI attempt therefore share one hard deadline.
-  const fetchDeadlineMs = Date.now() + indicatorsFetchBudgetMs();
-
-  // Authenticate once only after cache miss. Retrying the same CLI failure
-  // must not add another 20–25 second CAS round trip on every attempt.
-  const authRemainingMs = fetchDeadlineMs - Date.now();
-  if (authRemainingMs <= 0) {
-    return cardResult({
-      cardId,
-      fetchStatus: "failed",
-      error: "INDICATORS_FETCH_BUDGET_EXHAUSTED: no time remains for authentication",
-      attempts: [],
-    });
-  }
-  if (!ensureToken({ timeoutMs: authRemainingMs })) {
-    return cardResult({
-      cardId,
-      fetchStatus: "failed",
-      error: "AUTH_TOKEN_FAILED: unable to obtain Indicators token",
-      attempts: [],
-    });
-  }
-  const payload = normalizeEntryPayload(requestBody);
+  // Retry sleeps and all CLI attempts share one hard deadline, leaving time in
+  // the Writer envelope for evidence reading and its structured return.
+  const fetchDeadlineMs = Date.now() + metricFetchBudgetMs();
   const attempts = [];
   let entry = null;
   let failure = "unknown error";
@@ -345,10 +236,16 @@ async function fetchCard(sessionDir, card, { resultMtimeMs }) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const remainingMs = fetchDeadlineMs - Date.now();
     if (remainingMs <= 0) {
-      failure = "INDICATORS_FETCH_BUDGET_EXHAUSTED: no time remains for another CLI attempt";
+      failure = "METRIC_FETCH_BUDGET_EXHAUSTED: no time remains for another CLI attempt";
       break;
     }
-    const result = runExecute(payload, { timeoutMs: remainingMs });
+    let result;
+    try {
+      result = runMetricQuery(query, { projectRoot: root, sessionId, timeoutMs: remainingMs });
+    } catch (error) {
+      failure = String(error.message || error);
+      break;
+    }
     let parseError = "";
     attempts.push({ attempt, status: result.status, durationMs: result.durationMs });
     if (result.status === 0 && !result.error) {
@@ -366,10 +263,10 @@ async function fetchCard(sessionDir, card, { resultMtimeMs }) {
     // is not a transient quick failure. Do not start another long-running
     // descendant; only explicit failures returned within 15 seconds may retry.
     if (result.timedOut) break;
-    if (!shouldRetryIndicatorsFailure(result, { parseError })) break;
+    if (!shouldRetryMetricFailure(result, { parseError })) break;
     if (attempt < MAX_ATTEMPTS) {
       if (fetchDeadlineMs - Date.now() <= RETRY_DELAY_MS) {
-        failure = `${failure}\nINDICATORS_FETCH_BUDGET_EXHAUSTED: retry delay would exceed the adapter deadline`;
+        failure = `${failure}\nMETRIC_FETCH_BUDGET_EXHAUSTED: retry delay would exceed the adapter deadline`;
         break;
       }
       sleepSync(RETRY_DELAY_MS);
@@ -403,7 +300,12 @@ export async function fetchAllEntries(resultPath, { cardId } = {}) {
   if (!cards.length) throw new Error("no cards to fetch");
 
   const cardsResult = [];
-  for (const card of cards) cardsResult.push(await fetchCard(sessionDir, card, { resultMtimeMs }));
+  for (const card of cards) {
+    cardsResult.push(await fetchCard(sessionDir, card, {
+      resultMtimeMs,
+      sessionId: String(result.session_id || ""),
+    }));
+  }
   return {
     producer: "fetch-entry.mjs",
     cards: cardsResult,

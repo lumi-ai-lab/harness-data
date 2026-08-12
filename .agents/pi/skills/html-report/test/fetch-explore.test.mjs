@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   sanitizeTaskId,
   fetchExploreTask,
-  isIndicatorsTimeout,
+  isMetricTimeout,
   materialQueryDelta,
   reusableExplore,
   semanticQueryShape,
@@ -20,25 +20,38 @@ import {
   isValidEvidenceGap,
 } from "../scripts/research-contract.mjs";
 
+function metricQuery(overrides = {}) {
+  return {
+    metrics: ["profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-27" },
+    dimensions: ["incDate"],
+    filters: { storeId: ["101001"] },
+    pageNo: 1,
+    pageSize: 500,
+    ...overrides,
+  };
+}
+
 test("sanitizeTaskId strips unsafe chars", () => {
   assert.equal(sanitizeTaskId("drill-001"), "drill-001");
   assert.equal(sanitizeTaskId("a/b c"), "a_b_c");
   assert.equal(sanitizeTaskId(""), "task");
 });
 
-test("Indicators timeout classifier recognizes ETIMEDOUT and explicit timeout failures only", () => {
-  assert.equal(isIndicatorsTimeout({ errorCode: "ETIMEDOUT" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "指标查询超时" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "connection reset" }), false);
+test("Metric timeout classifier recognizes ETIMEDOUT and explicit timeout failures only", () => {
+  assert.equal(isMetricTimeout({ errorCode: "ETIMEDOUT" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "指标查询超时" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "connection reset" }), false);
   assert.equal(
-    isIndicatorsTimeout({ status: 0, error: "", stdout: '{"rows":[{"label":"timeout"}]}' }),
+    isMetricTimeout({ status: 0, error: "", stdout: '[{"label":"timeout"}]' }),
     false,
     "a successful data cell containing the word timeout is not a failed query"
   );
 });
 
-test("fetchExploreTask fails closed when indicatorFieldList empty (no CLI)", async (t) => {
+test("fetchExploreTask fails closed when metrics is empty (no CLI)", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-explore-"));
   const session = join(root, ".harness", "state", "html-report", "ex1");
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -49,7 +62,7 @@ test("fetchExploreTask fails closed when indicatorFieldList empty (no CLI)", asy
     resultPath,
     JSON.stringify({
       status: "confirmed",
-      cards: [{ id: "c1", requestBody: { indicatorFieldList: ["profitAmt"] } }],
+      cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
       title: "t",
     })
   );
@@ -68,12 +81,12 @@ test("fetchExploreTask fails closed when indicatorFieldList empty (no CLI)", asy
 
   const meta = await fetchExploreTask(resultPath, {
     taskId: "drill-001",
-    payload: { startDate: "2026-07-01", endDate: "2026-07-10" },
+    payload: metricQuery({ metrics: [] }),
     goal: "empty payload should fail",
   });
 
   assert.equal(meta.status, "failed");
-  assert.match(meta.failedMessage || meta.error || "", /indicatorFieldList/i);
+  assert.match(meta.failedMessage || meta.error || "", /query\.metrics/i);
 
   const metaOnDisk = JSON.parse(
     await readFile(join(session, "data", "explore", "drill-001.meta.json"), "utf8")
@@ -86,46 +99,27 @@ test("fetchExploreTask fails closed when indicatorFieldList empty (no CLI)", asy
 });
 
 test("normalizeEntryPayload still all-pages for explore payloads", () => {
-  const p = normalizeEntryPayload({
-    pageSize: 99999,
-    currPage: 3,
-    indicatorFieldList: ["x"],
-  });
-  assert.equal(p.currPage, 1);
-  assert.ok(p.pageSize <= 5000);
+  const p = normalizeEntryPayload(metricQuery({ pageSize: 99999, pageNo: 3 }));
+  assert.equal(p.pageNo, 1);
+  assert.equal(p.pageSize, 2000);
 });
 
 test("material query delta ignores ordering, pagination, and chart presentation", () => {
-  const original = {
-    indicatorFieldList: ["custNum", "profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    filterDimUniqueCodeList: [{ dimUniqueCode: "storeId", dimFieldIdList: ["101001"] }],
-    startDate: "2026-07-01",
-    endDate: "2026-07-27",
-    orderBy: "日维度 ASC",
-    currPage: 1,
-    pageSize: 500,
-    chartType: "table",
-  };
+  const original = metricQuery({ metrics: ["custNum", "profitAmt"], orderBy: { field: "incDate", direction: "ASC" } });
   const presentationOnly = {
     ...original,
-    indicatorFieldList: ["profitAmt", "custNum"],
-    orderBy: "门店毛利额 DESC",
-    currPage: 9,
+    metrics: ["profitAmt", "custNum"],
+    orderBy: { field: "profitAmt", direction: "DESC" },
+    pageNo: 9,
     pageSize: 50,
-    chartType: "line",
   };
   assert.deepEqual(materialQueryDelta(original, presentationOnly).changedKeys, []);
   assert.deepEqual(semanticQueryShape(original), semanticQueryShape(presentationOnly));
-  assert.deepEqual(materialQueryDelta(original, { ...presentationOnly, inventedFlag: "bypass" }).changedKeys, []);
-  assert.deepEqual(
-    materialQueryDelta(original, { ...presentationOnly, inventedFlag: "bypass" }).changedUnclassifiedKeys,
-    ["inventedFlag"]
-  );
+  assert.throws(() => materialQueryDelta(original, { ...presentationOnly, inventedFlag: "bypass" }), /unsupported fields/);
   for (const [key, candidate] of [
-    ["indicatorFieldList", { ...presentationOnly, indicatorFieldList: ["profitAmt", "saleAmt"] }],
-    ["aggDimUniqueCodeList", { ...presentationOnly, aggDimUniqueCodeList: ["storeId"] }],
-    ["startDate", { ...presentationOnly, startDate: "2026-06-01" }],
+    ["metrics", { ...presentationOnly, metrics: ["profitAmt", "saleAmt"] }],
+    ["dimensions", { ...presentationOnly, dimensions: ["storeId"] }],
+    ["time.startDate", { ...presentationOnly, time: { ...presentationOnly.time, startDate: "2026-06-01" } }],
   ]) {
     const delta = materialQueryDelta(original, candidate);
     assert.equal(delta.material, true, `${key} should be a material query change`);
@@ -135,10 +129,10 @@ test("material query delta ignores ordering, pagination, and chart presentation"
 
 test("evidence gap authorizes every material query change, not just one", () => {
   const gap = { type: "missing_indicator", reason: "需要补充销售额指标" };
-  assert.equal(evidenceGapMatchesChangedKeys(gap, ["indicatorFieldList"]), true);
+  assert.equal(evidenceGapMatchesChangedKeys(gap, ["metrics"]), true);
   assert.equal(evidenceGapMatchesChangedKeys(gap, []), false);
   assert.equal(
-    evidenceGapMatchesChangedKeys(gap, ["indicatorFieldList", "startDate"]),
+    evidenceGapMatchesChangedKeys(gap, ["metrics", "time.startDate"]),
     false
   );
   const mergedGap = {
@@ -146,11 +140,11 @@ test("evidence gap authorizes every material query change, not just one", () => 
     reason: "一次查询同时补充销售额指标与品类维度",
   };
   assert.equal(
-    evidenceGapMatchesChangedKeys(mergedGap, ["indicatorFieldList", "aggDimUniqueCodeList"]),
+    evidenceGapMatchesChangedKeys(mergedGap, ["metrics", "dimensions"]),
     true
   );
   assert.equal(
-    evidenceGapMatchesChangedKeys(mergedGap, ["indicatorFieldList", "aggDimUniqueCodeList", "startDate"]),
+    evidenceGapMatchesChangedKeys(mergedGap, ["metrics", "dimensions", "time.startDate"]),
     false
   );
   assert.equal(isValidEvidenceGap(mergedGap), true);
@@ -167,38 +161,12 @@ test("evidence gap authorizes every material query change, not just one", () => 
 });
 
 test("material query delta treats filter order and filter value order as set-like", () => {
-  const original = {
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-27",
-    filterDimUniqueCodeList: [
-      {
-        type: "DIMENSION",
-        dimUniqueCode: "storeId",
-        dimFieldIdList: ["101002", "101001"],
-      },
-      {
-        type: "DIMENSION",
-        dimUniqueCode: "categoryLevel1Id",
-        dimFieldIdList: ["20", "10"],
-      },
-    ],
-  };
+  const original = metricQuery({
+    filters: { storeId: ["101002", "101001"], categoryLevel1Id: ["20", "10"] },
+  });
   const reordered = {
     ...original,
-    filterDimUniqueCodeList: [
-      {
-        type: "DIMENSION",
-        dimUniqueCode: "categoryLevel1Id",
-        dimFieldIdList: ["10", "20", "10"],
-      },
-      {
-        type: "DIMENSION",
-        dimUniqueCode: "storeId",
-        dimFieldIdList: ["101001", "101002"],
-      },
-    ],
+    filters: { categoryLevel1Id: ["10", "20"], storeId: ["101001", "101002"] },
   };
 
   const delta = materialQueryDelta(original, reordered);
@@ -212,19 +180,15 @@ test("fetchExploreTask rejects orderBy-only re-query before CLI", async (t) => {
   const session = join(root, ".harness", "state", "html-report", "ex-same");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(session, { recursive: true });
-  const original = {
-    indicatorFieldList: ["custNum", "profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    filterDimUniqueCodeList: [{ dimUniqueCode: "storeId", dimFieldIdList: ["101001"] }],
-    startDate: "2026-07-01",
-    endDate: "2026-07-27",
-    orderBy: "日维度 ASC",
-  };
+  const original = metricQuery({
+    metrics: ["custNum", "profitAmt"],
+    orderBy: { field: "incDate", direction: "ASC" },
+  });
   const resultPath = join(session, "result.json");
   await mkdir(join(session, "analysis"), { recursive: true });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: original }],
+    cards: [{ id: "c1", query: { request: original, comparisons: [] } }],
   }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
@@ -239,7 +203,7 @@ test("fetchExploreTask rejects orderBy-only re-query before CLI", async (t) => {
   const meta = await fetchExploreTask(resultPath, {
     taskId: "same-query",
     fromCardId: "c1",
-    payload: { ...original, orderBy: "门店毛利额 DESC" },
+    payload: { ...original, orderBy: { field: "profitAmt", direction: "DESC" } },
   });
   assert.equal(meta.status, "failed");
   assert.equal(meta.errorCode, "NO_MATERIAL_QUERY_DELTA");
@@ -253,14 +217,14 @@ test("fetchExploreTask refuses a version-2 reuse_entry task even if caller omits
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
   const resultPath = join(session, "result.json");
-  await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "c1", requestBody: {} }] }));
+  await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }] }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
     tasks: [{ id: "reuse-1", fromCardId: "c1", goal: "复用现有明细", evidencePlan: { mode: "reuse_entry" } }],
   }));
   const meta = await fetchExploreTask(resultPath, {
     taskId: "reuse-1",
-    payload: { indicatorFieldList: ["profitAmt"] },
+    payload: metricQuery(),
   });
   assert.equal(meta.status, "failed");
   assert.equal(meta.errorCode, "TASK_MODE_REUSE_ENTRY");
@@ -275,7 +239,7 @@ test("fetchExploreTask refuses new_query without a structured evidence gap", asy
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["profitAmt"] } }],
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
@@ -284,7 +248,7 @@ test("fetchExploreTask refuses new_query without a structured evidence gap", asy
 
   const meta = await fetchExploreTask(resultPath, {
     taskId: "new-without-gap",
-    payload: { indicatorFieldList: ["profitAmt", "saleAmt"] },
+    payload: metricQuery({ metrics: ["profitAmt", "saleAmt"] }),
   });
   assert.equal(meta.status, "failed");
   assert.equal(meta.errorCode, "TASK_EVIDENCE_GAP_MISSING");
@@ -297,21 +261,21 @@ test("fetchExploreTask requires a version-2 runnable task before any query", asy
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
   const resultPath = join(session, "result.json");
-  const source = { indicatorFieldList: ["profitAmt"], aggDimUniqueCodeList: ["incDate"] };
-  const candidate = { ...source, indicatorFieldList: ["profitAmt", "saleAmt"] };
+  const source = metricQuery();
+  const candidate = metricQuery({ metrics: ["profitAmt", "saleAmt"] });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: source }],
+    cards: [{ id: "c1", query: { request: source, comparisons: [] } }],
   }));
 
-  await writeFile(resultPath, JSON.stringify({ cards: [{ id: "c1", requestBody: source }] }));
+  await writeFile(resultPath, JSON.stringify({ cards: [{ id: "c1", query: { request: source, comparisons: [] } }] }));
   await assert.rejects(
     () => fetchExploreTask(resultPath, { taskId: "guard-1", payload: candidate }),
     /result\.status must be confirmed/
   );
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: source }],
+    cards: [{ id: "c1", query: { request: source, comparisons: [] } }],
   }));
 
   let meta = await fetchExploreTask(resultPath, { taskId: "guard-1", payload: candidate });
@@ -379,8 +343,8 @@ test("fetchExploreTask rejects a missing baseline and unclassified payload chang
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
   const resultPath = join(session, "result.json");
-  const source = { indicatorFieldList: ["profitAmt"], aggDimUniqueCodeList: ["incDate"] };
-  const candidate = { ...source, indicatorFieldList: ["profitAmt", "saleAmt"] };
+  const source = metricQuery();
+  const candidate = metricQuery({ metrics: ["profitAmt", "saleAmt"] });
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
     round: 0,
@@ -397,49 +361,40 @@ test("fetchExploreTask rejects a missing baseline and unclassified payload chang
 
   await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "c1" }] }));
   let meta = await fetchExploreTask(resultPath, { taskId: "baseline-1", payload: candidate });
-  assert.equal(meta.errorCode, "FROM_CARD_REQUEST_BODY_INVALID");
+  assert.equal(meta.errorCode, "FROM_CARD_QUERY_INVALID");
   assert.deepEqual(meta.attempts, []);
 
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: source }],
+    cards: [{ id: "c1", query: { request: source, comparisons: [] } }],
   }));
   meta = await fetchExploreTask(resultPath, {
     taskId: "baseline-1",
     payload: { ...candidate, inventedFlag: "bypass" },
   });
-  assert.equal(meta.errorCode, "UNCLASSIFIED_QUERY_CHANGE");
-  assert.deepEqual(meta.queryDelta.changedUnclassifiedKeys, ["inventedFlag"]);
+  assert.equal(meta.errorCode, "METRIC_QUERY_INVALID");
+  assert.match(meta.failedMessage, /unsupported fields.*inventedFlag/);
   assert.deepEqual(meta.attempts, []);
 });
 
-test("fetch-explore CLI success uses --meta and persists rows with provenance", async (t) => {
+test("fetch-explore Metric CLI success persists rows with derived provenance", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-explore-success-"));
   const session = join(root, ".harness", "state", "html-report", "ex-success");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
 
-  const original = {
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    filterDimUniqueCodeList: [
-      { type: "DIMENSION", dimUniqueCode: "storeId", dimFieldIdList: ["101001"] },
-    ],
-    startDate: "2026-07-01",
-    endDate: "2026-07-27",
-    storeCollectType: 1,
-    orderBy: "日维度 ASC",
-  };
+  const original = metricQuery({ orderBy: { field: "incDate", direction: "ASC" } });
   const candidate = {
     ...original,
-    indicatorFieldList: ["profitAmt", "saleAmt"],
-    orderBy: "门店毛利额 DESC",
+    metrics: ["profitAmt", "saleAmt"],
+    orderBy: { field: "profitAmt", direction: "DESC" },
   };
   const taskId = "new-query-success";
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: original }],
+    session_id: "ex-success",
+    cards: [{ id: "c1", query: { request: original, comparisons: [] } }],
   }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
@@ -454,7 +409,7 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
 
   const fakeArgsPath = join(root, "fake-cli-args.json");
   const fakeCountPath = join(root, "fake-cli-count.txt");
-  const fakeCliPath = join(root, "fake-indicators-cli.mjs");
+  const fakeCliPath = join(root, "fake-metric-cli.mjs");
   const rows = [{ b: 2, a: "x" }, { a: "y", b: 1 }];
   const expectedRowsSha256 = "b33e3daec35e0d408ffa081470a9f4aa52a07350cc41b4fe31526f54aeb28130";
   await writeFile(
@@ -466,11 +421,7 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
       "const count = countPath && existsSync(countPath) ? Number(readFileSync(countPath, 'utf8')) : 0;",
       "if (countPath) writeFileSync(countPath, String(count + 1));",
       "writeFileSync(process.env.FAKE_CLI_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
-      `process.stdout.write(${JSON.stringify(JSON.stringify({
-        rows,
-        rowCount: rows.length,
-        rowsSha256: expectedRowsSha256,
-      }))});`,
+      `process.stdout.write(${JSON.stringify(JSON.stringify(rows))});`,
       "",
     ].join("\n")
   );
@@ -494,8 +445,8 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
       encoding: "utf8",
       env: {
         ...process.env,
-        QDM_INDICATORS_CLI: fakeCliPath,
-        QDM_INDICATORS_TOKEN: "test-token",
+        QDM_METRIC_CLI: fakeCliPath,
+        HARNESS_AUTHZ_MODE: "off",
         FAKE_CLI_ARGS_PATH: fakeArgsPath,
         FAKE_CLI_COUNT_PATH: fakeCountPath,
       },
@@ -506,13 +457,13 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   const cliArgs = JSON.parse(await readFile(fakeArgsPath, "utf8"));
   assert.equal(cliArgs[0], "analysis");
   assert.equal(cliArgs[1], "execute");
-  assert.ok(cliArgs.includes("--meta"));
+  assert.equal(cliArgs.includes("--meta"), false);
   assert.equal(cliArgs.includes("--single-page"), false);
   const payloadIndex = cliArgs.indexOf("--payload-json");
   assert.ok(payloadIndex >= 0);
   const executedPayload = JSON.parse(cliArgs[payloadIndex + 1]);
-  assert.deepEqual(executedPayload.indicatorFieldList, candidate.indicatorFieldList);
-  assert.equal(executedPayload.currPage, 1);
+  assert.deepEqual(executedPayload.metrics, candidate.metrics);
+  assert.equal(executedPayload.pageNo, 1);
 
   const dataPath = join(session, "data", "explore", `${taskId}.json`);
   const metaPath = join(session, "data", "explore", `${taskId}.meta.json`);
@@ -522,22 +473,25 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   assert.equal(meta.producer, "fetch-explore.mjs");
   assert.equal(meta.rowCount, rows.length);
   assert.equal(meta.rowsSha256, expectedRowsSha256);
-  assert.equal(meta.argsSummary.meta, true);
+  assert.equal(meta.argsSummary.singlePage, false);
   assert.equal(meta.queryDelta.material, true);
-  assert.deepEqual(meta.queryDelta.changedKeys, ["indicatorFieldList"]);
+  assert.deepEqual(meta.queryDelta.changedKeys, ["metrics"]);
+  assert.deepEqual(meta.queryPatch, { metrics: ["profitAmt", "saleAmt"] });
+  assert.match(meta.queryPatchSha256, /^[a-f0-9]{64}$/);
+  assert.match(meta.sourceQuerySha256, /^[a-f0-9]{64}$/);
+  assert.match(meta.executedQuerySha256, /^[a-f0-9]{64}$/);
+  assert.equal(meta.producerVersion, 3);
+  assert.equal(meta.cacheContractVersion, 3);
   assert.equal(meta.attempts.length, 1);
   assert.equal(meta.attempts[0].status, 0);
-  assert.equal(meta.cacheContractVersion, 1);
   assert.match(meta.resultSha256, /^[a-f0-9]{64}$/);
   assert.match(meta.taskQueryContractSha256, /^[a-f0-9]{64}$/);
   assert.match(meta.queryDeltaSha256, /^[a-f0-9]{64}$/);
   assert.equal(await readFile(fakeCountPath, "utf8"), "1");
 
-  const payloadPath = join(session, "data", "explore", `${taskId}.payload.json`);
   const beforeReuse = {
     data: await readFile(dataPath, "utf8"),
     meta: await readFile(metaPath, "utf8"),
-    payload: await readFile(payloadPath, "utf8"),
   };
   const cachedRun = spawnSync(
     process.execPath,
@@ -556,8 +510,8 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
       encoding: "utf8",
       env: {
         ...process.env,
-        QDM_INDICATORS_CLI: fakeCliPath,
-        QDM_INDICATORS_TOKEN: "test-token",
+        QDM_METRIC_CLI: fakeCliPath,
+        HARNESS_AUTHZ_MODE: "off",
         FAKE_CLI_ARGS_PATH: fakeArgsPath,
         FAKE_CLI_COUNT_PATH: fakeCountPath,
       },
@@ -565,29 +519,26 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   );
   assert.equal(cachedRun.status, 0, cachedRun.stderr || cachedRun.stdout);
   assert.equal(JSON.parse(cachedRun.stdout).cacheReuse?.reused, true);
-  assert.equal(await readFile(fakeCountPath, "utf8"), "1", "validated cache must skip Indicators CLI");
+  assert.equal(await readFile(fakeCountPath, "utf8"), "1", "validated cache must skip Metric CLI");
   assert.equal(await readFile(dataPath, "utf8"), beforeReuse.data);
   assert.equal(await readFile(metaPath, "utf8"), beforeReuse.meta);
-  assert.equal(await readFile(payloadPath, "utf8"), beforeReuse.payload);
 
-  const persistedPayload = JSON.parse(beforeReuse.payload);
   const expectedCache = {
     sessionDir: session,
     outDir: join(session, "data", "explore"),
     dataPath,
     metaPath,
-    payloadPath,
     resultPath,
     resultMtimeMs: (await stat(resultPath)).mtimeMs,
     resultSha256: meta.resultSha256,
     taskId,
     taskQueryContractSha256: meta.taskQueryContractSha256,
     fromCardId: "c1",
-    payload: persistedPayload,
-    payloadSha256: meta.payloadSha256,
+    queryPatch: meta.queryPatch,
+    queryPatchSha256: meta.queryPatchSha256,
+    sourceQuerySha256: meta.sourceQuerySha256,
+    executedQuerySha256: meta.executedQuerySha256,
     queryDelta: meta.queryDelta,
-    sourceQueryShape: meta.sourceQueryShape,
-    queryShape: meta.queryShape,
   };
   assert.ok(await reusableExplore(expectedCache));
   assert.equal(
@@ -603,15 +554,20 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   assert.equal(
     await reusableExplore({
       ...expectedCache,
-      queryDelta: { ...meta.queryDelta, changedKeys: ["aggDimUniqueCodeList"] },
+      queryDelta: { ...meta.queryDelta, changedKeys: ["dimensions"] },
     }),
     null,
     "recomputed queryDelta mismatch must miss cache"
   );
   assert.equal(
-    await reusableExplore({ ...expectedCache, payloadSha256: "0".repeat(64) }),
+    await reusableExplore({ ...expectedCache, queryPatchSha256: "0".repeat(64) }),
     null,
-    "payload hash mismatch must miss cache"
+    "query patch hash mismatch must miss cache"
+  );
+  assert.equal(
+    await reusableExplore({ ...expectedCache, sourceQuerySha256: "0".repeat(64) }),
+    null,
+    "source query hash mismatch must miss cache"
   );
 
   await writeFile(dataPath, JSON.stringify([...rows, { a: "tampered", b: 9 }]));
@@ -620,9 +576,9 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   await writeFile(metaPath, JSON.stringify({ ...meta, rowsSha256: "0".repeat(64) }));
   assert.equal(await reusableExplore(expectedCache), null, "metadata rows hash mismatch must miss cache");
   await writeFile(metaPath, beforeReuse.meta);
-  await writeFile(payloadPath, JSON.stringify({ ...persistedPayload, indicatorFieldList: ["forged"] }));
-  assert.equal(await reusableExplore(expectedCache), null, "persisted payload mismatch must miss cache");
-  await writeFile(payloadPath, beforeReuse.payload);
+  await writeFile(metaPath, JSON.stringify({ ...meta, executedQuerySha256: "0".repeat(64) }));
+  assert.equal(await reusableExplore(expectedCache), null, "executed query hash mismatch must miss cache");
+  await writeFile(metaPath, beforeReuse.meta);
 
   await writeFile(metaPath, JSON.stringify({ ...meta, taskQueryContractSha256: "0".repeat(64) }));
   const cacheMissRun = spawnSync(
@@ -642,8 +598,8 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
       encoding: "utf8",
       env: {
         ...process.env,
-        QDM_INDICATORS_CLI: fakeCliPath,
-        QDM_INDICATORS_TOKEN: "test-token",
+        QDM_METRIC_CLI: fakeCliPath,
+        HARNESS_AUTHZ_MODE: "off",
         FAKE_CLI_ARGS_PATH: fakeArgsPath,
         FAKE_CLI_COUNT_PATH: fakeCountPath,
       },
@@ -656,24 +612,89 @@ test("fetch-explore CLI success uses --meta and persists rows with provenance", 
   assert.equal(repairedMeta.taskQueryContractSha256, meta.taskQueryContractSha256);
 });
 
+test("fetch-explore inherits comparison evidence when the candidate query omits comparisons", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "html-report-explore-comparison-"));
+  const session = join(root, ".harness", "state", "html-report", "ex-comparison");
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(join(session, "analysis"), { recursive: true });
+
+  const source = metricQuery();
+  const candidate = metricQuery({ metrics: ["profitAmt", "saleAmt"] });
+  const taskId = "comparison-inheritance";
+  const resultPath = join(session, "result.json");
+  await writeFile(resultPath, JSON.stringify({
+    status: "confirmed",
+    session_id: "ex-comparison",
+    cards: [{
+      id: "c1",
+      query: { request: source, comparisons: ["YOY", "MOM"] },
+    }],
+  }));
+  await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
+    version: 2,
+    tasks: [{
+      id: taskId,
+      fromCardId: "c1",
+      goal: "补充销售额指标",
+      evidenceGap: { type: "missing_indicator", reason: "需要新增销售额指标" },
+      evidencePlan: { mode: "new_query" },
+    }],
+  }));
+
+  const fakeArgsPath = join(root, "fake-cli-args.json");
+  const fakeCliPath = join(root, "fake-metric-cli.mjs");
+  await writeFile(fakeCliPath, [
+    "#!/usr/bin/env node",
+    'import { writeFileSync } from "node:fs";',
+    "writeFileSync(process.env.FAKE_CLI_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
+    'process.stdout.write("[]");',
+    "",
+  ].join("\n"));
+  await chmod(fakeCliPath, 0o755);
+
+  const fetchExploreScript = fileURLToPath(new URL("../scripts/fetch-explore.mjs", import.meta.url));
+  const run = spawnSync(process.execPath, [
+    fetchExploreScript,
+    "--result", resultPath,
+    "--task-id", taskId,
+    "--payload-json", JSON.stringify(candidate),
+    "--from-card-id", "c1",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      QDM_METRIC_CLI: fakeCliPath,
+      HARNESS_AUTHZ_MODE: "off",
+      FAKE_CLI_ARGS_PATH: fakeArgsPath,
+    },
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const cliArgs = JSON.parse(await readFile(fakeArgsPath, "utf8"));
+  assert.equal(cliArgs.filter((arg) => arg === "--yoy").length, 1);
+  assert.equal(cliArgs.filter((arg) => arg === "--mom").length, 1);
+  const executedPayload = JSON.parse(cliArgs[cliArgs.indexOf("--payload-json") + 1]);
+  assert.equal(Object.prototype.hasOwnProperty.call(executedPayload, "comparisons"), false);
+  const meta = JSON.parse(await readFile(
+    join(session, "data", "explore", `${taskId}.meta.json`),
+    "utf8"
+  ));
+  assert.deepEqual(meta.queryDelta.changedKeys, ["metrics"]);
+});
+
 test("fetch-explore stops after the first real ETIMEDOUT without a second long query", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-explore-timeout-"));
   const session = join(root, ".harness", "state", "html-report", "ex-timeout");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
 
-  const original = {
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-27",
-  };
-  const candidate = { ...original, indicatorFieldList: ["profitAmt", "saleAmt"] };
+  const original = metricQuery();
+  const candidate = metricQuery({ metrics: ["profitAmt", "saleAmt"] });
   const taskId = "timeout-query";
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: original }],
+    session_id: "ex-timeout",
+    cards: [{ id: "c1", query: { request: original, comparisons: [] } }],
   }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
@@ -687,13 +708,8 @@ test("fetch-explore stops after the first real ETIMEDOUT without a second long q
   }));
 
   const fakeCliPath = join(root, "fake-timeout-cli.sh");
-  const fakeCountPath = join(root, "fake-timeout-count.txt");
   await writeFile(fakeCliPath, [
     "#!/bin/sh",
-    "count=0",
-    "if [ -f \"$FAKE_CLI_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_CLI_COUNT_PATH\"); fi",
-    "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_CLI_COUNT_PATH\"",
     "sleep 5",
     "",
   ].join("\n"));
@@ -711,37 +727,36 @@ test("fetch-explore stops after the first real ETIMEDOUT without a second long q
     encoding: "utf8",
     env: {
       ...process.env,
-      QDM_INDICATORS_CLI: fakeCliPath,
-      QDM_INDICATORS_TOKEN: "test-token",
-      QDM_INDICATORS_TIMEOUT_MS: "1000",
-      FAKE_CLI_COUNT_PATH: fakeCountPath,
+      QDM_METRIC_CLI: fakeCliPath,
+      HARNESS_AUTHZ_MODE: "off",
+      QDM_METRIC_TIMEOUT_MS: "1000",
     },
   });
   const elapsedMs = Date.now() - started;
   assert.equal(run.status, 1, run.stderr || run.stdout);
   assert.ok(elapsedMs < 3000, `timeout retry path took too long: ${elapsedMs}ms`);
-  assert.equal(await readFile(fakeCountPath, "utf8"), "1", "ETIMEDOUT must not launch attempt 2");
   const meta = JSON.parse(await readFile(join(session, "data", "explore", `${taskId}.meta.json`), "utf8"));
   assert.equal(meta.status, "failed");
-  assert.equal(meta.errorCode, "INDICATORS_TIMEOUT");
+  assert.equal(meta.errorCode, "METRIC_TIMEOUT");
   assert.equal(meta.attempts.length, 1);
   assert.equal(meta.attempts[0].timedOut, true);
   assert.match(meta.attempts[0].error, /ETIMEDOUT/i);
 });
 
-test("fetch-explore attempts CAS once and skips Indicators when auth fails", async (t) => {
+test("fetch-explore authz on fails closed before Metric CLI when no blob exists", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-explore-auth-"));
   const session = join(root, ".harness", "state", "html-report", "ex-auth");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
 
-  const source = { indicatorFieldList: ["profitAmt"], aggDimUniqueCodeList: ["incDate"] };
-  const candidate = { ...source, indicatorFieldList: ["profitAmt", "saleAmt"] };
+  const source = metricQuery();
+  const candidate = metricQuery({ metrics: ["profitAmt", "saleAmt"] });
   const taskId = "auth-query";
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: source }],
+    session_id: "ex-auth",
+    cards: [{ id: "c1", query: { request: source, comparisons: [] } }],
   }));
   await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
     version: 2,
@@ -755,36 +770,27 @@ test("fetch-explore attempts CAS once and skips Indicators when auth fails", asy
     }],
   }));
 
-  const casCountPath = join(root, "cas-count.txt");
-  const indicatorsCountPath = join(root, "indicators-count.txt");
-  const fakeCas = join(root, "fake-cas.sh");
-  const fakeIndicators = join(root, "fake-indicators.sh");
-  await writeFile(fakeCas, [
+  const metricCountPath = join(root, "metric-count.txt");
+  const fakeMetric = join(root, "fake-metric.sh");
+  await writeFile(fakeMetric, [
     "#!/bin/sh",
-    "count=0",
-    "if [ -f \"$FAKE_CAS_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_CAS_COUNT_PATH\"); fi",
-    "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_CAS_COUNT_PATH\"",
+    "printf 'called' > \"$FAKE_METRIC_COUNT_PATH\"",
     "exit 1",
     "",
   ].join("\n"));
-  await writeFile(fakeIndicators, [
-    "#!/bin/sh",
-    "printf 'called' > \"$FAKE_INDICATORS_COUNT_PATH\"",
-    "exit 1",
-    "",
-  ].join("\n"));
-  await Promise.all([chmod(fakeCas, 0o755), chmod(fakeIndicators, 0o755)]);
+  await chmod(fakeMetric, 0o755);
 
   const fetchExploreScript = fileURLToPath(new URL("../scripts/fetch-explore.mjs", import.meta.url));
   const env = {
     ...process.env,
-    QDM_CAS_CLI: fakeCas,
-    QDM_INDICATORS_CLI: fakeIndicators,
-    FAKE_CAS_COUNT_PATH: casCountPath,
-    FAKE_INDICATORS_COUNT_PATH: indicatorsCountPath,
+    QDM_METRIC_CLI: fakeMetric,
+    HARNESS_AUTHZ_MODE: "on",
+    FAKE_METRIC_COUNT_PATH: metricCountPath,
   };
-  delete env.QDM_INDICATORS_TOKEN;
+  delete env.HARNESS_AUTH_BLOB;
+  delete env.HARNESS_AUTH_BLOB_FILE;
+  delete env.HARNESS_AUTH_USER_ID;
+  delete env.LUMI_REQUESTER_CONTEXT_DIR;
   const run = spawnSync(process.execPath, [
     fetchExploreScript,
     "--result", resultPath,
@@ -794,9 +800,9 @@ test("fetch-explore attempts CAS once and skips Indicators when auth fails", asy
   ], { encoding: "utf8", env });
 
   assert.equal(run.status, 1, run.stderr || run.stdout);
-  assert.equal(await readFile(casCountPath, "utf8"), "1");
-  await assert.rejects(() => stat(indicatorsCountPath), /ENOENT/);
+  await assert.rejects(() => stat(metricCountPath), /ENOENT/);
   const meta = JSON.parse(await readFile(join(session, "data", "explore", `${taskId}.meta.json`), "utf8"));
-  assert.equal(meta.errorCode, "AUTH_TOKEN_FAILED");
+  assert.equal(meta.errorCode, "METRIC_FETCH_FAILED");
+  assert.match(meta.failedMessage, /METRIC_AUTH_CONTEXT_REQUIRED/);
   assert.deepEqual(meta.attempts, []);
 });

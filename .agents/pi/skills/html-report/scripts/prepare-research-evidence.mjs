@@ -19,7 +19,8 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { semanticQueryShape } from "./fetch-explore.mjs";
+import { semanticQueryShape, applyQueryPatch } from "./fetch-explore.mjs";
+import { metricQueryFromCard } from "./metric-query-contract.mjs";
 import { persistEditorSourceInventory } from "./editor-plan-contract.mjs";
 import {
   evidenceGapMatchesChangedKeys,
@@ -89,23 +90,28 @@ function sha256Json(value) {
 export function compactDecisionQueryScope(queryCoverage) {
   if (!queryCoverage || typeof queryCoverage !== "object" || Array.isArray(queryCoverage)) return null;
   const scope = {};
-  if (typeof queryCoverage.startDate === "string" || typeof queryCoverage.endDate === "string") {
+  const nestedTime = queryCoverage.time && typeof queryCoverage.time === "object" && !Array.isArray(queryCoverage.time)
+    ? queryCoverage.time
+    : {};
+  const time = {
+    startDate: nestedTime.startDate ?? queryCoverage["time.startDate"],
+    endDate: nestedTime.endDate ?? queryCoverage["time.endDate"],
+  };
+  if (typeof time.startDate === "string" || typeof time.endDate === "string") {
     scope.dateRange = {
-      startDate: typeof queryCoverage.startDate === "string" ? queryCoverage.startDate : null,
-      endDate: typeof queryCoverage.endDate === "string" ? queryCoverage.endDate : null,
+      startDate: typeof time.startDate === "string" ? time.startDate : null,
+      endDate: typeof time.endDate === "string" ? time.endDate : null,
     };
   }
-  const filters = (Array.isArray(queryCoverage.filterDimUniqueCodeList)
-    ? queryCoverage.filterDimUniqueCodeList
-    : [])
-    .filter((filter) => filter && typeof filter === "object" && !Array.isArray(filter))
-    .flatMap((filter) => {
-      const field = typeof filter.dimUniqueCode === "string" ? filter.dimUniqueCode : "";
-      const values = Array.isArray(filter.dimFieldIdList)
-        ? filter.dimFieldIdList.filter((item) => ["string", "number"].includes(typeof item))
-        : [];
-      return field && values.length ? [{ field, values }] : [];
-    });
+  const filterMap = queryCoverage.filters && typeof queryCoverage.filters === "object" && !Array.isArray(queryCoverage.filters)
+    ? queryCoverage.filters
+    : {};
+  const filters = Object.entries(filterMap).flatMap(([field, rawValues]) => {
+    const values = Array.isArray(rawValues)
+      ? rawValues.filter((item) => ["string", "number"].includes(typeof item))
+      : [];
+    return field && values.length ? [{ field, values }] : [];
+  });
   if (filters.length) scope.filters = filters;
   return Object.keys(scope).length ? scope : null;
 }
@@ -1718,8 +1724,11 @@ export async function prepareResearchEvidence(resultPath, options) {
   ) {
     throw new Error(`task ${task.id} source card ${JSON.stringify(rawSourceCardId)} is not in result.json`);
   }
-  if (!isJsonObject(sourceCard.requestBody)) {
-    throw new Error(`task ${task.id} source card ${rawSourceCardId} has no valid requestBody baseline`);
+  let sourceQuery;
+  try {
+    sourceQuery = metricQueryFromCard(sourceCard);
+  } catch (error) {
+    throw new Error(`task ${task.id} source card ${rawSourceCardId} has invalid canonical query: ${error.message || error}`);
   }
 
   let dataPath;
@@ -1754,7 +1763,7 @@ export async function prepareResearchEvidence(resultPath, options) {
   let queryCoverage;
   if (mode === "reuse_entry") {
     validateWriterSource(rows, meta, `task ${task.id}`);
-    queryCoverage = semanticQueryShape(sourceCard.requestBody);
+    queryCoverage = semanticQueryShape(sourceQuery);
   } else {
     if (meta.producer !== "fetch-explore.mjs" || meta.status !== "ok") {
       throw new Error(`new_query source for task ${task.id} must be a successful fetch-explore artifact`);
@@ -1771,13 +1780,18 @@ export async function prepareResearchEvidence(resultPath, options) {
     }
     if (meta.rowCount !== rows.length) throw new Error(`explore rowCount mismatch for task ${task.id}`);
     if (meta.rowsSha256 !== computedRowsSha256) throw new Error(`explore rowsSha256 mismatch for task ${task.id}`);
-    if (!meta.queryShape || typeof meta.queryShape !== "object" || Array.isArray(meta.queryShape)) {
-      throw new Error(`new_query source for task ${task.id} must include queryShape`);
+    if (!meta.queryPatch || typeof meta.queryPatch !== "object" || Array.isArray(meta.queryPatch)) {
+      throw new Error(`new_query source for task ${task.id} must include queryPatch`);
     }
-    if (meta.queryShapeSha256 !== sha256Json(meta.queryShape)) {
-      throw new Error(`new_query source for task ${task.id} queryShape hash mismatch`);
+    if (meta.queryPatchSha256 !== sha256Json(meta.queryPatch)) {
+      throw new Error(`new_query source for task ${task.id} queryPatch hash mismatch`);
     }
-    queryCoverage = meta.queryShape;
+    // Reconstruct the candidate query shape from source + minimal patch
+    // instead of trusting a persisted full query copy.  The source query is
+    // recomputed from the single card.query; the patch carries only the
+    // authorized changed fields with their new values.
+    const candidateQuery = applyQueryPatch(sourceQuery, meta.queryPatch);
+    queryCoverage = semanticQueryShape(candidateQuery);
   }
 
   if (options.operations && canonicalizeJson(options.operations) !== canonicalizeJson(plan.operations)) {

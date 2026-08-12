@@ -1351,7 +1351,16 @@ test("B2.5 auto-dispatches one typed Planner only after status and source-fields
     await writeFile(resultPath, JSON.stringify({
       status: "confirmed",
       title: "通用排序分析",
-      cards: [{ id: "card-a", title: "观测明细", requestBody: {} }],
+      cards: [{ id: "card-a", title: "观测明细", query: {
+        request: {
+          metrics: ["outcome"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-01-01", endDate: "2026-01-31" },
+          dimensions: ["period"],
+          filters: {},
+        },
+        comparisons: [],
+      } }],
     }));
     await writeFile(join(session, "recommendations.json"), JSON.stringify({
       userQuestion: "哪一条已观察记录的结果更好？",
@@ -1580,13 +1589,15 @@ test("B2.5 runs one fresh report-researcher Planner and automatically materializ
     cards: [{
       id: "card-a",
       title: "中性样本明细",
-      requestBody: {
-        indicatorFieldList: ["metric-a", "metric-b"],
-        aggDimUniqueCodeList: ["period-key"],
-        columnAggDimUniqueCodeList: [],
-        startDate: "2026-01-01",
-        endDate: "2026-01-31",
-        filterDimUniqueCodeList: [{ dimUniqueCode: "entity-key", dimFieldIdList: ["entity-a"] }],
+      query: {
+        request: {
+          metrics: ["metric-a", "metric-b"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-01-01", endDate: "2026-01-31" },
+          dimensions: ["period-key"],
+          filters: { "entity-key": ["entity-a"] },
+        },
+        comparisons: [],
       },
     }],
   }));
@@ -1806,7 +1817,7 @@ test("B2.5 zero-row plan hands an empty B3 directly to the fixed finalizer", asy
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
     title: "空范围核对",
-    cards: [{ id: "card-a", title: "空范围", requestBody: {} }],
+    cards: [{ id: "card-a", title: "空范围", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(session, "recommendations.json"), JSON.stringify({
     userQuestion: "确认范围内是否有匹配明细？",
@@ -2074,7 +2085,7 @@ test("B2.5 Planner missing structured output auto-fails once without writing or 
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
     title: "中性报告",
-    cards: [{ id: "card-a", title: "中性卡片", requestBody: {} }],
+    cards: [{ id: "card-a", title: "中性卡片", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(session, "recommendations.json"), JSON.stringify({
     userQuestion: "是否需要继续分析？",
@@ -3941,7 +3952,16 @@ test("parent accepts Report Researcher only through a checked structured chain a
   writeHtmlReportRuntimeContract(repoRoot, sid);
   await writeFile(paths.resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "card-1", requestBody: { indicatorFieldList: ["profitAmt"] } }],
+    cards: [{ id: "card-1", query: {
+      request: {
+        metrics: ["profitAmt"],
+        statisticPolicy: "SUMMARY",
+        time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+        dimensions: [],
+        filters: {},
+      },
+      comparisons: [],
+    } }],
   }));
   await writeFile(paths.tasksPath, JSON.stringify({ version: 2, round: 0, maxRounds: 2, tasks: [taskObject] }));
   t.after(async () => rm(session, { recursive: true, force: true }));

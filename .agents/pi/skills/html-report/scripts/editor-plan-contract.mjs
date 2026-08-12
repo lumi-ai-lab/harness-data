@@ -270,18 +270,23 @@ function checkedCache(path, kind, resultPath, resultSha256) {
   return document;
 }
 
-function compactQueryCoverage(requestBody) {
-  const request = isPlainObject(requestBody) ? requestBody : {};
+function compactQueryCoverage(cardQuery) {
+  const request = isPlainObject(cardQuery) && isPlainObject(cardQuery.request) ? cardQuery.request : {};
   return {
-    indicators: Array.isArray(request.indicatorFieldList) ? request.indicatorFieldList : [],
-    dimensions: Array.isArray(request.aggDimUniqueCodeList) ? request.aggDimUniqueCodeList : [],
-    columnDimensions: Array.isArray(request.columnAggDimUniqueCodeList) ? request.columnAggDimUniqueCodeList : [],
-    startDate: typeof request.startDate === "string" ? request.startDate : null,
-    endDate: typeof request.endDate === "string" ? request.endDate : null,
-    compareDate: Array.isArray(request.compareDate) ? request.compareDate : [],
-    filters: Array.isArray(request.filterDimUniqueCodeList) ? request.filterDimUniqueCodeList : [],
-    storeCollectType: request.storeCollectType ?? null,
-    indicatorsGroup: request.indicatorsGroup ?? null,
+    metrics: Array.isArray(request.metrics) ? request.metrics : [],
+    statisticPolicy: typeof request.statisticPolicy === "string" ? request.statisticPolicy : null,
+    dimensions: Array.isArray(request.dimensions) ? request.dimensions : [],
+    time: isPlainObject(request.time)
+      ? {
+          startDate: typeof request.time.startDate === "string" ? request.time.startDate : null,
+          endDate: typeof request.time.endDate === "string" ? request.time.endDate : null,
+          grain: typeof request.time.grain === "string" ? request.time.grain : null,
+        }
+      : null,
+    filters: isPlainObject(request.filters) ? request.filters : {},
+    scopes: isPlainObject(request.scopes) ? request.scopes : null,
+    measureFilters: Array.isArray(request.measureFilters) ? request.measureFilters : [],
+    comparisons: Array.isArray(cardQuery?.comparisons) ? cardQuery.comparisons : [],
   };
 }
 
@@ -339,7 +344,7 @@ export function loadEditorPlannerInput(resultPath) {
       id: card.id,
       title: String(card.title || recommendation.title || card.id),
       analysisFocus: typeof recommendation.analysisFocus === "string" ? recommendation.analysisFocus : null,
-      queryCoverage: compactQueryCoverage(card.requestBody),
+      queryCoverage: compactQueryCoverage(card.query),
       writer: {
         summary: String(writer.analysis?.summary || ""),
         findings: Array.isArray(writer.analysis?.findings) ? writer.analysis.findings : [],

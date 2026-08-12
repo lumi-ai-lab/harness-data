@@ -15,6 +15,8 @@ import {
   rowsSha256,
   validateEvidenceFieldReferences,
 } from "../scripts/prepare-research-evidence.mjs";
+import { metricQueryFromCard, normalizeMetricQuery } from "../scripts/metric-query-contract.mjs";
+import { computeQueryPatch, applyQueryPatch } from "../scripts/fetch-explore.mjs";
 
 function fingerprintJson(value) {
   return createHash("sha256").update(canonicalizeJson(value), "utf8").digest("hex");
@@ -23,16 +25,20 @@ function fingerprintJson(value) {
 function sourceCard() {
   return {
     id: "c1",
-    requestBody: {
-      indicatorFieldList: ["profitAmt"],
-      aggDimUniqueCodeList: ["incDate"],
-      startDate: "2026-07-01",
-      endDate: "2026-07-31",
+    query: {
+      request: {
+        metrics: ["profitAmt"],
+        statisticPolicy: "SUMMARY",
+        time: { startDate: "2026-07-01", endDate: "2026-07-31" },
+        dimensions: ["incDate"],
+        filters: {},
+      },
+      comparisons: [],
     },
   };
 }
 
-test("rowsSha256 matches Indicators CLI RFC 8785 fixture", () => {
+test("rowsSha256 matches Metric CLI RFC 8785 fixture", () => {
   const rows = [{ b: 2, a: "x" }, { a: "y", b: 1 }];
   assert.equal(canonicalizeJson(rows), '[{"a":"x","b":2},{"a":"y","b":1}]');
   assert.equal(rowsSha256(rows), "b33e3daec35e0d408ffa081470a9f4aa52a07350cc41b4fe31526f54aeb28130");
@@ -40,20 +46,14 @@ test("rowsSha256 matches Indicators CLI RFC 8785 fixture", () => {
 
 test("decision query scope keeps only traceable date and filter identities", () => {
   assert.deepEqual(compactDecisionQueryScope({
-    startDate: "2026-07-01",
-    endDate: "2026-07-31",
-    filterDimUniqueCodeList: [{
-      type: "DIMENSION",
-      dimUniqueCode: "storeId",
-      dimFieldIdList: ["101001"],
-    }],
-    indicatorFieldList: ["profitAmt"],
-    indicatorsGroup: 1,
+    time: { startDate: "2026-07-01", endDate: "2026-07-31" },
+    filters: { storeId: ["101001"] },
+    metrics: ["profitAmt"],
   }), {
     dateRange: { startDate: "2026-07-01", endDate: "2026-07-31" },
     filters: [{ field: "storeId", values: ["101001"] }],
   });
-  assert.equal(compactDecisionQueryScope({ indicatorFieldList: ["profitAmt"] }), null);
+  assert.equal(compactDecisionQueryScope({ metrics: ["profitAmt"] }), null);
 });
 
 test("fixed evidence operations return compact rows and deterministic stats", () => {
@@ -855,7 +855,7 @@ test("source field inventory validates Writer data without changing minimal CLI 
   const meta = { rowCount: rows.length, rowsSha256: rowsSha256(rows) };
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [sourceCard(), { id: "c2", requestBody: {} }],
+    cards: [sourceCard(), { id: "c2", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(cardDir, "entry.json"), JSON.stringify(rows));
   await writeFile(join(cardDir, "entry.meta.json"), JSON.stringify(meta));
@@ -937,7 +937,7 @@ test("source field inventory rejects dot-segment card ids before reading data", 
   const rows = [{ leaked: true }];
   await writeFile(join(session, "result.json"), JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "..", requestBody: {} }],
+    cards: [{ id: "..", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(session, "data", "entry.json"), JSON.stringify(rows));
   await writeFile(join(session, "data", "entry.meta.json"), JSON.stringify({
@@ -1080,7 +1080,7 @@ test("prepareResearchEvidence reuses Writer entry without explore files", async 
   await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "c1" }] }));
   await assert.rejects(
     () => prepareResearchEvidence(resultPath, { taskId: "balance-1" }),
-    /no valid requestBody baseline/
+    /invalid canonical query/
   );
 });
 
@@ -1123,19 +1123,25 @@ test("prepareResearchEvidence builds new_query evidence only from a material has
   ];
   const metaPath = join(exploreDir, "drill-1.meta.json");
   const queryShape = {
-    indicatorFieldList: ["saleAmt"],
-    aggDimUniqueCodeList: ["storeId"],
+    dimensions: ["storeId"],
   };
   await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [sourceCard()] }));
   await writeFile(join(exploreDir, "drill-1.json"), JSON.stringify(rows));
+  const sourceQuery = metricQueryFromCard(sourceCard());
+  const candidateQuery = normalizeMetricQuery({ ...sourceQuery, ...queryShape });
+  const queryPatch = computeQueryPatch(sourceQuery, candidateQuery);
   await writeFile(metaPath, JSON.stringify({
     producer: "fetch-explore.mjs",
+    producerVersion: 3,
+    cacheContractVersion: 3,
     status: "ok",
     rowCount: rows.length,
     rowsSha256: rowsSha256(rows),
-    queryDelta: { material: true, changedKeys: ["aggDimUniqueCodeList"] },
-    queryShape,
-    queryShapeSha256: fingerprintJson(queryShape),
+    queryDelta: { material: true, changedKeys: ["dimensions"] },
+    queryPatch,
+    queryPatchSha256: fingerprintJson(queryPatch),
+    sourceQuerySha256: fingerprintJson(sourceQuery),
+    executedQuerySha256: fingerprintJson(candidateQuery),
   }));
   await writeFile(taskPath, JSON.stringify({
     version: 2,
@@ -1171,12 +1177,16 @@ test("prepareResearchEvidence builds new_query evidence only from a material has
 
   await writeFile(metaPath, JSON.stringify({
     producer: "fetch-explore.mjs",
+    producerVersion: 3,
+    cacheContractVersion: 3,
     status: "ok",
     rowCount: rows.length,
     rowsSha256: rowsSha256(rows),
     queryDelta: { material: false, changedKeys: [] },
-    queryShape,
-    queryShapeSha256: fingerprintJson(queryShape),
+    queryPatch: {},
+    queryPatchSha256: fingerprintJson({}),
+    sourceQuerySha256: fingerprintJson(sourceQuery),
+    executedQuerySha256: fingerprintJson(sourceQuery),
   }));
   await assert.rejects(
     () => prepareResearchEvidence(resultPath, { taskId: "drill-1" }),

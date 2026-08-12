@@ -321,8 +321,8 @@ task 必须已有结构化的单个 `evidenceGap.type` 或非空 `evidenceGap.ty
 是查询后校验结果，不能代替 evidence gap。缺少授权时直接返回 `failed`。
 
 只读取一次传入的 `result.json`，按 `cards[].id === fromCardId` 精确找到原卡，取
-该卡 `requestBody` 作为不可变基线。禁止读取 Writer 的完整 `entry.json` 或
-`entry.meta.json`；若找不到唯一卡片或合法 requestBody，直接返回 `failed`。
+该卡 `query.request` 作为不可变基线。禁止读取 Writer 的完整 `entry.json` 或
+`entry.meta.json`；若找不到唯一卡片或合法 query.request，直接返回 `failed`。
 
 ### 2. 使用唯一命令定向召回
 
@@ -337,26 +337,26 @@ bin/data-harness-cli wikis recall-debug \
 JSON 的 `contextFiles` 中与 gap 相关的 Spec；禁止扫描 Wiki/index、改用其他召回
 命令、重复读取基线已覆盖字段的 Spec，或 inject-template。
 
-### 3. 从原 requestBody 设计最小实质变化
+### 3. 从原 query.request 设计最小实质变化
 
-深拷贝原 `requestBody`，只能修改 `evidenceGap` 明确授权的部分：
+深拷贝原 `query.request`，只能修改 `evidenceGap` 明确授权的部分：
 
-- `indicatorFieldList`；
-- `aggDimUniqueCodeList` / `columnAggDimUniqueCodeList`；
-- `filterDimUniqueCodeList` / 分析对象；
-- `startDate` / `endDate` / `compareDate`；
-- `storeCollectType` / `indicatorsGroup`。
+- `metrics`；
+- `dimensions`；
+- `filters` / `scopes` / `measureFilters`；
+- `time.startDate` / `time.endDate` / `time.grain`；
+- `comparisons` / `statisticPolicy`。
 
 未被 gap 点名的指标、维度、日期/对照期、筛选对象、分析范围和指标口径必须与
-原 requestBody 保持一致。不得为了“看起来不同”顺手改动无关字段。
+原 query.request 保持一致。不得为了"看起来不同"顺手改动无关字段。
 
-以下不算实质变化：`orderBy`、`currPage`、`pageSize`、`chartType`，以及未知的
-自定义字段。`fetch-explore.mjs` 会在 CLI 前硬校验；仅排序的请求返回
+以下不算实质变化：`requestId`、`orderBy`、`pageNo`、`pageSize`。未知字段
+一律拒绝。`fetch-explore.mjs` 会在 CLI 前硬校验；仅排序的请求返回
 `NO_MATERIAL_QUERY_DELTA`。
 
 ### 4. 唯一合法查询入口
 
-写 `$SESSION/data/explore/<taskId>.payload.json` 后：
+写 `$SESSION/data/explore/<taskId>.payload.json` 作为临时输入后：
 
 ```bash
 node .agents/pi/skills/html-report/scripts/fetch-explore.mjs \
@@ -375,9 +375,9 @@ data/explore/<taskId>.json       # rows 数组
 data/explore/<taskId>.meta.json  # rowCount + rowsSha256 + material queryDelta
 ```
 
-禁止 bare `qdm-indicators-cli`、`--single-page`、手写 explore meta。
+禁止 bare `qdm-metric-cli`、旧 `qdm-indicators-cli`、`--single-page`、手写 explore meta。
 `fetch-explore.mjs` 每个 task/query 只运行一次；若返回
-`INDICATORS_TIMEOUT`、`ETIMEDOUT`、`timeout`、`timed out` 或 `超时`，立即返回
+`METRIC_TIMEOUT`、`ETIMEDOUT`、`timeout`、`timed out` 或 `超时`，立即返回
 结构化 `status:"failed"`，不得重跑命令、修改 payload 后再试或换子代理执行
 同一查询。
 

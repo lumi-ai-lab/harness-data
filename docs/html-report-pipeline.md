@@ -29,7 +29,7 @@
 用户回 Pi：「生成报告」
   -> [B0_PREFLIGHT Gate] result/session + 四个 report-* agent（扩展确定性执行，不启动父模型）
   -> 读 result.json
-  -> [逐卡串行单步骤 chain] Report Writer 调用 fetch-entry：入门 CLI **全量分页**取数 + --meta → data/cards/<id>/
+  -> [逐卡串行单步骤 chain] Report Writer 调用 fetch-entry：qdm-metric-cli **全量分页**取数 → data/cards/<id>/
   -> Report Writer：返回仅含单行事实的简短分析与定性建议（不写报告章节、不做统计/排序/跨行推导）
   -> [B2_WRITER Gate] entry/meta 数据对校验
   -> [B25_EDITOR] status + source-fields → fresh report-researcher Planner（内部角色 report-editor-planner）
@@ -85,7 +85,7 @@ Session/阶段/attempt 绑定作为完成信号，不等待不存在的 `agent_s
 | 入门取数分页 | **必须拉全部分页**，禁止只取一页（不要加 `--single-page`） |
 | 取数重试 | 最多 **3 次**，间隔 **5 秒** |
 | 入门失败策略 | **单卡失败标注，不阻断其它卡** |
-| 加深分析 | `reuse_entry` 只解读固定 evidence；仅带结构化 evidenceGap 的 `new_query` 可从原 requestBody 做最小 material 查询 |
+| 加深分析 | `reuse_entry` 只解读固定 evidence；仅带结构化 evidenceGap 的 `new_query` 可从原 `query.request` 做最小 material 查询 |
 | 主产物 | 先 Markdown，质检通过后再 HTML；**不要 PPT** |
 | 质量 | 专用 Report Reviewer Sub-agent；首版不接完整 report-quality 系统 |
 | 确认后触发 | 用户说 **「生成报告」**（或等价）后继续 |
@@ -114,7 +114,7 @@ Session/阶段/attempt 绑定作为完成信号，不等待不存在的 `agent_s
 
 | 产物 | 合法 `producer` | 校验阶段 |
 | --- | --- | --- |
-| `data/cards/*/entry.json` + `entry.meta.json` | `fetch-entry.mjs` / CLI `--meta` | writer+ |
+| `data/cards/*/entry.json` + `entry.meta.json` | `fetch-entry.mjs` / Metric CLI rows + 本地 count/hash | writer+ |
 | `analysis/evidence/*.json` | `prepare-research-evidence.mjs`（绑定源 rows Hash + operation plan） | explore+ |
 | `data/explore/*.meta.json` | `fetch-explore.mjs`（仅 `new_query`；须含 `attempts[]`、rowCount/Hash、material queryDelta） | explore |
 | `report/render-manifest.json` | `assemble-report.mjs` + main/report hashes | explore+ |
@@ -122,7 +122,7 @@ Session/阶段/attempt 绑定作为完成信号，不等待不存在的 `agent_s
 | `report/render.meta.json` | `compose-report.mjs` + content/template hashes | html |
 | `report/design-result.json` | `finalize-design.mjs` + screenshot/HTML hashes | html |
 
-- bare `qdm-indicators-cli`、手写 Writer 数据文件、Editor 手改 verdict **过不了** `check-session-layout`。
+- bare `qdm-metric-cli`（以及旧 `qdm-indicators-cli`）、手写 Writer 数据文件、Editor 手改 verdict **过不了** `check-session-layout`。
 - 父扩展必须先运行 `quality-scan`：hard>0 写 repair-log、fail Gate 且不派 Reviewer；hard=0 才冻结五输入并派发。Reviewer 各读一次后只调用一次 `submit_review_scorecard` typed object；禁止 Bash、重复 scan 或模型手写 JSON。
 - Report Editor **禁止** 写 `quality/verdict.json` 或 `data/explore/*` 冒充通过。
 - `reuse_entry` Researcher 只能读取一次固定 evidence，并各写一次固定 section/summary；
@@ -155,7 +155,7 @@ Phase B 所有产物必须写在 `SESSION` 下。
     pipeline-state.json            # Gate 状态、attempt、执行/等待计时、批准记录
   data/
     cards/<card-id>/
-      entry.json                   # CLI --meta 的 rows
+      entry.json                   # qdm-metric-cli 的完整 rows
       entry.meta.json              # 仅 rowCount、rowsSha256
     explore/<task-id>.json         # 仅 P3 new_query；fetch-explore 写 rows
     explore/<task-id>.meta.json    # 仅 new_query；producer + rowCount/Hash + queryDelta
@@ -222,36 +222,60 @@ node .agents/pi/skills/html-report/scripts/check-session-layout.mjs \
 
 - `status === "confirmed"`
 - `session_id`、`title`、`mode`
-- `cards[]`：每卡含 `id`、`title`、`analysisFocus`、`requestBody`（及可选 `cli`）
+- `cards[]`：每卡含 `id`、`title`、`analysisFocus`、`query`
 - `validation[]`：确认时冒烟记录（可选参考，**不能替代全量取数**）
 
-`requestBody` 中常见 `pageSize`/`currPage`：
-**FETCH 全量模式忽略「只取一页」语义**，由 CLI 默认 **all-pages** 拉齐（或不传 `--single-page`，必要时规范化 pageSize≤5000）。
+每张卡只保存**一个** `query` 对象：
+
+```jsonc
+{
+  "query": {
+    "request": {
+      // 严格 qdm-metric-cli QueryRequest
+      "metrics": ["..."],
+      "statisticPolicy": "SUMMARY",
+      "time": { "startDate": "...", "endDate": "..." },
+      "dimensions": ["..."],
+      "filters": {},
+      "pageNo": 1,
+      "pageSize": 500
+    },
+    "comparisons": ["YOY", "MOM"]  // 可选，默认空数组
+  }
+}
+```
+
+`query.request` 是唯一查询真源，结构必须与 qdm-metric-cli `QueryRequest`
+严格一致（`additionalProperties: false`）。`query.comparisons` 是 Harness 级
+执行选项，适配器在 CLI 进程边界映射为 `--yoy`/`--mom`，不进入 QueryRequest。
+卡片不再有 `requestBody`、`queryProof`、`cli` 或顶层查询镜像字段。
+
+**FETCH 全量模式忽略「只取一页」语义**，由 CLI 默认 **all-pages** 拉齐；适配层固定 `pageNo=1`，并将 `pageSize` 默认/封顶为 2000。
 
 ---
 
 ## 6. FETCH 全量分页规则（重点）
 
-HTML / `buildRequest` 可能带 `currPage` + `pageSize`（例如 500），确认冒烟用 `--single-page`。
+HTML / `buildRequest` 可能带 `pageNo` + `pageSize`（例如 500），确认冒烟可用 `--single-page`。
 
 报告取数 **禁止** `--single-page`：
 
 ```bash
-qdm-indicators-cli analysis execute \
-  --payload-json '<normalized requestBody>'
+qdm-metric-cli analysis execute \
+  --payload-json '<card.query.request>'
   # 默认 all-pages，直到拉完
 ```
 
 规范化建议：
 
-1. 使用卡片 `requestBody` 为底稿。
+1. 使用卡片 `query.request` 为底稿。
 2. **不要**加 `--single-page`。
-3. `pageSize` 若缺失或过大，按 CLI 上限处理（默认/封顶 5000）。
-4. `currPage` 对 all-pages 模式无「只取该页」含义；可保留 1 作为起始。
-5. CLI `analysis execute --meta` 一次返回完整 `rows`、`rowCount`、`rowsSha256`；适配脚本将 rows 写为 `entry.json`，并将后两项写为 `entry.meta.json`。不生成 profile/facts 或任何汇总。
+3. `pageSize` 若缺失或过大，按 CLI 上限处理（默认/封顶 2000）。
+4. `pageNo` 固定为 1；不传 `--single-page`，CLI 自行拉完所有分页。
+5. CLI 默认 stdout 返回完整 rows 数组；适配脚本将其写为 `entry.json`，并本地计算 `rowCount` 与 RFC 8785/JCS `rowsSha256` 写入 `entry.meta.json`。不生成 profile/facts 或任何汇总。
 
 重试：只有明确的瞬时 CLI 错误且单次在 15 秒内返回时，才 sleep 5s 后重试，
-最多尝试 3 次；CAS、等待与全部 CLI 尝试共享 540 秒硬预算。超时、鉴权、参数、
+最多尝试 3 次；等待与全部 CLI 尝试共享 540 秒硬预算。超时、鉴权、参数、
 永久 HTTP 错误或返回契约错误均立即终止。同一卡/同一 Researcher task fingerprint
 在一个 Gate attempt 内只允许派发一个子代理，schema/结构化返回失败也不得自动
 换 child 重跑；只有用户明确「重试当前阶段」生成新 attempt，或 Editor 实质修改
@@ -274,7 +298,7 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 0. **B0：** 扩展通过真实 pi-subagents 事件桥自动执行一次 runtime list，并验收四个 `report-*` Agent；step 模式由 input hook 确定性回显 Gate，不启动父模型。缺失时自动 fail，**禁止** `agent: "worker"` 顶替。
 1. B2 启动时只暴露 `bash` 并执行当前 Session 的精确 `stage-gate status`。若模型在同一消息多生成 sibling 工具，扩展阻止 sibling 且不执行、不终止已在途的合法 status；status 成功后只暴露机器生成的精确首个 Writer `subagent(...)`，参数漂移继续被阻止，直到接棒完成。
 2. Report Editor 对每张卡逐个串行 spawn **`report-writer` 单步骤 chain**（1 卡也 spawn 1 个）；每次只含一张卡，禁止 `tasks[]`、`chain[].parallel` 或把多个 Writer 混入同一 chain。按 `agents/report-writer.md`：
-   - `fetch-entry.mjs --result … --card-id <id>` → entry/meta（CLI `--meta` 三字段契约）
+   - `fetch-entry.mjs --result … --card-id <id>` → entry/meta（CLI rows + 适配层 count/hash 契约）
    - 不写章节或报告；只回报 Report Editor：数据/元信息绝对路径 + 带 JSON Pointer 的单行事实、定性建议；不做统计、排序、极值、趋势或跨行推导
    - qdm-harness 强制注入精确 output schema 和前台运行边界；同一卡在每个 Gate attempt 只派发一次，任何失败均不自动换 child 重跑；用户明确重试产生新 attempt 后，合法 entry/meta 自动复用
 3. `check-session-layout --phase writer`；只检查成功 Writer 的 entry/meta 对且拒绝 profile/facts，随后完成 B2 Gate。
@@ -327,7 +351,7 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 3. `reuse_entry`：B2.5 扩展已按唯一一次 `--source-fields` 清单生成紧凑 evidence；Researcher 只读该 evidence，不召回、不查数、不读完整 entry。字段不匹配时脚本以 `EVIDENCE_FIELD_MISMATCH` 一次返回全部 `availableFields + missingFields[].references`，不得逐字段试错。
 4. `new_query`：必须已有结构化的单个 `evidenceGap.type` 或非空
    `evidenceGap.types[]`，并有 `reason`。Researcher 只读
-   一次 `result.json`，按 `fromCardId` 取原卡 `requestBody`，禁止读取 Writer
+   一次 `result.json`，按 `fromCardId` 取原卡 `query.request`，禁止读取 Writer
    entry/meta。唯一 Spec 召回命令是：
 
    ```bash
@@ -336,7 +360,7 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
    ```
 
    只读返回 `contextFiles` 中与 gap 相关的 Spec；payload 只修改 gap 授权部分，
-   其余日期、筛选、分析范围和指标口径保持原 requestBody 不变。
+   其余日期、筛选、分析范围和指标口径保持原 `query.request` 不变。
    `fetch-explore` 硬校验 material delta；查询后再经固定 evidence 脚本，模型不读
    完整 explore。
 5. 证据充分时 Researcher 写紧凑分析 + **selfCheck**；`needs_*` 只返回 gap、由 Editor 修 plan/升级；完整 Writer/explore 表由 `assemble-report.mjs` 自动插入。
@@ -365,7 +389,7 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 | --- | --- | --- |
 | P0 | 本文档 + HANDOFF 对齐 + agents 骨架 | 已落地 |
 | P1 | `fetch-entry.mjs` 全量分页 + 测试 | 已落地 |
-| P2 | Writer 最小取数契约 + SKILL 报告阶段 | 已落地（CLI `--meta` / analysis return / tasks / layout） |
+| P2 | Writer 最小取数契约 + SKILL 报告阶段 | 已落地（Metric CLI rows / adapter meta / tasks / layout） |
 | P3 | Report Researcher + tasks 往复 | **已落地**（reuse/new-query evidence + material fetch + mode-aware layout） |
 | P4 | Report Reviewer（scan + reviewer + 父扩展 authoritative quality layout） | **已落地** |
 | P5 | Designer Skill + compile/compose/capture/finalize + HTML gate | **已落地** |

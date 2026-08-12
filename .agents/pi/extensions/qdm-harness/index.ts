@@ -4,6 +4,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { loadAuthzConfig, resolveAuthBlob, resolveMetricCliPath } from "./authz-config.mjs";
+import { applyAuthzToToolCall } from "./authz-inject.mjs";
+import { AuthzStateStore } from "./authz-store.mjs";
 import {
   applyGateInput,
   b25EditorBootstrapContract,
@@ -82,6 +85,9 @@ interface PiEventBus {
 
 interface PiContextEvent {
   messages?: unknown[];
+  /** Host may attach encrypted auth material outside user-visible prompt text. */
+  _auth?: string;
+  _auth_user_id?: string;
 }
 
 interface PiBeforeAgentStartEvent {
@@ -323,9 +329,11 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/writer-return.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-entry.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-explore.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-cli-executor.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-query-contract.mjs",
   ".agents/pi/skills/html-report/scripts/research-contract.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-retry.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-timeout.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-retry.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-timeout.mjs",
   ".agents/pi/skills/html-report/scripts/researcher-return.mjs",
   ".agents/pi/skills/html-report/scripts/submit-research-findings.mjs",
   ".agents/pi/skills/html-report/scripts/prepare-research-evidence.mjs",
@@ -740,13 +748,14 @@ function parentDataFetchDecision(
   if (String(event.toolName || "").toLowerCase() !== "bash") return undefined;
   const command = typeof event.input?.command === "string" ? event.input.command : "";
   if (
-    /\bqdm-indicators-cli\b/i.test(command) ||
+    /\bqdm-(?:metric|indicators)-cli\b/i.test(command) ||
+    /\bQDM_METRIC_CLI\b/i.test(command) ||
     /\banalysis\s+execute\b/i.test(command) ||
     /\bfetch-(?:entry|explore)\.mjs\b/i.test(command)
   ) {
     return {
       block: true,
-      reason: "running html-report Gate 的父代理禁止直接取数；qdm-indicators-cli、analysis execute 与 fetch-entry/fetch-explore 只能由 Writer/Researcher 固定子链执行。",
+      reason: "running html-report Gate 的父代理禁止直接取数；qdm-metric-cli、analysis execute 与 fetch-entry/fetch-explore 只能由 Writer/Researcher 固定子链执行。",
     };
   }
   return undefined;
@@ -1246,6 +1255,19 @@ function sessionId(ctx?: PiExtensionContext): string {
     process.env.CLAUDE_SESSION_ID ||
     "unknown"
   );
+}
+
+/**
+ * Raw logical session id for Lumi requester-context lookup.
+ * A session file path or the synthetic "unknown" value must never be hashed.
+ */
+function envelopeSessionId(ctx?: PiExtensionContext): string | null {
+  const id =
+    ctx?.sessionManager?.getSessionId?.() ||
+    process.env.PI_SESSION_ID ||
+    process.env.CLAUDE_SESSION_ID ||
+    "";
+  return id || null;
 }
 
 function contentText(content: unknown): string {
@@ -3754,6 +3776,56 @@ function qdmContextMessage(text: string): JsonObject {
   };
 }
 
+function authzGuidance(mode: "off" | "on", bound: boolean): string {
+  if (mode !== "on") return "";
+  if (!bound) {
+    return [
+      "# QDM Data Auth",
+      "",
+      "Authz mode is on but no encrypted auth blob is bound for this turn.",
+      "Do not run `qdm-metric-cli analysis execute` or `qdm-metric-cli auth describe` until auth is available.",
+    ].join("\n");
+  }
+  return [
+    "# QDM Data Auth",
+    "",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`,",
+    "and `--auth-blob` for `qdm-metric-cli auth describe`.",
+    "Do not invent, omit, or override auth flags; the hook replaces them.",
+    "After every successful `analysis execute`, disclose that results are scoped by 账号数据权限.",
+    "Obtain scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
+  ].join("\n");
+}
+
+/** Bind the current Pi turn to Host/Lumi auth, with local fallback only when allowed. */
+function bindAuthzForTurn(
+  projectRoot: string,
+  store: AuthzStateStore,
+  ctx: PiExtensionContext | undefined,
+  event?: PiContextEvent,
+): { mode: "off" | "on"; bound: boolean; error?: string; source?: string } {
+  const config = loadAuthzConfig(projectRoot);
+  const sid = sessionId(ctx);
+  if (config.mode !== "on") {
+    store.clear(sid);
+    return { mode: "off", bound: false };
+  }
+
+  // A failed bind must never leave another user's previous turn active.
+  store.clear(sid);
+  const resolved = resolveAuthBlob({
+    projectRoot,
+    config,
+    hostAuth: event?._auth,
+    hostUserId: event?._auth_user_id,
+    sessionId: envelopeSessionId(ctx),
+  });
+  if (!resolved.ok) return { mode: "on", bound: false, error: resolved.error };
+
+  store.bind(sid, resolved.userId, resolved.blob, resolved.source);
+  return { mode: "on", bound: true, source: resolved.source };
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -3816,6 +3888,7 @@ export default function qdmHarnessExtension(pi: {
 }): void {
   const projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
   const runtimeSourcesAtLoad = captureRuntimeSources(projectRoot);
+  const authzStore = new AuthzStateStore();
   const b2StartupStatuses = new Map<string, B2StartupStatusRecord>();
   const b2StartupStatusCalls = new Map<string, string>();
   const b2StartupToolSnapshots = new Map<string, string[]>();
@@ -6098,9 +6171,20 @@ export default function qdmHarnessExtension(pi: {
     };
   });
 
-  pi.on?.("context", (event, ctx) => {
-    const messages = (event as PiContextEvent).messages;
+  pi.on?.("context", async (event, ctx) => {
+    const payload = event as PiContextEvent;
+    const messages = payload.messages;
     if (!Array.isArray(messages)) return undefined;
+    const authz = bindAuthzForTurn(projectRoot, authzStore, ctx, payload);
+    if (authz.mode === "on" && !authz.bound && authz.error) {
+      ctx?.ui?.notify?.(`QDM Authz: ${authz.error}`, "warning");
+    } else if (
+      authz.bound &&
+      authz.source === "lumi_envelope" &&
+      process.env.QDM_HARNESS_DIAG === "1"
+    ) {
+      ctx?.ui?.notify?.("QDM Authz: bound source=lumi_envelope", "info");
+    }
     const sid = sessionId(ctx);
     const gateState = sid && sid !== "unknown" ? readGateState(projectRoot, sid) : null;
     const effectiveMessages = compactHtmlReportGateHistory(
@@ -6112,20 +6196,38 @@ export default function qdmHarnessExtension(pi: {
       if (runtimeError) {
         rememberStaleHtmlReportSession(sid);
         notifyRuntimeFreshness(sid, runtimeError.reason, ctx);
-        return { messages: effectiveMessages };
+        return {
+          messages: authzGuidance(authz.mode, authz.bound)
+            ? [...effectiveMessages, qdmContextMessage(authzGuidance(authz.mode, authz.bound))]
+            : effectiveMessages,
+        };
       }
     }
     // Suppress recall only for the fixed html-report *skill* turn. Do not use
     // the environment flag alone here: ordinary (non-skill) messages must
     // keep the normal Harness recall path even while debugging is enabled.
-    if (sid && suppressHarnessRecallForSkillSessions.has(sid)) return { messages: effectiveMessages };
+    const authContext = authzGuidance(authz.mode, authz.bound);
+    if (sid && suppressHarnessRecallForSkillSessions.has(sid)) {
+      return {
+        messages: authContext
+          ? [...effectiveMessages, qdmContextMessage(authContext)]
+          : effectiveMessages,
+      };
+    }
     const rawPrompt = latestUserPrompt(event);
     const prompt = harnessQuestion(rawPrompt);
-    if (!prompt || injectedPromptThisTurn === prompt) return { messages: effectiveMessages };
+    if (!prompt || injectedPromptThisTurn === prompt) {
+      return {
+        messages: authContext
+          ? [...effectiveMessages, qdmContextMessage(authContext)]
+          : effectiveMessages,
+      };
+    }
     const context = runHarnessContext(projectRoot, rawPrompt || prompt, ctx);
-    if (!context) return { messages: effectiveMessages };
+    const additional = [context, authContext].filter(Boolean).join("\n\n");
+    if (!additional) return { messages: effectiveMessages };
     injectedPromptThisTurn = prompt;
-    return { messages: [...effectiveMessages, qdmContextMessage(context)] };
+    return { messages: [...effectiveMessages, qdmContextMessage(additional)] };
   });
 
   pi.on?.("tool_call", (event, ctx) => {
@@ -6168,6 +6270,39 @@ export default function qdmHarnessExtension(pi: {
     if (ledgerDecision) return ledgerDecision;
     const parentFetchDecision = parentDataFetchDecision(gateState, toolCall);
     if (parentFetchDecision) return parentFetchDecision;
+
+    const authzConfig = loadAuthzConfig(projectRoot);
+    const metricCliPath = resolveMetricCliPath(projectRoot, authzConfig);
+    let authzTurn = authzStore.getCurrentTurn(sid);
+    let authzMissingReason = "";
+    if (authzConfig.mode === "on" && !authzTurn?.blob) {
+      const rebound = bindAuthzForTurn(projectRoot, authzStore, ctx);
+      authzTurn = authzStore.getCurrentTurn(sid);
+      authzMissingReason = rebound.error || "";
+      if (process.env.QDM_HARNESS_DIAG === "1") {
+        const rawSid = envelopeSessionId(ctx) || "(empty)";
+        const envDir = process.env.LUMI_REQUESTER_CONTEXT_DIR ? "set" : "unset";
+        ctx?.ui?.notify?.(
+          rebound.bound
+            ? `QDM Authz diag: tool_call re-bind ok source=${rebound.source} sid=${rawSid} envDir=${envDir}`
+            : `QDM Authz diag: tool_call re-bind failed sid=${rawSid} envDir=${envDir} err=${rebound.error || "unknown"}`,
+          rebound.bound ? "info" : "warning",
+        );
+      }
+    }
+    const authzDecision = applyAuthzToToolCall(toolCall, {
+      mode: authzConfig.mode,
+      blob: authzTurn?.blob ?? null,
+      metricCliPath,
+      allowLocalBlob: authzConfig.allowLocalBlob,
+      missingReason: authzTurn?.blob
+        ? undefined
+        : authzConfig.allowLocalBlob === false
+          ? "authz: host blob not bound; cannot run gated metric-cli under allow_local_blob=false (refusing any model-supplied --auth-blob)"
+          : `authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe${authzMissingReason ? ` (${authzMissingReason})` : ""}`,
+    });
+    if (authzDecision?.block) return authzDecision;
+
     const waitingAConfigList = isWaitingAConfigAgentList(gateState, toolCall);
     const listIdentity = runtimeAgentListAttempt(gateState);
     if (listIdentity && isExactRuntimeAgentList(toolCall)) {

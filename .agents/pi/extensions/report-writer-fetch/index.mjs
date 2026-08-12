@@ -180,7 +180,7 @@ export default function registerReportWriterFetch(pi) {
   pi.registerTool({
     name: "fetch_report_entry",
     label: "Fetch report entry",
-    description: "Fetch exactly one assigned html-report card through analysis execute --meta. Call once, then only read its entry.json and entry.meta.json.",
+    description: "Fetch exactly one assigned html-report card through qdm-metric-cli. Call once, then only read its entry.json and entry.meta.json.",
     promptSnippet: "fetch_report_entry: the only Writer fetch; accepts absolute resultPath and assigned cardId; call once.",
     promptGuidelines: [
       "Use fetch_report_entry exactly once before reading this card's returned entry.json or entry.meta.json.",

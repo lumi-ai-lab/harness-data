@@ -120,11 +120,15 @@ test("pending reuse evidence and finalizer close B3 without parent file-by-file 
     cards: [{
       id: "c1",
       title: "测试卡",
-      requestBody: {
-        indicatorFieldList: ["profitAmt"],
-        aggDimUniqueCodeList: ["incDate"],
-        startDate: "2026-07-01",
-        endDate: "2026-07-02",
+      query: {
+        request: {
+          metrics: ["profitAmt"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+          dimensions: ["incDate"],
+          filters: {},
+        },
+        comparisons: [],
       },
     }],
   }));

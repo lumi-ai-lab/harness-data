@@ -9,10 +9,10 @@ import {
   normalizeEntryPayload,
   buildExecuteArgs,
   fetchAllEntries,
-  indicatorsFetchBudgetMs,
-  isIndicatorsTimeout,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
+  metricFetchBudgetMs,
+  isMetricTimeout,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
   parseEntryMetaResponse,
   reusableEntry,
   rowsSha256,
@@ -25,105 +25,155 @@ import {
   writerReturnPaths,
 } from "../scripts/writer-return.mjs";
 import { writerCoordinationDecision } from "../../../extensions/report-writer-fetch/lifecycle.mjs";
+import { metricQueryFromCard } from "../scripts/metric-query-contract.mjs";
 
 const root = resolve(new URL("../../../../../", import.meta.url).pathname);
 
-test("normalizeEntryPayload keeps all-pages friendly pageSize and currPage=1", () => {
-  const payload = normalizeEntryPayload({
-    indicatorFieldList: ["saleAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-14",
-    currPage: 3,
+function metricQuery(overrides = {}) {
+  return {
+    metrics: ["saleAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-14" },
+    dimensions: ["incDate"],
+    filters: {},
+    pageNo: 1,
     pageSize: 500,
-    chartType: "table",
-  });
-  assert.equal(payload.currPage, 1);
+    ...overrides,
+  };
+}
+
+test("normalizeEntryPayload keeps all-pages friendly pageSize and pageNo=1", () => {
+  const payload = normalizeEntryPayload(metricQuery({ pageNo: 3 }));
+  assert.equal(payload.pageNo, 1);
   assert.equal(payload.pageSize, 500);
-  assert.deepEqual(payload.indicatorFieldList, ["saleAmt"]);
+  assert.deepEqual(payload.metrics, ["saleAmt"]);
 });
 
-test("normalizeEntryPayload caps pageSize at 5000", () => {
-  const payload = normalizeEntryPayload({ pageSize: 99999, indicatorFieldList: ["a"] });
-  assert.equal(payload.pageSize, 5000);
+test("normalizeEntryPayload caps pageSize at the Metric CLI limit", () => {
+  const payload = normalizeEntryPayload(metricQuery({ pageSize: 99999 }));
+  assert.equal(payload.pageSize, 2000);
 });
 
-test("B2 execute args enable meta but never single-page", () => {
-  const args = buildExecuteArgs(
-    normalizeEntryPayload({
-      indicatorFieldList: ["saleAmt"],
-      aggDimUniqueCodeList: ["incDate"],
-      startDate: "2026-07-01",
-      endDate: "2026-07-02",
-      pageSize: 500,
-    }),
-    { meta: true }
-  );
+test("B2 execute args request data rows but never single-page or legacy meta", () => {
+  const args = buildExecuteArgs(normalizeEntryPayload(metricQuery()));
   assert.equal(args[0], "analysis");
   assert.equal(args[1], "execute");
   assert.ok(args.includes("--payload-json"));
   assert.ok(!args.includes("--single-page"), "report fetch must pull all pages");
-  assert.ok(args.includes("--meta"), "B2 must request the minimal CLI metadata contract");
+  assert.ok(!args.includes("--meta"), "qdm-metric-cli has no legacy --meta mode");
+  assert.deepEqual(args.slice(args.indexOf("--output"), args.indexOf("--output") + 2), ["--output", "data"]);
   const json = JSON.parse(args[args.indexOf("--payload-json") + 1]);
   assert.equal(json.pageSize, 500);
-  assert.equal(json.currPage, 1);
+  assert.equal(json.pageNo, 1);
 });
 
-test("execute args omit meta unless a report adapter opts in", () => {
-  const args = buildExecuteArgs({ chartType: "table" });
-  assert.ok(!args.includes("--meta"));
+test("legacy Indicators payload is rejected explicitly", () => {
+  assert.throws(
+    () => normalizeEntryPayload({ indicatorFieldList: ["saleAmt"] }),
+    /LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED/
+  );
+});
+
+test("Metric query rejects unsupported policies and comparison without dimensions", () => {
+  assert.throws(
+    () => normalizeEntryPayload(metricQuery({ statisticPolicy: "VALID_DATA" })),
+    /only supports SUMMARY and SALES_STORE_DAY_AVG/
+  );
+  assert.throws(
+    () => normalizeEntryPayload(metricQuery({ dimensions: [], comparisons: ["YOY"] })),
+    /requires at least one dimension/
+  );
+});
+
+test("query.comparisons adds only CLI flags and stays out of the payload", () => {
+  const withComparisons = metricQueryFromCard({
+    id: "card-1",
+    query: {
+      request: metricQuery(),
+      comparisons: ["YOY", "MOM"],
+    },
+  });
+  assert.deepEqual(withComparisons.comparisons, ["MOM", "YOY"]);
+  const args = buildExecuteArgs(withComparisons);
+  assert.equal(args.filter((arg) => arg === "--yoy").length, 1);
+  assert.equal(args.filter((arg) => arg === "--mom").length, 1);
+  const payload = JSON.parse(args[args.indexOf("--payload-json") + 1]);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, "comparisons"), false);
+});
+
+test("query without comparisons defaults to empty", () => {
+  const noComparisons = metricQueryFromCard({
+    id: "card-2",
+    query: {
+      request: metricQuery(),
+      comparisons: [],
+    },
+  });
+  assert.deepEqual(noComparisons.comparisons, []);
+  const args = buildExecuteArgs(noComparisons);
+  assert.equal(args.filter((arg) => arg === "--yoy").length, 0);
+  assert.equal(args.filter((arg) => arg === "--mom").length, 0);
+});
+
+test("legacy requestBody and queryProof are rejected", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", requestBody: metricQuery() }),
+    /LEGACY_QUERY_FIELD_UNSUPPORTED.*requestBody/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", queryProof: { comparisons: ["YOY"] } }),
+    /LEGACY_QUERY_FIELD_UNSUPPORTED.*queryProof/
+  );
 });
 
 test("Writer timeout classifier stops backend timeouts but preserves fast retries", () => {
-  assert.equal(isIndicatorsTimeout({ errorCode: "ETIMEDOUT" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stdout: "指标查询超时" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "HTTP 504" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "status code: 408" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "connection reset" }), false);
+  assert.equal(isMetricTimeout({ errorCode: "ETIMEDOUT" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stdout: "指标查询超时" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "HTTP 504" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "status code: 408" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "connection reset" }), false);
   assert.equal(
-    isIndicatorsTimeout({ status: 0, error: "", stdout: '{"rows":[{"label":"timeout"}]}' }),
+    isMetricTimeout({ status: 0, error: "", stdout: '[{"label":"timeout"}]' }),
     false
   );
 });
 
-test("Indicators retries use a transient allowlist", () => {
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, errorCode: "ECONNRESET" }), true);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 503 service unavailable" }), true);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "invalid record id 503" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 425 too early" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 418 service unavailable" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "temporarily invalid parameter" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 401 unauthorized" }), false);
+test("Metric retries use a transient allowlist", () => {
+  assert.equal(isRetryableMetricFailure({ status: 1, errorCode: "ECONNRESET" }), true);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 503 service unavailable" }), true);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "invalid record id 503" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 425 too early" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 418 service unavailable" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "temporarily invalid parameter" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 401 unauthorized" }), false);
   assert.equal(
-    isRetryableIndicatorsFailure({ status: 1, errorCode: "ECONNRESET", stderr: "HTTP 401 unauthorized" }),
+    isRetryableMetricFailure({ status: 1, errorCode: "ECONNRESET", stderr: "HTTP 401 unauthorized" }),
     false
   );
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, errorCode: "ENOENT" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: null, signal: "SIGKILL" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 0, stdout: "not json" }, { parseError: "invalid JSON" }), false);
-  assert.equal(shouldRetryIndicatorsFailure({ status: 1, stderr: "HTTP 503", durationMs: 100 }), true);
-  assert.equal(shouldRetryIndicatorsFailure({ status: 1, stderr: "HTTP 503", durationMs: 15_001 }), false);
-  assert.equal(indicatorsFetchBudgetMs({}), 540_000);
-  assert.equal(indicatorsFetchBudgetMs({ QDM_INDICATORS_FETCH_BUDGET_MS: "900000" }), 540_000);
-  assert.equal(indicatorsFetchBudgetMs({ QDM_INDICATORS_FETCH_BUDGET_MS: "1000" }), 1_000);
+  assert.equal(isRetryableMetricFailure({ status: 1, errorCode: "ENOENT" }), false);
+  assert.equal(isRetryableMetricFailure({ status: null, signal: "SIGKILL" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 0, stdout: "not json" }, { parseError: "invalid JSON" }), false);
+  assert.equal(shouldRetryMetricFailure({ status: 1, stderr: "HTTP 503", durationMs: 100 }), true);
+  assert.equal(shouldRetryMetricFailure({ status: 1, stderr: "HTTP 503", durationMs: 15_001 }), false);
+  assert.equal(metricFetchBudgetMs({}), 540_000);
+  assert.equal(metricFetchBudgetMs({ QDM_METRIC_FETCH_BUDGET_MS: "900000" }), 540_000);
+  assert.equal(metricFetchBudgetMs({ QDM_METRIC_FETCH_BUDGET_MS: "1000" }), 1_000);
 });
 
-test("parseEntryMetaResponse accepts only the three-field CLI contract", () => {
-  const parsed = parseEntryMetaResponse(JSON.stringify({
-    rows: [{ id: 1 }, { id: 2 }],
-    rowCount: 2,
-    rowsSha256: "a".repeat(64),
-  }));
+test("parseEntryMetaResponse accepts rows-array stdout and derives meta", () => {
+  const rows = [{ id: 1 }, { id: 2 }];
+  const parsed = parseEntryMetaResponse(JSON.stringify(rows));
   assert.equal(parsed.rowCount, 2);
-  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows, rows);
+  assert.equal(parsed.rowsSha256, rowsSha256(rows));
   assert.throws(
-    () => parseEntryMetaResponse(JSON.stringify({ rows: [], rowCount: 0, rowsSha256: "a".repeat(64), extra: true })),
-    /exactly rows, rowCount, rowsSha256/
+    () => parseEntryMetaResponse(JSON.stringify({ rows: [] })),
+    /rows array/
   );
   assert.throws(
-    () => parseEntryMetaResponse(JSON.stringify({ rows: [{ id: 1 }], rowCount: 2, rowsSha256: "a".repeat(64) })),
-    /rowCount/
+    () => parseEntryMetaResponse(JSON.stringify([1])),
+    /rows\[0\]/
   );
 });
 
@@ -134,7 +184,7 @@ test("fetchAllEntries rejects result.json without confirmed status before CLI", 
   await mkdir(session, { recursive: true });
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
   await assert.rejects(
     () => fetchAllEntries(resultPath, { cardId: "c1" }),
@@ -142,7 +192,7 @@ test("fetchAllEntries rejects result.json without confirmed status before CLI", 
   );
 });
 
-test("fetch-entry attempts CAS once and skips Indicators when auth fails", async (t) => {
+test("fetch-entry authz on fails closed before invoking Metric CLI when no bound blob exists", async (t) => {
   const rootDir = await mkdtemp(join(tmpdir(), "html-report-fetch-entry-auth-"));
   const session = join(rootDir, ".harness", "state", "html-report", "auth");
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
@@ -150,50 +200,40 @@ test("fetch-entry attempts CAS once and skips Indicators when auth fails", async
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    session_id: "auth-session",
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
 
-  const casCountPath = join(rootDir, "cas-count.txt");
-  const indicatorsCountPath = join(rootDir, "indicators-count.txt");
-  const fakeCas = join(rootDir, "fake-cas.sh");
-  const fakeIndicators = join(rootDir, "fake-indicators.sh");
-  await writeFile(fakeCas, [
+  const countPath = join(rootDir, "metric-count.txt");
+  const fakeMetric = join(rootDir, "fake-metric.sh");
+  await writeFile(fakeMetric, [
     "#!/bin/sh",
-    "count=0",
-    "if [ -f \"$FAKE_CAS_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_CAS_COUNT_PATH\"); fi",
-    "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_CAS_COUNT_PATH\"",
-    "exit 1",
+    "printf 'called' > \"$FAKE_METRIC_COUNT_PATH\"",
+    "printf '%s\\n' '[]'",
     "",
   ].join("\n"));
-  await writeFile(fakeIndicators, [
-    "#!/bin/sh",
-    "printf 'called' > \"$FAKE_INDICATORS_COUNT_PATH\"",
-    "exit 1",
-    "",
-  ].join("\n"));
-  await Promise.all([chmod(fakeCas, 0o755), chmod(fakeIndicators, 0o755)]);
+  await chmod(fakeMetric, 0o755);
 
   const fetchEntryScript = fileURLToPath(new URL("../scripts/fetch-entry.mjs", import.meta.url));
   const env = {
     ...process.env,
-    QDM_CAS_CLI: fakeCas,
-    QDM_INDICATORS_CLI: fakeIndicators,
-    FAKE_CAS_COUNT_PATH: casCountPath,
-    FAKE_INDICATORS_COUNT_PATH: indicatorsCountPath,
+    QDM_METRIC_CLI: fakeMetric,
+    HARNESS_AUTHZ_MODE: "on",
+    FAKE_METRIC_COUNT_PATH: countPath,
   };
-  delete env.QDM_INDICATORS_TOKEN;
-  const run = spawnSync(process.execPath, [
-    fetchEntryScript,
-    "--result", resultPath,
-    "--card-id", "c1",
-  ], { encoding: "utf8", env });
+  delete env.HARNESS_AUTH_BLOB;
+  delete env.HARNESS_AUTH_BLOB_FILE;
+  delete env.HARNESS_AUTH_USER_ID;
+  delete env.LUMI_REQUESTER_CONTEXT_DIR;
+  const run = spawnSync(process.execPath, [fetchEntryScript, "--result", resultPath, "--card-id", "c1"], {
+    encoding: "utf8",
+    env,
+  });
 
   assert.equal(run.status, 1, run.stderr || run.stdout);
-  assert.equal(await readFile(casCountPath, "utf8"), "1");
-  await assert.rejects(() => stat(indicatorsCountPath), /ENOENT/);
+  await assert.rejects(() => stat(countPath), /ENOENT/);
   const output = JSON.parse(run.stdout);
-  assert.equal(output.cards[0].error, "AUTH_TOKEN_FAILED: unable to obtain Indicators token");
+  assert.match(output.cards[0].error, /METRIC_AUTH_CONTEXT_REQUIRED/);
   assert.deepEqual(output.cards[0].attempts, []);
 });
 
@@ -201,14 +241,14 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
   const rootDir = await mkdtemp(join(tmpdir(), "html-report-fetch-entry-terminal-"));
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
 
-  const fakeIndicators = join(rootDir, "fake-indicators.sh");
-  await writeFile(fakeIndicators, [
+  const fakeMetric = join(rootDir, "fake-metric.sh");
+  await writeFile(fakeMetric, [
     "#!/bin/sh",
     "count=0",
-    "if [ -f \"$FAKE_INDICATORS_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_INDICATORS_COUNT_PATH\"); fi",
+    "if [ -f \"$FAKE_METRIC_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_METRIC_COUNT_PATH\"); fi",
     "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_INDICATORS_COUNT_PATH\"",
-    "if [ \"$FAKE_INDICATORS_MODE\" = \"unauthorized\" ]; then",
+    "printf '%s' \"$count\" > \"$FAKE_METRIC_COUNT_PATH\"",
+    "if [ \"$FAKE_METRIC_MODE\" = \"unauthorized\" ]; then",
     "  printf '%s\\n' 'HTTP 401 unauthorized' >&2",
     "  exit 1",
     "fi",
@@ -216,7 +256,7 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
     "exit 0",
     "",
   ].join("\n"));
-  await chmod(fakeIndicators, 0o755);
+  await chmod(fakeMetric, 0o755);
 
   const fetchEntryScript = fileURLToPath(new URL("../scripts/fetch-entry.mjs", import.meta.url));
   for (const mode of ["unauthorized", "invalid-json"]) {
@@ -225,7 +265,8 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
     const resultPath = join(session, "result.json");
     await writeFile(resultPath, JSON.stringify({
       status: "confirmed",
-      cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+      session_id: mode,
+      cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
     }));
     const countPath = join(rootDir, `${mode}-count.txt`);
     const run = spawnSync(process.execPath, [
@@ -236,10 +277,10 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
       encoding: "utf8",
       env: {
         ...process.env,
-        QDM_INDICATORS_TOKEN: "test-token",
-        QDM_INDICATORS_CLI: fakeIndicators,
-        FAKE_INDICATORS_COUNT_PATH: countPath,
-        FAKE_INDICATORS_MODE: mode,
+        QDM_METRIC_CLI: fakeMetric,
+        HARNESS_AUTHZ_MODE: "off",
+        FAKE_METRIC_COUNT_PATH: countPath,
+        FAKE_METRIC_MODE: mode,
       },
     });
 
@@ -269,7 +310,8 @@ test("Writer retry reuses an intact entry/meta pair without calling CLI or rewri
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    session_id: "reuse",
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
   await writeFile(entryPath, entryText);
   await writeFile(metaPath, metaText);

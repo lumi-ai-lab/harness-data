@@ -58,9 +58,11 @@ const RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/writer-return.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-entry.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-explore.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-cli-executor.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-query-contract.mjs",
   ".agents/pi/skills/html-report/scripts/research-contract.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-retry.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-timeout.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-retry.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-timeout.mjs",
   ".agents/pi/skills/html-report/scripts/researcher-return.mjs",
   ".agents/pi/skills/html-report/scripts/submit-research-findings.mjs",
   ".agents/pi/skills/html-report/scripts/prepare-research-evidence.mjs",
@@ -173,40 +175,18 @@ const resultJson = {
       chartType: "table",
       statisticPolicy: "SUMMARY",
       indicatorBizId: "retail",
-      dimensions: ["incDate"],
-      metrics: ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
-      startDate,
-      endDate: yesterdayStr,
-      filters: [
-        {
-          type: "DIMENSION",
-          dimUniqueCode: "storeId",
-          values: ["101001"],
-          valueLabelMap: { "101001": "101001门店" },
+      query: {
+        request: {
+          metrics: ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate, endDate: yesterdayStr },
+          dimensions: ["incDate"],
+          filters: { storeId: ["101001"] },
+          pageNo: 1,
+          pageSize: 500,
         },
-      ],
-      requestBody: {
-        filterDimUniqueCodeList: [
-          { type: "DIMENSION", dimUniqueCode: "storeId", dimFieldIdList: ["101001"] },
-        ],
-        aggDimUniqueCodeList: ["incDate"],
-        indicatorFieldList: ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
-        columnAggDimUniqueCodeList: [],
-        startDate,
-        endDate: yesterdayStr,
-        indicatorsGroup: 1,
-        storeCollectType: 2,
-        currPage: 1,
-        pageSize: 500,
-        chartType: "table",
-        compareDate: [],
+        comparisons: [],
       },
-      cli: {
-        parameterized: '"$QDM_METRIC_CLI" analysis execute --start-date ...',
-        parameterizedExecutable: true,
-        compatibility: [{ type: "ok", text: "requestBody 字段均已纳入参数化映射检查" }],
-      },
-      queryProof: {},
     },
   ],
 };
@@ -284,7 +264,7 @@ console.log('  /skill:html-report 生成客数(客流)和客单的平衡在哪�
 console.log("\n📌 扩展会检测到已有 B2_WRITER running 状态，直接开始逐卡派发");
 console.log("   report-writer 子代理。Writer 会调用 fetch-entry.mjs 全量取数，");
 console.log("   产出 entry.json + entry.meta.json。");
-console.log("\n📌 如果 bin/qdm-indicators-cli 不存在，取数会失败但流程结构仍可验证：");
+console.log("\n📌 如果 bin/qdm-metric-cli 不存在，取数会失败但流程结构仍可验证：");
 console.log("   - Writer 返回 fetchStatus=failed");
 console.log("   - 单卡失败不阻断");
 console.log("   - B2 完成后 check-session-layout --phase writer 仍会检查产物结构");

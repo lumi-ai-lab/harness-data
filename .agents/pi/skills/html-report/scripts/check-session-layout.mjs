@@ -5,7 +5,7 @@
  *
  * B2 data gates:
  *   - successful Writer data is an entry.json + minimal entry.meta.json pair
- *   - entry.meta.json contains only rowCount + rowsSha256 from CLI --meta
+ *   - entry.meta.json contains only adapter-derived rowCount + rowsSha256
  *   - explore meta producer === fetch-explore.mjs
  *   - verdict.json producer === write-verdict.mjs + scanFingerprint match
  *
@@ -29,6 +29,7 @@ import {
   executeEvidenceOperations,
 } from "./prepare-research-evidence.mjs";
 import {
+  applyQueryPatch,
   materialQueryDelta,
   semanticQueryShape,
 } from "./fetch-explore.mjs";
@@ -37,6 +38,7 @@ import {
   isJsonObject,
   isValidEvidenceGap,
 } from "./research-contract.mjs";
+import { metricQueryFromCard } from "./metric-query-contract.mjs";
 import {
   researcherContrastPolicy,
   validateResearcherAnalysisRequirements,
@@ -144,7 +146,7 @@ async function checkEntryPair(abs, cardId, errors, resultMtimeMs) {
   }
   for (const legacy of ["entry.profile.json", "entry.facts.json"]) {
     if (await exists(join(cardDir, legacy))) {
-      errors.push(`card ${cardId} has forbidden legacy ${legacy}; B2 uses CLI --meta only`);
+      errors.push(`card ${cardId} has forbidden legacy ${legacy}; B2 persists only CLI rows plus minimal count/hash metadata`);
     }
   }
   return true;
@@ -429,12 +431,17 @@ async function validateEvidencePacket(abs, task, mode, errors) {
     const sourceCard = (Array.isArray(resultDocument.cards) ? resultDocument.cards : []).find(
       (card) => String(card?.id) === rawSourceCardId
     );
-    if (!isJsonObject(sourceCard?.requestBody)) {
-      errors.push(`task ${task.id} source card has no valid requestBody baseline`);
+    let sourceQuery = null;
+    try {
+      sourceQuery = metricQueryFromCard(sourceCard);
+    } catch (error) {
+      errors.push(`task ${task.id} source card has invalid canonical query: ${error.message || error}`);
     }
     const expectedQueryCoverage = mode === "reuse_entry"
-      ? (isJsonObject(sourceCard?.requestBody) ? semanticQueryShape(sourceCard.requestBody) : null)
-      : meta.queryShape;
+      ? (sourceQuery ? semanticQueryShape(sourceQuery) : null)
+      : (sourceQuery && meta.queryPatch
+          ? semanticQueryShape(applyQueryPatch(sourceQuery, meta.queryPatch))
+          : null);
     const computed = Array.isArray(rows) ? canonicalFingerprint(rows) : null;
     if (!Array.isArray(rows)) errors.push(`task ${task.id} evidence source data must be a rows array`);
     if (meta.rowCount !== rows.length || evidence.source?.rowCount !== rows.length) {
@@ -637,7 +644,6 @@ async function checkExploreArtifacts(abs, errors, warnings) {
       const mode = version2 ? String(t.evidencePlan?.mode || "") : "new_query";
       const meta = join(abs, "data", "explore", `${id}.meta.json`);
       const data = join(abs, "data", "explore", `${id}.json`);
-      const payload = join(abs, "data", "explore", `${id}.payload.json`);
       const md = completionSection;
       const sum = completionSummary;
       if (!(await exists(md))) {
@@ -651,7 +657,7 @@ async function checkExploreArtifacts(abs, errors, warnings) {
       if (version2) await validateEvidencePacket(abs, t, mode, errors);
 
       if (mode === "reuse_entry") {
-        if ((await exists(meta)) || (await exists(data)) || (await exists(payload))) {
+        if ((await exists(meta)) || (await exists(data))) {
           errors.push(`reuse_entry task ${t.id} must not create data/explore/${id}.*`);
         }
       } else {
@@ -660,9 +666,6 @@ async function checkExploreArtifacts(abs, errors, warnings) {
         }
         if (!(await exists(data))) {
           errors.push(`missing data/explore/${id}.json for done new_query task ${t.id}`);
-        }
-        if (!(await exists(payload))) {
-          errors.push(`missing data/explore/${id}.payload.json for done new_query task ${t.id}`);
         }
       }
       if (mode === "new_query" && (await exists(meta))) {
@@ -688,42 +691,36 @@ async function checkExploreArtifacts(abs, errors, warnings) {
           if (version2 && (!Number.isSafeInteger(metaObj.rowCount) || !/^[a-f0-9]{64}$/.test(metaObj.rowsSha256 || ""))) {
             errors.push(`new_query task ${t.id} explore meta requires rowCount + rowsSha256`);
           }
-          if (version2 && (await exists(payload))) {
-            const persistedPayload = JSON.parse(await readFile(payload, "utf8"));
+          if (version2 && metaObj.queryPatch && typeof metaObj.queryPatch === "object") {
             const sourceCardId = String(t.fromCardId || "");
             const sourceCard = (Array.isArray(resultDocument.cards) ? resultDocument.cards : []).find(
               (card) => String(card?.id) === sourceCardId
             );
-            if (!isJsonObject(sourceCard?.requestBody)) {
-              errors.push(`new_query task ${t.id} source card has no valid requestBody baseline`);
+            let sourceQuery;
+            try {
+              sourceQuery = metricQueryFromCard(sourceCard);
+            } catch (error) {
+              errors.push(`new_query task ${t.id} source card has invalid canonical query: ${error.message || error}`);
               continue;
             }
-            const sourceShape = semanticQueryShape(sourceCard.requestBody);
-            const queryShape = semanticQueryShape(persistedPayload);
-            const queryDelta = materialQueryDelta(sourceCard.requestBody, persistedPayload);
+            const sourceQuerySha256 = canonicalFingerprint(sourceQuery);
+            if (metaObj.sourceQuerySha256 !== sourceQuerySha256) {
+              errors.push(`new_query task ${t.id} source query fingerprint mismatch`);
+            }
+            if (metaObj.queryPatchSha256 !== canonicalFingerprint(metaObj.queryPatch)) {
+              errors.push(`new_query task ${t.id} queryPatch hash mismatch`);
+            }
+            // Reconstruct candidate from source + patch and verify
+            const candidateQuery = applyQueryPatch(sourceQuery, metaObj.queryPatch);
+            if (metaObj.executedQuerySha256 !== canonicalFingerprint(candidateQuery)) {
+              errors.push(`new_query task ${t.id} executed query fingerprint mismatch`);
+            }
+            const queryDelta = materialQueryDelta(sourceQuery, candidateQuery);
             if (queryDelta.changedUnclassifiedKeys.length > 0) {
               errors.push(`new_query task ${t.id} changes unclassified query fields`);
             }
-            if (resolve(metaObj.payloadPath || "") !== payload) {
-              errors.push(`new_query task ${t.id} explore meta payloadPath is not the contracted path`);
-            }
-            if (metaObj.payloadSha256 !== canonicalFingerprint(persistedPayload)) {
-              errors.push(`new_query task ${t.id} explore payloadSha256 mismatch`);
-            }
-            if (
-              canonicalizeJson(metaObj.sourceQueryShape) !== canonicalizeJson(sourceShape) ||
-              metaObj.sourceQueryShapeSha256 !== canonicalFingerprint(sourceShape)
-            ) {
-              errors.push(`new_query task ${t.id} source query shape mismatch`);
-            }
-            if (
-              canonicalizeJson(metaObj.queryShape) !== canonicalizeJson(queryShape) ||
-              metaObj.queryShapeSha256 !== canonicalFingerprint(queryShape)
-            ) {
-              errors.push(`new_query task ${t.id} query shape mismatch`);
-            }
             if (canonicalizeJson(metaObj.queryDelta) !== canonicalizeJson(queryDelta) || queryDelta.material !== true) {
-              errors.push(`new_query task ${t.id} queryDelta cannot be reproduced from payload`);
+              errors.push(`new_query task ${t.id} queryDelta cannot be reproduced from patch`);
             }
           }
         } catch (e) {

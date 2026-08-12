@@ -1,9 +1,5 @@
-/**
- * Classify terminal Indicators timeouts consistently for Writer and
- * Researcher fetches. Successful payload text is never inspected, because a
- * legitimate data cell may itself contain words such as "timeout" or "超时".
- */
-export function isIndicatorsTimeout(result = {}) {
+/** Classify terminal qdm-metric-cli timeouts consistently. */
+export function isMetricTimeout(result = {}) {
   if (result.timedOut === true || result.errorCode === "ETIMEDOUT") return true;
   if (result.status === 0 && !result.error) return false;
   const message = [result.error, result.stderr, result.stdout]
