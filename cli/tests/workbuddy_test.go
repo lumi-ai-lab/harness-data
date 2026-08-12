@@ -78,38 +78,39 @@ func TestWorkBuddyContextMissingSessionFailsSafelyWithoutState(t *testing.T) {
 	}
 }
 
-func TestWorkBuddyContextSupportsAuthzOn(t *testing.T) {
+func TestWorkBuddyContextReportsAuthzMode(t *testing.T) {
 	sourceRoot := currentRootWithIndex(t)
-	root := t.TempDir()
-	if err := os.Symlink(filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index")); err != nil {
-		t.Fatal(err)
-	}
-	writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", `paths:
-  knowledge: wikis
-
-authz:
-  mode: on
-`)
-	payload := []byte(`{"session_id":"authz-session","prompt":"销售额是多少？"}`)
-	ok, output, err := dhcontext.RunWorkBuddyHook(root, payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || !output.Continue {
-		t.Fatalf("expected WorkBuddy context, ok=%v continue=%v", ok, output.Continue)
-	}
-	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "# Data Harness Context") ||
-		strings.Contains(output.HookSpecificOutput.AdditionalContext, "AUTHZ_UNSUPPORTED") {
-		t.Fatalf("unexpected authz-on context: %s", output.HookSpecificOutput.AdditionalContext)
-	}
-	if _, err := os.Stat(sessionstate.Path(root, "workbuddy:authz-session")); err != nil {
-		t.Fatalf("authz-on context must keep namespaced session state: %v", err)
+	for _, mode := range []string{"on", "off"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Symlink(filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index")); err != nil {
+				t.Fatal(err)
+			}
+			config := "paths:\n  knowledge: wikis\n\nauthz:\n  mode: " + mode + "\n"
+			writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", config)
+			payload := []byte(`{"session_id":"authz-session","prompt":"销售额是多少？"}`)
+			ok, output, err := dhcontext.RunWorkBuddyHook(root, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || !output.Continue {
+				t.Fatalf("expected WorkBuddy context, ok=%v continue=%v", ok, output.Continue)
+			}
+			context := output.HookSpecificOutput.AdditionalContext
+			if !strings.Contains(context, "# Data Harness Context") ||
+				!strings.Contains(context, "authzMode: "+mode) || strings.Contains(context, "AUTHZ_UNSUPPORTED") {
+				t.Fatalf("unexpected authz context: %s", context)
+			}
+			if _, err := os.Stat(sessionstate.Path(root, "workbuddy:authz-session")); err != nil {
+				t.Fatalf("context must keep namespaced session state: %v", err)
+			}
+		})
 	}
 }
 

@@ -5,11 +5,20 @@ This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through n
 ## Runtime flow
 
 ```text
-PreToolUse / UserPromptSubmit / PostToolUse
-        -> scripts/harness-hook.mjs
-        -> data-harness-cli authz-hook --agent workbuddy
-           or data-harness-cli --format workbuddy-hook
-        -> shared authz or context/session/template core
+PreToolUse
+  -> scripts/harness-hook.mjs authz
+  -> data-harness-cli authz-hook --agent workbuddy
+  -> shared authz core
+
+UserPromptSubmit
+  -> scripts/harness-hook.mjs context
+  -> data-harness-cli context --format workbuddy-hook
+  -> shared context/session core
+
+PostToolUse
+  -> scripts/harness-hook.mjs posttool
+  -> data-harness-cli posttool --format workbuddy-hook
+  -> shared session/template core
 ```
 
 The JavaScript adapter only normalizes WorkBuddy transport fields and tool names. Wikis recall, plan selection, session state, and template injection remain in the Go CLI.
@@ -33,7 +42,7 @@ The npm installer deliberately does not edit WorkBuddy settings or Marketplace r
 ## Hooks
 
 - `PreToolUse` matches macOS `Bash|execute_command`, calls `authz-hook --agent workbuddy`, and only permits gated QDM commands through `updatedInput.command`.
-- `UserPromptSubmit` calls `context --format workbuddy-hook`.
+- `UserPromptSubmit` calls `context --format workbuddy-hook` and injects the current `authzMode`.
 - `PostToolUse` matches `Bash|PowerShell|execute_command`, normalizes the tool name to `Bash`, and calls `posttool --format workbuddy-hook`.
 - Outside a Harness workspace, all hooks return an empty object and do not alter normal WorkBuddy behavior.
 - Context/PostToolUse failures return model-visible `additionalContext` and host-visible `systemMessage`; auth failures return an explicit `permissionDecision=deny` reason and exit with status `2` so hosts that cannot enforce the JSON decision still fail closed.
