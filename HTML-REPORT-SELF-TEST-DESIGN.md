@@ -781,10 +781,64 @@ node .agents/pi/skills/html-report/scripts/html-report-self-test.mjs --full
 - 开始时间：`2026-07-29T12:37:22.301Z`
 - 结束时间：`2026-07-29T12:43:47.477Z`
 - 总墙钟时间：`6 分 25.176 秒`
-- 报告绝对路径：`/Users/pengmd/c/qdm/harenss-data-github-ppt-master/.harness/test-runs/html-report/a906a917-b04d-4e13-a7eb-09359e6a8b38/self-test-report.md`
+- 报告路径：`.harness/test-runs/html-report/a906a917-b04d-4e13-a7eb-09359e6a8b38/self-test-report.md`（参考工作区 `harenss-data-github-ppt-master`）
 - 确定性测试：`339/339 PASS`
 
 browser 确认模式另行完成专项验收：
 
 - 最终结果：`PASS`
 - Session ID：`295f497e-bc3b-4a8b-b45c-9c5ba25958ba`
+
+## 21. 2026-08-12 B3_RESEARCH 验收记录 (#39)
+
+代码主体在 `eeed094`（#38）提前落地。本次提交提供 B2.5→B3 专项验收。
+
+### 确定性测试
+
+B2.5/B3 专项（含新增 `b25-b3-acceptance.test.mjs`）：
+
+```bash
+node --test \
+  .agents/pi/skills/html-report/test/editor-plan.test.mjs \
+  .agents/pi/skills/html-report/test/prepare-research-evidence.test.mjs \
+  .agents/pi/skills/html-report/test/fetch-explore.test.mjs \
+  .agents/pi/skills/html-report/test/report-researcher-guard.test.mjs \
+  .agents/pi/skills/html-report/test/researcher-return.test.mjs \
+  .agents/pi/skills/html-report/test/submit-research-findings.test.mjs \
+  .agents/pi/skills/html-report/test/finalize-editor-stage.test.mjs \
+  .agents/pi/skills/html-report/test/finalize-research-stage.test.mjs \
+  .agents/pi/skills/html-report/test/b25-b3-acceptance.test.mjs \
+  .agents/pi/skills/html-report/test/extension-gate.test.mjs
+```
+
+结果：**195/195 PASS**
+
+全部确定性测试：
+
+```bash
+node --test .agents/pi/skills/html-report/test/*.test.mjs
+```
+
+结果：**467/472 PASS**（5 失败均为 A_CONFIG HTML builder/server 相关，与 B3 无关）
+
+### 新增场景级验收
+
+`b25-b3-acceptance.test.mjs` 串联三个场景：
+
+| 场景 | 覆盖 |
+| --- | --- |
+| A — reuse_entry 全链路 | B25→Planner→evidence→Researcher→finalizer→`report/report.md`，含 full-table 标记 |
+| B — new_query evidenceGap 校验 | 无 gap 拒绝、未授权字段 material delta 拒绝、授权字段通过 |
+| C — evidence 防篡改 | 修改 entry 后 explore layout rowsSha256 不匹配 |
+
+### E2E 自测
+
+```bash
+node .agents/pi/skills/html-report/scripts/html-report-self-test.mjs --until B3_RESEARCH
+```
+
+结果：**INFRASTRUCTURE** — 在 A_CONFIRM 阶段因 Indicators CLI 后端不可用（HTTP 422）终止，非 B3 代码问题。需在 Indicators CLI 后端可用时重跑。
+
+### A_CONFIG 红测修复
+
+`extension-gate.test.mjs` 中 `fixed A_CONFIG debug mode seeds the known-good card before the model runs` 此前失败，根因是 `bin/data-harness-cli` 二进制版本过旧（不支持 `--doc-set` flag）。已用参考工作区的新版本替换，62/62 全部通过。
