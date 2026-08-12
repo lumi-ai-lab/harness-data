@@ -3,6 +3,7 @@ package agentauthz
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"harness-data/cli/internal/harness"
@@ -125,5 +126,24 @@ func TestResolveAuthBlobNoBlobAvailable(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected no blob available error")
+	}
+}
+
+func TestResolveAuthBlobRejectsGroupReadableFile(t *testing.T) {
+	root := t.TempDir()
+	blobPath := filepath.Join(root, "admin-auth.blob")
+	if err := os.WriteFile(blobPath, []byte(testBlob+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ResolveAuthBlob(ResolveOptions{
+		ProjectRoot: root,
+		Config:      harness.AuthzConfig{},
+		Env: map[string]string{
+			EnvAuthBlobFile: blobPath,
+			EnvAuthUserID:   "env-user",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "permissions must be 0600") {
+		t.Fatalf("expected insecure permission error, got %v", err)
 	}
 }

@@ -3,7 +3,9 @@ package agentauthz
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,9 +13,6 @@ import (
 func TestHookAuthzOnPreservesToolInputFields(t *testing.T) {
 	root := writeHarnessConfig(t, `paths:
   knowledge: wikis
-
-cli:
-  qdm_metric_cli: /abs/bin/qdm-metric-cli
 
 authz:
   mode: on
@@ -40,7 +39,8 @@ authz:
 		t.Fatal("expected hook output")
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
-	if updated["command"] != `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; '/abs/bin/qdm-metric-cli' analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'` {
+	expectedCommand := `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ` + ShellQuote(filepath.Join(root, "bin", "qdm-metric-cli")) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
+	if updated["command"] != expectedCommand {
 		t.Fatalf("unexpected command: %v", updated["command"])
 	}
 	if updated["timeout_ms"] != json.Number("10000") {
@@ -323,6 +323,110 @@ authz:
 	}
 }
 
+func TestHookSupportsWorkBuddyAndRewritesEveryGatedInvocation(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, "qdm1enc.runtime")
+	t.Setenv(EnvAuthUserID, "env-user")
+	command := `qdm-metric-cli auth describe --data-auth --auth-blob qdm1enc.model && qdm-metric-cli analysis execute --auth-json fake --metric saleAmt`
+
+	ok, output, err := Run(root, "workbuddy", hookInput(command))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected WorkBuddy allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	rewritten := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if strings.Count(rewritten, "--auth-blob 'qdm1enc.runtime'") != 2 || strings.Count(rewritten, "--data-auth") != 1 {
+		t.Fatalf("expected both gated invocations to be rewritten: %s", rewritten)
+	}
+	for _, forbidden := range []string{"qdm1enc.model", "--auth-json"} {
+		if strings.Contains(rewritten, forbidden) {
+			t.Fatalf("model auth input survived rewrite: %s", rewritten)
+		}
+	}
+}
+
+func TestHookWorkBuddyAuthDescribeReturnsPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("rewritten WorkBuddy auth commands use POSIX shell syntax")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	metricCLI := filepath.Join(root, "bin", "qdm-metric-cli")
+	script := `#!/bin/sh
+[ -z "${HARNESS_AUTH_BLOB:-}" ] || exit 8
+[ "$1" = "auth" ] || exit 9
+[ "$2" = "describe" ] || exit 10
+[ "$3" = "--auth-blob" ] || exit 11
+[ "$4" = "qdm1enc.runtime" ] || exit 12
+printf '{"user":"env-user","permissions":["sales:read"]}\n'
+`
+	if err := os.WriteFile(metricCLI, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvAuthBlob, "qdm1enc.runtime")
+	t.Setenv(EnvAuthUserID, "env-user")
+
+	ok, output, err := Run(root, "workbuddy", hookInput(`qdm-metric-cli auth describe`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected WorkBuddy auth describe allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	rewritten := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	result, err := exec.Command("/bin/sh", "-c", rewritten).Output()
+	if err != nil {
+		t.Fatalf("rewritten auth describe failed: %v", err)
+	}
+	var permissions struct {
+		User        string   `json:"user"`
+		Permissions []string `json:"permissions"`
+	}
+	if err := json.Unmarshal(result, &permissions); err != nil {
+		t.Fatalf("invalid auth describe output %q: %v", result, err)
+	}
+	if permissions.User != "env-user" || len(permissions.Permissions) != 1 || permissions.Permissions[0] != "sales:read" {
+		t.Fatalf("unexpected auth describe permissions: %+v", permissions)
+	}
+}
+
+func TestHookDeniesWhenMetricCLIIsMissing(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	if err := os.Remove(filepath.Join(root, "bin", "qdm-metric-cli")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "env-user")
+
+	ok, output, err := Run(root, "workbuddy", hookInput(`qdm-metric-cli auth describe`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "trusted qdm-metric-cli") {
+		t.Fatalf("expected missing CLI denial: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+}
+
 func hookInput(command string) []byte {
 	body, _ := json.Marshal(map[string]any{
 		"session_id":      "session-1",
@@ -346,6 +450,12 @@ func writeHarnessConfig(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "config", "harness-config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "qdm-metric-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return root

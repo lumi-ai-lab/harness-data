@@ -1,7 +1,9 @@
 package agentauthz
 
 import (
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -214,21 +216,116 @@ func StripAuthFlags(command string) string {
 }
 
 func InjectDataAuth(command, blob, metricCliPath string) string {
-	cleaned := StripAuthFlags(command)
-	if metricCliPath != "" {
-		cleaned = RewriteMetricCliInvocation(cleaned, metricCliPath)
+	if strings.TrimSpace(metricCliPath) == "" {
+		cleaned := StripAuthFlags(command)
+		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute")
 	}
-	flags := " --data-auth --auth-blob " + ShellQuote(blob)
-	return InsertFlagsBeforeShellTail(cleaned, flags, "execute")
+	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
+	if err == nil {
+		return rewritten
+	}
+	return command
 }
 
 func InjectAuthDescribeBlob(command, blob, metricCliPath string) string {
-	cleaned := StripAuthFlags(command)
-	if metricCliPath != "" {
-		cleaned = RewriteMetricCliInvocation(cleaned, metricCliPath)
+	if strings.TrimSpace(metricCliPath) == "" {
+		cleaned := StripAuthFlags(command)
+		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe")
 	}
-	flags := " --auth-blob " + ShellQuote(blob)
-	return InsertFlagsBeforeShellTail(cleaned, flags, "describe")
+	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
+	if err == nil {
+		return rewritten
+	}
+	return command
+}
+
+type metricInvocation struct {
+	start int
+	end   int
+	kind  string
+}
+
+func RewriteGatedMetricCommands(command, blob, metricCliPath string) (string, error) {
+	if strings.TrimSpace(metricCliPath) == "" {
+		return "", fmt.Errorf("qdm-metric-cli path is empty")
+	}
+	invocations, err := findMetricInvocations(command)
+	if err != nil {
+		return "", err
+	}
+	if len(invocations) == 0 {
+		return "", fmt.Errorf("no gated invocation found")
+	}
+
+	rewritten := command
+	quotedCLI := ShellQuote(metricCliPath)
+	quotedBlob := ShellQuote(blob)
+	for index := len(invocations) - 1; index >= 0; index-- {
+		invocation := invocations[index]
+		segment := StripAuthFlags(command[invocation.start:invocation.end])
+		segment = RewriteMetricCliInvocation(segment, metricCliPath)
+		flags := " --auth-blob " + ShellQuote(blob)
+		if invocation.kind == "analysis" {
+			flags = " --data-auth" + flags
+		}
+		replacement := strings.TrimRight(segment, " \t") + flags
+		if !strings.HasPrefix(replacement, quotedCLI+" ") {
+			return "", fmt.Errorf("gated invocation did not bind the trusted CLI path")
+		}
+		if strings.Count(replacement, "--auth-blob") != 1 || !strings.Contains(replacement, "--auth-blob "+quotedBlob) || strings.Contains(replacement, "--auth-json") {
+			return "", fmt.Errorf("gated invocation did not bind exactly one runtime blob")
+		}
+		dataAuthCount := strings.Count(replacement, "--data-auth")
+		if (invocation.kind == "analysis" && dataAuthCount != 1) || (invocation.kind == "describe" && dataAuthCount != 0) {
+			return "", fmt.Errorf("gated invocation has invalid data-auth flags")
+		}
+		rewritten = rewritten[:invocation.start] + replacement + rewritten[invocation.end:]
+	}
+	return rewritten, nil
+}
+
+func findMetricInvocations(command string) ([]metricInvocation, error) {
+	skeleton := MaskQuotedAndHeredocRegions(command)
+	invocations := []metricInvocation{}
+	for _, candidate := range []struct {
+		kind   string
+		subcmd string
+	}{
+		{kind: "analysis", subcmd: `analysis\s+execute`},
+		{kind: "describe", subcmd: `auth\s+describe`},
+	} {
+		invocationRe := metricInvocationRegexp(candidate.subcmd)
+		commandRe := regexp.MustCompile(`(?:'|")?` + metricBinPattern + `(?:'|")?\s+` + candidate.subcmd + `\b`)
+		for _, match := range invocationRe.FindAllStringIndex(skeleton, -1) {
+			relative := commandRe.FindStringIndex(skeleton[match[0]:match[1]])
+			if relative == nil {
+				continue
+			}
+			start := match[0] + relative[0]
+			subcommandEnd := match[0] + relative[1]
+			invocations = append(invocations, metricInvocation{
+				start: start,
+				end:   metricInvocationEnd(skeleton, subcommandEnd),
+				kind:  candidate.kind,
+			})
+		}
+	}
+	sort.Slice(invocations, func(i, j int) bool { return invocations[i].start < invocations[j].start })
+	for index := 1; index < len(invocations); index++ {
+		if invocations[index-1].end > invocations[index].start {
+			return nil, fmt.Errorf("overlapping gated invocations cannot be safely rewritten")
+		}
+	}
+	return invocations, nil
+}
+
+func metricInvocationEnd(skeleton string, from int) int {
+	tail := skeleton[from:]
+	operator := regexp.MustCompile(`(?m)\s*(?:\|\||&&|[|;]|[0-9]*>|&>|\n)`).FindStringIndex(tail)
+	if operator == nil {
+		return len(skeleton)
+	}
+	return from + operator[0]
 }
 
 func InsertFlagsBeforeShellTail(command, flags, anchorWord string) string {
