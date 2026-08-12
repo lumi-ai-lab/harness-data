@@ -13,7 +13,8 @@ Use this skill together with the QDM Harness WorkBuddy hooks.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values, fabricate evidence, or replace missing data with examples.
 - Do not invent authentication or authorization flags.
-- WorkBuddy support currently requires `authz.mode=off`. If a hook reports `QDM_HARNESS_AUTHZ_UNSUPPORTED`, stop the data flow.
+- On macOS, let the WorkBuddy `PreToolUse` hook bind authorization for `analysis execute` and `auth describe`; never add `--data-auth`, `--auth-blob`, or `--auth-json` yourself.
+- When `authz.mode=on`, do not run QDM data commands through PowerShell. If the auth hook denies a command, stop the data flow and report the denial without exposing credential values.
 - Deliver analysis, query results, reports, summaries, and diagnostic conclusions in the current conversation by default.
 - Do not write final or intermediate results to files unless the user explicitly asks to export, save, or generate a file.
 - Never read, open, guess, or use a template file directly. A selected template is valid only when the `PostToolUse` hook injects it after `bin/data-harness-cli stage template` or `inject-template` (Windows PowerShell: `.\\bin\\data-harness-cli.exe stage template`).

@@ -1,15 +1,15 @@
 # QDM Harness WorkBuddy Plugin
 
-This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through native plugin hooks.
+This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through native plugin hooks. Auth command rewriting requires WorkBuddy 5.3.11+ with embedded CodeBuddy CLI 2.115.0+.
 
 ## Runtime flow
 
 ```text
-UserPromptSubmit / PostToolUse
+PreToolUse / UserPromptSubmit / PostToolUse
         -> scripts/harness-hook.mjs
-        -> data-harness-cli --format workbuddy-hook
-        -> Harness context/session/template core
-        -> hookSpecificOutput.additionalContext
+        -> data-harness-cli authz-hook --agent workbuddy
+           or data-harness-cli --format workbuddy-hook
+        -> shared authz or context/session/template core
 ```
 
 The JavaScript adapter only normalizes WorkBuddy transport fields and tool names. Wikis recall, plan selection, session state, and template injection remain in the Go CLI.
@@ -32,15 +32,26 @@ The npm installer deliberately does not edit WorkBuddy settings or Marketplace r
 
 ## Hooks
 
+- `PreToolUse` matches macOS `Bash|execute_command`, calls `authz-hook --agent workbuddy`, and only permits gated QDM commands through `updatedInput.command`.
 - `UserPromptSubmit` calls `context --format workbuddy-hook`.
 - `PostToolUse` matches `Bash|PowerShell|execute_command`, normalizes the tool name to `Bash`, and calls `posttool --format workbuddy-hook`.
-- Outside a Harness workspace, both hooks return an empty object and do not alter normal WorkBuddy behavior.
-- Adapter and CLI failures return the same safety message through model-visible `additionalContext` and host-visible `systemMessage`, so failures are explicit without guessing data or templates.
+- Outside a Harness workspace, all hooks return an empty object and do not alter normal WorkBuddy behavior.
+- Context/PostToolUse failures return model-visible `additionalContext` and host-visible `systemMessage`; auth failures return an explicit `permissionDecision=deny` reason and exit with status `2` so hosts that cannot enforce the JSON decision still fail closed.
 - WorkBuddy requires a stable `session_id`; its namespaced session key is stored under a collision-resistant SHA-256 filename and never falls back to shared `unknown` state.
 
-## Current limitation
+## macOS auth
 
-WorkBuddy support currently requires `authz.mode=off`. Data-permission/auth-blob injection is not implemented. Do not use `--agent workbuddy` together with installer `--data-auth`.
+`authz.mode=on` gates only `qdm-metric-cli analysis execute` and `qdm-metric-cli auth describe`. The hook removes model-provided auth flags, binds the runtime encrypted Blob, fixes the CLI path, and scrubs auth source environment variables before execution.
+
+For managed distribution, keep the Blob outside the workspace with mode `0600`, inject its path and user id into the GUI session, then restart WorkBuddy:
+
+```bash
+install -m 600 qdm-auth.blob "$HOME/.qdm/auth/qdm-auth.blob"
+launchctl setenv HARNESS_AUTH_BLOB_FILE "$HOME/.qdm/auth/qdm-auth.blob"
+launchctl setenv HARNESS_AUTH_USER_ID "<user-id>"
+```
+
+PowerShell auth rewriting is not supported in this milestone. M1/M2 expose the Blob in `updatedInput.command`; use only for local validation or controlled pilots until a Keychain/Broker integration removes it from command text.
 
 ## Manual transport smoke
 
@@ -52,4 +63,8 @@ printf '%s' '{"session_id":"workbuddy-debug","prompt":"销售额最近怎么样�
 printf '%s' '{"session_id":"workbuddy-debug","tool_name":"Bash","tool_input":{"command":"bin/data-harness-cli stage template"},"cwd":"'"$PWD"'"}' \
   | CODEBUDDY_PROJECT_DIR="$PWD" \
     node agents/workbuddy/scripts/harness-hook.mjs posttool
+
+printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"qdm-metric-cli auth describe"},"cwd":"'"$PWD"'"}' \
+  | CODEBUDDY_PROJECT_DIR="$PWD" WORKBUDDY_APP_PATH="/Applications/WorkBuddy.app" \
+    node agents/workbuddy/scripts/harness-hook.mjs authz
 ```
