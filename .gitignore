@@ -18,6 +18,9 @@ __pycache__/
 # Local agent links
 .claude/
 .claude
+
+# pi-subagents runtime artifacts
+.pi-subagents/
 .codex/
 .codex
 .claude-bak/
