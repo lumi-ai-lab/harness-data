@@ -18,6 +18,9 @@
         },
         "windows-amd64": {
           "archive": "zip"
+        },
+        "windows-arm64": {
+          "archive": "zip"
         }
       }
     },
@@ -37,6 +40,9 @@
           "archive": "tar.gz"
         },
         "windows-amd64": {
+          "archive": "zip"
+        },
+        "windows-arm64": {
           "archive": "zip"
         }
       }
