@@ -7,27 +7,6 @@ const hookRoots = [".claude", ".codex", ".pi", ".openclaw", ".hermes"];
 const cacheRoot = ".bootstrap-cache";
 const tempPrefixes = [".install-session-backup-", ".install-backup-", ".install-new-runtime-"];
 
-function listRelFiles(dir) {
-  if (!fs.existsSync(dir)) return [];
-  const out = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      for (const child of listRelFiles(full)) out.push(path.join(entry.name, child));
-    } else {
-      out.push(entry.name);
-    }
-  }
-  return out;
-}
-
-function removeNewFiles(dir, priorRelFiles) {
-  const prior = new Set(priorRelFiles);
-  for (const rel of listRelFiles(dir)) {
-    if (!prior.has(rel)) fs.rmSync(path.join(dir, rel), { force: true });
-  }
-}
-
 function cleanupTemps(root) {
   if (!fs.existsSync(root)) return;
   for (const name of fs.readdirSync(root)) {
@@ -54,7 +33,6 @@ export function createInstallSession(runtimeDir) {
   for (const name of [...trackedRoots, ...hookRoots, cacheRoot]) {
     existed[name] = fs.existsSync(path.join(root, name));
   }
-  const priorConfigFiles = existed.config ? listRelFiles(path.join(root, "config")) : [];
   const isReinstall = fs.existsSync(path.join(root, ".harness", "installer-state.json"))
     || (existed.agents && existed.bootstrap);
 
@@ -87,7 +65,8 @@ export function createInstallSession(runtimeDir) {
       if (begun) return;
       begun = true;
       if (createdRuntimeDir) fs.mkdirSync(root, { recursive: true });
-      if (!isReinstall) return;
+      // Snapshot any pre-existing root, including first install into a dest
+      // that already has bin/wikis/config (not classified as reinstall).
       for (const name of [...trackedRoots, ...hookRoots]) {
         const target = path.join(root, name);
         if (!fs.existsSync(target)) continue;
@@ -100,23 +79,12 @@ export function createInstallSession(runtimeDir) {
     },
     rollback() {
       if (committed) return;
-      if (isReinstall) {
-        for (const item of backups.slice().reverse()) {
-          fs.rmSync(item.target, { recursive: true, force: true });
-          if (fs.existsSync(item.backup)) fs.renameSync(item.backup, item.target);
-        }
-        for (const name of [...trackedRoots, ...hookRoots]) {
-          if (!existed[name]) fs.rmSync(path.join(root, name), { recursive: true, force: true });
-        }
-      } else {
-        for (const name of [...trackedRoots, ...hookRoots, cacheRoot]) {
-          const target = path.join(root, name);
-          if (name === "config" && existed.config) {
-            removeNewFiles(target, priorConfigFiles);
-            continue;
-          }
-          if (!existed[name]) fs.rmSync(target, { recursive: true, force: true });
-        }
+      for (const item of backups.slice().reverse()) {
+        fs.rmSync(item.target, { recursive: true, force: true });
+        if (fs.existsSync(item.backup)) fs.renameSync(item.backup, item.target);
+      }
+      for (const name of [...trackedRoots, ...hookRoots, cacheRoot]) {
+        if (!existed[name]) fs.rmSync(path.join(root, name), { recursive: true, force: true });
       }
       cleanupTemps(root);
       restoreUserState();

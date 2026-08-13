@@ -2297,6 +2297,46 @@ test("install session rollback restores a reinstall workspace", () => {
   assert.equal(fs.existsSync(path.join(workspace, "bin")), false);
 });
 
+test("install session rollback restores pre-existing roots on a first install", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "bin", "keep"), "old-bin");
+  fs.mkdirSync(path.join(workspace, "wikis", "rules"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "old-wikis");
+  fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "config", "harness-config.yaml"), "old-config");
+  fs.mkdirSync(path.join(workspace, ".codex"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".codex", "hooks.json"), "old-hook");
+  const session = createInstallSession(workspace);
+  assert.equal(session.isReinstall, false);
+  session.begin();
+  fs.writeFileSync(path.join(workspace, "bin", "keep"), "new-bin");
+  fs.writeFileSync(path.join(workspace, "bin", "tool"), "new-tool");
+  fs.rmSync(path.join(workspace, "wikis"), { recursive: true, force: true });
+  fs.mkdirSync(path.join(workspace, "wikis"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "new-wikis");
+  fs.writeFileSync(path.join(workspace, "config", "harness-config.yaml"), "new-config");
+  fs.writeFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "new-env");
+  fs.writeFileSync(path.join(workspace, ".codex", "hooks.json"), "new-hook");
+  fs.mkdirSync(path.join(workspace, "agents"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "agents", "x"), "new");
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), "{}");
+  fs.mkdirSync(path.join(workspace, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".claude", "settings.json"), "new");
+  session.rollback();
+  assert.equal(fs.readFileSync(path.join(workspace, "bin", "keep"), "utf8"), "old-bin");
+  assert.equal(fs.existsSync(path.join(workspace, "bin", "tool")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8"), "old-wikis");
+  assert.equal(fs.existsSync(path.join(workspace, "wikis", "rules")), true);
+  assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8"), "old-config");
+  assert.equal(fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8"), "old-hook");
+  assert.equal(fs.existsSync(path.join(workspace, "agents")), false);
+  assert.equal(fs.existsSync(path.join(workspace, ".harness")), false);
+  assert.equal(fs.existsSync(path.join(workspace, ".claude")), false);
+});
+
 test("installToolsFromManifest rolls back earlier tools when a later download fails", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const key = platformKey();
