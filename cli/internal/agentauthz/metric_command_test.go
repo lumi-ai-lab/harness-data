@@ -1,6 +1,7 @@
 package agentauthz
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -8,16 +9,144 @@ import (
 func TestMetricCommandDetectionMatchesExecutableForms(t *testing.T) {
 	commands := []string{
 		"qdm-metric-cli analysis execute --metric saleAmt",
+		"qdm-metric-cli.exe analysis execute --metric saleAmt",
 		"./bin/qdm-metric-cli analysis execute --metric saleAmt",
+		".\\bin\\qdm-metric-cli.exe analysis execute --metric saleAmt",
 		"$QDM_METRIC_CLI analysis execute --metric saleAmt",
 		"${QDM_METRIC_CLI} auth describe",
 		"FOO=bar /opt/qdm/bin/qdm-metric-cli auth describe",
+		`C:\\harness\\bin\\qdm-metric-cli.exe auth describe`,
 		"source config/qdm-cli-paths.env && qdm-metric-cli analysis execute --metric saleAmt",
 	}
 	for _, command := range commands {
 		if !IsMetricAuthzGatedCommand(command) {
 			t.Fatalf("expected gated command match: %s", command)
 		}
+	}
+}
+
+func TestMetricCommandDetectionMatchesPowerShellQuotedPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell command syntax")
+	}
+
+	commands := []string{
+		`& 'E:\Harness Data\bin\qdm-metric-cli.exe' auth describe`,
+		`& "E:\Harness Data\bin\qdm-metric-cli.exe" analysis execute --metric saleAmt`,
+		`& '.\bin\qdm-metric-cli.exe' auth describe`,
+	}
+	for _, command := range commands {
+		if !IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected PowerShell command to be gated: %s", command)
+		}
+	}
+}
+
+func TestInjectAuthDescribeSupportsPowerShellQuotedPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell command syntax")
+	}
+
+	got := InjectAuthDescribeBlob(
+		`& 'E:\Harness Data\bin\qdm-metric-cli.exe' auth describe`,
+		"qdm1enc.runtime",
+		`E:\Harness Data\bin\qdm-metric-cli.exe`,
+	)
+	if !strings.Contains(got, "auth describe --auth-blob 'qdm1enc.runtime'") {
+		t.Fatalf("expected auth blob injection: %s", got)
+	}
+}
+
+func TestMetricCommandDetectionMatchesCMDWrapper(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows CMD command syntax")
+	}
+
+	commands := []string{
+		`cmd /c "E:\\Harness Data\\bin\\qdm-metric-cli.exe" auth describe`,
+		`cmd.exe /C "E:\\Harness Data\\bin\\qdm-metric-cli.exe" analysis execute --metric saleAmt`,
+	}
+	for _, command := range commands {
+		if !IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("expected CMD wrapper command to be gated: %s", command)
+		}
+	}
+}
+
+func TestRewriteGatedMetricCommandsPreservesCMDWrapper(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows CMD command syntax")
+	}
+
+	got, err := RewriteGatedMetricCommands(
+		`cmd /c "E:\\old\\qdm-metric-cli.exe" auth describe`,
+		"qdm1enc.runtime",
+		`C:\\Harness Data\\bin\\qdm-metric-cli.exe`,
+		ShellCMD,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, `cmd /c "C:\\Harness Data\\bin\\qdm-metric-cli.exe" auth describe`) {
+		t.Fatalf("expected CMD wrapper and quoting to be preserved: %s", got)
+	}
+	if !strings.Contains(got, `--auth-blob "qdm1enc.runtime"`) {
+		t.Fatalf("expected CMD auth blob injection: %s", got)
+	}
+}
+
+func TestRewriteGatedMetricCommandsRendersCMDWrapperWithNestedQuotes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows CMD command syntax")
+	}
+	got, err := RewriteGatedMetricCommands(
+		`cmd /c "qdm-metric-cli auth describe"`,
+		"qdm1enc.runtime",
+		`C:\\Harness Data\\bin\\qdm-metric-cli.exe`,
+		ShellCMD,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, `cmd /c ""C:\\Harness Data\\bin\\qdm-metric-cli.exe" auth describe`) ||
+		!strings.HasSuffix(got, `--auth-blob "qdm1enc.runtime""`) {
+		t.Fatalf("expected nested CMD wrapper quotes: %s", got)
+	}
+}
+
+func TestRewriteGatedMetricCommandsRendersPowerShellInvocation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialect")
+	}
+	got, err := RewriteGatedMetricCommands(
+		`qdm-metric-cli.exe analysis execute --metric saleAmt`,
+		"qdm1enc.runtime",
+		`C:\Harness Data\bin\qdm-metric-cli.exe`,
+		ShellPowerShell,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, `& 'C:\Harness Data\bin\qdm-metric-cli.exe' analysis execute`) {
+		t.Fatalf("expected PowerShell invocation operator and quoting: %s", got)
+	}
+}
+
+func TestRewriteGatedMetricCommandsRendersCMDInvocation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialect")
+	}
+	got, err := RewriteGatedMetricCommands(
+		`qdm-metric-cli.exe auth describe`,
+		"qdm1enc.runtime",
+		`C:\Harness Data\bin\qdm-metric-cli.exe`,
+		ShellCMD,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, `"C:\Harness Data\bin\qdm-metric-cli.exe" auth describe`) {
+		t.Fatalf("expected CMD quoting: %s", got)
 	}
 }
 

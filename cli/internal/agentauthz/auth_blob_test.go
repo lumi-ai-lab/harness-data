@@ -3,6 +3,7 @@ package agentauthz
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -130,6 +131,9 @@ func TestResolveAuthBlobNoBlobAvailable(t *testing.T) {
 }
 
 func TestResolveAuthBlobRejectsGroupReadableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX mode bits for this permission test")
+	}
 	root := t.TempDir()
 	blobPath := filepath.Join(root, "admin-auth.blob")
 	if err := os.WriteFile(blobPath, []byte(testBlob+"\n"), 0o644); err != nil {

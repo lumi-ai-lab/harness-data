@@ -39,7 +39,15 @@ authz:
 		t.Fatal("expected hook output")
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
-	expectedCommand := `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ` + ShellQuote(filepath.Join(root, "bin", "qdm-metric-cli")) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
+	metricName := "qdm-metric-cli"
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+	}
+	prefix := ""
+	if runtime.GOOS != "windows" {
+		prefix = "unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; "
+	}
+	expectedCommand := prefix + ShellQuote(filepath.Join(root, "bin", metricName)) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
 	if updated["command"] != expectedCommand {
 		t.Fatalf("unexpected command: %v", updated["command"])
 	}
@@ -51,6 +59,112 @@ authz:
 	}
 	if updated["unknown"] != "kept" {
 		t.Fatalf("unknown field not preserved: %#v", updated["unknown"])
+	}
+}
+
+func TestHookAuthzOnDoesNotDependOnToolName(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-user
+  allow_local_blob: true
+`)
+	if err := os.WriteFile(filepath.Join(root, "config", "dev-auth.blob"), []byte(testBlob+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "PowerShell",
+  "tool_input": {
+    "command": "qdm-metric-cli.exe analysis execute --metric saleAmt"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if !strings.Contains(command, "--data-auth") || !strings.Contains(command, "--auth-blob '"+testBlob+"'") {
+		t.Fatalf("expected auth injection: %s", command)
+	}
+}
+
+func TestHookAuthzOnRewritesCMDWrapperFromGenericShellTool(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows CMD command syntax")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-user
+  allow_local_blob: true
+`)
+	if err := os.WriteFile(filepath.Join(root, "config", "dev-auth.blob"), []byte(testBlob+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "shell_command",
+  "tool_input": {
+    "command": "cmd /c \"C:\\old\\qdm-metric-cli.exe\" auth describe"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected CMD wrapper to be authorized: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if !strings.HasPrefix(command, `cmd /c "`+filepath.Join(root, "bin", "qdm-metric-cli.exe")+`" auth describe`) {
+		t.Fatalf("expected trusted CLI path inside CMD wrapper: %s", command)
+	}
+	if !strings.Contains(command, `--auth-blob "`+testBlob+`"`) {
+		t.Fatalf("expected CMD auth blob injection: %s", command)
+	}
+}
+
+func TestHookWindowsUnknownShellDeniesControlledCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialect")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "env-user")
+
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "UnknownShell",
+  "tool_input": {
+    "command": "qdm-metric-cli.exe analysis execute --metric saleAmt"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("expected fail-closed denial: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	if !strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "unsupported shell tool") {
+		t.Fatalf("unexpected denial reason: %s", output.HookSpecificOutput.PermissionDecisionReason)
 	}
 }
 
@@ -135,6 +249,12 @@ authz:
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
 	}
 	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if runtime.GOOS == "windows" {
+		if strings.HasPrefix(command, "unset ") {
+			t.Fatalf("Windows command must not use POSIX unset: %s", command)
+		}
+		return
+	}
 	if !strings.HasPrefix(command, "unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ") {
 		t.Fatalf("expected auth source env scrub prefix: %s", command)
 	}
@@ -159,6 +279,12 @@ authz:
 	ok, output, err := Run(root, "codex", hookInput(`env | sort`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if ok {
+			t.Fatalf("Windows non-gated command must not be rewritten for env scrubbing: %+v", output)
+		}
+		return
 	}
 	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
@@ -211,6 +337,12 @@ authz:
 	ok, output, err := Run(root, "codex", hookInput(`cat /etc/hosts`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if ok {
+			t.Fatalf("Windows non-gated command must not be rewritten for env scrubbing: %+v", output)
+		}
+		return
 	}
 	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
 		t.Fatalf("expected allow output: ok=%v output=%+v", ok, output.HookSpecificOutput)
@@ -411,7 +543,11 @@ authz:
   mode: on
   allow_local_blob: true
 `)
-	if err := os.Remove(filepath.Join(root, "bin", "qdm-metric-cli")); err != nil {
+	metricName := "qdm-metric-cli"
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+	}
+	if err := os.Remove(filepath.Join(root, "bin", metricName)); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvAuthBlob, testBlob)
@@ -455,7 +591,13 @@ func writeHarnessConfig(t *testing.T, body string) string {
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "qdm-metric-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	metricName := "qdm-metric-cli"
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+		content = []byte("fixture")
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", metricName), content, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return root
