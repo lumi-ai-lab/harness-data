@@ -135,6 +135,9 @@ func runEnabled(cfg harness.Config, root string, agent string, input []byte, str
 
 	if !isMetricAuthzGatedCommand(dialect, command) {
 		if looksLikeGatedMetricCommand(command) {
+			if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && dialect == ShellPowerShell {
+				return true, denyOutput("QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED: Windows WorkBuddy PowerShell sandbox cannot return command output reliably; retry with the Bash tool"), nil
+			}
 			return true, denyOutput("QDM_AUTHZ_COMMAND_UNSUPPORTED: the QDM data command shape cannot be authorized safely"), nil
 		}
 		if AuthSourceEnvPresent(nil) {
@@ -212,6 +215,9 @@ func resolveDialect(agent, toolName string, toolInput map[string]any) (ShellDial
 }
 
 func isMetricAuthzGatedCommand(dialect ShellDialect, command string) bool {
+	if dialect == ShellPowerShell {
+		return IsPowerShellMetricAuthzGatedCommand(command)
+	}
 	return IsMetricAuthzGatedCommand(command)
 }
 
@@ -236,6 +242,9 @@ func shellDialect(toolName, command string) (ShellDialect, bool) {
 }
 
 func metricInvocationCount(dialect ShellDialect, command string) int {
+	if dialect == ShellPowerShell {
+		return PowerShellMetricInvocationCount(command)
+	}
 	return MetricInvocationCount(command)
 }
 
@@ -305,6 +314,9 @@ func replaceCommand(input map[string]any, command string) map[string]any {
 
 func missingAuthReason(dialect ShellDialect, command string, cfg harness.AuthzConfig, sourceErr error) string {
 	hasModelFlags := CommandHasModelAuthFlags(command)
+	if dialect == ShellPowerShell {
+		hasModelFlags = PowerShellCommandHasModelAuthFlags(command)
+	}
 	if !cfg.LocalBlobAllowed() && hasModelFlags {
 		return "QDM_AUTHZ_SOURCE_MISSING: refusing model-supplied --auth-blob or related authorization flags while local authorization is disabled"
 	}
@@ -318,6 +330,9 @@ func missingAuthReason(dialect ShellDialect, command string, cfg harness.AuthzCo
 		}
 	}
 	isDescribe := IsMetricAuthDescribe(command)
+	if dialect == ShellPowerShell {
+		isDescribe = IsPowerShellMetricAuthDescribe(command)
+	}
 	if isDescribe {
 		return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli auth describe"
 	}

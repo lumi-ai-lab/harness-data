@@ -42,7 +42,11 @@ authz:
 		t.Fatal("expected hook output")
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
-	expected := `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ` + ShellQuote(filepath.Join(root, "bin", "qdm-metric-cli.exe")) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
+	metricName := "qdm-metric-cli"
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+	}
+	expected := `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ` + ShellQuote(filepath.Join(root, "bin", metricName)) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
 	if updated["command"] != expected {
 		t.Fatalf("unexpected command: %v", updated["command"])
 	}
