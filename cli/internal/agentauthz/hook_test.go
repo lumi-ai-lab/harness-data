@@ -96,6 +96,78 @@ authz:
 	}
 }
 
+func TestHookAuthzOnRewritesCMDWrapperFromGenericShellTool(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows CMD command syntax")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  blob_file: config/dev-auth.blob
+  dev_user_id: local-user
+  allow_local_blob: true
+`)
+	if err := os.WriteFile(filepath.Join(root, "config", "dev-auth.blob"), []byte(testBlob+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "shell_command",
+  "tool_input": {
+    "command": "cmd /c \"C:\\old\\qdm-metric-cli.exe\" auth describe"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected CMD wrapper to be authorized: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	if !strings.HasPrefix(command, `cmd /c "`+filepath.Join(root, "bin", "qdm-metric-cli.exe")+`" auth describe`) {
+		t.Fatalf("expected trusted CLI path inside CMD wrapper: %s", command)
+	}
+	if !strings.Contains(command, `--auth-blob "`+testBlob+`"`) {
+		t.Fatalf("expected CMD auth blob injection: %s", command)
+	}
+}
+
+func TestHookWindowsUnknownShellDeniesControlledCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialect")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "env-user")
+
+	input := []byte(`{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "UnknownShell",
+  "tool_input": {
+    "command": "qdm-metric-cli.exe analysis execute --metric saleAmt"
+  }
+}`)
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("expected fail-closed denial: ok=%v output=%+v", ok, output.HookSpecificOutput)
+	}
+	if !strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "unsupported shell tool") {
+		t.Fatalf("unexpected denial reason: %s", output.HookSpecificOutput.PermissionDecisionReason)
+	}
+}
+
 func TestHookAuthzOffPassesThroughWithoutMutation(t *testing.T) {
 	root := writeHarnessConfig(t, `paths:
   knowledge: wikis

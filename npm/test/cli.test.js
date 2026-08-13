@@ -1855,6 +1855,19 @@ test("Windows update re-patches freshly replaced Codex hooks when the junction a
   }
 });
 
+test("doctor fails when Windows Codex shim is missing", async () => {
+  if (process.platform !== "win32") return;
+  const workspace = createDoctorWorkspace("codex");
+  copyCodexHooks(workspace);
+  linkAgents(workspace, "codex");
+  patchCodexHooksForWindows(workspace);
+  fs.rmSync(path.join(workspace, "agents", "codex", "hooks", "cli-shim.mjs"));
+  const report = await collectDoctor(workspace, { agent: "codex" });
+  const check = report.checks.find((item) => item.name === "Codex hooks");
+  assert.equal(check?.ok, false);
+  assert.match(check?.detail || "", /cli-shim\.mjs is missing/);
+});
+
 test("update recognizes a prepared WorkBuddy plugin without creating a symlink", async () => {
   const workspace = createAgentWorkspace();
   copyWorkBuddyPlugin(workspace);

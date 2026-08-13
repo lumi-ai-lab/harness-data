@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -64,6 +65,10 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		}
 		return false, HookOutput{}, nil
 	}
+	dialect, supported := shellDialect(payload.ToolName, command)
+	if !supported {
+		return true, denyOutput("authz could not safely rewrite the controlled command: unsupported shell tool " + payload.ToolName), nil
+	}
 
 	resolved, err := ResolveAuthBlob(ResolveOptions{
 		ProjectRoot: root,
@@ -76,7 +81,7 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	if err != nil {
 		return true, denyOutput("authz mode is on but no trusted qdm-metric-cli is available: " + err.Error()), nil
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, resolved.Blob, metricCliPath)
+	rewritten, err := RewriteGatedMetricCommands(command, resolved.Blob, metricCliPath, dialect)
 	if err != nil {
 		return true, denyOutput("authz could not safely rewrite every gated qdm-metric-cli invocation: " + err.Error()), nil
 	}
@@ -84,6 +89,34 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		rewritten = ScrubAuthSourceEnvCommand(rewritten)
 	}
 	return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Current requester authorization is bound to this QDM data command"), nil
+}
+
+func shellDialect(toolName, command string) (ShellDialect, bool) {
+	if runtime.GOOS != "windows" {
+		return ShellBash, true
+	}
+	normalizedTool := strings.ToLower(strings.TrimSpace(toolName))
+	// Codex may expose the generic shell_command tool even when the user
+	// explicitly invokes CMD. Detect the wrapper from the payload before
+	// falling back to the tool name; otherwise CMD would receive PowerShell
+	// quoting and the rewritten command would not execute.
+	if isCMDWrapper(command) {
+		return ShellCMD, true
+	}
+	switch normalizedTool {
+	case "bash", "git bash", "shell", "sh":
+		return ShellBash, true
+	case "powershell", "pwsh", "powershell.exe", "shell_command", "functions.shell_command":
+		return ShellPowerShell, true
+	case "cmd", "cmd.exe", "command prompt", "commandprompt":
+		return ShellCMD, true
+	default:
+		return "", false
+	}
+}
+
+func isCMDWrapper(command string) bool {
+	return regexp.MustCompile(`(?i)^\s*cmd(?:\.exe)?\s+/(?:c|k)\b`).MatchString(command)
 }
 
 func parseHookPayload(input []byte) (HookPayload, bool) {

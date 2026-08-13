@@ -28,6 +28,38 @@ function agentOk(workspace, name) {
   }
 }
 
+function codexHooksStatus(workspace) {
+  const hooksFile = path.join(workspace, "agents", "codex", "hooks.json");
+  const shimFile = path.join(workspace, "agents", "codex", "hooks", "cli-shim.mjs");
+  if (!fs.existsSync(hooksFile)) return { ok: false, detail: "agents/codex/hooks.json is missing" };
+  if (process.platform === "win32" && !fs.existsSync(shimFile)) {
+    return { ok: false, detail: "agents/codex/hooks/cli-shim.mjs is missing" };
+  }
+  let hooks;
+  try {
+    hooks = JSON.parse(fs.readFileSync(hooksFile, "utf8"));
+  } catch {
+    return { ok: false, detail: "agents/codex/hooks.json is invalid JSON" };
+  }
+  const expected = {
+    UserPromptSubmit: "context --format codex-hook",
+    PreToolUse: "authz-hook --agent codex",
+    PostToolUse: "posttool --format codex-hook",
+  };
+  for (const [event, args] of Object.entries(expected)) {
+    const commands = (hooks.hooks?.[event] || []).flatMap((entry) => (entry.hooks || []).map((hook) => hook.command).filter((command) => typeof command === "string"));
+    const matches = commands.filter((command) => command.includes(args));
+    if (matches.length !== 1) return { ok: false, detail: `${event} must contain exactly one ${args} hook` };
+    if (process.platform === "win32" && !matches[0].includes("cli-shim.mjs")) {
+      return { ok: false, detail: `${event} must use cli-shim.mjs on Windows` };
+    }
+    if (process.platform !== "win32" && !matches[0].includes("bash -c")) {
+      return { ok: false, detail: `${event} must use the Bash hook on this platform` };
+    }
+  }
+  return { ok: true, detail: process.platform === "win32" ? "Codex hooks and Node shim" : "Codex hooks" };
+}
+
 function configPathsValid(workspace) {
   const configDir = path.join(workspace, "config");
 
@@ -140,6 +172,9 @@ export async function collectDoctor(workspace, options = {}) {
     }
   }
 
+  const codexSelected = configuredAgent === "codex" || configuredAgent === "both" || configuredAgent === "all" || fs.existsSync(path.join(workspace, ".codex"));
+  const codexStatus = codexSelected ? codexHooksStatus(workspace) : null;
+  if (codexSelected) add("Codex hooks", codexStatus.ok, codexStatus.detail);
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)) || (workBuddySelected && Boolean(workBuddy?.prepared)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {
