@@ -9,6 +9,12 @@
  *
  * 用法:
  *   node .agents/pi/skills/html-report/scripts/setup-b2-test.mjs
+ *   node .agents/pi/skills/html-report/scripts/setup-b2-test.mjs \
+ *     --result /abs/path/to/result.json
+ *
+ * `--result` 会把指定 confirmed result.json 拷进 session，并改写
+ * session_id / result_path / recommendations_path；缺 userQuestion 时用
+ * title 补上。落盘前按现行 Metric query 契约校验每一张卡。
  *
  * 然后启动 Pi:
  *   pi --session-id test-b2
@@ -22,11 +28,131 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { metricQueryFromCard } from "./metric-query-contract.mjs";
+import { sanitizeCardId } from "./writer-return.mjs";
 
 const projectRoot = resolve(new URL("../../../../../", import.meta.url).pathname);
 const sessionId = "test-b2";
 const sessionDir = join(projectRoot, ".harness", "state", "html-report", sessionId);
+
+export function parseSetupB2Args(argv = process.argv.slice(2)) {
+  const resultIndex = argv.indexOf("--result");
+  if (resultIndex < 0) return { fixturePath: "" };
+  const fixturePath = argv[resultIndex + 1];
+  if (!fixturePath || fixturePath.startsWith("--")) {
+    throw new Error("--result requires a path to a result.json file");
+  }
+  return { fixturePath: resolve(fixturePath) };
+}
+
+export function defaultB2Result({ sessionId: sid, sessionDir: dir, startDate, endDate }) {
+  return {
+    status: "confirmed",
+    submitted_at: new Date().toISOString(),
+    title: "区域客数与门店运营分析",
+    userQuestion: "分析各区域的客数与门店运营表现",
+    mode: "free",
+    session_id: sid,
+    result_path: join(dir, "result.json"),
+    recommendations_path: join(dir, "recommendations.json"),
+    already_validated: false,
+    validation: [],
+    cards: [
+      {
+        id: "regional-custNum-summary",
+        title: "区域客数与门店运营汇总分析",
+        headingLevel: 2,
+        analysisFocus:
+          "按管理区域分析来客数、开业门店数、签约门店数及流失率，识别客数与运营效率的区域差异。",
+        chartType: "table",
+        indicatorBizId: "retail",
+        query: {
+          request: {
+            metrics: ["bf19CustNum", "openStores", "contractStores", "unknowLostRate"],
+            statisticPolicy: "SUMMARY",
+            time: { startDate, endDate },
+            dimensions: ["manageAreaId"],
+            filters: { manageAreaId: ["CN01", "CN04", "CN05", "CN07", "CN12"] },
+            pageNo: 1,
+            pageSize: 500,
+          },
+          comparisons: ["YOY", "MOM"],
+        },
+      },
+    ],
+  };
+}
+
+export function normalizeSessionResult(raw, { sessionId: sid, sessionDir: dir }) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("result.json must be one JSON object");
+  }
+  const title = String(raw.title || "").trim();
+  const userQuestion = String(raw.userQuestion || title).trim();
+  return {
+    ...raw,
+    status: "confirmed",
+    title: title || String(raw.title || ""),
+    userQuestion,
+    session_id: sid,
+    result_path: join(dir, "result.json"),
+    recommendations_path: join(dir, "recommendations.json"),
+  };
+}
+
+export function validateSessionResult(result) {
+  const errors = [];
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return { ok: false, errors: ["result.json must be one JSON object"] };
+  }
+  if (result.status !== "confirmed") errors.push(`result.status must be confirmed, got ${JSON.stringify(result.status)}`);
+  if (!String(result.userQuestion || "").trim()) errors.push("result.json is missing userQuestion");
+  if (!Array.isArray(result.cards) || !result.cards.length) {
+    errors.push("result.cards must be a non-empty array");
+    return { ok: false, errors };
+  }
+  const seen = new Set();
+  result.cards.forEach((card, index) => {
+    const label = `cards[${index}]`;
+    if (!card || typeof card !== "object" || Array.isArray(card)) {
+      errors.push(`${label} must be an object`);
+      return;
+    }
+    const cardId = String(card.id || "").trim();
+    if (!cardId) {
+      errors.push(`${label}.id is required`);
+      return;
+    }
+    try {
+      if (sanitizeCardId(cardId) !== cardId) errors.push(`${label}.id must already be a safe path segment`);
+    } catch {
+      errors.push(`${label}.id is not a safe path segment`);
+    }
+    if (seen.has(cardId)) errors.push(`${label}.id duplicates ${cardId}`);
+    seen.add(cardId);
+    try {
+      metricQueryFromCard(card);
+    } catch (error) {
+      errors.push(`${label} (${cardId}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  return { ok: errors.length === 0, errors };
+}
+
+export function loadB2SessionResult({ fixturePath, sessionId: sid, sessionDir: dir, startDate, endDate }) {
+  const raw = fixturePath
+    ? JSON.parse(readFileSync(fixturePath, "utf8"))
+    : defaultB2Result({ sessionId: sid, sessionDir: dir, startDate, endDate });
+  const result = normalizeSessionResult(raw, { sessionId: sid, sessionDir: dir });
+  const checked = validateSessionResult(result);
+  if (!checked.ok) {
+    const prefix = fixturePath ? `invalid --result ${fixturePath}` : "invalid default result.json";
+    throw new Error(`${prefix}:\n${checked.errors.map((item) => `- ${item}`).join("\n")}`);
+  }
+  return result;
+}
 
 // 与 qdm-harness/index.ts 中 HTML_REPORT_RUNTIME_SOURCE_FILES 完全一致
 const RUNTIME_SOURCE_FILES = [
@@ -87,6 +213,7 @@ const RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/check-session-layout.mjs",
 ];
 
+function main() {
 // 0. 清理旧 session（自动，无需手动删除）
 if (existsSync(sessionDir)) {
   rmSync(sessionDir, { recursive: true, force: true });
@@ -155,46 +282,27 @@ console.log(`✅ Session 目录: ${sessionDir}`);
 // 1.1 写入运行时契约标记（必须在 stage-gate init 之前，扩展启动时会校验）
 writeRuntimeContract();
 
-// 2. 写入测试 result.json (模拟 A_CONFIG 确认后的产物)
-//    使用与固定推荐调试模式一致的卡片配置
-const resultJson = {
-  status: "confirmed",
-  submitted_at: new Date().toISOString(),
-  title: "区域客数与门店运营分析",
-  userQuestion: "分析各区域的客数与门店运营表现",
-  mode: "free",
-  session_id: sessionId,
-  result_path: join(sessionDir, "result.json"),
-  recommendations_path: join(sessionDir, "recommendations.json"),
-  already_validated: false,
-  validation: [],
-  cards: [
-    {
-      id: "regional-custNum-summary",
-      title: "区域客数与门店运营汇总分析",
-      headingLevel: 2,
-      analysisFocus:
-        "按管理区域分析来客数、开业门店数、签约门店数及流失率，识别客数与运营效率的区域差异。",
-      chartType: "table",
-      indicatorBizId: "retail",
-      query: {
-        request: {
-          metrics: ["bf19CustNum", "openStores", "contractStores", "unknowLostRate"],
-          statisticPolicy: "SUMMARY",
-          time: { startDate, endDate: yesterdayStr },
-          dimensions: ["manageAreaId"],
-          filters: { manageAreaId: ["CN01", "CN04", "CN05", "CN07", "CN12"] },
-          pageNo: 1,
-          pageSize: 500,
-        },
-        comparisons: ["YOY", "MOM"],
-      },
-    },
-  ],
-};
+// 2. 写入测试 result.json（默认小卡，或 --result 指定的 confirmed 输入）
+let resultJson;
+try {
+  const { fixturePath } = parseSetupB2Args();
+  resultJson = loadB2SessionResult({
+    fixturePath,
+    sessionId,
+    sessionDir,
+    startDate,
+    endDate: yesterdayStr,
+  });
+  if (fixturePath) console.log(`✅ 使用 --result ${fixturePath}`);
+} catch (error) {
+  console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 
-writeFileSync(join(sessionDir, "result.json"), JSON.stringify(resultJson, null, 2));
-console.log(`✅ result.json 已写入 (status=confirmed, 1 card, ${startDate} ~ ${yesterdayStr})`);
+writeFileSync(join(sessionDir, "result.json"), `${JSON.stringify(resultJson, null, 2)}\n`);
+console.log(
+  `✅ result.json 已写入 (status=confirmed, ${resultJson.cards.length} card${resultJson.cards.length === 1 ? "" : "s"})`
+);
 
 // 3. 运行 stage-gate: init → start → finish → approve for A_CONFIG
 const stageGate = join(
@@ -273,3 +381,10 @@ console.log("   - 单卡失败不阻断");
 console.log("   - B2 完成后 check-session-layout --phase writer 仍会检查产物结构");
 console.log("\n📌 重新测试只需重跑此脚本（自动清理旧 session）：");
 console.log(`  node ${join(projectRoot, ".agents", "pi", "skills", "html-report", "scripts", "setup-b2-test.mjs")}`);
+console.log("  或带自定义 result.json：");
+console.log(`  node ${join(projectRoot, ".agents", "pi", "skills", "html-report", "scripts", "setup-b2-test.mjs")} --result <abs/result.json>`);
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
