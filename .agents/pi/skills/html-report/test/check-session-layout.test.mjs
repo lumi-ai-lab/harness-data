@@ -20,6 +20,7 @@ import {
   finishPipelineStage,
   initPipeline,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 function fingerprintJson(value) {
@@ -348,7 +349,11 @@ test("quality phase requires preceding approvals when the session is in step mod
   const session = join(root, ".harness", "state", "html-report", "sess-qgate");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await seedQualitySession(session);
-  await initPipeline(session, { mode: "step", sessionId: "sess-qgate" });
+  await initPipeline(session, {
+    mode: "step",
+    sessionId: "sess-qgate",
+    policy: LEGACY_STAGE_POLICY,
+  });
   await startPipelineStage(session, "A_CONFIG");
   await finishPipelineStage(session, "A_CONFIG");
   await approvePipelineStage(session);

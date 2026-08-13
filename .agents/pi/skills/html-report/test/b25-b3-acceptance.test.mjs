@@ -10,6 +10,7 @@ import {
   finishPipelineStage,
   approvePipelineStage,
   readPipelineState,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 import { finalizeEditorStage } from "../scripts/finalize-editor-stage.mjs";
 import { finalizeResearchStage } from "../scripts/finalize-research-stage.mjs";
@@ -162,7 +163,7 @@ async function setupSession(root) {
 }
 
 async function advanceGateToB25(sessionDir) {
-  await initPipeline(sessionDir, { mode: "step", sessionId: "test-b3" });
+  await initPipeline(sessionDir, { mode: "step", sessionId: "test-b3", policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(sessionDir, "A_CONFIG");
   await finishPipelineStage(sessionDir, "A_CONFIG");
   await approvePipelineStage(sessionDir);

@@ -73,6 +73,7 @@ const RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/reviewer-return.mjs",
   ".agents/pi/skills/html-report/scripts/designer-return.mjs",
   ".agents/pi/skills/html-report/scripts/assemble-report.mjs",
+  ".agents/pi/skills/html-report/scripts/compose-main.mjs",
   ".agents/pi/skills/html-report/scripts/quality-scan.mjs",
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",
@@ -91,7 +92,7 @@ if (existsSync(sessionDir)) {
   rmSync(sessionDir, { recursive: true, force: true });
   console.log("🧹 已清理旧 .harness session");
 }
-// 同时清理 Pi 的 session JSONL，否则 Pi 会恢复旧的 paused/failed Gate 状态
+// 同时清理 Pi 的 session JSONL 和目录，否则 Pi 会恢复旧的 paused/failed Gate 状态
 const piSessionsDir = join(
   process.env.HOME || "",
   ".pi",
@@ -101,9 +102,10 @@ const piSessionsDir = join(
 );
 if (existsSync(piSessionsDir)) {
   for (const f of readdirSync(piSessionsDir)) {
-    if (f.includes(`_${sessionId}.jsonl`) || f === sessionId) {
-      rmSync(join(piSessionsDir, f), { force: true });
-      console.log(`🧹 已清理 Pi session JSONL: ${f}`);
+    // Match both JSONL files and session directories: *_test-b2.jsonl, *_test-b2/
+    if (f.includes(`_${sessionId}`) || f === sessionId) {
+      rmSync(join(piSessionsDir, f), { recursive: true, force: true });
+      console.log(`🧹 已清理 Pi session: ${f}`);
     }
   }
 }
@@ -158,7 +160,8 @@ writeRuntimeContract();
 const resultJson = {
   status: "confirmed",
   submitted_at: new Date().toISOString(),
-  title: "门店101001 客数与客单价平衡点分析",
+  title: "区域客数与门店运营分析",
+  userQuestion: "分析各区域的客数与门店运营表现",
   mode: "free",
   session_id: sessionId,
   result_path: join(sessionDir, "result.json"),
@@ -167,25 +170,24 @@ const resultJson = {
   validation: [],
   cards: [
     {
-      id: "balance-custNum-perCustAmt-001",
-      title: "门店101001 客数与客单价平衡点分析（逐日趋势）",
+      id: "regional-custNum-summary",
+      title: "区域客数与门店运营汇总分析",
       headingLevel: 2,
       analysisFocus:
-        "以门店101001为样本，按日分析来客数、客单价与门店毛利额的关系，寻找毛利额最优的客数-客单价平衡点。",
+        "按管理区域分析来客数、开业门店数、签约门店数及流失率，识别客数与运营效率的区域差异。",
       chartType: "table",
-      statisticPolicy: "SUMMARY",
       indicatorBizId: "retail",
       query: {
         request: {
-          metrics: ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
+          metrics: ["bf19CustNum", "openStores", "contractStores", "unknowLostRate"],
           statisticPolicy: "SUMMARY",
           time: { startDate, endDate: yesterdayStr },
-          dimensions: ["incDate"],
-          filters: { storeId: ["101001"] },
+          dimensions: ["manageAreaId"],
+          filters: { manageAreaId: ["CN01", "CN04", "CN05", "CN07", "CN12"] },
           pageNo: 1,
           pageSize: 500,
         },
-        comparisons: [],
+        comparisons: ["YOY", "MOM"],
       },
     },
   ],
@@ -263,7 +265,8 @@ console.log("📌 在 Pi 中发送技能问题：");
 console.log('  /skill:html-report 生成客数(客流)和客单的平衡在哪个点最好? 用门店毛利额做评估, 以门店:101001为分析样本');
 console.log("\n📌 扩展会检测到已有 B2_WRITER running 状态，直接开始逐卡派发");
 console.log("   report-writer 子代理。Writer 会调用 fetch-entry.mjs 全量取数，");
-console.log("   产出 entry.json + entry.meta.json。");
+console.log("   产出 entry.json + entry.meta.json。全部卡成功后扩展会自动");
+console.log("   compose-main 写出 analysis/main.md，并停在 B2_MAIN Gate。");
 console.log("\n📌 如果 bin/qdm-metric-cli 不存在，取数会失败但流程结构仍可验证：");
 console.log("   - Writer 返回 fetchStatus=failed");
 console.log("   - 单卡失败不阻断");

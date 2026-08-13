@@ -951,9 +951,11 @@ test("Planner cache is result-fingerprinted and builds compact authoritative inp
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
     title: "中性报告",
+    userQuestion: "比较观测组合",
     cards: [{
       id: "card-a",
       title: "中性卡片",
+      analysisFocus: "中性分析",
       query: {
         request: {
           metrics: ["metric-a"],
@@ -965,10 +967,6 @@ test("Planner cache is result-fingerprinted and builds compact authoritative inp
         comparisons: [],
       },
     }],
-  }));
-  await writeFile(join(session, "recommendations.json"), JSON.stringify({
-    userQuestion: "比较观测组合",
-    cards: [{ id: "card-a", analysisFocus: "中性分析" }],
   }));
   persistEditorSourceInventory(resultPath, {
     version: 1,

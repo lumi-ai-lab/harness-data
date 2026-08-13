@@ -76,13 +76,13 @@ async function checkOne(name) {
           .split(",")
           .map((tool) => tool.trim())
           .filter(Boolean);
-        const expectedTools = ["read", "fetch_report_entry", "submit_writer_result"];
+        const expectedTools = ["ack_cli_data"];
         if (
           tools.length !== expectedTools.length ||
           expectedTools.some((tool) => !tools.includes(tool))
         ) {
           item.ok = false;
-          item.messages.push("report-writer tools must be exactly read, fetch_report_entry, submit_writer_result (no general bash or mutating tools)");
+          item.messages.push("report-writer tools must be exactly ack_cli_data (no read, submit, bash, or mutating tools)");
         }
         const fetchExtension = ".agents/pi/extensions/report-writer-fetch/index.mjs";
         if (frontmatter.subagentOnlyExtensions !== fetchExtension) {

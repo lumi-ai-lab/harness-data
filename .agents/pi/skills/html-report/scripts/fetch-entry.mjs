@@ -13,7 +13,7 @@
  *   data/cards/<card-id>/entry.json       # rows only
  *   data/cards/<card-id>/entry.meta.json  # rowCount + rowsSha256 only
  *
- * A Writer returns the paths plus its concise analysis to the Report Editor.
+ * ack_cli_data returns the paths plus rowCount/rowsSha256 to the Report Editor.
  * No fetch ledger is written: the parent already receives each Writer result.
  */
 import { createHash } from "node:crypto";

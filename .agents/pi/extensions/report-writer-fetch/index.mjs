@@ -1,10 +1,9 @@
 /**
  * Child-only Report Writer tool.
  *
- * This deliberately replaces the Writer's general bash capability with one
- * operation: fetch exactly one confirmed card using the deterministic B2
- * adapter.  The tool's process-local single-use guard prevents a Writer from
- * issuing a second recall/query during the same assignment.
+ * The journalist may call ack_cli_data exactly once. The adapter writes
+ * entry/meta and writes that same receipt to the parent-owned outputSchema
+ * capture. The child never authors the schema or the JSON.
  */
 import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -12,10 +11,9 @@ import { fileURLToPath } from "node:url";
 import { fetchAllEntries } from "../../skills/html-report/scripts/fetch-entry.mjs";
 import {
   buildWriterReturnSchema,
-  buildWriterSubmitSchema,
-  normalizeWriterSubmitValue,
   sanitizeCardId,
   validateWriterReturn,
+  WRITER_ACK_TOOL,
 } from "../../skills/html-report/scripts/writer-return.mjs";
 import {
   prepareStructuredOutputCapture,
@@ -24,7 +22,6 @@ import {
 import {
   initialWriterGuardState,
   parseWriterAssignment,
-  WRITER_SUBMIT_TOOL,
   writerUnvalidatedSubmitFailureState,
   writerToolDecision,
   writerToolResultState,
@@ -36,14 +33,6 @@ const sessionRoot = resolve(projectRoot, ".harness", "state", "html-report");
 function isInside(root, candidate) {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  return `{${Object.keys(value).sort().map((key) =>
-    `${JSON.stringify(key)}:${canonicalJson(value[key])}`
-  ).join(",")}}`;
 }
 
 async function resolveAllowedResult(resultPath) {
@@ -61,17 +50,24 @@ async function resolveAllowedResult(resultPath) {
   return realResult;
 }
 
-function outputFor(card) {
-  const base = {
-    cardId: card.cardId,
-    fetchStatus: card.fetchStatus,
-    dataPath: card.dataPath,
-    metaPath: card.metaPath,
-  };
+export function receiptFor(card) {
   if (card.fetchStatus === "success") {
-    return { ...base, rowCount: card.rowCount, rowsSha256: card.rowsSha256 };
+    return {
+      cardId: card.cardId,
+      fetchStatus: "success",
+      dataPath: card.dataPath,
+      metaPath: card.metaPath,
+      rowCount: card.rowCount,
+      rowsSha256: card.rowsSha256,
+    };
   }
-  return { ...base, error: card.error || "fetch failed" };
+  return {
+    cardId: card.cardId,
+    fetchStatus: "failed",
+    dataPath: null,
+    metaPath: null,
+    error: card.error || "fetch failed",
+  };
 }
 
 function messageText(content) {
@@ -103,8 +99,6 @@ export default function registerReportWriterFetch(pi) {
   let state = initialWriterGuardState();
   let assignmentText = "";
   let used = false;
-  let submitted = false;
-  let authorizedSubmit = "";
 
   function captureAssignment(event) {
     const text = writerAssignmentText(event).trim();
@@ -120,8 +114,7 @@ export default function registerReportWriterFetch(pi) {
     assignmentText = text;
     contract = parseWriterAssignment(text, { projectRoot });
     state = initialWriterGuardState();
-    submitted = false;
-    authorizedSubmit = "";
+    used = false;
   }
 
   pi.on?.("before_agent_start", (event) => {
@@ -129,16 +122,11 @@ export default function registerReportWriterFetch(pi) {
     state = initialWriterGuardState();
     assignmentText = "";
     used = false;
-    submitted = false;
-    authorizedSubmit = "";
     captureAssignment(event);
-    // The typed terminal owns the same parent-provided outputSchema capture,
-    // so the generic structured_output wrapper is unnecessary and hidden.
-    pi.setActiveTools?.(["read", "fetch_report_entry", WRITER_SUBMIT_TOOL]);
+    pi.setActiveTools?.([WRITER_ACK_TOOL]);
     return undefined;
   });
 
-  // The assigned task is normally the last user message in child context.
   pi.on?.("context", (event) => {
     captureAssignment(event);
     return undefined;
@@ -147,12 +135,6 @@ export default function registerReportWriterFetch(pi) {
   pi.on?.("tool_call", (event) => {
     const transition = writerToolDecision(contract, state, event);
     state = transition.state;
-    if (
-      String(event?.toolName || "").toLowerCase() === WRITER_SUBMIT_TOOL &&
-      !transition.decision
-    ) {
-      authorizedSubmit = canonicalJson(normalizeWriterSubmitValue(event.input));
-    }
     return transition.decision;
   });
 
@@ -161,30 +143,24 @@ export default function registerReportWriterFetch(pi) {
     return undefined;
   });
 
-  // As with Researcher typed submit, core validates arguments before
-  // tool_call. A schema-invalid first attempt is still terminal and cannot be
-  // corrected into a hidden retry.
   pi.on?.("tool_execution_end", (event) => {
     const previousAttempts = state.structuredAttempts;
     state = writerUnvalidatedSubmitFailureState(contract, state, event);
     if (previousAttempts === 0 && state.structuredAttempts === 1) {
-      // A core schema error never reaches tool_call, so guard state alone
-      // cannot intercept another equally malformed attempt. Remove every tool
-      // at this boundary: the child now fails closed and cannot enter a repair,
-      // I/O, or resubmission chain.
       pi.setActiveTools?.([]);
     }
     return undefined;
   });
 
   pi.registerTool({
-    name: "fetch_report_entry",
-    label: "Fetch report entry",
-    description: "Fetch exactly one assigned html-report card through qdm-metric-cli. Call once, then only read its entry.json and entry.meta.json.",
-    promptSnippet: "fetch_report_entry: the only Writer fetch; accepts absolute resultPath and assigned cardId; call once.",
+    name: WRITER_ACK_TOOL,
+    label: "Ack CLI data",
+    description:
+      "Fetch the assigned html-report card through qdm-metric-cli, persist entry/meta, and return that receipt. Call exactly once. Do not read files or call any other tool.",
+    promptSnippet: "ack_cli_data: the only Writer tool; call once with assigned resultPath and cardId; its return is the editor receipt.",
     promptGuidelines: [
-      "Use fetch_report_entry exactly once before reading this card's returned entry.json or entry.meta.json.",
-      "Do not use it for another card or retry it; report its failure through submit_writer_result instead.",
+      "Call ack_cli_data exactly once with the assigned resultPath and cardId.",
+      "Do not read files, do not retry, and do not call submit_writer_result or structured_output.",
     ],
     parameters: {
       type: "object",
@@ -197,71 +173,47 @@ export default function registerReportWriterFetch(pi) {
     },
     executionMode: "sequential",
     async execute(_toolCallId, params) {
-      if (used) throw new Error("fetch_report_entry may be called only once per Report Writer assignment");
+      if (used) throw new Error("ack_cli_data may be called only once per Report Writer assignment");
       used = true;
       if (
         !contract.ok ||
         params.resultPath !== contract.resultPath ||
         params.cardId !== contract.cardId
       ) {
-        throw new Error("fetch_report_entry parameters do not match the parsed Report Writer assignment");
+        throw new Error("ack_cli_data parameters do not match the parsed Report Writer assignment");
       }
-      const resultPath = await resolveAllowedResult(params.resultPath);
-      const output = await fetchAllEntries(resultPath, { cardId: params.cardId });
-      if (!Array.isArray(output.cards) || output.cards.length !== 1) {
-        throw new Error("fetch_report_entry expected exactly one assigned card result");
-      }
-      const card = output.cards[0];
-      if (card.cardId !== sanitizeCardId(params.cardId)) {
-        throw new Error("fetch_report_entry returned a different card");
-      }
-      const value = outputFor(card);
-      return {
-        content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
-        details: value,
-      };
-    },
-  });
 
-  pi.registerTool({
-    name: WRITER_SUBMIT_TOOL,
-    label: "Submit Writer result",
-    description: "Validate and capture the assigned Writer return directly, then terminate the child. Call exactly once after the fixed fetch/read sequence.",
-    promptSnippet: "submit_writer_result: direct typed Writer terminal; pass the return object itself, without a value wrapper.",
-    promptGuidelines: [
-      "After the authorized reads, call submit_writer_result exactly once as the only tool in its assistant message.",
-      "Pass cardId, fetchStatus, paths, and analysis directly; do not wrap them in value and do not call structured_output.",
-    ],
-    parameters: buildWriterSubmitSchema(),
-    // Keep the public tool schema strict. Some OpenAI-compatible relays encode
-    // a nested object argument as JSON text; Pi runs this transport shim before
-    // schema validation, after which every guard/capture sees the canonical
-    // object form only.
-    prepareArguments(args) {
-      return normalizeWriterSubmitValue(args);
-    },
-    executionMode: "sequential",
-    async execute(_toolCallId, params) {
-      if (submitted) throw new Error("submit_writer_result may be called only once per Report Writer assignment");
-      submitted = true;
-      if (!contract.ok) {
-        throw new Error("Report Writer assignment is unavailable for typed submit");
+      let receipt;
+      try {
+        const resultPath = await resolveAllowedResult(params.resultPath);
+        const output = await fetchAllEntries(resultPath, { cardId: params.cardId });
+        if (!Array.isArray(output.cards) || output.cards.length !== 1) {
+          throw new Error("ack_cli_data expected exactly one assigned card result");
+        }
+        const card = output.cards[0];
+        if (card.cardId !== sanitizeCardId(params.cardId)) {
+          throw new Error("ack_cli_data returned a different card");
+        }
+        receipt = receiptFor(card);
+      } catch (error) {
+        receipt = {
+          cardId: params.cardId,
+          fetchStatus: "failed",
+          dataPath: null,
+          metaPath: null,
+          error: String(error?.message || error || "fetch failed"),
+        };
       }
-      const normalized = normalizeWriterSubmitValue(params);
-      if (!authorizedSubmit || authorizedSubmit !== canonicalJson(normalized)) {
-        throw new Error("submit_writer_result was not authorized by the Writer guard");
-      }
-      const checked = validateWriterReturn(normalized, contract);
+
+      const checked = validateWriterReturn(receipt, contract);
       if (!checked.ok) {
-        throw new Error(`Writer return is invalid: ${checked.errors.join("; ")}`);
+        throw new Error(`Writer receipt is invalid: ${checked.errors.join("; ")}`);
       }
-      const capture = await prepareStructuredOutputCapture(
-        buildWriterReturnSchema(contract)
-      );
-      const structuredOutputPath = await writeStructuredOutputCapture(capture, normalized);
+      const capture = await prepareStructuredOutputCapture(buildWriterReturnSchema(contract));
+      await writeStructuredOutputCapture(capture, receipt);
       return {
-        content: [{ type: "text", text: "Writer result committed; structured output captured." }],
-        details: { writerReturn: normalized, structuredOutputPath },
+        content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
+        details: receipt,
         terminate: true,
       };
     },

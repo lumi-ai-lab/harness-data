@@ -320,6 +320,8 @@ test("skill instructions require Spec-only flow and forbid analysis execute", as
   assert.match(skill, /A_CONFIG/);
   assert.match(skill, /B0_PREFLIGHT/);
   assert.match(skill, /B2_WRITER/);
+  assert.match(skill, /B2_MAIN/);
+  assert.match(skill, /compose-main/);
   assert.match(skill, /B25_EDITOR/);
   assert.match(skill, /B3_RESEARCH/);
   assert.match(skill, /B4_REVIEW/);

@@ -312,14 +312,6 @@ export function loadEditorPlannerInput(resultPath) {
   }
   if (!isPlainObject(writerCache.cards)) throw new Error("Writer cache is missing cards{}");
 
-  const recommendationsPath = join(paths.sessionDir, "recommendations.json");
-  if (!inside(paths.sessionDir, recommendationsPath)) throw new Error("recommendations path escaped SESSION");
-  const recommendations = readJson(recommendationsPath, "recommendations.json");
-  const recommendationCards = new Map(
-    (Array.isArray(recommendations?.cards) ? recommendations.cards : [])
-      .filter((card) => isPlainObject(card) && typeof card.id === "string")
-      .map((card) => [card.id, card])
-  );
   const sources = new Map();
   for (const source of inventory.sources) {
     if (!isPlainObject(source) || typeof source.cardId !== "string") {
@@ -329,6 +321,8 @@ export function loadEditorPlannerInput(resultPath) {
     sources.set(source.cardId, source);
   }
 
+  // All card metadata (title, analysisFocus) and the user question come from
+  // result.json — the sole A/B hard interface.  No recommendations.json read.
   const cards = result.value.cards.map((card, index) => {
     if (!isPlainObject(card) || typeof card.id !== "string" || !card.id.trim()) {
       throw new Error(`result.cards[${index}] is missing a non-empty id`);
@@ -339,11 +333,10 @@ export function loadEditorPlannerInput(resultPath) {
     if (!isPlainObject(writer) || writer.fetchStatus !== "success" || writer.cardId !== card.id) {
       throw new Error(`validated Writer return cache is missing cardId=${card.id}`);
     }
-    const recommendation = recommendationCards.get(card.id) || {};
     return {
       id: card.id,
-      title: String(card.title || recommendation.title || card.id),
-      analysisFocus: typeof recommendation.analysisFocus === "string" ? recommendation.analysisFocus : null,
+      title: String(card.title || card.id),
+      analysisFocus: typeof card.analysisFocus === "string" ? card.analysisFocus : null,
       queryCoverage: compactQueryCoverage(card.query),
       writer: {
         summary: String(writer.analysis?.summary || ""),
@@ -355,8 +348,8 @@ export function loadEditorPlannerInput(resultPath) {
   });
   if (sources.size !== cards.length) throw new Error("source inventory card set does not match result.json");
 
-  const userQuestion = String(recommendations?.userQuestion || "").trim();
-  if (!userQuestion) throw new Error("recommendations.json is missing userQuestion");
+  const userQuestion = String(result.value.userQuestion || "").trim();
+  if (!userQuestion) throw new Error("result.json is missing userQuestion");
   return {
     version: EDITOR_PLAN_INPUT_VERSION,
     producer: "editor-plan-contract.mjs",

@@ -79,17 +79,20 @@ The qdm-harness extension initializes every new html-report Pi session in
 $SESSION/debug/pipeline-state.json
 ```
 
-There are six human Gates and one separately timed internal stage:
+There are human Gates plus skippable later stages. Each stage has `enabled`
+(run or skip) and `gate` (wait for 「继续」or auto-advance). Current first
+slice:
 
-| Order | Timed stage | Human stop |
-| --- | --- | --- |
-| 1 | `A_CONFIG` | yes |
-| 2 | `B0_PREFLIGHT` | yes |
-| 3 | `B2_WRITER` | yes |
-| 4 | `B25_EDITOR` | no; included in the B3 Gate |
-| 5 | `B3_RESEARCH` | yes; reports Editor and Researcher times separately |
-| 6 | `B4_REVIEW` | yes; every failed repair attempt is a new Gate |
-| 7 | `B5_DESIGN` | final completion（固定推荐调试模式由扩展自动跳过；动态模式执行 Designer） |
+| Order | Timed stage | Human stop | Default |
+| --- | --- | --- | --- |
+| 1 | `A_CONFIG` | yes | on |
+| 2 | `B0_PREFLIGHT` | yes | on |
+| 3 | `B2_WRITER` | no | on; journalists fetch only |
+| 4 | `B2_MAIN` | yes | on; `compose-main.mjs` writes `analysis/main.md` |
+| 5 | `B25_EDITOR` | no | **off** until later slices |
+| 6 | `B3_RESEARCH` | yes | **off** |
+| 7 | `B4_REVIEW` | yes | **off** |
+| 8 | `B5_DESIGN` | final | **off** |
 
 For every stage, the mandatory order is `start → 工作 → layout → finish/fail → stop`:
 
@@ -296,7 +299,7 @@ approved and `result.json` exists. Never jump directly to Writer work.
 | Display | Technical id | Asset |
 | --- | --- | --- |
 | **Report Editor** (you) | — | Own stages and consume typed handoffs; B2.5 artifacts are materialized deterministically |
-| **Report Writer** | `report-writer` | Per-card SubAgent: fetch + concise analysis return |
+| **Report Writer** | `report-writer` | Per-card SubAgent: call `ack_cli_data` once; the tool return is the receipt |
 | **Report Researcher** | `report-researcher` | Drill-down SubAgent per pending task |
 | **Report Reviewer** | `report-reviewer` | Final R1–R7 scorecard SubAgent (B4) |
 | **Report Designer** | `report-designer` | Isolated frontend design + visual QA SubAgent (B5) |
@@ -410,19 +413,31 @@ The extension owns this latency-critical stage:
    there is only one card. Never bulk-fetch, impersonate Writer, or use parallel
    `tasks[]`. Each card/Gate attempt has one dispatch; do not retry or inspect
    child/session artifacts.
-3. Accept only the extension-validated typed result. The child contract owns
-   fetch/read/submit details and limits first-pass analysis to at most one
-   literal `entry.json#/0` finding plus exactly one short qualitative action.
+3. Accept only the extension-validated `ack_cli_data` receipt. The child
+   calls that tool once; it writes entry/meta and the same receipt to the
+   parent-owned `outputSchema`. Do not write or rewrite `outputSchema`.
    Its `fetch-entry.mjs` path is all-pages and never uses `--single-page`.
-   `qdm-harness` always replaces them with the exact per-card schema; a valid persisted
-   entry/meta pair is reused automatically on a user-approved retry.
+   A valid persisted entry/meta pair is reused automatically on a
+   user-approved retry.
 4. After a valid result, follow only the next exact call returned by the
    extension. It dispatches the next card or deterministically performs B2
-   layout and finish/fail. Return the final Gate text and stop; never run parent
-   layout/Gate commands or write/edit Writer data.
+   layout, runs `compose-main.mjs`, finishes `B2_MAIN`, and stops at that Gate.
+   Return the Gate text; never write/edit `analysis/main.md` or Writer data.
 
-Shallow or unanswered analysis becomes a B2.5 Researcher task; never re-spawn
-Writer for depth.
+Shallow or unanswered analysis is later work. Do not re-spawn Writer for depth.
+
+### B2_MAIN — 初版 MAIN Gate
+
+全部 Writer 取数通过 `--phase writer` 后，扩展自动：
+
+1. `finish B2_WRITER`（本阶段默认不等待「继续」）
+2. `start B2_MAIN` 并调用 `compose-main.mjs`
+3. 按 `result.json` 卡片顺序把各卡 `entry.json` 原样写入 `analysis/main.md`
+4. `finish B2_MAIN` 后停在人工 Gate
+
+主编只看 `$SESSION/analysis/main.md`。回复 **「继续」** 才进入下一启用阶段。
+当前后续 Planner / Researcher / Review / Design 默认关闭，所以「继续」后本段
+skill 结束。不要手写 MAIN，不要派 Planner。
 
 ### B2.5 — Report Editor Planner（单次语义规划 + 确定性落盘）
 

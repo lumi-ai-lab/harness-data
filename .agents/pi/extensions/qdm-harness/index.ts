@@ -28,6 +28,8 @@ import {
 } from "../../skills/html-report/scripts/stage-gate.mjs";
 import {
   buildWriterReturnSchema,
+  extractWriterReceipt,
+  isWriterEmptyOutputError,
   validateWriterReturn,
   writerReturnPathsForResult,
 } from "../../skills/html-report/scripts/writer-return.mjs";
@@ -49,6 +51,7 @@ import {
   validateDesignerArtifacts,
 } from "../../skills/html-report/scripts/designer-return.mjs";
 import { checkSessionLayout } from "../../skills/html-report/scripts/check-session-layout.mjs";
+import { composeMain } from "../../skills/html-report/scripts/compose-main.mjs";
 import {
   PARENT_REVIEWER_SCAN_MARKER,
   REVIEWER_INPUT_MAX_BYTES,
@@ -344,6 +347,7 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/reviewer-return.mjs",
   ".agents/pi/skills/html-report/scripts/designer-return.mjs",
   ".agents/pi/skills/html-report/scripts/assemble-report.mjs",
+  ".agents/pi/skills/html-report/scripts/compose-main.mjs",
   ".agents/pi/skills/html-report/scripts/quality-scan.mjs",
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",
@@ -1392,6 +1396,7 @@ const HTML_REPORT_STAGE_SUBAGENTS: Record<string, readonly string[] | "list" | "
   A_CONFIG: "list",
   B0_PREFLIGHT: "list",
   B2_WRITER: ["report-writer"],
+  B2_MAIN: "none",
   B25_EDITOR: ["report-researcher"],
   B3_RESEARCH: ["report-researcher"],
   B4_REVIEW: ["report-researcher", "report-reviewer"],
@@ -1898,7 +1903,7 @@ function writerInvocationFromSubagentInput(input: JsonObject | undefined): {
   const unsupported = unsupportedParallelReportAgent(input, "report-writer");
   if (unsupported) return { error: parallelReportAgentError("Report Writer", unsupported) };
   if (input.agent === "report-writer") {
-    return { error: "Report Writer 必须使用带 outputSchema 的单步骤 chain 调用，不能使用自由文本单代理调用。" };
+    return { error: "Report Writer 必须使用单步骤 chain 调用，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const writers = input.chain.filter(
@@ -1909,9 +1914,6 @@ function writerInvocationFromSubagentInput(input: JsonObject | undefined): {
     return { error: "每张卡的 Report Writer 必须是独立的一步 chain，且不得混入其他步骤。" };
   }
   const [writer] = writers;
-  if (!isObject(writer.outputSchema)) {
-    return { error: "Report Writer chain 必须提供 outputSchema；父代理不能接受自由格式返回。" };
-  }
   if (typeof writer.task !== "string" || !writer.task.trim()) {
     return { error: "Report Writer chain 缺少 task，无法校验 cardId 与数据路径。" };
   }
@@ -1983,11 +1985,10 @@ function verifiedB2WriterCardIds(projectRoot: string, session: string, gateState
 }
 
 /**
- * `outputSchema` is deterministic from the assigned card and session. The
- * extension owns the complete Writer run envelope: model-provided schemas and
- * lifecycle controls are never trusted for this narrow structured-return job.
+ * The extension owns the Writer run envelope. outputSchema is the receipt
+ * schema, generated here from the assignment — never from model JSON.
  */
-function attachWriterOutputSchema(
+function attachWriterRunEnvelope(
   input: JsonObject | undefined,
   {
     projectRoot,
@@ -2012,23 +2013,17 @@ function attachWriterOutputSchema(
   if ("error" in expected) return { error: expected.error };
   const envelope = resetContractRunEnvelope(input, writer, projectRoot);
   if (envelope.error) return envelope;
-  // Always replace caller input. A partial or serialization-damaged schema can
-  // otherwise trap the child in repeated structured_output validation turns.
   writer.outputSchema = buildWriterReturnSchema(expected);
-  // Writer is deliberately foreground-only. If it cannot return within this
-  // small read/fetch/structured sequence, pi-subagents must terminate it
-  // instead of leaving a retry or detached run alive in the background.
-  input.turnBudget = { maxTurns: 6, graceTurns: 1 };
+  // Writer is deliberately foreground-only. If it cannot return after the
+  // single ack_cli_data call, pi-subagents must terminate it instead of
+  // leaving a retry or detached run alive in the background.
+  input.turnBudget = { maxTurns: 2, graceTurns: 1 };
   delete input.toolBudget;
   delete input.timeoutMs;
-  // The adapter caps CAS + retry sleeps + CLI attempts at 540s, leaving this
-  // foreground envelope headroom for model setup, evidence reads, and the
-  // final structured return.
+  // The adapter caps CAS + retry sleeps + CLI attempts at 540s. The child only
+  // calls ack_cli_data once; that tool writes the receipt as outputSchema.
   input.maxRuntimeMs = 720_000;
-  // At the hard limit, stop only further data access. `structured_output` must
-  // remain callable so the child can submit its final contract instead of
-  // looping on a budget-blocked completion tool until maxRuntimeMs.
-  writer.toolBudget = { hard: 8, block: ["read", "fetch_report_entry"] };
+  writer.toolBudget = { hard: 1, block: "*" };
   delete writer.async;
   delete writer.turnBudget;
   delete writer.timeoutMs;
@@ -2054,7 +2049,7 @@ type EditorPlannerToolResultPatch = ToolResultPatch & {
  */
 function writerSuccessText(value: unknown): string {
   return [
-    "B2 Report Writer 已通过结构化契约验证。以下 JSON 是本卡唯一可用返回：",
+    "B2 Report Writer 已通过 ack_cli_data 回执验收。以下 JSON 是本卡唯一可用返回：",
     JSON.stringify(value),
     "不要扫描 .pi-subagents 临时目录，也不要手工 ls/read entry 目录或 entry.meta.json。",
   ].join("\n");
@@ -2160,11 +2155,58 @@ async function finishWriterStageIfReady(
     const reason = `B2 Writer 产物已验收，但扩展无法自动 finish：${finished.error || "unknown stage-gate error"}`;
     return { ok: false, text: reason };
   }
+  return finalizeMainDraftIfReady(projectRoot, session);
+}
+
+function failMainStage(projectRoot: string | undefined, session: string | undefined, reason: string): string {
+  const concise = String(reason || "B2 Main compose failed").slice(0, 500);
+  if (!projectRoot || !session || session === "unknown") {
+    return `${concise}\n缺少当前项目或 Session，扩展无法自动 fail B2_MAIN。`;
+  }
+  const failed = runStageGate(projectRoot, session, "fail", [
+    "--stage",
+    "B2_MAIN",
+    "--reason",
+    concise,
+  ]);
   const state = readGateState(projectRoot, session);
-  const gateText = state ? formatGateMessage(state, { stageId: "B2_WRITER" }) : "B2_WRITER completed";
+  if (!failed.ok) return `${concise}\n扩展无法自动 fail B2_MAIN：${failed.error || "unknown stage-gate error"}`;
+  return state ? `${concise}\n${formatGateMessage(state, { stageId: "B2_MAIN" })}` : concise;
+}
+
+async function finalizeMainDraftIfReady(
+  projectRoot: string,
+  session: string,
+): Promise<{ ok: boolean; text: string }> {
+  const afterWriter = readGateState(projectRoot, session);
+  if (!isObject(afterWriter) || afterWriter.currentStage !== "B2_MAIN") {
+    const gateText = afterWriter
+      ? formatGateMessage(afterWriter, { stageId: String(afterWriter.currentStage || "B2_WRITER") })
+      : "B2_WRITER completed";
+    return {
+      ok: true,
+      text: `phase-writer layout：passed（扩展已确定性检查并完成 B2）\n${gateText}`,
+    };
+  }
+
+  const sessionDir = htmlReportSessionDir(projectRoot, session);
+  try {
+    await composeMain(sessionDir);
+  } catch (error) {
+    const reason = `B2 Main 合并 analysis/main.md 失败：${error instanceof Error ? error.message : String(error)}`;
+    return { ok: false, text: failMainStage(projectRoot, session, reason) };
+  }
+
+  const finishedMain = runStageGate(projectRoot, session, "finish", ["--stage", "B2_MAIN"]);
+  if (!finishedMain.ok) {
+    const reason = `初版 MAIN 已写出，但扩展无法自动 finish B2_MAIN：${finishedMain.error || "unknown stage-gate error"}`;
+    return { ok: false, text: reason };
+  }
+  const state = readGateState(projectRoot, session);
+  const gateText = state ? formatGateMessage(state, { stageId: "B2_MAIN" }) : "B2_MAIN completed";
   return {
     ok: true,
-    text: `phase-writer layout：passed（扩展已确定性检查并完成 B2）\n${gateText}`,
+    text: `phase-writer layout：passed；初版 analysis/main.md 已由 compose-main 合并\n${gateText}`,
   };
 }
 
@@ -2176,13 +2218,6 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     return failWriterResult(projectRoot, session, `B2 Report Writer 拒绝：${invocation.error}`);
   }
   if (!invocation.invocation) return undefined;
-  if (event.isError) {
-    return failWriterResult(
-      projectRoot,
-      session,
-      `B2 Report Writer 子代理失败：${contentText(event.content) || "顶层 tool_result isError=true"}`
-    );
-  }
   const expected = writerExpectedFromTask(invocation.invocation.task, { projectRoot, session });
   if ("error" in expected) {
     return failWriterResult(projectRoot, session, `B2 Report Writer 拒绝：${expected.error}`);
@@ -2194,10 +2229,37 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     return failWriterResult(
       projectRoot,
       session,
-      "B2 Report Writer 拒绝：子代理没有返回唯一 result。"
+      event.isError
+        ? `B2 Report Writer 子代理失败：${contentText(event.content) || "顶层 tool_result isError=true"}`
+        : "B2 Report Writer 拒绝：子代理没有返回唯一 result。"
     );
   }
-  if (result.exitCode !== 0) {
+  const receipt = isObject(result.structuredOutput)
+    ? result.structuredOutput
+    : extractWriterReceipt(result);
+  const emptyOutput = isWriterEmptyOutputError(
+    typeof result.error === "string" ? result.error : contentText(event.content)
+  );
+  if (!receipt) {
+    if (event.isError || result.exitCode !== 0) {
+      const childError = typeof result.error === "string" && result.error.trim()
+        ? `：${result.error.trim()}`
+        : event.isError
+          ? `：${contentText(event.content) || "顶层 tool_result isError=true"}`
+          : "";
+      return failWriterResult(
+        projectRoot,
+        session,
+        `B2 Report Writer 拒绝：子代理 exitCode=${String(result.exitCode ?? "unknown")}${childError}`
+      );
+    }
+    return failWriterResult(
+      projectRoot,
+      session,
+      "B2 Report Writer 拒绝：子代理未通过 ack_cli_data 返回回执。"
+    );
+  }
+  if (!emptyOutput && (event.isError || result.exitCode !== 0)) {
     const childError = typeof result.error === "string" && result.error.trim()
       ? `：${result.error.trim()}`
       : "";
@@ -2207,14 +2269,7 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       `B2 Report Writer 拒绝：子代理 exitCode=${String(result.exitCode)}${childError}`
     );
   }
-  if (!("structuredOutput" in result)) {
-    return failWriterResult(
-      projectRoot,
-      session,
-      "B2 Report Writer 拒绝：子代理未通过 typed submit 与 outputSchema capture 提交唯一 JSON。"
-    );
-  }
-  const checked = validateWriterReturn(result.structuredOutput, expected);
+  const checked = validateWriterReturn(receipt, expected);
   if (!checked.ok) {
     return failWriterResult(
       projectRoot,
@@ -2222,7 +2277,7 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       `B2 Report Writer 拒绝：返回契约不合法：${checked.errors.join("；")}`
     );
   }
-  if (result.structuredOutput.fetchStatus === "success") {
+  if (receipt.fetchStatus === "success") {
     let persisted = null;
     try {
       const resultMtimeMs = (await stat(expected.resultPath)).mtimeMs;
@@ -2246,9 +2301,9 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       "B2 Report Writer 拒绝：缺少当前项目或 Session，无法执行确定性验收。"
     );
   }
-  if (result.structuredOutput.fetchStatus === "success") {
+  if (receipt.fetchStatus === "success") {
     try {
-      persistEditorWriterReturn(expected.resultPath, result.structuredOutput);
+      persistEditorWriterReturn(expected.resultPath, receipt);
     } catch (error) {
       const reason = `B2 Writer 已验收，但无法建立 B2.5 Planner 输入缓存：${error instanceof Error ? error.message : String(error)}`;
       return {
@@ -2257,12 +2312,12 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       };
     }
   }
-  const finalized = await finishWriterStageIfReady(projectRoot, session, result.structuredOutput);
+  const finalized = await finishWriterStageIfReady(projectRoot, session, receipt);
   return {
     isError: finalized.ok ? false : true,
     content: [{
       type: "text",
-      text: `${writerSuccessText(result.structuredOutput)}\n${finalized.text}`,
+      text: `${writerSuccessText(receipt)}\n${finalized.text}`,
     }],
     // Preserve the original result for extensions and diagnostics. The Editor
     // consumes the validated JSON above, rather than navigating this detail.
@@ -4596,6 +4651,34 @@ export default function qdmHarnessExtension(pi: {
     return attempt ? { key: `${sid}|${attempt}|startup-status`, attempt } : null;
   }
 
+  function unavailableSiblingToolName(event: PiToolResultEvent): string | null {
+    if (event.isError !== true) return null;
+    const match = /^Tool (\S+) not found$/i.exec(contentText(event.content).trim());
+    return match?.[1] || null;
+  }
+
+  /** Hide the red "Tool read not found" that Pi emits after B2 startup strips non-bash tools. */
+  function quietB2StartupUnavailableTool(
+    sid: string,
+    state: unknown,
+    event: PiToolResultEvent
+  ): ToolResultPatch | undefined {
+    const identity = b2StartupStatusIdentity(sid, state);
+    if (!identity) return undefined;
+    const record = b2StartupStatuses.get(identity.key);
+    if (record?.phase === "failed") return undefined;
+    const missing = unavailableSiblingToolName(event);
+    if (!missing) return undefined;
+    if (String(event.toolName || "").toLowerCase() === "bash") return undefined;
+    return {
+      isError: false,
+      content: [{
+        type: "text",
+        text: `已忽略：B2 启动只允许 stage-gate status，${missing} 未执行。`,
+      }],
+    };
+  }
+
   function exactB2StartupStatusCall(sid: string, event: PiToolCallEvent): boolean {
     if (String(event.toolName || "").toLowerCase() !== "bash" || !isObject(event.input)) return false;
     if (Object.keys(event.input).sort().join(",") !== "command") return false;
@@ -5802,7 +5885,7 @@ export default function qdmHarnessExtension(pi: {
     const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
     const bound = toolCallId ? inFlightContractCalls.get(toolCallId) : undefined;
     const protectedStage = isObject(gateState) &&
-      ["B2_WRITER", "B25_EDITOR", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(String(gateState.currentStage));
+      ["B2_WRITER", "B2_MAIN", "B25_EDITOR", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(String(gateState.currentStage));
     if (!bound && !contractInvocationPresent(event.input) && !protectedStage) return null;
     if (!toolCallId) return { error: contractResultError("缺少 toolCallId，无法绑定已获准的 contract tool_call。") };
     if (settledContractToolCalls.has(toolCallId)) {
@@ -6360,7 +6443,7 @@ export default function qdmHarnessExtension(pi: {
     if (stageSubagentDecision) return stageSubagentDecision;
 
     if (isSubagentToolName(toolCall.toolName)) {
-      const schemaAttachment = attachWriterOutputSchema(toolCall.input, { projectRoot, session: sid });
+      const schemaAttachment = attachWriterRunEnvelope(toolCall.input, { projectRoot, session: sid });
       if (schemaAttachment.error) return { block: true, reason: schemaAttachment.error };
       const editorPlannerSchemaAttachment = attachEditorPlannerOutputSchema(toolCall.input, { projectRoot, session: sid });
       if (editorPlannerSchemaAttachment.error) {
@@ -6502,6 +6585,8 @@ export default function qdmHarnessExtension(pi: {
         };
       }
     }
+    const quietUnavailable = quietB2StartupUnavailableTool(sid, gateState, toolResultEvent);
+    if (quietUnavailable) return quietUnavailable;
     const b3FinalizerResult = settleB3FinalizerResult(
       sid,
       gateState,
@@ -6712,19 +6797,21 @@ export default function qdmHarnessExtension(pi: {
     if (writerDecision) {
       const details = isObject(contractEvent.details) ? contractEvent.details : null;
       const results = Array.isArray(details?.results) ? details.results : [];
-      const output = results.length === 1 && isObject(results[0]) && isObject(results[0].structuredOutput)
-        ? results[0].structuredOutput
+      const output = results.length === 1 && isObject(results[0])
+        ? (isObject(results[0].structuredOutput)
+          ? results[0].structuredOutput
+          : extractWriterReceipt(results[0]))
         : null;
       if (dispatchIdentity?.role === "report-writer") {
         const reason = writerDecision.isError === true
           ? runtimeTimeout
             ? `子代理运行超时：${runtimeTimeout}`
             : output
-              ? `结构化返回已验收但 B2 已终止：fetchStatus=${String(output.fetchStatus || "unknown")}`
+              ? `ack_cli_data 回执已验收但 B2 已终止：fetchStatus=${String(output.fetchStatus || "unknown")}`
               : "Writer 终端结果未通过，B2 已确定性失败"
           : output?.fetchStatus === "success"
             ? "success 已验收"
-            : `结构化 fetchStatus=${String(output?.fetchStatus || "failed")} 已验收`;
+            : `ack_cli_data fetchStatus=${String(output?.fetchStatus || "failed")} 已验收`;
         markContractTerminal(dispatchIdentity, reason);
       }
       return writerDecision;

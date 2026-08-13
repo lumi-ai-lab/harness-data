@@ -19,10 +19,11 @@ import {
 } from "../scripts/fetch-entry.mjs";
 import {
   buildWriterReturnSchema,
-  buildWriterSubmitSchema,
+  extractWriterReceipt,
   parseWriterReturnText,
   validateWriterReturn,
   writerReturnPaths,
+  WRITER_ACK_TOOL,
 } from "../scripts/writer-return.mjs";
 import { writerCoordinationDecision } from "../../../extensions/report-writer-fetch/lifecycle.mjs";
 import { metricQueryFromCard } from "../scripts/metric-query-contract.mjs";
@@ -476,8 +477,7 @@ test("B2.5 uses one typed Planner and extension-owned deterministic materializat
   assert.match(b25, /researchTasks\[\][\s\S]*完整[\s\S]*task[\s\S]*evidencePath/);
   assert.match(b25, /禁止手工 `write\/edit`[\s\S]*禁止手工[\s\S]*stage-gate finish/);
   assert.match(b25, /失败后扩展自动 fail[\s\S]*不得重派/);
-  assert.match(skill, /always replaces them with the exact per-card schema/i);
-  assert.match(skill, /valid persisted\s+entry\/meta pair is reused automatically/i);
+  assert.match(skill, /valid persisted entry\/meta pair is reused automatically/i);
   assert.match(pipeline, /不得重新列举或读取 Writer 的 entry\/meta 目录/);
   assert.match(pipeline, /--source-fields/);
   assert.match(pipeline, /同源需求必须合并/);
@@ -498,47 +498,32 @@ test("B2 dispatch keeps status but does not duplicate confirmed card content", a
   assert.doesNotMatch(b2, /listed order fixes only the\s+message shape[\s\S]*do not wait/i);
   assert.doesNotMatch(b2, /本卡配置:\s*<JSON>/);
   assert.doesNotMatch(b2, /用户问题:\s*<…>/);
-  assert.match(b2, /at most one[\s\S]*entry\.json#\/0[\s\S]*exactly one short/i);
+  assert.match(b2, /ack_cli_data/i);
 });
 
-test("report-writer persists only the CLI contract and returns analysis", async () => {
+test("report-writer persists only the CLI contract and submits the fetch receipt", async () => {
   const worker = await readFile(
     join(root, ".agents/pi/skills/html-report/agents/report-writer.md"),
     "utf8"
   );
-  assert.match(worker, /fetch_report_entry/);
+  assert.match(worker, /ack_cli_data/);
   assert.doesNotMatch(worker, /fetch-entry\.mjs/);
   assert.match(worker, /entry\.json/);
   assert.match(worker, /entry\.meta\.json/);
   assert.doesNotMatch(worker, /entry\.profile\.json/);
   assert.doesNotMatch(worker, /entry\.facts\.json/);
-  assert.match(worker, /submit_writer_result/);
-  assert.match(worker, /Never call `structured_output` yourself/);
-  assert.match(worker, /"dataPath"/);
-  assert.match(worker, /"metaPath"/);
-  assert.match(worker, /JSON Pointer/);
-  assert.match(worker, /never calculate|Do not calculate/i);
-  assert.match(worker, /Python, Node\.js, `jq`, shell expressions, SQL/i);
-  assert.match(worker, /period-wide\s+or cross-row claim/i);
-  assert.match(worker, /qualitative and must not introduce a numeric target/i);
-  assert.match(worker, /recommendations.*next actions only/i);
-  assert.match(worker, /Do not repeat a number, date, or\s+sample row/i);
-  assert.match(worker, /silently check these three field\s+rules/i);
-  assert.doesNotMatch(worker, /outliers or comparisons/i);
+  assert.match(worker, /single call is the entire job/i);
+  assert.match(worker, /Do not call `submit_writer_result` or `structured_output`/);
   assert.match(worker, /report-writer/);
   assert.match(worker, /禁止.*worker|Unknown agent: report-writer/i);
 });
 
-test("runtime report-writer prompt carries the exact return contract", async () => {
+test("runtime report-writer prompt carries the fetch-only contract", async () => {
   const runtime = await readFile(join(root, ".agents/pi/agents/report-writer.md"), "utf8");
-  assert.match(runtime, /"dataPath"/);
-  assert.match(runtime, /"metaPath"/);
-  assert.match(runtime, /"findings"/);
-  assert.match(runtime, /JSON Pointer/);
-  assert.match(runtime, /rowCount \+ rowsSha256/);
+  assert.match(runtime, /entry\.json` \+ `entry\.meta\.json/);
   assert.doesNotMatch(runtime, /entry\.profile\.json/);
   assert.doesNotMatch(runtime, /entry\.facts\.json/);
-  assert.match(runtime, /^tools:\s*read, fetch_report_entry, submit_writer_result$/m);
+  assert.match(runtime, /^tools:\s*ack_cli_data$/m);
   assert.match(runtime, /^extensions:\s*$/m);
   assert.match(runtime, /^subagentOnlyExtensions:\s*\.agents\/pi\/extensions\/report-writer-fetch\/index\.mjs$/m);
   assert.match(runtime, /^inheritProjectContext:\s*false$/m);
@@ -546,76 +531,85 @@ test("runtime report-writer prompt carries the exact return contract", async () 
   assert.match(runtime, /^completionGuard:\s*false$/m);
   assert.match(runtime, /^acceptanceRole:\s*read-only$/m);
   assert.match(runtime, /^acceptance:\s*\{"level":"none",/m);
-  assert.match(runtime, /period-wide or cross-row claim/i);
-  assert.match(runtime, /Python, Node\.js, `jq`, shell expressions, SQL/i);
-  assert.match(runtime, /recommendations.*next actions only/i);
-  assert.match(runtime, /Do not repeat a number, date, or\s+sample row/i);
-  assert.match(runtime, /silently check these three field\s+rules/i);
-  assert.match(runtime, /do not spend\s+a turn searching skills,\s+wikis, Git state/i);
-  assert.match(runtime, /fetch_report_entry.*exactly once/i);
-  assert.match(runtime, /Finish by calling.*submit_writer_result/i);
-  assert.match(runtime, /Do not wrap it in `value`[\s\S]*do not call[\s\S]*`structured_output`/i);
-  assert.match(runtime, /取数失败，未形成业务判断/);
-  assert.match(runtime, /literal token `null`[\s\S]*never the quoted string `"null"`/i);
+  assert.match(runtime, /ack_cli_data.*exactly once/i);
+  assert.match(runtime, /single call is the entire job/i);
+  assert.match(runtime, /Do \*\*not\*\* call `read`[\s\S]*`submit_writer_result`[\s\S]*`structured_output`/i);
 });
 
-test("Writer return contract rejects prose, wrong paths, and ungrounded findings", () => {
+test("Writer return contract accepts the fetch receipt and rejects extras", () => {
   const expected = writerReturnPaths({
     sessionDir: "/tmp/html-report-session",
-    cardId: "card/a",
+    cardId: "card-a",
   });
   const valid = {
-    cardId: "card/a",
+    cardId: "card-a",
     fetchStatus: "success",
     dataPath: expected.dataPath,
     metaPath: expected.metaPath,
-    analysis: {
-      summary: "明细中包含门店日度记录。",
-      findings: [{ statement: "第一行包含一个日期字段。", evidence: ["entry.json#/0"] }],
-      recommendations: ["结合业务场景核对该日记录。"],
-    },
+    rowCount: 2,
+    rowsSha256: "a".repeat(64),
   };
   assert.deepEqual(validateWriterReturn(valid, expected), { ok: true, errors: [] });
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: {
-        ...valid.analysis,
-        findings: [{ statement: "跨行事实", evidence: ["entry.json#/0", "entry.json#/1"] }],
-      },
-    }, expected).ok,
-    false
-  );
   assert.equal(validateWriterReturn({ ...valid, dataPath: "/tmp/other/entry.json" }, expected).ok, false);
+  assert.equal(validateWriterReturn({ ...valid, error: null }, expected).ok, false);
   assert.equal(
     validateWriterReturn({
-      ...valid,
-      analysis: { ...valid.analysis, findings: [{ statement: "x", evidence: ["entry.json#/bad~2"] }] },
+      cardId: "card-a",
+      fetchStatus: "failed",
+      dataPath: null,
+      metaPath: null,
+      error: "cli failed",
     }, expected).ok,
-    false
-  );
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: {
-        ...valid.analysis,
-        findings: [
-          { statement: "第一行。", evidence: ["entry.json#/0"] },
-          { statement: "第二行。", evidence: ["entry.json#/1"] },
-        ],
-      },
-    }, expected).ok,
-    false
-  );
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: { ...valid.analysis, recommendations: [] },
-    }, expected).ok,
-    false
+    true
   );
   assert.throws(() => parseWriterReturnText("说明：" + JSON.stringify(valid)), /without prose/);
   assert.deepEqual(parseWriterReturnText(JSON.stringify(valid)), valid);
+  assert.deepEqual(extractWriterReceipt({
+    exitCode: 1,
+    error: "Subagent produced no output (possible model cold-start or empty response).",
+    messages: [{
+      role: "toolResult",
+      toolName: WRITER_ACK_TOOL,
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(valid) }],
+      details: valid,
+    }],
+  }), valid);
+});
+
+test("extractWriterReceipt reads ack_cli_data from the child transcript when messages are omitted", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "writer-ack-transcript-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const expected = writerReturnPaths({
+    sessionDir: "/tmp/html-report-session",
+    cardId: "card-a",
+  });
+  const valid = {
+    cardId: "card-a",
+    fetchStatus: "success",
+    dataPath: expected.dataPath,
+    metaPath: expected.metaPath,
+    rowCount: 2,
+    rowsSha256: "a".repeat(64),
+  };
+  const transcriptPath = join(dir, "writer.transcript.jsonl");
+  await writeFile(transcriptPath, `${JSON.stringify({
+    recordType: "message",
+    role: "toolResult",
+    text: JSON.stringify(valid, null, 2),
+    message: {
+      role: "toolResult",
+      toolName: WRITER_ACK_TOOL,
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(valid, null, 2) }],
+      details: valid,
+    },
+  })}\n`);
+  assert.deepEqual(extractWriterReceipt({
+    exitCode: 1,
+    error: "Subagent produced no output (possible model cold-start or empty response).",
+    transcriptPath,
+  }), valid);
 });
 
 test("Writer return output schema fixes the assigned card and absolute paths", () => {
@@ -625,17 +619,9 @@ test("Writer return output schema fixes the assigned card and absolute paths", (
   assert.equal(schema.oneOf[0].properties.cardId.const, "card-1");
   assert.equal(schema.oneOf[0].properties.dataPath.const, expected.dataPath);
   assert.equal(schema.oneOf[0].properties.metaPath.const, expected.metaPath);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.findings.maxItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.findings.items.properties.evidence.maxItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.recommendations.minItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.recommendations.maxItems, 1);
+  assert.equal(schema.oneOf[0].required.includes("rowCount"), true);
   assert.equal(schema.oneOf[1].properties.dataPath.const, null);
-  const submitSchema = buildWriterSubmitSchema();
-  assert.equal(submitSchema.oneOf[0].properties.cardId.type, "string");
-  assert.equal(submitSchema.oneOf[0].properties.fetchStatus.const, "success");
-  assert.equal(submitSchema.oneOf[0].properties.analysis.type, "object");
-  assert.equal(submitSchema.oneOf[1].properties.fetchStatus.const, "failed");
-  assert.deepEqual(submitSchema.oneOf[1].properties.dataPath, { type: "null" });
+  assert.equal(schema.oneOf[1].required.includes("error"), true);
 });
 
 test("Writer paths reject dot-segment card ids", () => {

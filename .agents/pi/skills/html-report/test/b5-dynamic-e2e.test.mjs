@@ -20,6 +20,7 @@ import {
   initPipeline,
   readPipelineState,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 const rows = [
@@ -98,7 +99,7 @@ test("real Phase A confirmation result drives the dynamic B5 delivery chain", as
     else process.env.QDM_METRIC_CLI = previousMetricCli;
   });
 
-  await initPipeline(session, { mode: "step", sessionId });
+  await initPipeline(session, { mode: "step", sessionId, policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG");
   const confirmed = await headlessConfirm({
     recommendationsPath,

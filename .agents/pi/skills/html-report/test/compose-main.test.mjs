@@ -5,6 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { composeMain } from "../scripts/compose-main.mjs";
 import { rowsSha256 } from "../scripts/fetch-entry.mjs";
+import {
+  approvePipelineStage,
+  finishPipelineStage,
+  initPipeline,
+  startPipelineStage,
+} from "../scripts/stage-gate.mjs";
 
 async function exists(path) {
   try {
@@ -121,4 +127,28 @@ test("compose-main fails on rowsSha256 mismatch", async (t) => {
     /rowsSha256 does not match entry\.json for card hash/,
   );
   assert.equal(await exists(join(session, "analysis", "main.md")), false);
+});
+
+test("compose-main then B2_MAIN finish waits for 继续", async (t) => {
+  const session = await seedSession(t, {
+    cards: [{ id: "south", title: "南方", rows: [{ 区域: "华南", 客数: 12 }] }],
+  });
+  await initPipeline(session, { mode: "step" });
+  await startPipelineStage(session, "A_CONFIG");
+  await finishPipelineStage(session, "A_CONFIG");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B0_PREFLIGHT");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B2_WRITER");
+
+  const composed = await composeMain(session);
+  const finished = await finishPipelineStage(session, "B2_MAIN");
+  assert.equal(composed.mainPath, join(session, "analysis", "main.md"));
+  assert.equal(finished.state.currentStage, "B2_MAIN");
+  assert.equal(finished.state.status, "awaiting_approval");
+  assert.match(await readFile(composed.mainPath, "utf8"), /华南/);
+
+  const approved = await approvePipelineStage(session);
+  assert.equal(approved.state.status, "completed");
+  assert.equal(approved.state.stages.B25_EDITOR, undefined);
 });

@@ -15,6 +15,7 @@ import {
   resumePipeline,
   retryPipelineStage,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 const at = (seconds) => new Date(Date.UTC(2026, 6, 24, 0, 0, seconds)).toISOString();
@@ -171,7 +172,7 @@ test("failing a paused stage closes the pause interval", async (t) => {
 test("B2.5 is timed separately and B3 gate reports both durations", async (t) => {
   const session = await makeSession(t, "research");
   await confirmResult(session);
-  await initPipeline(session, { mode: "step", now: at(0) });
+  await initPipeline(session, { mode: "step", now: at(0), policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   await approvePipelineStage(session, { now: at(3) });
@@ -197,7 +198,7 @@ test("B2.5 is timed separately and B3 gate reports both durations", async (t) =>
 test("auto mode completes every stage without approval records", async (t) => {
   const session = await makeSession(t, "auto");
   await confirmResult(session);
-  await initPipeline(session, { mode: "auto", now: at(0) });
+  await initPipeline(session, { mode: "auto", now: at(0), policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
   const stages = [
     "A_CONFIG",
@@ -247,4 +248,49 @@ test("sessions keep independent state files", async (t) => {
   assert.equal(secondState.mode, "auto");
   assert.equal(secondState.status, "paused");
   assert.notEqual(pipelineStatePath(first), pipelineStatePath(second));
+});
+
+test("default policy finishes B2_WRITER without waiting and stops at B2_MAIN", async (t) => {
+  const session = await makeSession(t, "b2-main");
+  await confirmResult(session);
+  await initPipeline(session, { mode: "step", now: at(0) });
+  await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
+  await approvePipelineStage(session, { now: at(3) });
+  await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(4) });
+  await approvePipelineStage(session, { now: at(5) });
+  assert.equal((await pipelineStatus(session, { now: at(5) })).state.currentStage, "B2_WRITER");
+
+  const finishedWriter = await finishPipelineStage(session, "B2_WRITER", { now: at(6) });
+  assert.equal(finishedWriter.state.stages.B2_WRITER.status, "completed");
+  assert.equal(finishedWriter.state.currentStage, "B2_MAIN");
+  assert.equal(finishedWriter.state.status, "running");
+
+  const finishedMain = await finishPipelineStage(session, "B2_MAIN", { now: at(7) });
+  assert.equal(finishedMain.state.status, "awaiting_approval");
+  assert.equal(finishedMain.state.currentStage, "B2_MAIN");
+  assert.match(finishedMain.message, /回复“继续”结束本阶段/);
+
+  const approved = await approvePipelineStage(session, { now: at(8) });
+  assert.equal(approved.state.status, "completed");
+  assert.equal(approved.state.currentStage, "B2_MAIN");
+  assert.equal(approved.state.stages.B25_EDITOR, undefined);
+});
+
+test("disabled stages are skipped when advancing", async (t) => {
+  const session = await makeSession(t, "skip-policy");
+  await confirmResult(session);
+  await initPipeline(session, {
+    mode: "step",
+    now: at(0),
+    policy: {
+      B0_PREFLIGHT: { enabled: false },
+      B2_WRITER: { enabled: true, gate: false },
+      B2_MAIN: { enabled: true, gate: true },
+    },
+  });
+  await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
+  const approved = await approvePipelineStage(session, { now: at(3) });
+  assert.equal(approved.state.currentStage, "B2_WRITER");
 });
