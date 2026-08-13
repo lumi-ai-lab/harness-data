@@ -184,21 +184,27 @@ func LoadConfig(root string) (Config, error) {
 	if err := validatePathsConfig(ConfigRel, cfg.Paths); err != nil {
 		return Config{}, err
 	}
-	normalizeAuthzConfig(&cfg.Authz)
+	if err := normalizeAuthzConfig(&cfg.Authz); err != nil {
+		return Config{}, fmt.Errorf("%s: %w", ConfigRel, err)
+	}
 	return cfg, nil
 }
 
-func normalizeAuthzConfig(cfg *AuthzConfig) {
+func normalizeAuthzConfig(cfg *AuthzConfig) error {
 	if cfg == nil {
-		return
+		return nil
 	}
-	if strings.TrimSpace(cfg.Mode) == "" {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if mode == "" {
 		cfg.Mode = "off"
+	} else if mode == "on" || mode == "off" {
+		cfg.Mode = mode
 	} else {
-		cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+		return fmt.Errorf("authz.mode must be on or off, got %q", cfg.Mode)
 	}
 	// DevUserID stays empty unless explicitly configured — no default principal.
 	cfg.DevUserID = strings.TrimSpace(cfg.DevUserID)
+	return nil
 }
 
 func loadLegacyPathsConfig(root string, cfg Config) (Config, error) {

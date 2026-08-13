@@ -30,6 +30,23 @@ type HookPayload struct {
 	ToolInput     map[string]any
 }
 
+const AdapterEnvelopeSchemaVersion = 1
+
+const (
+	AdapterStatusDisabled = "disabled"
+	AdapterStatusNoop     = "noop"
+	AdapterStatusAllow    = "allow"
+	AdapterStatusDeny     = "deny"
+)
+
+// AdapterEnvelope makes the Go authorization decision explicit for the
+// WorkBuddy transport adapter.
+type AdapterEnvelope struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Status        string `json:"status"`
+	HookOutput    any    `json:"hookOutput"`
+}
+
 type CommandDialect string
 
 const (
@@ -42,8 +59,63 @@ func ReadHookStdin() ([]byte, error) {
 }
 
 func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
+	cfg, err := harness.LoadConfig(root)
+	if err != nil {
+		return false, HookOutput{}, err
+	}
+	if !cfg.Authz.AuthzEnabled() {
+		return false, HookOutput{}, nil
+	}
+	return runEnabled(cfg, root, agent, input, false)
+}
+
+// RunAdapterEnvelope evaluates a WorkBuddy authorization hook with Go as the
+// sole source of configuration and business semantics.
+func RunAdapterEnvelope(root string, agent string, input []byte) (AdapterEnvelope, error) {
+	cfg, err := harness.LoadConfig(root)
+	if err != nil {
+		return AdapterEnvelope{}, err
+	}
+	if !cfg.Authz.AuthzEnabled() {
+		return adapterEnvelope(AdapterStatusDisabled, map[string]any{}), nil
+	}
+	ok, output, err := runEnabled(cfg, root, agent, input, true)
+	if err != nil {
+		return AdapterEnvelope{}, err
+	}
+	if !ok {
+		return adapterEnvelope(AdapterStatusNoop, map[string]any{}), nil
+	}
+	var status string
+	switch output.HookSpecificOutput.PermissionDecision {
+	case "allow":
+		status = AdapterStatusAllow
+	case "deny":
+		status = AdapterStatusDeny
+	default:
+		return AdapterEnvelope{}, fmt.Errorf("unsupported authorization decision: %q", output.HookSpecificOutput.PermissionDecision)
+	}
+	return adapterEnvelope(status, output), nil
+}
+
+func adapterEnvelope(status string, output any) AdapterEnvelope {
+	return AdapterEnvelope{SchemaVersion: AdapterEnvelopeSchemaVersion, Status: status, HookOutput: output}
+}
+
+func runEnabled(cfg harness.Config, root string, agent string, input []byte, strictInput bool) (bool, HookOutput, error) {
 	payload, ok := parseHookPayload(input)
 	if !ok {
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided invalid PreToolUse JSON"), nil
+	}
+	toolName := strings.ToLower(strings.TrimSpace(payload.ToolName))
+	if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && toolName != "" &&
+		toolName != "bash" && toolName != "powershell" && toolName != "execute_command" {
+		return false, HookOutput{}, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(agent), "codex") && toolName != "" && toolName != "bash" {
 		return false, HookOutput{}, nil
 	}
 	dialect, accepted := resolveDialect(agent, payload.ToolName, payload.ToolInput)
@@ -51,19 +123,17 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		return false, HookOutput{}, fmt.Errorf("unsupported authz agent: %s", agent)
 	}
 	if payload.HookEventName != "" && payload.HookEventName != "PreToolUse" {
-		return false, HookOutput{}, nil
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an invalid PreToolUse event"), nil
 	}
 	command, ok := payload.ToolInput["command"].(string)
 	if !ok || strings.TrimSpace(command) == "" {
-		return false, HookOutput{}, nil
-	}
-
-	cfg, err := harness.LoadConfig(root)
-	if err != nil {
-		return false, HookOutput{}, err
-	}
-	if !cfg.Authz.AuthzEnabled() {
-		return false, HookOutput{}, nil
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an incomplete PreToolUse payload"), nil
 	}
 	if dialect == "" {
 		if AuthSourceEnvPresent(nil) || looksLikeGatedMetricCommand(command) {
@@ -170,6 +240,10 @@ func parseHookPayload(input []byte) (HookPayload, bool) {
 	if err := decoder.Decode(&raw); err != nil {
 		return HookPayload{}, false
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return HookPayload{}, false
+	}
 	toolInput, _ := raw["tool_input"].(map[string]any)
 	return HookPayload{
 		HookEventName: stringField(raw, "hook_event_name"),
@@ -209,13 +283,22 @@ func replaceCommand(input map[string]any, command string) map[string]any {
 	return out
 }
 
-func missingAuthReason(dialect CommandDialect, command string, cfg harness.AuthzConfig, _ error) string {
+func missingAuthReason(dialect CommandDialect, command string, cfg harness.AuthzConfig, sourceErr error) string {
 	hasModelFlags := CommandHasModelAuthFlags(command)
 	if dialect == DialectPowerShell {
 		hasModelFlags = PowerShellCommandHasModelAuthFlags(command)
 	}
 	if !cfg.LocalBlobAllowed() && hasModelFlags {
 		return "QDM_AUTHZ_SOURCE_MISSING: refusing model-supplied --auth-blob or related authorization flags while local authorization is disabled"
+	}
+	if sourceErr != nil {
+		reason := sourceErr.Error()
+		if strings.Contains(reason, "must be an encrypted qdm1enc blob") ||
+			strings.Contains(reason, "must contain a qdm1enc blob") ||
+			strings.Contains(reason, "auth blob file is empty") ||
+			strings.Contains(reason, "auth blob file must be a regular file") {
+			return "QDM_AUTHZ_SOURCE_INVALID: the configured authorization source is invalid"
+		}
 	}
 	isDescribe := IsMetricAuthDescribe(command)
 	if dialect == DialectPowerShell {

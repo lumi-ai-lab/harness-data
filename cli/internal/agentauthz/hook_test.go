@@ -84,6 +84,164 @@ authz:
 	}
 }
 
+func TestAdapterEnvelopeStates(t *testing.T) {
+	t.Run("disabled without authz section", func(t *testing.T) {
+		root := writeHarnessConfig(t, "paths:\n  knowledge: wikis\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("qdm-metric-cli auth describe"))
+		assertEnvelope(t, envelope, err, AdapterStatusDisabled)
+	})
+	t.Run("disabled with empty mode", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode:\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("qdm-metric-cli auth describe"))
+		assertEnvelope(t, envelope, err, AdapterStatusDisabled)
+	})
+	t.Run("disabled with explicit off and incomplete payload", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: off\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", []byte(`{"tool_name":"Bash"}`))
+		assertEnvelope(t, envelope, err, AdapterStatusDisabled)
+	})
+	t.Run("deny malformed JSON when enabled", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", []byte("{invalid"))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_INPUT_INVALID")
+	})
+	t.Run("deny trailing JSON when enabled", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", append(hookInput("pwd"), []byte(` {}`)...))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_INPUT_INVALID")
+	})
+	t.Run("deny incomplete payload when enabled", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", []byte(`{"tool_name":"Bash"}`))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_INPUT_INVALID")
+	})
+	t.Run("noop non-gated command without auth environment", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("pwd"))
+		assertEnvelope(t, envelope, err, AdapterStatusNoop)
+	})
+	t.Run("allow non-gated command with auth environment", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		t.Setenv(EnvAuthBlobFile, filepath.Join(t.TempDir(), "auth.blob"))
+		t.Setenv(EnvAuthUserID, "user")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("pwd"))
+		assertEnvelope(t, envelope, err, AdapterStatusAllow)
+		output := envelope.HookOutput.(HookOutput)
+		assertAllowUpdatedInput(t, output, "pwd", map[string]any{"shell": "bash"}, false)
+		command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+		for _, key := range AuthSourceEnvKeys {
+			if !strings.Contains(command, key) {
+				t.Fatalf("scrubbed command missing %s: %s", key, command)
+			}
+		}
+	})
+	t.Run("allow Bash gated with valid credentials", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n  allow_local_blob: true\n")
+		t.Setenv(EnvAuthBlob, testBlob)
+		t.Setenv(EnvAuthUserID, "user")
+		originalCommand := "qdm-metric-cli auth describe --auth-blob qdm1enc.model --auth-json fake"
+		input, _ := json.Marshal(map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "Bash",
+			"tool_input": map[string]any{
+				"command":    originalCommand,
+				"shell":      "bash",
+				"timeout_ms": json.Number("92233720368547758070"),
+				"unknown":    "kept",
+			},
+		})
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", input)
+		assertEnvelope(t, envelope, err, AdapterStatusAllow)
+		output := envelope.HookOutput.(HookOutput)
+		assertAllowUpdatedInput(t, output, originalCommand, map[string]any{
+			"shell": "bash", "timeout_ms": json.Number("92233720368547758070"), "unknown": "kept",
+		}, true)
+		command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+		if strings.Count(command, testBlob) != 1 || strings.Contains(command, "qdm1enc.model") || strings.Contains(command, "--auth-json") {
+			t.Fatalf("unsafe rewritten command: %s", command)
+		}
+	})
+	t.Run("deny Bash gated without credentials", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("qdm-metric-cli analysis execute --metric saleAmt"))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_SOURCE_MISSING")
+	})
+	t.Run("deny invalid credential source", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		t.Setenv(EnvAuthBlob, "invalid")
+		t.Setenv(EnvAuthUserID, "user")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput("qdm-metric-cli auth describe"))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_SOURCE_INVALID")
+	})
+	t.Run("deny unsafe rewrite", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		t.Setenv(EnvAuthBlob, testBlob)
+		t.Setenv(EnvAuthUserID, "user")
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", hookInput(`qdm-metric-cli auth describe --auth-blob`))
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_REWRITE_FAILED")
+	})
+	t.Run("deny PowerShell gated", func(t *testing.T) {
+		root := writeHarnessConfig(t, "authz:\n  mode: on\n")
+		input := []byte(`{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":".\\qdm-metric-cli.exe auth describe"}}`)
+		envelope, err := RunAdapterEnvelope(root, "workbuddy", input)
+		assertEnvelope(t, envelope, err, AdapterStatusDeny)
+		assertDenyEnvelope(t, envelope, "QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED")
+	})
+}
+
+func assertEnvelope(t *testing.T, envelope AdapterEnvelope, err error, status string) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.SchemaVersion != AdapterEnvelopeSchemaVersion || envelope.Status != status {
+		t.Fatalf("unexpected envelope: %+v", envelope)
+	}
+	if status == AdapterStatusDisabled || status == AdapterStatusNoop {
+		if output, ok := envelope.HookOutput.(map[string]any); !ok || len(output) != 0 {
+			t.Fatalf("expected empty hook output: %#v", envelope.HookOutput)
+		}
+	}
+}
+
+func assertDenyEnvelope(t *testing.T, envelope AdapterEnvelope, code string) {
+	t.Helper()
+	output, ok := envelope.HookOutput.(HookOutput)
+	if !ok {
+		t.Fatalf("unexpected hook output type: %T", envelope.HookOutput)
+	}
+	hook := output.HookSpecificOutput
+	if hook.PermissionDecision != "deny" || !strings.Contains(hook.PermissionDecisionReason, code) || hook.UpdatedInput != nil {
+		t.Fatalf("unexpected deny output: %+v", hook)
+	}
+}
+
+func assertAllowUpdatedInput(t *testing.T, output HookOutput, originalCommand string, expectedFields map[string]any, gated bool) {
+	t.Helper()
+	hook := output.HookSpecificOutput
+	if hook.PermissionDecision != "allow" || hook.UpdatedInput == nil {
+		t.Fatalf("unexpected allow output: %+v", hook)
+	}
+	command, ok := hook.UpdatedInput["command"].(string)
+	if !ok || strings.TrimSpace(command) == "" {
+		t.Fatalf("allow output has no command: %#v", hook.UpdatedInput)
+	}
+	if gated && command == originalCommand {
+		t.Fatalf("gated command was not rewritten: %s", command)
+	}
+	for key, want := range expectedFields {
+		if got := hook.UpdatedInput[key]; got != want {
+			t.Fatalf("updatedInput[%q] = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func TestHookAuthzOnLocalBlobInjectsRuntimeBlobDirectly(t *testing.T) {
 	root := writeHarnessConfig(t, `paths:
   knowledge: wikis

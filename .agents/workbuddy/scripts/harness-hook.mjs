@@ -228,29 +228,6 @@ export function resolveHarnessCLI(root, env = process.env) {
   return candidates.find((candidate) => candidate && existsSync(candidate)) || "";
 }
 
-export function readAuthzMode(root) {
-  if (!root) return "unknown";
-  try {
-    const lines = readFileSync(join(root, "config", "harness-config.yaml"), "utf8").split(/\r?\n/);
-    let inAuthz = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const indent = line.length - line.trimStart().length;
-      if (indent === 0) {
-        inAuthz = /^authz\s*:\s*(?:#.*)?$/.test(trimmed);
-        continue;
-      }
-      if (!inAuthz) continue;
-      const match = trimmed.match(/^mode\s*:\s*["']?(on|off)["']?(?:\s+#.*)?$/i);
-      if (match) return match[1].toLowerCase();
-    }
-  } catch {
-    // Unknown configuration must fail closed for authz transport errors.
-  }
-  return "unknown";
-}
-
 function readJSON(pathname) {
   try {
     return JSON.parse(readFileSync(pathname, "utf8"));
@@ -379,24 +356,56 @@ export function validateHookOutput(mode, stdout, canonicalPayload = null) {
   return output;
 }
 
-export function runCanonicalHook(mode, canonicalPayload, root, env = process.env) {
-  const authzMode = mode === "authz" ? readAuthzMode(root) : "off";
-  const failureOutput = (message) => mode === "authz" && authzMode === "off" ? {} : safeOutput(mode, message);
+export function validateAuthzEnvelope(stdout, canonicalPayload = null) {
+  const text = String(stdout || "").trim();
+  if (!text) return null;
+  let envelope;
+  try {
+    envelope = parseLosslessJSON(text);
+  } catch {
+    return null;
+  }
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  if (!isLosslessDeepEqual(Object.keys(envelope).sort(), ["hookOutput", "schemaVersion", "status"])) return null;
+  if (!isLosslessDeepEqual(envelope.schemaVersion, 1)) return null;
+  if (!Object.hasOwn(envelope, "status") || !Object.hasOwn(envelope, "hookOutput")) return null;
+  if (!new Set(["disabled", "noop", "allow", "deny"]).has(envelope.status)) return null;
+  const hookOutput = envelope.hookOutput;
+  if (envelope.status === "disabled" || envelope.status === "noop") {
+    if (!hookOutput || typeof hookOutput !== "object" || Array.isArray(hookOutput) || Object.keys(hookOutput).length !== 0) {
+      return null;
+    }
+    return {};
+  }
+  const validated = validateHookOutput("authz", stringifyLosslessJSON(hookOutput), canonicalPayload);
+  if (!validated) return null;
+  const decision = validated.hookSpecificOutput.permissionDecision;
+  if (decision !== envelope.status) return null;
+  if (decision === "deny" && !validated.systemMessage) {
+    validated.systemMessage = validated.hookSpecificOutput.permissionDecisionReason;
+  }
+  return validated;
+}
+
+export function runCanonicalHook(mode, canonicalPayload, root, env = process.env, rawAuthzInput = "", spawn = spawnSync) {
   const cli = resolveHarnessCLI(root, env);
   if (!cli || !existsSync(cli)) {
     const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
-    return failureOutput(
+    return safeOutput(
+      mode,
       `${code}: data-harness-cli is missing or not executable for this WorkBuddy project. ` +
         "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates until Harness is repaired.",
     );
   }
 
   const command = mode === "authz" ? "authz-hook" : (mode === "posttool" ? "posttool" : "context");
-  const args = mode === "authz" ? [command, "--agent", "workbuddy"] : [command, "--format", "workbuddy-hook"];
-  const result = spawnSync(cli, args, {
+  const args = mode === "authz"
+    ? [command, "--agent", "workbuddy", "--format", "adapter-envelope"]
+    : [command, "--format", "workbuddy-hook"];
+  const result = spawn(cli, args, {
     cwd: root,
     env: { ...env, CODEBUDDY_PROJECT_DIR: root },
-    input: `${stringifyLosslessJSON(canonicalPayload)}\n`,
+    input: mode === "authz" ? `${rawAuthzInput || stringifyLosslessJSON(canonicalPayload)}\n` : `${stringifyLosslessJSON(canonicalPayload)}\n`,
     encoding: "utf8",
     timeout: hookTimeout(env),
     maxBuffer: MAX_BUFFER_BYTES,
@@ -407,28 +416,21 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
     const reason = result.error?.code === "ETIMEDOUT" ? "timed out" : "failed";
     const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
     process.stderr.write(`[qdm-harness] data-harness-cli ${command} ${reason}\n`);
-    return failureOutput(
+    return safeOutput(
+      mode,
       `${code}: WorkBuddy Harness ${command} ${reason}. ` +
         "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
     );
   }
 
-  const output = validateHookOutput(mode, result.stdout, canonicalPayload);
-  if (output) {
-    if (mode === "authz" && output.hookSpecificOutput?.permissionDecision === "deny" && !output.systemMessage) {
-      output.systemMessage = output.hookSpecificOutput.permissionDecisionReason;
-    }
-    const noDecision = mode === "authz" && Object.keys(output).length === 0;
-    const commandText = canonicalPayload?.tool_input?.command || "";
-    const authEnvPresent = ["HARNESS_AUTH_BLOB", "HARNESS_AUTH_BLOB_FILE", "HARNESS_AUTH_USER_ID", "LUMI_REQUESTER_CONTEXT_DIR"]
-      .some((key) => typeof env[key] === "string" && env[key].trim());
-    const gatedMarker = /(?:qdm-metric-cli(?:\.exe)?|%QDM_METRIC_CLI%|\$env:QDM_METRIC_CLI|\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?)/i;
-    const gatedCommand = gatedMarker.test(commandText) && /(?:analysis\s+execute|auth\s+describe)/i.test(commandText);
-    if (!noDecision || authzMode === "off" || (!gatedCommand && !authEnvPresent)) return output;
-  }
+  const output = mode === "authz"
+    ? validateAuthzEnvelope(result.stdout, canonicalPayload)
+    : validateHookOutput(mode, result.stdout, canonicalPayload);
+  if (output) return output;
   process.stderr.write(`[qdm-harness] data-harness-cli ${command} returned invalid JSON\n`);
   const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
-  return failureOutput(
+  return safeOutput(
+    mode,
     `${code}: WorkBuddy Harness ${command} returned an invalid response. ` +
       "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
   );
@@ -452,38 +454,26 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return;
   }
 
+  let raw = "";
   let payload;
   try {
-    const raw = await readStdin();
+    raw = await readStdin();
     payload = raw.trim() ? parseLosslessJSON(raw) : {};
   } catch {
-    if (mode !== "authz") {
-      emit({});
-      return;
-    }
-    const root = resolveWorkspace({}, env);
-    emit(!root || readAuthzMode(root) === "off"
-      ? {}
-      : safeOutput("authz", "QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided invalid PreToolUse JSON"));
-    return;
+    payload = {};
   }
 
   let root = "";
   if (mode === "authz") {
     root = resolveWorkspace(payload, env);
-    if (!root || readAuthzMode(root) === "off") {
-      emit({});
-      return;
-    }
-    const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
-    if (toolName && !SHELL_TOOL_NAMES.has(toolName)) {
+    if (!root) {
       emit({});
       return;
     }
   }
   const canonical = normalizePayload(mode, payload);
-  if (!canonical) {
-    emit(mode === "authz" ? safeOutput("authz", "QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an incomplete PreToolUse payload") : {});
+  if (!canonical && mode !== "authz") {
+    emit({});
     return;
   }
   if (!root) root = resolveWorkspace(payload, env);
@@ -493,8 +483,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     emit({});
     return;
   }
-  const output = runCanonicalHook(mode, canonical, root, env);
-  if (mode === "authz" && Object.keys(output).length > 0 && !detectAuthRuntime(env).supported) {
+  const output = runCanonicalHook(mode, canonical, root, env, raw);
+  if (mode === "authz" && output.hookSpecificOutput?.permissionDecision === "allow" && !detectAuthRuntime(env).supported) {
     emit(safeOutput(
       mode,
       `QDM_AUTHZ_RUNTIME_UNSUPPORTED: WorkBuddy ${WORKBUDDY_AUTH_MINIMUM_VERSION}+ with CodeBuddy CLI ${CODEBUDDY_AUTH_MINIMUM_VERSION}+ is required for auth command rewriting.`,
@@ -510,7 +500,7 @@ if (entry === import.meta.url) {
   main().catch(() => {
     if (failedMode === "authz") {
       const root = resolveWorkspace({}, process.env);
-      if (!root || readAuthzMode(root) === "off") {
+      if (!root) {
         emit({});
         return;
       }

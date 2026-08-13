@@ -3,8 +3,57 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoadConfigNormalizesAuthzMode(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "no authz section", body: "paths:\n  knowledge: wikis\n", want: "off"},
+		{name: "missing mode", body: "authz:\n  allow_local_blob: true\n", want: "off"},
+		{name: "empty mode", body: "authz:\n  mode:\n", want: "off"},
+		{name: "off", body: "authz:\n  mode: off\n", want: "off"},
+		{name: "trimmed mixed case off", body: "authz:\n  mode: '  OfF  '\n", want: "off"},
+		{name: "on", body: "authz:\n  mode: on\n", want: "on"},
+		{name: "trimmed mixed case on", body: "authz:\n  mode: '  ON  '\n", want: "on"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeConfig(t, tc.body)
+			cfg, err := LoadConfig(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Authz.Mode != tc.want {
+				t.Fatalf("authz mode = %q, want %q", cfg.Authz.Mode, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsUnknownAuthzMode(t *testing.T) {
+	root := writeConfig(t, "authz:\n  mode: enabled\n")
+	_, err := LoadConfig(root)
+	if err == nil || !strings.Contains(err.Error(), "authz.mode must be on or off") {
+		t.Fatalf("expected unknown authz mode error, got %v", err)
+	}
+}
+
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ConfigRel), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
 
 func TestLoadConfigDefaultsToWikisRoot(t *testing.T) {
 	root := t.TempDir()

@@ -137,13 +137,147 @@ test("WorkBuddy adapter preserves JSON numbers beyond JavaScript safe integer ra
   assert.equal(adapter.validateHookOutput("authz", roundedOutput, parsed), null);
 });
 
-test("WorkBuddy adapter reads authz mode without reading credentials", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-mode-"));
-  fs.mkdirSync(path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "paths:\n  knowledge: wikis\n\nauthz:\n  mode: on # enabled\n");
-  assert.equal(adapter.readAuthzMode(root), "on");
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
-  assert.equal(adapter.readAuthzMode(root), "off");
+test("WorkBuddy adapter source does not parse authorization configuration", () => {
+  const source = fs.readFileSync(adapterPath, "utf8");
+  assert.doesNotMatch(source, /readAuthzMode|authzMode/);
+  assert.doesNotMatch(source, /readFileSync\([^\n]*harness-config\.yaml/);
+});
+
+test("WorkBuddy adapter validates disabled and noop envelopes", () => {
+  for (const status of ["disabled", "noop"]) {
+    const output = adapter.validateAuthzEnvelope(JSON.stringify({ schemaVersion: 1, status, hookOutput: {} }));
+    assert.deepEqual(output, {});
+  }
+});
+
+test("WorkBuddy adapter validates allow and deny envelopes", () => {
+  const canonical = { tool_input: { command: "qdm-metric-cli auth describe", timeout_ms: 10 } };
+  const allow = adapter.validateAuthzEnvelope(JSON.stringify({
+    schemaVersion: 1,
+    status: "allow",
+    hookOutput: {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: "bound",
+        updatedInput: { command: "qdm-metric-cli auth describe --auth-blob trusted", timeout_ms: 10 },
+      },
+    },
+  }), canonical);
+  assert.equal(allow.hookSpecificOutput.permissionDecision, "allow");
+
+  const deny = adapter.validateAuthzEnvelope(JSON.stringify({
+    schemaVersion: 1,
+    status: "deny",
+    hookOutput: {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "QDM_AUTHZ_SOURCE_MISSING: missing",
+      },
+    },
+  }), canonical);
+  assert.equal(deny.systemMessage, "QDM_AUTHZ_SOURCE_MISSING: missing");
+});
+
+test("WorkBuddy adapter rejects invalid or contradictory envelopes", () => {
+  const canonical = { tool_input: { command: "qdm-metric-cli auth describe", timeout_ms: 10 } };
+  const validAllow = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { command: "qdm-metric-cli auth describe --auth-blob trusted", timeout_ms: 10 },
+    },
+  };
+  const validDeny = {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "QDM_AUTHZ_SOURCE_MISSING: missing",
+    },
+  };
+  const invalid = [
+    "",
+    "not-json",
+    "[]",
+    JSON.stringify({ status: "disabled", hookOutput: {} }),
+    JSON.stringify({ schemaVersion: 2, status: "disabled", hookOutput: {} }),
+    JSON.stringify({ schemaVersion: 1, status: "unknown", hookOutput: {} }),
+    JSON.stringify({ schemaVersion: 1, status: "disabled", hookOutput: {}, extra: true }),
+    JSON.stringify({ schemaVersion: 1, status: "disabled", hookOutput: validDeny }),
+    JSON.stringify({ schemaVersion: 1, status: "noop", hookOutput: validAllow }),
+    JSON.stringify({ schemaVersion: 1, status: "allow", hookOutput: validDeny }),
+    JSON.stringify({ schemaVersion: 1, status: "deny", hookOutput: validAllow }),
+    JSON.stringify({ schemaVersion: 1, status: "deny", hookOutput: {
+      hookSpecificOutput: { ...validDeny.hookSpecificOutput, updatedInput: { command: "bad" } },
+    } }),
+    JSON.stringify({ schemaVersion: 1, status: "allow", hookOutput: {
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    } }),
+    JSON.stringify({ schemaVersion: 1, status: "allow", hookOutput: {
+      hookSpecificOutput: { ...validAllow.hookSpecificOutput, updatedInput: { command: canonical.tool_input.command, timeout_ms: 10 } },
+    } }),
+    JSON.stringify({ schemaVersion: 1, status: "allow", hookOutput: {
+      hookSpecificOutput: { ...validAllow.hookSpecificOutput, updatedInput: { command: "rewritten" } },
+    } }),
+  ];
+  for (const value of invalid) assert.equal(adapter.validateAuthzEnvelope(value, canonical), null, value);
+});
+
+test("WorkBuddy authz adapter invokes the explicit envelope format", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-envelope-call-"));
+  const cli = path.join(root, "data-harness-cli.exe");
+  fs.writeFileSync(cli, "fixture");
+  let observed;
+  const output = adapter.runCanonicalHook("authz", {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "pwd" },
+  }, root, { QDM_HARNESS_CLI: cli }, "", (file, args, options) => {
+    observed = { file, args, input: options.input };
+    return {
+      status: 0,
+      stdout: JSON.stringify({ schemaVersion: 1, status: "noop", hookOutput: {} }),
+      stderr: "",
+    };
+  });
+  assert.deepEqual(output, {});
+  assert.equal(observed.file, cli);
+  assert.deepEqual(observed.args, ["authz-hook", "--agent", "workbuddy", "--format", "adapter-envelope"]);
+  assert.match(observed.input, /"tool_name":"Bash"/);
+});
+
+test("WorkBuddy authz transport failures fail closed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-envelope-failure-"));
+  const cli = path.join(root, "data-harness-cli.exe");
+  fs.writeFileSync(cli, "fixture");
+  const canonical = {
+    hook_event_name: "PreToolUse",
+    tool_name: "Bash",
+    tool_input: { command: "qdm-metric-cli auth describe" },
+  };
+  const failures = [
+    { name: "startup failure", result: { error: Object.assign(new Error("spawn"), { code: "ENOENT" }), status: null, stdout: "" } },
+    { name: "timeout", result: { error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }), status: null, stdout: "" } },
+    { name: "non-zero", result: { status: 2, stdout: "", stderr: "failed" } },
+    { name: "empty stdout", result: { status: 0, stdout: "", stderr: "" } },
+    { name: "non-json stdout", result: { status: 0, stdout: "not-json", stderr: "" } },
+    { name: "invalid envelope", result: { status: 0, stdout: JSON.stringify({ schemaVersion: 1, status: "bad", hookOutput: {} }), stderr: "" } },
+  ];
+  for (const failure of failures) {
+    const output = adapter.runCanonicalHook("authz", canonical, root, { QDM_HARNESS_CLI: cli }, "", () => failure.result);
+    assert.equal(output.hookSpecificOutput.permissionDecision, "deny", failure.name);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /QDM_AUTHZ_HOOK_UNAVAILABLE/, failure.name);
+    assert.equal(Object.hasOwn(output.hookSpecificOutput, "updatedInput"), false, failure.name);
+  }
+});
+
+test("WorkBuddy adapter preserves unsafe-range numbers through an allow envelope", () => {
+  const canonical = adapter.parseLosslessJSON('{"tool_input":{"command":"qdm-metric-cli auth describe","large":92233720368547758070}}');
+  const envelope = '{"schemaVersion":1,"status":"allow","hookOutput":{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"rewritten","large":92233720368547758070}}}}';
+  const output = adapter.validateAuthzEnvelope(envelope, canonical);
+  assert.ok(output);
+  assert.match(adapter.stringifyLosslessJSON(output), /92233720368547758070/);
 });
 
 test("WorkBuddy authz output validator rejects unchanged gated commands", () => {
@@ -174,23 +308,7 @@ test("WorkBuddy adapter accepts the validated Windows auth runtime", () => {
   assert.equal(adapter.detectAuthRuntime({}, "linux").supported, false);
 });
 
-test("WorkBuddy authz adapter fails closed on invalid input", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-invalid-authz-"));
-  fs.mkdirSync(path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: on\n");
-  const result = runAdapter("authz", {
-    session_id: "invalid",
-    tool_name: "PowerShell",
-    tool_input: {},
-    cwd: root,
-  }, { CODEBUDDY_PROJECT_DIR: root });
-  assert.equal(result.status, 0, result.stderr);
-  const output = JSON.parse(result.stdout);
-  assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(output.hookSpecificOutput.permissionDecisionReason, /QDM_AUTHZ_INPUT_INVALID/);
-});
-
-test("WorkBuddy authz adapter keeps authz-off no-op when CLI is missing", () => {
+test("WorkBuddy authz adapter fails closed when CLI is missing", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-"));
   fs.mkdirSync(path.join(root, "config"), { recursive: true });
   fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
@@ -204,30 +322,9 @@ test("WorkBuddy authz adapter keeps authz-off no-op when CLI is missing", () => 
     QDM_HARNESS_CLI: path.join(root, "bin", "missing-data-harness-cli.exe"),
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {});
-});
-
-test("WorkBuddy authz adapter keeps authz-off no-op for an incomplete payload", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-invalid-"));
-  fs.mkdirSync(path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
-  const result = runAdapter("authz", {
-    session_id: "off-invalid",
-    tool_name: "execute_command",
-    tool_input: {},
-    cwd: root,
-  }, { CODEBUDDY_PROJECT_DIR: root });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {});
-});
-
-test("WorkBuddy authz adapter keeps authz-off no-op for invalid JSON", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-authz-off-json-"));
-  fs.mkdirSync(path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: off\n");
-  const result = runAdapterRaw("authz", "{invalid", { CODEBUDDY_PROJECT_DIR: root });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {});
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(output.hookSpecificOutput.permissionDecisionReason, /QDM_AUTHZ_HOOK_UNAVAILABLE/);
 });
 
 test("WorkBuddy authz adapter is a no-op outside Harness projects even for incomplete payloads", () => {
@@ -236,20 +333,6 @@ test("WorkBuddy authz adapter is a no-op outside Harness projects even for incom
     session_id: "ordinary",
     tool_name: "execute_command",
     tool_input: {},
-    cwd: root,
-  }, { CODEBUDDY_PROJECT_DIR: root });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {});
-});
-
-test("WorkBuddy authz adapter ignores non-shell tools", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-workbuddy-non-shell-"));
-  fs.mkdirSync(path.join(root, "config"), { recursive: true });
-  fs.writeFileSync(path.join(root, "config", "harness-config.yaml"), "authz:\n  mode: on\n");
-  const result = runAdapter("authz", {
-    session_id: "non-shell",
-    tool_name: "Read",
-    tool_input: { file_path: "README.md" },
     cwd: root,
   }, { CODEBUDDY_PROJECT_DIR: root });
   assert.equal(result.status, 0, result.stderr);
