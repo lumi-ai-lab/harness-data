@@ -33,7 +33,7 @@ func looksLikeGatedMetricCommand(command string) bool {
 
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
-	return regexp.MustCompile(`(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
 }
 
 func matchesMetricInvocation(command, subcmd string) bool {
@@ -225,7 +225,9 @@ func StripAuthFlags(command string) string {
 }
 
 func stripAuthFlagsWithSkeleton(command, skeleton string) string {
-	re := regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth\b|(?:auth-blob|auth-json)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
+	// Bash treats an unquoted \--flag token as --flag. Strip both spellings so
+	// model-supplied authorization cannot survive the runtime rewrite.
+	re := regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth\b|(?:auth-blob|auth-json)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
 	matches := re.FindAllStringIndex(skeleton, -1)
 	if len(matches) == 0 {
 		return strings.TrimSpace(command)
@@ -240,28 +242,20 @@ func stripAuthFlagsWithSkeleton(command, skeleton string) string {
 	return strings.TrimSpace(out.String())
 }
 
-func InjectDataAuth(command, blob, metricCliPath string) string {
+func InjectDataAuth(command, blob, metricCliPath string) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
 		cleaned := StripAuthFlags(command)
-		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute")
+		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute"), nil
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
-	if err == nil {
-		return rewritten
-	}
-	return command
+	return RewriteGatedMetricCommands(command, blob, metricCliPath)
 }
 
-func InjectAuthDescribeBlob(command, blob, metricCliPath string) string {
+func InjectAuthDescribeBlob(command, blob, metricCliPath string) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
 		cleaned := StripAuthFlags(command)
-		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe")
+		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe"), nil
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
-	if err == nil {
-		return rewritten
-	}
-	return command
+	return RewriteGatedMetricCommands(command, blob, metricCliPath)
 }
 
 type metricInvocation struct {

@@ -146,6 +146,19 @@ test("WorkBuddy adapter reads authz mode without reading credentials", () => {
   assert.equal(adapter.readAuthzMode(root), "off");
 });
 
+test("WorkBuddy authz output validator rejects unchanged gated commands", () => {
+  const command = "./original/qdm-metric-cli.exe auth describe \\--auth-blob 'qdm1enc.model'";
+  const canonical = { tool_input: { command, timeout_ms: 10000 } };
+  const unchanged = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput: { command, timeout_ms: 10000 },
+    },
+  });
+  assert.equal(adapter.validateHookOutput("authz", unchanged, canonical), null);
+});
+
 test("WorkBuddy adapter accepts the validated Windows auth runtime", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-windows-runtime-"));
   const cliRoot = path.join(root, "resources", "app.asar.unpacked", "cli");

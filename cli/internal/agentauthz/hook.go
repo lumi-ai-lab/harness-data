@@ -97,7 +97,10 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	}
 
 	metricCliPath := ResolveMetricCLIPath(root, cfg)
-	rewritten := injectAuthForCommand(dialect, command, resolved.Blob, metricCliPath)
+	rewritten, err := injectAuthForCommand(dialect, command, resolved.Blob, metricCliPath)
+	if err != nil || strings.TrimSpace(rewritten) == "" || rewritten == command {
+		return true, denyOutput("QDM_AUTHZ_REWRITE_FAILED: refusing to execute a QDM data command whose authorization could not be rewritten safely"), nil
+	}
 	if AuthSourceEnvPresent(nil) {
 		rewritten = scrubAuthSourceEnvCommand(dialect, rewritten)
 	}
@@ -224,12 +227,12 @@ func missingAuthReason(dialect CommandDialect, command string, cfg harness.Authz
 	return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli analysis execute"
 }
 
-func injectAuthForCommand(dialect CommandDialect, command, blob, metricCliPath string) string {
+func injectAuthForCommand(dialect CommandDialect, command, blob, metricCliPath string) (string, error) {
 	if dialect == DialectPowerShell {
 		if IsPowerShellMetricAuthDescribe(command) {
-			return InjectPowerShellAuthDescribeBlob(command, blob, metricCliPath)
+			return InjectPowerShellAuthDescribeBlob(command, blob, metricCliPath), nil
 		}
-		return InjectPowerShellDataAuth(command, blob, metricCliPath)
+		return InjectPowerShellDataAuth(command, blob, metricCliPath), nil
 	}
 	if IsMetricAuthDescribe(command) {
 		return InjectAuthDescribeBlob(command, blob, metricCliPath)

@@ -324,6 +324,64 @@ authz:
 	}
 }
 
+func TestWorkBuddyBashHookRewritesBackslashEscapedModelAuthFlags(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+cli:
+  qdm_metric_cli: /trusted/bin/qdm-metric-cli
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, "qdm1enc.runtime")
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	command := `./original/qdm-metric-cli.exe auth describe \--data-auth \--auth-blob 'qdm1enc.model-supplied' \--auth-json '{"fake":true}'`
+	ok, output, err := Run(root, "workbuddy", hookInput(command))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Fatalf("expected safe rewrite allow: ok=%v output=%+v", ok, output)
+	}
+	rewritten, _ := output.HookSpecificOutput.UpdatedInput["command"].(string)
+	for _, forbidden := range []string{"./original/qdm-metric-cli.exe", "qdm1enc.model-supplied", `\--`, "--auth-json", "--data-auth"} {
+		if strings.Contains(rewritten, forbidden) {
+			t.Fatalf("rewritten command retained %q: %s", forbidden, rewritten)
+		}
+	}
+	if strings.Count(rewritten, "--auth-blob") != 1 || !strings.Contains(rewritten, "--auth-blob 'qdm1enc.runtime'") {
+		t.Fatalf("expected exactly one runtime blob: %s", rewritten)
+	}
+}
+
+func TestWorkBuddyBashHookDeniesMalformedEscapedAuthFlag(t *testing.T) {
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+cli:
+  qdm_metric_cli: /trusted/bin/qdm-metric-cli
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, "qdm1enc.runtime")
+	t.Setenv(EnvAuthUserID, "workbuddy-user")
+	ok, output, err := Run(root, "workbuddy", hookInput(`./original/qdm-metric-cli.exe auth describe \--auth-blob`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_REWRITE_FAILED") {
+		t.Fatalf("expected rewrite failure deny: ok=%v output=%+v", ok, output)
+	}
+	if output.HookSpecificOutput.UpdatedInput != nil {
+		t.Fatalf("deny must not return updatedInput: %#v", output.HookSpecificOutput.UpdatedInput)
+	}
+}
+
 func TestWorkBuddyPowerShellHookDeniesGatedCommandBeforeResolvingAuthorization(t *testing.T) {
 	root := writeHarnessConfig(t, `paths:
   knowledge: wikis

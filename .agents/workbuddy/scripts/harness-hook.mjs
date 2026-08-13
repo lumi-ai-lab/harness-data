@@ -357,6 +357,11 @@ export function validateHookOutput(mode, stdout, canonicalPayload = null) {
     if (hook.updatedInput === undefined) return null;
     if (!hook.updatedInput || typeof hook.updatedInput !== "object" || Array.isArray(hook.updatedInput)) return null;
     if (typeof hook.updatedInput.command !== "string" || !hook.updatedInput.command.trim()) return null;
+    const originalCommand = canonicalPayload?.tool_input?.command;
+    const gatedCommand = typeof originalCommand === "string" &&
+      /(?:qdm-metric-cli(?:\.exe)?|%QDM_METRIC_CLI%|\$env:QDM_METRIC_CLI|\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?)/i.test(originalCommand) &&
+      /(?:analysis\s+execute|auth\s+describe)/i.test(originalCommand);
+    if (gatedCommand && hook.updatedInput.command === originalCommand) return null;
     // Direct injection intentionally matches the merged macOS WorkBuddy
     // contract. The encrypted Blob is required in updatedInput.command.
     const original = canonicalPayload?.tool_input || {};
