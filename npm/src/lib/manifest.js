@@ -338,6 +338,15 @@ async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) 
   }
 }
 
+function restoreToolBinaries(written, backups) {
+  for (const binary of written.slice().reverse()) {
+    const backup = backups.find((item) => item.binary === binary);
+    if (backup && fs.existsSync(backup.file)) fs.copyFileSync(backup.file, binary);
+    else fs.rmSync(binary, { force: true });
+  }
+  for (const item of backups) fs.rmSync(item.file, { force: true });
+}
+
 export async function installToolsFromManifest(workspace, manifestPath, options = {}) {
   const manifest = options.manifestOverride || readManifest(manifestPath);
   const only = options.tools ? new Set(options.tools) : null;
@@ -347,33 +356,48 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
   fs.mkdirSync(cacheDir, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
   const installedTools = {};
+  const written = [];
+  const backups = [];
 
-  for (const tool of manifest.tools || []) {
-    if (only && !only.has(tool.name)) continue;
-    const asset = tool.platforms?.[key];
-    if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
-    const reusable = !options.force ? reusableInstalledTool(workspace, tool, asset, options) : null;
-    if (reusable) {
-      if (options.log !== false) skip(`${tool.name} 已是最新 ${tool.version}`);
-      installedTools[tool.name] = reusable;
-      continue;
+  try {
+    for (const tool of manifest.tools || []) {
+      if (only && !only.has(tool.name)) continue;
+      const asset = tool.platforms?.[key];
+      if (!asset?.url) throw new Error(`manifest missing ${tool.name} asset for ${key}`);
+      const reusable = !options.force ? reusableInstalledTool(workspace, tool, asset, options) : null;
+      if (reusable) {
+        if (options.log !== false) skip(`${tool.name} 已是最新 ${tool.version}`);
+        installedTools[tool.name] = reusable;
+        continue;
+      }
+      const binary = path.join(binDir, binaryName(tool.binary));
+      if (fs.existsSync(binary) && !backups.some((item) => item.binary === binary)) {
+        const file = `${binary}.install-bak`;
+        fs.copyFileSync(binary, file);
+        backups.push({ binary, file });
+      }
+      const archive = path.join(cacheDir, assetName(asset));
+      if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
+      await downloadAsset(tool, asset, archive, options);
+      const sha = await expectedSha256(tool, asset, options);
+      const actualSha = fileSha256(archive);
+      if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
+      if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
+      await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool);
+      if (!written.includes(binary)) written.push(binary);
+      const binarySha = fileSha256(binary);
+      installedTools[tool.name] = {
+        version: tool.version || "",
+        asset: assetName(asset),
+        sha256: binarySha,
+        assetSha256: sha || actualSha
+      };
     }
-    const archive = path.join(cacheDir, assetName(asset));
-    if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
-    await downloadAsset(tool, asset, archive, options);
-    const sha = await expectedSha256(tool, asset, options);
-    const actualSha = fileSha256(archive);
-    if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
-    if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
-    const binary = await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool);
-    const binarySha = fileSha256(binary);
-    installedTools[tool.name] = {
-      version: tool.version || "",
-      asset: assetName(asset),
-      sha256: binarySha,
-      assetSha256: sha || actualSha
-    };
+  } catch (error) {
+    restoreToolBinaries(written, backups);
+    throw error;
   }
+  for (const item of backups) fs.rmSync(item.file, { force: true });
   Object.defineProperty(manifest, "installedTools", { value: installedTools, enumerable: false });
   return manifest;
 }

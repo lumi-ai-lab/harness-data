@@ -16,7 +16,9 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { collectInstallAuth } from "../src/lib/install-auth.js";
+import { createInstallSession } from "../src/lib/install-session.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import {
@@ -284,7 +286,7 @@ test("install downloads CLI when installed binary sha does not match state", asy
         }
       }
     }),
-    /ECONNREFUSED|connect/
+    /ECONNREFUSED|connect|PROXY_TUNNEL|tunnel/
   );
 });
 
@@ -300,7 +302,7 @@ test("install downloads CLI when state is missing", async () => {
       log: false,
       manifestOverride: reusableToolManifest(key)
     }),
-    /ECONNREFUSED|connect/
+    /ECONNREFUSED|connect|PROXY_TUNNEL|tunnel/
   );
 });
 
@@ -327,7 +329,7 @@ test("install force downloads CLI even when installed binary matches state", asy
         }
       }
     }),
-    /ECONNREFUSED|connect/
+    /ECONNREFUSED|connect|PROXY_TUNNEL|tunnel/
   );
 });
 
@@ -1626,7 +1628,7 @@ test("AUTH_OFF_PASSWORD is hardcoded to expected value", () => {
 
 test("install --auth-blob + --auth-user-id writes mode on with user blob (regression for 0.0.44)", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  // 模拟 installCommand step 5 默认分支对 flag 的消费
+  // 模拟预检通过后，installCommand 把 flag 写入本地配置
   const options = { authBlob: "qdm1enc.regression-blob", authUserId: "pengmingde01" };
   // 默认分支逻辑（与 install.js 一致：flag > env > prompt，此处直接用 flag）
   writeAuthBlob(workspace, options.authBlob);
@@ -2169,4 +2171,288 @@ test("build index prints concise Chinese summary", async () => {
 
   assert.match(lines.join("\n"), /执行：data-harness-cli wikis build-index --skip-checks/);
   assert.match(lines.join("\n"), /通过：docs=264, recall=1592, runtimeDocs=264/);
+});
+
+function harnessResidue(dir) {
+  return ["agents", "bootstrap", "config", "bin", "wikis", ".harness"].filter((name) => (
+    fs.existsSync(path.join(dir, name))
+  ));
+}
+
+async function withCleanAuthEnv(fn) {
+  const keys = ["HARNESS_AUTH_BLOB", "HARNESS_AUTH_USER_ID", "GITHUB_TOKEN"];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+}
+
+test("collectInstallAuth rejects missing blob and invalid prefix", async () => {
+  await withCleanAuthEnv(async () => {
+    await assert.rejects(collectInstallAuth({ yes: true }), /auth blob is required/);
+    await assert.rejects(collectInstallAuth({ yes: true, authBlob: "plain-text", authUserId: "u" }), /must start with qdm1enc/);
+    await assert.rejects(collectInstallAuth({ yes: true, authBlob: "qdm1enc.ok", authUserId: "  " }), /dev_user_id is required/);
+    await assert.rejects(collectInstallAuth({ yes: true, noAuth: true, authOffPassword: "wrong" }), /关闭权限密码错误/);
+    const auth = await collectInstallAuth({ yes: true, authBlob: "qdm1enc.ok", authUserId: "user-1" });
+    assert.deepEqual(auth, { mode: "auth-blob", blobContent: "qdm1enc.ok", devUserId: "user-1" });
+  });
+});
+
+test("install fails before writes when auth materials are missing", async () => {
+  await withCleanAuthEnv(async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+    await assert.rejects(installCommand({ yes: true, dir: workspace, agent: "codex" }), /auth blob is required/);
+    assert.deepEqual(harnessResidue(workspace), []);
+  });
+});
+
+test("install fails before writes when auth blob prefix is invalid", async () => {
+  await withCleanAuthEnv(async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+    await assert.rejects(
+      installCommand({ yes: true, dir: workspace, agent: "codex", authBlob: "not-encrypted", authUserId: "user-1" }),
+      /must start with qdm1enc/
+    );
+    assert.deepEqual(harnessResidue(workspace), []);
+  });
+});
+
+test("install fails before writes when no-auth password is wrong", async () => {
+  await withCleanAuthEnv(async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+    await assert.rejects(
+      installCommand({ yes: true, dir: workspace, agent: "codex", noAuth: true, authOffPassword: "wrong" }),
+      /关闭权限密码错误/
+    );
+    assert.deepEqual(harnessResidue(workspace), []);
+  });
+});
+
+test("install fails before writes when GitHub auth and local wikis are both missing", async () => {
+  await withCleanAuthEnv(async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+    await assert.rejects(
+      installCommand({
+        yes: true,
+        dir: workspace,
+        agent: "codex",
+        authBlob: "qdm1enc.test",
+        authUserId: "user-1",
+        githubAuth: false
+      }),
+      /harness-data-wikis is required/
+    );
+    assert.deepEqual(harnessResidue(workspace), []);
+  });
+});
+
+test("collectInstallAccess accepts a local wikis source without GitHub", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const source = path.join(workspace, "harness-data-wikis");
+  for (const dir of ["metrics", "reports", "dims", "rules"]) fs.mkdirSync(path.join(source, dir), { recursive: true });
+  fs.writeFileSync(path.join(source, "index.md"), "# wikis\n");
+  const access = await collectInstallAccess({ yes: true, githubAuth: false }, workspace);
+  assert.equal(access.tokenMode, false);
+  assert.equal(access.wikisSource, source);
+});
+
+test("install session rollback clears a fresh workspace", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const session = createInstallSession(workspace);
+  assert.equal(session.isReinstall, false);
+  session.begin();
+  fs.mkdirSync(path.join(workspace, "agents"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "agents", "x"), "new");
+  fs.mkdirSync(path.join(workspace, "config"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "config", "dev-auth.blob"), "qdm1enc.x");
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), "{}");
+  session.rollback();
+  assert.deepEqual(harnessResidue(workspace), []);
+});
+
+test("install session rollback restores a reinstall workspace", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  fs.mkdirSync(path.join(workspace, "agents"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "agents", "old"), "old");
+  fs.mkdirSync(path.join(workspace, "bootstrap"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "{}");
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), "{\"ok\":true}\n");
+  const session = createInstallSession(workspace);
+  assert.equal(session.isReinstall, true);
+  session.begin();
+  fs.writeFileSync(path.join(workspace, "agents", "old"), "new");
+  fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "bin", "tool"), "tool");
+  session.rollback();
+  assert.equal(fs.readFileSync(path.join(workspace, "agents", "old"), "utf8"), "old");
+  assert.equal(fs.readFileSync(path.join(workspace, ".harness", "installer-state.json"), "utf8"), "{\"ok\":true}\n");
+  assert.equal(fs.existsSync(path.join(workspace, "bin")), false);
+});
+
+test("installToolsFromManifest rolls back earlier tools when a later download fails", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const fakeBin = path.join(workspace, "fake-bin");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "tar"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+printf '%s' '#!/bin/sh\\necho first\\n' > "$dir/${binaryName("data-harness-cli")}"
+`, { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.headers = {};
+        if (String(url).includes("second-tool") && !String(url).endsWith(".sha256")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("missing");
+          return;
+        }
+        if (String(url).endsWith(".sha256")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("missing");
+          return;
+        }
+        response.statusCode = 200;
+        callback(response);
+        response.end("archive");
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+        log: false,
+        manifestOverride: {
+          schemaVersion: 2,
+          tools: [
+            {
+              name: "data-harness-cli",
+              binary: "data-harness-cli",
+              version: "v1",
+              platforms: {
+                [key]: { url: "https://example.test/first.tar.gz" }
+              }
+            },
+            {
+              name: "qdm-metric-cli",
+              binary: "qdm-metric-cli",
+              version: "v1",
+              platforms: {
+                [key]: { url: "https://example.test/second-tool.tar.gz" }
+              }
+            }
+          ]
+        }
+      }),
+      /download failed 404/
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+  assert.equal(fs.existsSync(path.join(workspace, "bin", binaryName("data-harness-cli"))), false);
+});
+
+test("installToolsFromManifest restores the previous binary when a later tool fails", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const binDir = path.join(workspace, "bin");
+  const fakeBin = path.join(workspace, "fake-bin");
+  const oldBinary = "#!/bin/sh\necho old\n";
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), oldBinary, { mode: 0o755 });
+  fs.writeFileSync(path.join(fakeBin, "tar"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+printf '%s' '#!/bin/sh\\necho new\\n' > "$dir/${binaryName("data-harness-cli")}"
+`, { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.headers = {};
+        if (String(url).includes("second-tool") && !String(url).endsWith(".sha256")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("missing");
+          return;
+        }
+        if (String(url).endsWith(".sha256")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("missing");
+          return;
+        }
+        response.statusCode = 200;
+        callback(response);
+        response.end("archive");
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+        log: false,
+        manifestOverride: {
+          schemaVersion: 2,
+          tools: [
+            {
+              name: "data-harness-cli",
+              binary: "data-harness-cli",
+              version: "v1",
+              platforms: {
+                [key]: { url: "https://example.test/first.tar.gz" }
+              }
+            },
+            {
+              name: "qdm-metric-cli",
+              binary: "qdm-metric-cli",
+              version: "v1",
+              platforms: {
+                [key]: { url: "https://example.test/second-tool.tar.gz" }
+              }
+            }
+          ]
+        }
+      }),
+      /download failed 404/
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+  assert.equal(fs.readFileSync(path.join(binDir, binaryName("data-harness-cli")), "utf8"), oldBinary);
 });
