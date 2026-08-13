@@ -47,10 +47,9 @@ export const localTestAuthBlobRel = "config/dev-auth.blob";
 /** Slot user id for the local-test fixture; must match blob userId. */
 export const localTestAuthUserId = "local-test-user";
 
-export function assertCodexAuthPlatform(agent, authEnabled, platform = process.platform) {
-  if (authEnabled && platform === "win32" && String(agent || "").toLowerCase() !== "workbuddy") {
-    throw new Error("Codex auth currently supports macOS/Linux only; use --no-auth on Windows");
-  }
+export function assertCodexAuthPlatform(_agent, authEnabled, platform = process.platform) {
+  // Codex authz is cross-platform. Windows uses the Node hook shim while
+  // macOS/Linux keep the existing shell hook path.
 }
 
 export function hasAnyAgentHook(workspace) {

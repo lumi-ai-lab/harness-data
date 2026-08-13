@@ -132,8 +132,6 @@ func SafeSessionID(sessionID string) string {
 	}
 
 	digest := sha256.Sum256([]byte(sessionID))
-	// The '~' marker cannot occur in an unchanged plain session ID, so hashed
-	// names cannot collide with a caller-provided safe ID that resembles a hash.
 	return "sha256~" + hex.EncodeToString(digest[:])
 }
 

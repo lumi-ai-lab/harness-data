@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -41,7 +42,8 @@ authz:
 		t.Fatal("expected hook output")
 	}
 	updated := output.HookSpecificOutput.UpdatedInput
-	if updated["command"] != `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; '/abs/bin/qdm-metric-cli' analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'` {
+	expected := `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ` + ShellQuote(filepath.Join(root, "bin", "qdm-metric-cli.exe")) + ` analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`
+	if updated["command"] != expected {
 		t.Fatalf("unexpected command: %v", updated["command"])
 	}
 	if updated["timeout_ms"] != json.Number("10000") {
@@ -52,6 +54,60 @@ authz:
 	}
 	if updated["unknown"] != "kept" {
 		t.Fatalf("unknown field not preserved: %#v", updated["unknown"])
+	}
+}
+
+func TestCodexWindowsShellDialects(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialects")
+	}
+	root := writeHarnessConfig(t, `paths:
+  knowledge: wikis
+
+authz:
+  mode: on
+  allow_local_blob: true
+`)
+	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "codex-user")
+	for _, test := range []struct {
+		name, tool, command, contains string
+	}{
+		{name: "PowerShell", tool: "shell_command", command: `qdm-metric-cli.exe analysis execute --metric saleAmt`, contains: "& '"},
+		{name: "CMD", tool: "shell_command", command: `cmd /c "qdm-metric-cli.exe auth describe"`, contains: `cmd /c "`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": test.tool, "tool_input": map[string]any{"command": test.command}})
+			ok, output, err := Run(root, "codex", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || output.HookSpecificOutput.PermissionDecision != "allow" {
+				t.Fatalf("expected Codex %s allow: ok=%v output=%+v", test.name, ok, output)
+			}
+			command := output.HookSpecificOutput.UpdatedInput["command"].(string)
+			if !strings.Contains(command, test.contains) || !strings.Contains(command, testBlob) {
+				t.Fatalf("unexpected Codex %s rewrite: %s", test.name, command)
+			}
+		})
+	}
+}
+
+func TestCodexWindowsUnknownShellDeniesGatedCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell dialect")
+	}
+	root := writeHarnessConfig(t, `authz:
+  mode: on
+  allow_local_blob: true
+`)
+	input, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "UnknownShell", "tool_input": map[string]any{"command": "qdm-metric-cli.exe auth describe"}})
+	ok, output, err := Run(root, "codex", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" || !strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_DIALECT_UNSUPPORTED") {
+		t.Fatalf("expected unknown-shell deny: ok=%v output=%+v", ok, output)
 	}
 }
 
@@ -700,8 +756,8 @@ authz:
 		t.Fatal(err)
 	}
 	if !ok || output.HookSpecificOutput.PermissionDecision != "deny" ||
-		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_COMMAND_UNSUPPORTED") {
-		t.Fatalf("expected deterministic unsupported-command deny: ok=%v output=%+v", ok, output)
+		!strings.Contains(output.HookSpecificOutput.PermissionDecisionReason, "QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED") {
+		t.Fatalf("expected deterministic PowerShell host deny: ok=%v output=%+v", ok, output)
 	}
 }
 
@@ -789,14 +845,14 @@ func TestResolveDialectRequiresExplicitExecuteCommandExecutor(t *testing.T) {
 		name     string
 		tool     string
 		input    map[string]any
-		want     CommandDialect
+		want     ShellDialect
 		accepted bool
 	}{
-		{name: "bash tool", tool: "Bash", input: map[string]any{}, want: DialectBash, accepted: true},
-		{name: "powershell tool", tool: "PowerShell", input: map[string]any{}, want: DialectPowerShell, accepted: true},
+		{name: "bash tool", tool: "Bash", input: map[string]any{}, want: ShellBash, accepted: true},
+		{name: "powershell tool", tool: "PowerShell", input: map[string]any{}, want: ShellPowerShell, accepted: true},
 		{name: "execute without hint", tool: "execute_command", input: map[string]any{}, want: "", accepted: true},
-		{name: "execute powershell", tool: "execute_command", input: map[string]any{"executor": "pwsh.exe"}, want: DialectPowerShell, accepted: true},
-		{name: "execute bash", tool: "execute_command", input: map[string]any{"shell_name": "git-bash"}, want: DialectBash, accepted: true},
+		{name: "execute powershell", tool: "execute_command", input: map[string]any{"executor": "pwsh.exe"}, want: ShellPowerShell, accepted: true},
+		{name: "execute bash", tool: "execute_command", input: map[string]any{"shell_name": "git-bash"}, want: ShellBash, accepted: true},
 		{name: "execute cmd", tool: "execute_command", input: map[string]any{"shell": "cmd.exe"}, want: "", accepted: true},
 	}
 	for _, tt := range tests {
@@ -882,6 +938,15 @@ func writeHarnessConfig(t *testing.T, body string) string {
 	}
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metricName := "qdm-metric-cli"
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if runtime.GOOS == "windows" {
+		metricName += ".exe"
+		content = []byte("fixture")
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", metricName), content, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {

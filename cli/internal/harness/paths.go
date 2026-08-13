@@ -27,11 +27,9 @@ type AuthzConfig struct {
 	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob (dev/test only).
 	BlobFile string
 	// DevUserID is the principal for local blob/env resolution.
-	// Required when using authz.blob_file; can also be set via HARNESS_AUTH_USER_ID env var.
+	// Required when using authz.blob_file; can also be set via HARNESS_AUTH_USER_ID.
 	DevUserID string
-	// AllowLocalBlob permits env/file blob sources (HARNESS_AUTH_BLOB, HARNESS_AUTH_BLOB_FILE, authz.blob_file).
-	// Default true (dev-friendly). Production should distribute blob via HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID
-	// and keep this true; setting false disables all blob sources.
+	// AllowLocalBlob permits env/file blob sources. Default true for this MVP.
 	AllowLocalBlob *bool
 }
 

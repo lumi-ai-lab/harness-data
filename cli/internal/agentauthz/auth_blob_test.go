@@ -132,7 +132,7 @@ func TestResolveAuthBlobNoBlobAvailable(t *testing.T) {
 
 func TestResolveAuthBlobRejectsGroupReadableFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Windows does not enforce POSIX mode bits")
+		t.Skip("Windows does not expose POSIX mode bits for this permission test")
 	}
 	root := t.TempDir()
 	blobPath := filepath.Join(root, "admin-auth.blob")

@@ -3,11 +3,24 @@ package agentauthz
 import (
 	"fmt"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
 
-var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|[A-Za-z]:[\\/](?:[^\s;|&'"]+[\\/])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?|(?:[^\s;|&'"]+[\\/])*qdm-metric-cli(?:\.exe)?)`
+type ShellDialect string
+
+const (
+	ShellBash       ShellDialect = "bash"
+	ShellPowerShell ShellDialect = "powershell"
+	ShellCMD        ShellDialect = "cmd"
+)
+
+// Windows PowerShell may invoke a quoted absolute path with `&`.
+// This pattern is used only on Windows; Bash parsing remains unchanged.
+var windowsMetricBinPattern = `(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^;|&'"\r\n]*[/\\]qdm-metric-cli(?:\.exe)?`
+
+var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|[A-Za-z]:[/\\](?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?|(?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?)`
 
 func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
@@ -33,7 +46,7 @@ func looksLikeGatedMetricCommand(command string) bool {
 
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
-	return regexp.MustCompile(`(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
 }
 
 func matchesMetricInvocation(command, subcmd string) bool {
@@ -45,10 +58,26 @@ func matchesMetricInvocation(command, subcmd string) bool {
 }
 
 func metricInvocationRegexp(subcmd string) *regexp.Regexp {
-	return regexp.MustCompile(`(?m)(?:^|[\n;|&]|\b(?:then|do|if|elif|else)\b)\s*` +
+	binPattern := runtimeMetricBinPattern()
+	return metricRegexp(`(?m)(?:^|[\n;|&]|\b(?:then|do|if|elif|else)\b)\s*` +
+		`(?:cmd(?:\.exe)?\s+/(?:c|k)\s+)?` +
 		`(?:(?:source|\.)\s+[^\s;|&]+\s*(?:&&\s*)?)*` +
 		`(?:[A-Za-z_][\w]*=(?:'[^\n']*'|"[^\n"]*"|\S+)\s+)*` +
-		`(?:'|")?` + metricBinPattern + `(?:'|")?\s+` + subcmd + `\b`)
+		`(?:'|")?` + binPattern + `(?:'|")?\s+` + subcmd + `\b`)
+}
+
+func runtimeMetricBinPattern() string {
+	if runtime.GOOS == "windows" {
+		return `(?:` + metricBinPattern + `|` + windowsMetricBinPattern + `)`
+	}
+	return metricBinPattern
+}
+
+func metricRegexp(pattern string) *regexp.Regexp {
+	if runtime.GOOS == "windows" {
+		return regexp.MustCompile(`(?i)` + pattern)
+	}
+	return regexp.MustCompile(pattern)
 }
 
 func MaskQuotedAndHeredocRegions(command string) string {
@@ -67,6 +96,12 @@ func MaskQuotedAndHeredocRegions(command string) string {
 	}
 	isProtectedVarQuote := func(inner string) bool {
 		return regexp.MustCompile(`^\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?$`).MatchString(strings.TrimSpace(inner))
+	}
+	isWindowsMetricCLIPath := func(inner string) bool {
+		if runtime.GOOS != "windows" {
+			return false
+		}
+		return regexp.MustCompile(`(?i)^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$`).MatchString(strings.TrimSpace(inner))
 	}
 
 	for i < n {
@@ -133,7 +168,8 @@ func MaskQuotedAndHeredocRegions(command string) string {
 				j++
 			}
 			if j < n {
-				if !isProtectedVarQuote(string(chars[i+1 : j])) {
+				inner := string(chars[i+1 : j])
+				if !isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) {
 					spaceOut(i+1, j)
 				}
 				i = j + 1
@@ -177,7 +213,8 @@ func MaskQuotedAndHeredocRegions(command string) string {
 				j++
 			}
 			if j < n {
-				if !isProtectedVarQuote(string(chars[i+1 : j])) {
+				inner := string(chars[i+1 : j])
+				if !isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) && !isCMDWrapperCommandQuote(chars, i) {
 					spaceOut(i+1, j)
 				}
 				i = j + 1
@@ -191,29 +228,40 @@ func MaskQuotedAndHeredocRegions(command string) string {
 	return string(chars)
 }
 
-func RewriteMetricCliInvocation(command, metricCliPath string) string {
+func isCMDWrapperCommandQuote(chars []rune, quoteIndex int) bool {
+	if runtime.GOOS != "windows" || quoteIndex <= 0 {
+		return false
+	}
+	prefix := strings.TrimSpace(string(chars[:quoteIndex]))
+	return regexp.MustCompile(`(?i)(?:^|[\n;|&])\s*cmd(?:\.exe)?\s+/(?:c|k)\s*$`).MatchString(prefix)
+}
+
+func RewriteMetricCliInvocation(command, metricCliPath string, dialect ...ShellDialect) string {
 	if strings.TrimSpace(metricCliPath) == "" || command == "" {
 		return command
 	}
-	return rewriteMetricCLIExecutable(command, ShellQuote(metricCliPath))
-}
-
-func rewriteMetricCLIExecutable(command, replacement string) string {
+	quoted := shellQuote(metricCliPath, firstDialect(dialect))
 	skeleton := MaskQuotedAndHeredocRegions(command)
-	binRe := regexp.MustCompile(`(?:'|")?` + metricBinPattern + `(?:'|")?`)
+	// In `cmd /c "qdm-metric-cli ..."`, the whole inner command is quoted
+	// for CMD. Once the outer `cmd /c` prefix is sliced off, preserve that
+	// quote pair so the executable token remains available for rewriting.
+	if firstDialect(dialect) == ShellCMD && isCMDQuotedCommandSegment(command) {
+		skeleton = command
+	}
+	binRe := metricRegexp(`(?:'|")?` + runtimeMetricBinPattern() + `(?:'|")?`)
 	matches := binRe.FindAllStringIndex(skeleton, -1)
 	if len(matches) == 0 {
 		return command
 	}
 	var out strings.Builder
 	last := 0
-	invokeHereRe := regexp.MustCompile(`^(?:'|")?` + metricBinPattern + `(?:'|")?\s+(?:analysis\s+execute|auth\s+describe)\b`)
+	invokeHereRe := metricRegexp(`^(?:'|")?` + runtimeMetricBinPattern() + `(?:'|")?\s+(?:analysis\s+execute|auth\s+describe)\b`)
 	for _, match := range matches {
 		if !invokeHereRe.MatchString(skeleton[match[0]:]) {
 			continue
 		}
 		out.WriteString(command[last:match[0]])
-		out.WriteString(replacement)
+		out.WriteString(quoted)
 		last = match[1]
 	}
 	out.WriteString(command[last:])
@@ -264,9 +312,19 @@ type metricInvocation struct {
 	kind  string
 }
 
-func RewriteGatedMetricCommands(command, blob, metricCliPath string) (string, error) {
+func RewriteGatedMetricCommands(command, blob, metricCliPath string, dialect ...ShellDialect) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
 		return "", fmt.Errorf("qdm-metric-cli path is empty")
+	}
+	activeDialect := firstDialect(dialect)
+	if activeDialect == ShellCMD {
+		if prefix, inner, ok := splitCMDWrapper(command); ok {
+			rewrittenInner, err := RewriteGatedMetricCommands(inner, blob, metricCliPath, ShellCMD)
+			if err != nil {
+				return "", err
+			}
+			return prefix + `"` + rewrittenInner + `"`, nil
+		}
 	}
 	invocations, err := findMetricInvocations(command)
 	if err != nil {
@@ -277,18 +335,50 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string) (string, er
 	}
 
 	rewritten := command
-	quotedCLI := ShellQuote(metricCliPath)
-	quotedBlob := ShellQuote(blob)
+	quotedCLI := shellQuote(metricCliPath, activeDialect)
+	quotedBlob := shellQuote(blob, activeDialect)
 	for index := len(invocations) - 1; index >= 0; index-- {
 		invocation := invocations[index]
 		segment := StripAuthFlags(command[invocation.start:invocation.end])
-		segment = RewriteMetricCliInvocation(segment, metricCliPath)
-		flags := " --auth-blob " + ShellQuote(blob)
+		segment = RewriteMetricCliInvocation(segment, metricCliPath, activeDialect)
+		wrappedCMD := activeDialect == ShellCMD && strings.HasPrefix(segment, `"`) && strings.HasSuffix(segment, `"`)
+		if wrappedCMD {
+			segment = strings.TrimSuffix(segment, `"`)
+		}
+		if activeDialect == ShellPowerShell && !strings.HasPrefix(strings.TrimSpace(segment), "&") {
+			segment = "& " + strings.TrimSpace(segment)
+		}
+		flags := " --auth-blob " + quotedBlob
 		if invocation.kind == "analysis" {
 			flags = " --data-auth" + flags
 		}
 		replacement := strings.TrimRight(segment, " \t") + flags
-		if !strings.HasPrefix(replacement, quotedCLI+" ") {
+		if wrappedCMD {
+			replacement += `"`
+		}
+		trustedCLIStart := strings.HasPrefix(strings.TrimSpace(replacement), quotedCLI+" ")
+		if activeDialect == ShellPowerShell {
+			trustedCLIStart = trustedCLIStart || strings.HasPrefix(replacement, "& "+quotedCLI+" ")
+		}
+		if activeDialect == ShellCMD && isCMDWrapperText(replacement) {
+			trustedCLIStart = strings.HasPrefix(strings.TrimSpace(replacement), "cmd /c "+quotedCLI+" ") ||
+				strings.HasPrefix(strings.TrimSpace(replacement), "cmd /k "+quotedCLI+" ") ||
+				strings.HasPrefix(strings.TrimSpace(replacement), "cmd.exe /c "+quotedCLI+" ") ||
+				strings.HasPrefix(strings.TrimSpace(replacement), "cmd.exe /k "+quotedCLI+" ")
+		}
+		if activeDialect == ShellCMD && isCMDWrapperText(command) {
+			trimmedReplacement := strings.TrimSpace(replacement)
+			trustedCLIStart = trustedCLIStart || strings.HasPrefix(trimmedReplacement, quotedCLI+" ")
+		}
+		// For `cmd /c "qdm-metric-cli ..."`, the wrapper and its opening
+		// quote are outside the invocation slice. The invocation itself still
+		// starts at the trusted CLI token after RewriteMetricCliInvocation.
+		if activeDialect == ShellCMD && isCMDWrapperText(command) {
+			trimmedReplacement := strings.TrimSpace(replacement)
+			trustedCLIStart = trustedCLIStart || strings.HasPrefix(trimmedReplacement, quotedCLI+" ") ||
+				strings.HasPrefix(trimmedReplacement, `"`+quotedCLI+`" `)
+		}
+		if !trustedCLIStart {
 			return "", fmt.Errorf("gated invocation did not bind the trusted CLI path")
 		}
 		if strings.Count(replacement, "--auth-blob") != 1 || !strings.Contains(replacement, "--auth-blob "+quotedBlob) || strings.Contains(replacement, "--auth-json") {
@@ -303,6 +393,23 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string) (string, er
 	return rewritten, nil
 }
 
+func isCMDWrapperText(command string) bool {
+	return regexp.MustCompile(`(?i)^\s*cmd(?:\.exe)?\s+/(?:c|k)\s+`).MatchString(command)
+}
+
+func splitCMDWrapper(command string) (prefix, inner string, ok bool) {
+	match := regexp.MustCompile(`(?is)^(\s*cmd(?:\.exe)?\s+/(?:c|k)\s+)"(.*)"\s*$`).FindStringSubmatch(command)
+	if match == nil {
+		return "", "", false
+	}
+	return match[1], match[2], true
+}
+
+func isCMDQuotedCommandSegment(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	return runtime.GOOS == "windows" && len(trimmed) >= 2 && strings.HasPrefix(trimmed, `"`) && strings.HasSuffix(trimmed, `"`)
+}
+
 func findMetricInvocations(command string) ([]metricInvocation, error) {
 	skeleton := MaskQuotedAndHeredocRegions(command)
 	invocations := []metricInvocation{}
@@ -314,7 +421,7 @@ func findMetricInvocations(command string) ([]metricInvocation, error) {
 		{kind: "describe", subcmd: `auth\s+describe`},
 	} {
 		invocationRe := metricInvocationRegexp(candidate.subcmd)
-		commandRe := regexp.MustCompile(`(?:'|")?` + metricBinPattern + `(?:'|")?\s+` + candidate.subcmd + `\b`)
+		commandRe := metricRegexp(`(?:'|")?` + runtimeMetricBinPattern() + `(?:'|")?\s+` + candidate.subcmd + `\b`)
 		for _, match := range invocationRe.FindAllStringIndex(skeleton, -1) {
 			relative := commandRe.FindStringIndex(skeleton[match[0]:match[1]])
 			if relative == nil {
@@ -322,9 +429,11 @@ func findMetricInvocations(command string) ([]metricInvocation, error) {
 			}
 			start := match[0] + relative[0]
 			subcommandEnd := match[0] + relative[1]
+			end := metricInvocationEnd(skeleton, subcommandEnd)
+			// `cmd /c "qdm-metric-cli ..."` wraps the complete inner
 			invocations = append(invocations, metricInvocation{
 				start: start,
-				end:   metricInvocationEnd(skeleton, subcommandEnd),
+				end:   end,
 				kind:  candidate.kind,
 			})
 		}
@@ -353,7 +462,7 @@ func InsertFlagsBeforeShellTail(command, flags, anchorWord string) string {
 	if anchorWord == "describe" {
 		subcmd = `auth\s+describe`
 	}
-	inv := regexp.MustCompile(`(?i)(?:'|")?` + metricBinPattern + `(?:'|")?\s+` + subcmd + `\b`).FindStringIndex(skeleton)
+	inv := metricRegexp(`(?:'|")?` + runtimeMetricBinPattern() + `(?:'|")?\s+` + subcmd + `\b`).FindStringIndex(skeleton)
 	fromAnchor := -1
 	if inv != nil {
 		lower := strings.ToLower(skeleton[inv[0]:inv[1]])
@@ -380,6 +489,22 @@ func InsertFlagsBeforeShellTail(command, flags, anchorWord string) string {
 
 func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func firstDialect(dialect []ShellDialect) ShellDialect {
+	if len(dialect) > 0 && dialect[0] != "" {
+		return dialect[0]
+	}
+	return ShellBash
+}
+
+func shellQuote(value string, dialect ShellDialect) string {
+	switch dialect {
+	case ShellCMD:
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	default:
+		return ShellQuote(value)
+	}
 }
 
 func isSpace(r rune) bool {

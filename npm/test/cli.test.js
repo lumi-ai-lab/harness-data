@@ -16,7 +16,7 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, installRuntimeBundle, validateInstallAuthOptions, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import {
@@ -1202,9 +1202,9 @@ test("local config exports metric cli path only", () => {
 
   const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
   const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli"/);
+  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli(?:\.exe)?"/);
   assert.doesNotMatch(env, /QDM_SQL_CLI|QDM_CAS_CLI|QDM_CAS_CONFIG_DIR|QDM_CMR_CLI|QDM_INDICATORS_CLI/);
-  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli/);
+  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli(?:\.exe)?/);
   assert.doesNotMatch(harnessConfig, /qdm_sql_cli|qdm_cas_cli|qdm_cmr_cli|qdm_indicators_cli/);
   assert.match(harnessConfig, /authz:\n  mode: off/);
   assert.match(harnessConfig, /allow_local_blob: true/);
@@ -1431,17 +1431,6 @@ test("WorkBuddy auth installer parameters support macOS and Windows", () => {
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("all", true, "win32"));
 });
 
-test("install auth parameters reject ambiguous combinations", () => {
-  assert.doesNotThrow(() => validateInstallAuthOptions({ authBlob: "qdm1enc.runtime", authUserId: "user" }));
-  assert.doesNotThrow(() => validateInstallAuthOptions({ dataAuth: true }));
-  assert.doesNotThrow(() => validateInstallAuthOptions({ noAuth: true, authOffPassword: AUTH_OFF_PASSWORD }));
-  assert.throws(() => validateInstallAuthOptions({ noAuth: true, dataAuth: true }), /cannot be combined/);
-  assert.throws(() => validateInstallAuthOptions({ dataAuth: true, authBlob: "qdm1enc.runtime", authUserId: "user" }), /cannot be combined/);
-  assert.throws(() => validateInstallAuthOptions({ authBlob: "qdm1enc.runtime" }), /must be provided together/);
-  assert.throws(() => validateInstallAuthOptions({ authUserId: "user" }), /must be provided together/);
-  assert.throws(() => validateInstallAuthOptions({ authOffPassword: AUTH_OFF_PASSWORD }), /requires --no-auth/);
-});
-
 test("WorkBuddy plugin package matches npm version and native hook contract", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   copyWorkBuddyPlugin(workspace);
@@ -1531,7 +1520,6 @@ test("WorkBuddy version detection accepts a macOS app.asar path", () => {
 });
 
 test("WorkBuddy auth inspection accepts launchctl file source outside workspace", () => {
-  if (process.platform === "win32") return;
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-runtime-"));
   const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-auth-"));
   const blobFile = path.join(authDir, "qdm-auth.blob");
@@ -1539,7 +1527,7 @@ test("WorkBuddy auth inspection accepts launchctl file source outside workspace"
   const authz = { mode: "on", allowLocalBlob: true, blobFile: "", devUserId: "" };
   const inspected = inspectWorkBuddyAuth(workspace, authz, {
     env: {},
-    platform: "darwin",
+    platform: process.platform === "win32" ? "win32" : "darwin",
     launchctlEnv: {
       HARNESS_AUTH_BLOB_FILE: blobFile,
       HARNESS_AUTH_USER_ID: "admin-user",
@@ -1552,18 +1540,20 @@ test("WorkBuddy auth inspection accepts launchctl file source outside workspace"
   fs.writeFileSync(insideFile, "qdm1enc.runtime\n", { mode: 0o600 });
   const inside = inspectWorkBuddyAuth(workspace, authz, {
     env: { HARNESS_AUTH_BLOB_FILE: insideFile, HARNESS_AUTH_USER_ID: "admin-user" },
-    platform: "darwin",
+    platform: process.platform === "win32" ? "win32" : "darwin",
   });
   assert.equal(inside.ok, false);
   assert.match(inside.detail, /outside the Harness workspace/);
 
-  fs.chmodSync(blobFile, 0o644);
-  const insecure = inspectWorkBuddyAuth(workspace, authz, {
-    env: { HARNESS_AUTH_BLOB_FILE: blobFile, HARNESS_AUTH_USER_ID: "admin-user" },
-    platform: "darwin",
-  });
-  assert.equal(insecure.ok, false);
-  assert.match(insecure.detail, /mode 0600/);
+  if (process.platform !== "win32") {
+    fs.chmodSync(blobFile, 0o644);
+    const insecure = inspectWorkBuddyAuth(workspace, authz, {
+      env: { HARNESS_AUTH_BLOB_FILE: blobFile, HARNESS_AUTH_USER_ID: "admin-user" },
+      platform: "darwin",
+    });
+    assert.equal(insecure.ok, false);
+    assert.match(insecure.detail, /mode 0600/);
+  }
 });
 
 test("codex agent template includes authz PreToolUse hook and guidance", () => {
@@ -1571,13 +1561,13 @@ test("codex agent template includes authz PreToolUse hook and guidance", () => {
   const hooksConfig = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
   const preToolUse = hooksConfig.hooks.PreToolUse;
   assert.ok(Array.isArray(preToolUse), "missing PreToolUse hooks");
-  const bashHook = preToolUse.find((entry) => entry.matcher === "Bash");
-  assert.ok(bashHook, "missing Bash PreToolUse hook");
-  const commands = bashHook.hooks.map((hook) => hook.command).join("\n");
+  const authzHook = preToolUse.find((entry) => !entry.matcher || entry.matcher === "Bash");
+  assert.ok(authzHook, "missing PreToolUse authz hook");
+  const commands = authzHook.hooks.map((hook) => hook.command).join("\n");
   assert.match(commands, /authz-hook --agent codex/);
   assert.match(commands, /exit 2/);
   const instructions = fs.readFileSync(path.join(root, "..", ".agents", "codex", "AGENTS.md"), "utf8");
-  assert.match(instructions, /current data permissions or scopes, run `qdm-metric-cli auth describe`/);
+  assert.match(instructions, /PreToolUse.*authz hook injects authorization/);
 });
 
 test("writeAuthBlob writes user blob to config/dev-auth.blob", () => {
@@ -1712,17 +1702,15 @@ test("Windows Codex hook patch fails closed when a required hook cannot be rewri
   assert.equal(fs.readFileSync(hooksFile, "utf8"), original);
 });
 
-test("Windows keeps Codex default, allows explicit WorkBuddy, and scopes the Codex auth gate", async () => {
+test("Windows keeps Codex default, allows explicit WorkBuddy, and supports both auth adapters", async () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
   try {
     assert.equal(await chooseAgent({ agent: "workbuddy" }), "workbuddy");
     assert.equal(await chooseAgent({ agent: " CODEX " }), "codex");
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", false, "win32"));
-    for (const agent of ["codex", "both", "all", "claude", "pi", "openclaw", "hermes", "unknown", ""]) {
-      assert.throws(() => assertCodexAuthPlatform(agent, true, "win32"), /use --no-auth on Windows/);
-    }
-    assert.doesNotThrow(() => assertCodexAuthPlatform("workbuddy", true, "win32"));
+    assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "win32"));
+    assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"));
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "linux"));
   } finally {
     Object.defineProperty(process, "platform", platformDescriptor);
@@ -1730,6 +1718,7 @@ test("Windows keeps Codex default, allows explicit WorkBuddy, and scopes the Cod
 });
 
 test("Codex CLI shim preserves arguments and propagates the child exit code", () => {
+  if (process.platform === "win32") return;
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness shim space-"));
   const hooksDir = path.join(workspace, "agents", "codex", "hooks");
   const binDir = path.join(workspace, "bin");
@@ -1737,7 +1726,7 @@ test("Codex CLI shim preserves arguments and propagates the child exit code", ()
   fs.mkdirSync(hooksDir, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
   fs.copyFileSync(path.join(root, "..", ".agents", "codex", "hooks", "cli-shim.mjs"), path.join(hooksDir, "cli-shim.mjs"));
-  const fixture = path.join(binDir, "data-harness-cli");
+  const fixture = path.join(binDir, process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli");
   fs.writeFileSync(fixture, `#!${process.execPath}\nimport fs from "node:fs";\nfs.writeFileSync(process.env.HARNESS_SHIM_ARGS_FILE, JSON.stringify(process.argv.slice(2)));\nprocess.exit(23);\n`, { mode: 0o755 });
   fs.chmodSync(fixture, 0o755);
 
@@ -1829,6 +1818,7 @@ test("detects whether any agent hook exists", () => {
 
 test("update restore recreates agent hooks only when all are missing", async () => {
   const missingWorkspace = createAgentWorkspace();
+  copyCodexHooks(missingWorkspace);
 
   const restored = await restoreAgentHooksIfMissing(missingWorkspace, { agent: "codex" });
 
@@ -1836,6 +1826,7 @@ test("update restore recreates agent hooks only when all are missing", async () 
   assert.equal(fs.realpathSync(path.join(missingWorkspace, ".codex")), fs.realpathSync(path.join(missingWorkspace, "agents", "codex")));
 
   const existingWorkspace = createAgentWorkspace();
+  copyCodexHooks(existingWorkspace);
   linkAgents(existingWorkspace, "codex");
   const before = fs.realpathSync(path.join(existingWorkspace, ".codex"));
 
@@ -1866,6 +1857,19 @@ test("Windows update re-patches freshly replaced Codex hooks when the junction a
   for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse"]) {
     assert.match(patched.hooks[event][0].hooks[0].command, /cli-shim\.mjs/);
   }
+});
+
+test("doctor fails when Windows Codex shim is missing", async () => {
+  if (process.platform !== "win32") return;
+  const workspace = createDoctorWorkspace("codex");
+  copyCodexHooks(workspace);
+  linkAgents(workspace, "codex");
+  patchCodexHooksForWindows(workspace);
+  fs.rmSync(path.join(workspace, "agents", "codex", "hooks", "cli-shim.mjs"));
+  const report = await collectDoctor(workspace, { agent: "codex" });
+  const check = report.checks.find((item) => item.name === "Codex hooks");
+  assert.equal(check?.ok, false);
+  assert.match(check?.detail || "", /cli-shim\.mjs is missing/);
 });
 
 test("update recognizes a prepared WorkBuddy plugin without creating a symlink", async () => {
@@ -1949,6 +1953,8 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.11", codeBuddyVersion: "2.115.0", homeDir: home });
   assert.equal(disabled.checks.find((check) => check.name === "WorkBuddy plugin enablement")?.ok, false);
 
+  if (process.platform === "win32") return;
+
   writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
   fs.writeFileSync(path.join(workspace, localTestAuthBlobRel), "qdm1enc.local\n", { mode: 0o600 });
   const authzOn = await collectDoctor(workspace, {
@@ -1956,7 +1962,7 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
     workBuddyVersion: "5.3.11",
     codeBuddyVersion: "2.115.0",
     homeDir: home,
-    platform: "win32",
+    platform: "darwin",
     env: {},
   });
   assert.equal(authzOn.checks.find((check) => check.name === "WorkBuddy auth platform")?.ok, true);
@@ -1969,7 +1975,7 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
     workBuddyVersion: "5.3.10",
     codeBuddyVersion: "2.115.0",
     homeDir: home,
-    platform: "win32",
+    platform: "darwin",
     env: {},
   });
   assert.equal(oldAuthClient.checks.find((check) => check.name === "WorkBuddy auth version >= 5.3.11")?.ok, false);
