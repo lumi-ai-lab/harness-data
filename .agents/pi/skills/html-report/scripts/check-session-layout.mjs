@@ -5,6 +5,7 @@
  *
  * B2 data gates:
  *   - successful Writer data is an entry.json + minimal entry.meta.json pair
+ *   - writer phase also requires caption.md + caption-evidence.json
  *   - entry.meta.json contains only adapter-derived rowCount + rowsSha256
  *   - explore meta producer === fetch-explore.mjs
  *   - verdict.json producer === write-verdict.mjs + scanFingerprint match
@@ -98,7 +99,38 @@ function sanitizeTaskId(raw) {
   return cleaned || "task";
 }
 
-async function checkEntryPair(abs, cardId, errors, resultMtimeMs) {
+async function checkCaptionArtifacts(abs, cardId, errors) {
+  const cardDir = join(abs, "data", "cards", cardId);
+  const captionPath = join(cardDir, "caption.md");
+  const evidencePath = join(cardDir, "caption-evidence.json");
+  if (!(await exists(captionPath))) {
+    errors.push(`card ${cardId} is missing caption.md`);
+  } else {
+    try {
+      const caption = (await readFile(captionPath, "utf8")).trim();
+      if (!caption) errors.push(`card ${cardId} caption.md is empty`);
+    } catch (error) {
+      errors.push(`card ${cardId} caption.md cannot be read: ${error.message || error}`);
+    }
+  }
+  if (!(await exists(evidencePath))) {
+    errors.push(`card ${cardId} is missing caption-evidence.json`);
+    return;
+  }
+  try {
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    if (!evidence || evidence.producer !== "prepare-card-caption-evidence.mjs") {
+      errors.push(`card ${cardId} caption-evidence.json producer must be prepare-card-caption-evidence.mjs`);
+    }
+    if (!evidence || typeof evidence.views !== "object" || Array.isArray(evidence.views)) {
+      errors.push(`card ${cardId} caption-evidence.json views must be an object`);
+    }
+  } catch (error) {
+    errors.push(`card ${cardId} caption-evidence.json is invalid: ${error.message || error}`);
+  }
+}
+
+async function checkEntryPair(abs, cardId, errors, resultMtimeMs, { requireCaption = false } = {}) {
   const cardDir = join(abs, "data", "cards", cardId);
   const entryPath = join(cardDir, "entry.json");
   const metaPath = join(cardDir, "entry.meta.json");
@@ -149,6 +181,7 @@ async function checkEntryPair(abs, cardId, errors, resultMtimeMs) {
       errors.push(`card ${cardId} has forbidden legacy ${legacy}; B2 persists only CLI rows plus minimal count/hash metadata`);
     }
   }
+  if (requireCaption) await checkCaptionArtifacts(abs, cardId, errors);
   return true;
 }
 
@@ -156,7 +189,7 @@ async function checkEntryPair(abs, cardId, errors, resultMtimeMs) {
  * Validate each persisted successful Writer data pair. A failed Writer returns
  * its failure to the parent and deliberately leaves no data pair on disk.
  */
-async function checkEntryData(abs, errors, warnings, result) {
+async function checkEntryData(abs, errors, warnings, result, options = {}) {
   if (!result) return;
   let resultMtimeMs;
   try {
@@ -175,7 +208,7 @@ async function checkEntryData(abs, errors, warnings, result) {
       continue;
     }
     cardIds.set(cardId, String(card.id));
-    const persisted = await checkEntryPair(abs, cardId, errors, resultMtimeMs);
+    const persisted = await checkEntryPair(abs, cardId, errors, resultMtimeMs, options);
     if (persisted) persistedCards += 1;
     else warnings.push(`card ${card.id} has no persisted entry pair; confirm the Writer returned a fetch failure to the Report Editor`);
   }
@@ -211,8 +244,8 @@ async function checkStrayAnalysis(abs, errors) {
   }
 }
 
-async function checkWriterArtifacts(abs, errors, warnings, result) {
-  await checkEntryData(abs, errors, warnings, result);
+async function checkWriterArtifacts(abs, errors, warnings, result, options = {}) {
+  await checkEntryData(abs, errors, warnings, result, options);
   await checkStrayAnalysis(abs, errors);
 }
 
@@ -1296,7 +1329,7 @@ export async function checkSessionLayout(sessionDir, { phase = "b2" } = {}) {
   }
 
   if (phase === "writer") {
-    await checkWriterArtifacts(abs, errors, warnings, result);
+    await checkWriterArtifacts(abs, errors, warnings, result, { requireCaption: true });
   }
 
   if (phase === "b2" || phase === "explore" || phase === "quality" || phase === "html") {

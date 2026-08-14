@@ -1,19 +1,26 @@
 /**
- * Child-only Report Writer tool.
+ * Child-only Report Writer tools.
  *
- * The journalist may call ack_cli_data exactly once. The adapter writes
- * entry/meta and writes that same receipt to the parent-owned outputSchema
- * capture. The child never authors the schema or the JSON.
+ * The journalist calls ack_cli_data once, then submit_card_caption once.
+ * Fetch failure writes the parent receipt and terminates. Fetch success
+ * returns compact evidence; caption writes caption.md and the parent receipt.
  */
 import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetchAllEntries } from "../../skills/html-report/scripts/fetch-entry.mjs";
 import {
+  buildCaptionEvidence,
+  persistCaptionEvidence,
+  prepareCardCaptionEvidence,
+} from "../../skills/html-report/scripts/prepare-card-caption-evidence.mjs";
+import { writeCardCaption } from "../../skills/html-report/scripts/submit-card-caption.mjs";
+import {
   buildWriterReturnSchema,
   sanitizeCardId,
   validateWriterReturn,
   WRITER_ACK_TOOL,
+  WRITER_CAPTION_TOOL,
 } from "../../skills/html-report/scripts/writer-return.mjs";
 import {
   prepareStructuredOutputCapture,
@@ -99,6 +106,8 @@ export default function registerReportWriterFetch(pi) {
   let state = initialWriterGuardState();
   let assignmentText = "";
   let used = false;
+  let captionUsed = false;
+  let acceptedReceipt = null;
 
   function captureAssignment(event) {
     const text = writerAssignmentText(event).trim();
@@ -115,6 +124,13 @@ export default function registerReportWriterFetch(pi) {
     contract = parseWriterAssignment(text, { projectRoot });
     state = initialWriterGuardState();
     used = false;
+    captionUsed = false;
+    acceptedReceipt = null;
+  }
+
+  async function captureReceipt(receipt) {
+    const capture = await prepareStructuredOutputCapture(buildWriterReturnSchema(contract));
+    await writeStructuredOutputCapture(capture, receipt);
   }
 
   pi.on?.("before_agent_start", (event) => {
@@ -122,6 +138,8 @@ export default function registerReportWriterFetch(pi) {
     state = initialWriterGuardState();
     assignmentText = "";
     used = false;
+    captionUsed = false;
+    acceptedReceipt = null;
     captureAssignment(event);
     pi.setActiveTools?.([WRITER_ACK_TOOL]);
     return undefined;
@@ -144,11 +162,8 @@ export default function registerReportWriterFetch(pi) {
   });
 
   pi.on?.("tool_execution_end", (event) => {
-    const previousAttempts = state.structuredAttempts;
     state = writerUnvalidatedSubmitFailureState(contract, state, event);
-    if (previousAttempts === 0 && state.structuredAttempts === 1) {
-      pi.setActiveTools?.([]);
-    }
+    if (state.terminalFailure) pi.setActiveTools?.([]);
     return undefined;
   });
 
@@ -156,10 +171,11 @@ export default function registerReportWriterFetch(pi) {
     name: WRITER_ACK_TOOL,
     label: "Ack CLI data",
     description:
-      "Fetch the assigned html-report card through qdm-metric-cli, persist entry/meta, and return that receipt. Call exactly once. Do not read files or call any other tool.",
-    promptSnippet: "ack_cli_data: the only Writer tool; call once with assigned resultPath and cardId; its return is the editor receipt.",
+      "Fetch the assigned html-report card through qdm-metric-cli, persist entry/meta, and return a compact topN/bottomN packet. Call exactly once. On success, next call submit_card_caption. Do not read files.",
+    promptSnippet: "ack_cli_data: call once with assigned resultPath and cardId; on success, use the returned evidence and call submit_card_caption.",
     promptGuidelines: [
       "Call ack_cli_data exactly once with the assigned resultPath and cardId.",
+      "On success, write the short caption from evidence.views only, then call submit_card_caption. Do not mention rowCount or 行数.",
       "Do not read files, do not retry, and do not call submit_writer_result or structured_output.",
     ],
     parameters: {
@@ -184,8 +200,9 @@ export default function registerReportWriterFetch(pi) {
       }
 
       let receipt;
+      let resultPath;
       try {
-        const resultPath = await resolveAllowedResult(params.resultPath);
+        resultPath = await resolveAllowedResult(params.resultPath);
         const output = await fetchAllEntries(resultPath, { cardId: params.cardId });
         if (!Array.isArray(output.cards) || output.cards.length !== 1) {
           throw new Error("ack_cli_data expected exactly one assigned card result");
@@ -209,11 +226,116 @@ export default function registerReportWriterFetch(pi) {
       if (!checked.ok) {
         throw new Error(`Writer receipt is invalid: ${checked.errors.join("; ")}`);
       }
-      const capture = await prepareStructuredOutputCapture(buildWriterReturnSchema(contract));
-      await writeStructuredOutputCapture(capture, receipt);
+      if (receipt.fetchStatus !== "success") {
+        await captureReceipt(receipt);
+        pi.setActiveTools?.([]);
+        return {
+          content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
+          details: receipt,
+          terminate: true,
+        };
+      }
+
+      let evidence;
+      try {
+        evidence = (await prepareCardCaptionEvidence({
+          resultPath,
+          cardId: params.cardId,
+        })).evidence;
+      } catch (error) {
+        evidence = buildCaptionEvidence({
+          cardId: sanitizeCardId(params.cardId),
+          query: { metrics: [], dimensions: [], statisticPolicy: null, comparisons: [] },
+          rows: [],
+        });
+        evidence.error = String(error?.message || error);
+        await persistCaptionEvidence(contract.evidencePath, evidence);
+      }
+      acceptedReceipt = receipt;
+      pi.setActiveTools?.([WRITER_CAPTION_TOOL]);
+      const payload = { receipt, evidence };
       return {
-        content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
-        details: receipt,
+        content: [{
+          type: "text",
+          text: [
+            "取数成功。不要读 entry.json。只用下面 evidence.views 写本卡短分析，然后调用 submit_card_caption。",
+            JSON.stringify(payload, null, 2),
+          ].join("\n"),
+        }],
+        details: payload,
+        terminate: false,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: WRITER_CAPTION_TOOL,
+    label: "Submit card caption",
+    description:
+      "Submit the short per-card analysis. Pass only paragraphs and /views/... pointers copied from the ack_cli_data evidence. The tool writes caption.md and the editor receipt.",
+    promptSnippet: "submit_card_caption: after a successful ack_cli_data, call once with paragraphs and pointers from the compact evidence.",
+    promptGuidelines: [
+      "Cite only /views/... pointers from the evidence packet (not /evidence/views/...). You may cite every view in that packet.",
+      "Every number in paragraphs must appear in the evidence packet views (any view, not only pointed-at nodes). Prefer the views digits; 万/亿元 of the same cell is allowed. Do not write 超/约/近 with a number that is not itself in the packet. Copy metric and dimension names from views; do not translate or guess Chinese labels.",
+      "Do not read files or call structured_output.",
+    ],
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        paragraphs: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: { type: "string", minLength: 1 },
+        },
+        pointers: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          description: "JSON pointers into evidence.views; at most one per view in this card's packet",
+        },
+      },
+      required: ["paragraphs", "pointers"],
+    },
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      if (captionUsed) throw new Error("submit_card_caption may be called only once per Report Writer assignment");
+      captionUsed = true;
+      if (!contract.ok) throw new Error("submit_card_caption has no parsed Writer assignment");
+      if (!acceptedReceipt || acceptedReceipt.fetchStatus !== "success") {
+        throw new Error("submit_card_caption requires a successful ack_cli_data in this assignment");
+      }
+      try {
+        await writeCardCaption({
+          input: params,
+          evidencePath: contract.evidencePath,
+          captionPath: contract.captionPath,
+        });
+      } catch (error) {
+        const failed = {
+          cardId: contract.cardId,
+          fetchStatus: "failed",
+          dataPath: null,
+          metaPath: null,
+          error: String(error?.message || error || "submit_card_caption failed"),
+        };
+        await captureReceipt(failed);
+        pi.setActiveTools?.([]);
+        return {
+          content: [{ type: "text", text: JSON.stringify(failed, null, 2) }],
+          details: failed,
+          terminate: true,
+        };
+      }
+      const checked = validateWriterReturn(acceptedReceipt, contract);
+      if (!checked.ok) {
+        throw new Error(`Writer receipt is invalid: ${checked.errors.join("; ")}`);
+      }
+      await captureReceipt(acceptedReceipt);
+      pi.setActiveTools?.([]);
+      return {
+        content: [{ type: "text", text: JSON.stringify(acceptedReceipt, null, 2) }],
+        details: acceptedReceipt,
         terminate: true,
       };
     },

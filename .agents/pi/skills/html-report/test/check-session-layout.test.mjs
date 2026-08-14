@@ -43,6 +43,17 @@ async function seedWriterSession(session) {
     rowsSha256: rowsSha256(rows),
   };
   await writeFile(join(cardDir, "entry.meta.json"), JSON.stringify(meta));
+  await writeFile(join(cardDir, "caption.md"), "本卡最高为 200。\n");
+  await writeFile(join(cardDir, "caption-evidence.json"), JSON.stringify({
+    producer: "prepare-card-caption-evidence.mjs",
+    cardId,
+    rowCount: rows.length,
+    query: { metrics: ["销售额"], statisticPolicy: "SUMMARY", dimensions: [], time: null, comparisons: [] },
+    axis: [],
+    groups: [],
+    droppedDimensions: [],
+    views: {},
+  }));
   return { cardDir, entryPath, rows, meta };
 }
 
@@ -57,6 +68,17 @@ test("writer phase validates Writer artifacts without requiring Editor tasks/mai
   const b2 = await checkSessionLayout(session, { phase: "b2" });
   assert.equal(b2.ok, false);
   assert.ok(b2.errors.some((error) => /main\.md|tasks\.json/.test(error)));
+});
+
+test("writer phase requires caption artifacts after a successful entry pair", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "html-report-layout-writer-caption-"));
+  const session = join(root, ".harness", "state", "html-report", "writer-caption");
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const seeded = await seedWriterSession(session);
+  await rm(join(seeded.cardDir, "caption.md"));
+
+  const report = await checkSessionLayout(session, { phase: "writer" });
+  assert.ok(report.errors.some((error) => /missing caption\.md/.test(error)));
 });
 
 test("writer phase requires a minimal entry/meta pair and rejects legacy artifacts", async (t) => {

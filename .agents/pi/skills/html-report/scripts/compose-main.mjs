@@ -6,8 +6,8 @@
  *   node compose-main.mjs --result <result.json>
  *   node compose-main.mjs --session-dir <SESSION>
  *
- * Reads result.json card order and each data/cards/<id>/entry.json,
- * verifies entry.meta.json, then atomically writes analysis/main.md.
+ * Reads result.json card order, each data/cards/<id>/entry.json, and
+ * caption.md, verifies entry.meta.json, then atomically writes analysis/main.md.
  * Does not invent analysis, read the user question, or call a CLI.
  */
 import { randomUUID } from "node:crypto";
@@ -85,11 +85,24 @@ async function loadVerifiedCardTable(sessionDir, card, index) {
     throw new Error(`entry.meta.json rowsSha256 does not match entry.json for card ${cardId}`);
   }
   const table = rowsToMarkdown(rows);
+  let caption = "";
+  try {
+    caption = (await readFile(paths.captionPath, "utf8")).trim();
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(`caption.md for card ${cardId} is missing: ${paths.captionPath}`);
+    }
+    throw new Error(`cannot read caption.md for card ${cardId}: ${error.message || error}`);
+  }
+  if (!caption) {
+    throw new Error(`caption.md for card ${cardId} is empty`);
+  }
   return {
     cardId,
     title: titleForCard(card, cardId),
     rowCount: rows.length,
     markdown: table.markdown || "_本次查询返回 0 行明细。_",
+    caption,
   };
 }
 
@@ -101,6 +114,10 @@ export function renderFirstMain(result, tables) {
     `<!-- html-report:full-table card="${table.cardId}" rows="${table.rowCount}" -->`,
     "",
     table.markdown,
+    "",
+    "### 分析",
+    "",
+    table.caption,
   ].join("\n"));
   return [`# ${title}`, "", ...sections].join("\n\n") + "\n";
 }

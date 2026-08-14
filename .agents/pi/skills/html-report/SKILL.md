@@ -87,7 +87,7 @@ slice:
 | --- | --- | --- | --- |
 | 1 | `A_CONFIG` | yes | on |
 | 2 | `B0_PREFLIGHT` | yes | on |
-| 3 | `B2_WRITER` | no | on; journalists fetch only |
+| 3 | `B2_WRITER` | no | on; journalists fetch then caption |
 | 4 | `B2_MAIN` | yes | on; `compose-main.mjs` writes `analysis/main.md` |
 | 5 | `B25_EDITOR` | no | **off** until later slices |
 | 6 | `B3_RESEARCH` | yes | **off** |
@@ -299,7 +299,7 @@ approved and `result.json` exists. Never jump directly to Writer work.
 | Display | Technical id | Asset |
 | --- | --- | --- |
 | **Report Editor** (you) | — | Own stages and consume typed handoffs; B2.5 artifacts are materialized deterministically |
-| **Report Writer** | `report-writer` | Per-card SubAgent: call `ack_cli_data` once; the tool return is the receipt |
+| **Report Writer** | `report-writer` | Per-card SubAgent: `ack_cli_data` then `submit_card_caption`; caption tool writes the receipt |
 | **Report Researcher** | `report-researcher` | Drill-down SubAgent per pending task |
 | **Report Reviewer** | `report-reviewer` | Final R1–R7 scorecard SubAgent (B4) |
 | **Report Designer** | `report-designer` | Isolated frontend design + visual QA SubAgent (B5) |
@@ -405,20 +405,21 @@ The extension owns this latency-critical stage:
 1. Its initial `NEXT_TOOL_ONLY` is the exact mandatory stage-start status call;
    issue it alone. A successful result reveals one exact Writer call. Issue only
    that call—never merge calls, read `result.json`, or reconstruct arguments.
-   If a provider emits an extra sibling beside the exact in-flight status, the
-   extension blocks that sibling without executing it or invalidating the Gate;
-   wait for the status result. After success only the exact revealed Writer is
-   admitted until the handoff completes; parameter drift remains blocked.
+   Extra tools before that status, or siblings beside an in-flight status, are
+   blocked without executing and without invalidating the Gate; wait for the
+   status result. After success only the exact revealed Writer is admitted
+   until the handoff completes; parameter drift remains blocked.
 2. Run the revealed `report-writer` calls one card at a time, including when
    there is only one card. Never bulk-fetch, impersonate Writer, or use parallel
    `tasks[]`. Each card/Gate attempt has one dispatch; do not retry or inspect
    child/session artifacts.
-3. Accept only the extension-validated `ack_cli_data` receipt. The child
-   calls that tool once; it writes entry/meta and the same receipt to the
-   parent-owned `outputSchema`. Do not write or rewrite `outputSchema`.
-   Its `fetch-entry.mjs` path is all-pages and never uses `--single-page`.
-   A valid persisted entry/meta pair is reused automatically on a
-   user-approved retry.
+3. Accept only the extension-validated Writer receipt. The child calls
+   `ack_cli_data` once, then `submit_card_caption` once on success. Fetch
+   writes entry/meta and a compact evidence packet; caption writes
+   `caption.md` and the parent-owned `outputSchema` receipt. Do not write
+   or rewrite `outputSchema`. The fetch path is all-pages and never uses
+   `--single-page`. A valid persisted entry/meta pair is reused automatically
+   on a user-approved retry; caption may be rewritten.
 4. After a valid result, follow only the next exact call returned by the
    extension. It dispatches the next card or deterministically performs B2
    layout, runs `compose-main.mjs`, finishes `B2_MAIN`, and stops at that Gate.
@@ -432,7 +433,7 @@ Shallow or unanswered analysis is later work. Do not re-spawn Writer for depth.
 
 1. `finish B2_WRITER`（本阶段默认不等待「继续」）
 2. `start B2_MAIN` 并调用 `compose-main.mjs`
-3. 按 `result.json` 卡片顺序把各卡 `entry.json` 原样写入 `analysis/main.md`
+3. 按 `result.json` 卡片顺序把各卡 `entry.json` 原表和 `caption.md` 写入 `analysis/main.md`
 4. `finish B2_MAIN` 后停在人工 Gate
 
 主编只看 `$SESSION/analysis/main.md`。回复 **「继续」** 才进入下一启用阶段。
@@ -1042,7 +1043,7 @@ There is no further approval after B5.
 
 | After | Command | Provenance required |
 | --- | --- | --- |
-| B2 Writer | `--phase writer` | `entry.json` + minimal `entry.meta.json` pairs; no profile/facts, sections, tasks or main |
+| B2 Writer | `--phase writer` | `entry.json` + minimal `entry.meta.json` + caption pair; no profile/facts, sections, tasks or main |
 | B2.5 | `--phase b2` | Writer data pairs + Editor tasks/main |
 | B3.5 | `--phase explore` | 两模式均验 evidence producer/source Hash；仅 new_query 验 material explore；fresh assembly |
 | B4 | `--phase quality` | approved prior step Gates + assembled `report.md` + verdict producer/fingerprint |

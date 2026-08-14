@@ -588,6 +588,20 @@ function contractResult(call, overrides = {}) {
   };
 }
 
+async function writeWriterCaptionArtifacts(cardDir, cardId = "card-1") {
+  await writeFile(join(cardDir, "caption.md"), "本卡最高为 100。\n");
+  await writeFile(join(cardDir, "caption-evidence.json"), JSON.stringify({
+    producer: "prepare-card-caption-evidence.mjs",
+    cardId,
+    rowCount: 1,
+    query: { metrics: [], statisticPolicy: "SUMMARY", dimensions: [], time: null, comparisons: [] },
+    axis: [],
+    groups: [],
+    droppedDimensions: [],
+    views: {},
+  }));
+}
+
 function writerAckChildResult(receipt, extras = {}) {
   return {
     exitCode: extras.exitCode ?? 0,
@@ -901,9 +915,34 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   };
   const invalidDecision = await toolCall(wrongStatus, invalid.ctx);
   assert.equal(invalidDecision.block, true);
-  assert.match(invalidDecision.reason, /status 成功前只允许/);
-  assert.equal(readGateState(repoRoot, invalid.sid).status, "failed");
-  assert.deepEqual(handlers.activeTools(), initialTools, "错误 status fail closed 后也恢复原工具集");
+  assert.match(invalidDecision.reason, /该工具未执行.*Gate attempt 保持有效/);
+  assert.equal(readGateState(repoRoot, invalid.sid).status, "running");
+  assert.deepEqual(handlers.activeTools(), ["bash"], "无害多余工具不得废掉 B2 启动");
+  const recoveredStatus = {
+    toolCallId: "b2-invalid-recovered-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${invalid.session}' --format text`,
+    },
+  };
+  assert.equal(await toolCall(recoveredStatus, invalid.ctx), undefined);
+  const recoveredResult = await toolResult({
+    ...recoveredStatus,
+    isError: false,
+    content: [{ type: "text", text: "阶段：B2 Writer\n状态：running" }],
+  }, invalid.ctx);
+  assert.equal(recoveredResult.isError, false);
+  assert.match(recoveredResult.content.at(-1).text, /startup status 已验证/);
+  const recoveredTask = [
+    "按 report-writer 处理 cardId=card-1",
+    `SESSION=${invalid.session}`,
+    `result.json=${join(invalid.session, "result.json")}`,
+  ].join("\n");
+  assert.equal(await toolCall(contractCall({
+    context: "fresh",
+    chain: [{ agent: "report-writer", task: recoveredTask }],
+  }, "b2-invalid-recovered-writer"), invalid.ctx), undefined);
+  assert.deepEqual(handlers.activeTools(), initialTools);
 
   const executionError = await seed("execution-error");
   await input({ text: "继续" }, executionError.ctx);
@@ -3761,12 +3800,12 @@ test("parent accepts Report Writer only through checked structured output and pe
   assert.equal(input.chain[0].outputSchema.oneOf[0].properties.dataPath.const, `${session}/data/cards/card-1/entry.json`);
   assert.equal(input.async, false, "Writer must remain a foreground run");
   assert.equal(input.clarify, false);
-  assert.deepEqual(input.turnBudget, { maxTurns: 2, graceTurns: 1 });
+  assert.deepEqual(input.turnBudget, { maxTurns: 3, graceTurns: 1 });
   assert.equal(input.maxRuntimeMs, 720_000);
   assert.equal(input.timeoutMs, undefined);
   assert.equal(input.toolBudget, undefined);
   assert.deepEqual(input.chain[0].toolBudget, {
-    hard: 1,
+    hard: 2,
     block: "*",
   });
   assert.equal(input.chain[0].timeoutMs, undefined);
@@ -3806,6 +3845,7 @@ test("parent accepts Report Writer only through checked structured output and pe
     rowCount: writerRows.length,
     rowsSha256: rowsSha256(writerRows),
   }));
+  await writeWriterCaptionArtifacts(dirname(valid.dataPath), "card-1");
   const accepted = await toolResult(
     contractResult(writerCall, {
       isError: false,
@@ -3835,6 +3875,7 @@ test("parent accepts Report Writer only through checked structured output and pe
     rowCount: writerRows.length,
     rowsSha256: rowsSha256(writerRows),
   }));
+  await writeWriterCaptionArtifacts(dirname(valid2.dataPath), "card-2");
   const accepted2 = await toolResult(
     contractResult(writerCall2, {
       isError: false,
@@ -3930,6 +3971,7 @@ test("parent accepts Report Writer only through checked structured output and pe
     rowCount: writerRows.length,
     rowsSha256: rowsSha256(writerRows),
   }));
+  await writeWriterCaptionArtifacts(dirname(valid.dataPath), "card-1");
   const transcriptPath = join(session, "writer-ack.transcript.jsonl");
   await writeFile(transcriptPath, `${JSON.stringify({
     recordType: "message",

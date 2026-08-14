@@ -507,12 +507,12 @@ test("report-writer persists only the CLI contract and submits the fetch receipt
     "utf8"
   );
   assert.match(worker, /ack_cli_data/);
+  assert.match(worker, /submit_card_caption/);
   assert.doesNotMatch(worker, /fetch-entry\.mjs/);
   assert.match(worker, /entry\.json/);
   assert.match(worker, /entry\.meta\.json/);
   assert.doesNotMatch(worker, /entry\.profile\.json/);
   assert.doesNotMatch(worker, /entry\.facts\.json/);
-  assert.match(worker, /single call is the entire job/i);
   assert.match(worker, /Do not call `submit_writer_result` or `structured_output`/);
   assert.match(worker, /report-writer/);
   assert.match(worker, /禁止.*worker|Unknown agent: report-writer/i);
@@ -523,7 +523,7 @@ test("runtime report-writer prompt carries the fetch-only contract", async () =>
   assert.match(runtime, /entry\.json` \+ `entry\.meta\.json/);
   assert.doesNotMatch(runtime, /entry\.profile\.json/);
   assert.doesNotMatch(runtime, /entry\.facts\.json/);
-  assert.match(runtime, /^tools:\s*ack_cli_data$/m);
+  assert.match(runtime, /^tools:\s*ack_cli_data, submit_card_caption$/m);
   assert.match(runtime, /^extensions:\s*$/m);
   assert.match(runtime, /^subagentOnlyExtensions:\s*\.agents\/pi\/extensions\/report-writer-fetch\/index\.mjs$/m);
   assert.match(runtime, /^inheritProjectContext:\s*false$/m);
@@ -532,7 +532,7 @@ test("runtime report-writer prompt carries the fetch-only contract", async () =>
   assert.match(runtime, /^acceptanceRole:\s*read-only$/m);
   assert.match(runtime, /^acceptance:\s*\{"level":"none",/m);
   assert.match(runtime, /ack_cli_data.*exactly once/i);
-  assert.match(runtime, /single call is the entire job/i);
+  assert.match(runtime, /submit_card_caption.*exactly once/i);
   assert.match(runtime, /Do \*\*not\*\* call `read`[\s\S]*`submit_writer_result`[\s\S]*`structured_output`/i);
 });
 

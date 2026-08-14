@@ -2014,16 +2014,15 @@ function attachWriterRunEnvelope(
   const envelope = resetContractRunEnvelope(input, writer, projectRoot);
   if (envelope.error) return envelope;
   writer.outputSchema = buildWriterReturnSchema(expected);
-  // Writer is deliberately foreground-only. If it cannot return after the
-  // single ack_cli_data call, pi-subagents must terminate it instead of
-  // leaving a retry or detached run alive in the background.
-  input.turnBudget = { maxTurns: 2, graceTurns: 1 };
+  // Writer is deliberately foreground-only. If it cannot return after
+  // ack_cli_data + submit_card_caption, pi-subagents must terminate it.
+  input.turnBudget = { maxTurns: 3, graceTurns: 1 };
   delete input.toolBudget;
   delete input.timeoutMs;
-  // The adapter caps CAS + retry sleeps + CLI attempts at 540s. The child only
-  // calls ack_cli_data once; that tool writes the receipt as outputSchema.
+  // The adapter caps CAS + retry sleeps + CLI attempts at 540s. Success
+  // uses two tools; the caption tool writes the receipt as outputSchema.
   input.maxRuntimeMs = 720_000;
-  writer.toolBudget = { hard: 1, block: "*" };
+  writer.toolBudget = { hard: 2, block: "*" };
   delete writer.async;
   delete writer.turnBudget;
   delete writer.timeoutMs;
@@ -2088,7 +2087,9 @@ async function finishWriterStageIfReady(
   value: JsonObject
 ): Promise<{ ok: boolean; text: string }> {
   if (value.fetchStatus !== "success") {
-    const reason = `B2 Writer cardId=${String(value.cardId || "unknown")} 取数失败：${String(value.error || "unknown error")}`;
+    const error = String(value.error || "unknown error");
+    const kind = error.startsWith("caption rejected:") ? "交稿失败" : "取数失败";
+    const reason = `B2 Writer cardId=${String(value.cardId || "unknown")} ${kind}：${error}`;
     return { ok: false, text: failWriterStage(projectRoot, session, reason) };
   }
 
@@ -5694,7 +5695,10 @@ export default function qdmHarnessExtension(pi: {
       const shapeError = foreignToolShapeError(event);
       if (shapeError) return failB2StartupStatus(sid, identity, shapeError);
       if (!exactB2StartupStatusCall(sid, event)) {
-        return failB2StartupStatus(sid, identity, "status 成功前只允许当前 Session 的精确 stage-gate status");
+        return {
+          block: true,
+          reason: "B2 启动只需精确 stage-gate status；该工具未执行。当前 Gate attempt 保持有效。",
+        };
       }
       const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
       if (!toolCallId) return failB2StartupStatus(sid, identity, "status 缺少 toolCallId");

@@ -3,9 +3,10 @@ import {
   sanitizeCardId,
   writerReturnPaths,
   WRITER_ACK_TOOL,
+  WRITER_CAPTION_TOOL,
 } from "../../skills/html-report/scripts/writer-return.mjs";
 
-export { WRITER_ACK_TOOL, WRITER_ACK_TOOL as WRITER_FETCH_TOOL };
+export { WRITER_ACK_TOOL, WRITER_ACK_TOOL as WRITER_FETCH_TOOL, WRITER_CAPTION_TOOL };
 
 function allow(state) {
   return { decision: undefined, state };
@@ -96,14 +97,18 @@ export function parseWriterAssignment(prompt, { projectRoot } = {}) {
     cardId,
     dataPath: paths.dataPath,
     metaPath: paths.metaPath,
+    evidencePath: paths.evidencePath,
+    captionPath: paths.captionPath,
   };
 }
 
 export function initialWriterGuardState() {
   return {
     fetchAttempts: 0,
+    captionAttempts: 0,
     pending: {},
     fetchResult: null,
+    captionSubmitted: false,
     terminalFailure: null,
     structuredAttempts: 0,
   };
@@ -116,11 +121,20 @@ function exactKeys(value, keys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function pendingKey(event) {
-  return String(event?.toolCallId || `<unknown:${WRITER_ACK_TOOL}>`);
+function pendingKey(event, fallbackTool) {
+  return String(event?.toolCallId || `<unknown:${fallbackTool}>`);
 }
 
-/** Pure fail-fast Writer tool-call transition. Only ack_cli_data is legal. */
+function fetchReceiptFromEvent(event) {
+  const details = event?.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    if (details.fetchStatus === "success" || details.fetchStatus === "failed") return details;
+    if (details.receipt && typeof details.receipt === "object") return details.receipt;
+  }
+  return null;
+}
+
+/** Pure fail-fast Writer tool-call transition: ack once, then caption once. */
 export function writerToolDecision(contract, state, event) {
   const current = state || initialWriterGuardState();
   const toolName = String(event?.toolName || "").toLowerCase();
@@ -128,27 +142,54 @@ export function writerToolDecision(contract, state, event) {
   if (!contract?.ok) {
     return block(`任务契约解析失败，已 fail closed：${contract?.errors?.join("；") || "unknown error"}`, current);
   }
-  if (current.fetchAttempts > 0 || current.structuredAttempts > 0) {
-    return block("ack_cli_data 最多调用一次；禁止其它工具或重试", current);
+  if (current.terminalFailure || current.captionSubmitted || current.captionAttempts > 0) {
+    return block("submit_card_caption 最多调用一次；禁止其它工具或重试", current);
   }
-  if (toolName !== WRITER_ACK_TOOL) {
-    return block(`只允许调用 ack_cli_data 一次并交卷，禁止 ${toolName || "unknown"}`, current);
+  if (current.fetchResult?.fetchStatus === "failed") {
+    return block("ack_cli_data 已失败，禁止其它工具", current);
+  }
+
+  if (!current.fetchResult) {
+    if (current.fetchAttempts > 0) {
+      return block("ack_cli_data 最多调用一次；禁止其它工具或重试", current);
+    }
+    if (toolName !== WRITER_ACK_TOOL) {
+      return block(`先调用 ack_cli_data 一次，禁止 ${toolName || "unknown"}`, current);
+    }
+    const input = event?.input;
+    if (
+      !input || typeof input !== "object" || Array.isArray(input) ||
+      input.resultPath !== contract.resultPath || input.cardId !== contract.cardId ||
+      !exactKeys(input, ["resultPath", "cardId"])
+    ) {
+      return block("ack_cli_data 参数必须逐字等于 assignment 的 result.json 与 cardId", current);
+    }
+    const key = pendingKey(event, WRITER_ACK_TOOL);
+    if (current.pending[key]) return block("ack_cli_data toolCallId 重复", current);
+    return allow({
+      ...current,
+      fetchAttempts: 1,
+      pending: { ...current.pending, [key]: { type: WRITER_ACK_TOOL } },
+    });
+  }
+
+  if (toolName !== WRITER_CAPTION_TOOL) {
+    return block(`取数成功后只允许调用 submit_card_caption 一次，禁止 ${toolName || "unknown"}`, current);
   }
   const input = event?.input;
   if (
     !input || typeof input !== "object" || Array.isArray(input) ||
-    input.resultPath !== contract.resultPath || input.cardId !== contract.cardId ||
-    !exactKeys(input, ["resultPath", "cardId"])
+    !exactKeys(input, ["paragraphs", "pointers"])
   ) {
-    return block("ack_cli_data 参数必须逐字等于 assignment 的 result.json 与 cardId", current);
+    return block("submit_card_caption 只接受 paragraphs 与 pointers", current);
   }
-  const key = pendingKey(event);
-  if (current.pending[key]) return block("ack_cli_data toolCallId 重复", current);
+  const key = pendingKey(event, WRITER_CAPTION_TOOL);
+  if (current.pending[key]) return block("submit_card_caption toolCallId 重复", current);
   return allow({
     ...current,
-    fetchAttempts: 1,
-    structuredAttempts: 1,
-    pending: { ...current.pending, [key]: { type: WRITER_ACK_TOOL } },
+    captionAttempts: 1,
+    structuredAttempts: Math.max(1, current.structuredAttempts),
+    pending: { ...current.pending, [key]: { type: WRITER_CAPTION_TOOL } },
   });
 }
 
@@ -167,44 +208,58 @@ function conciseError(event, fallback) {
   return text.slice(0, 1200);
 }
 
-/** Record the one-shot fetch result. Capture/terminate happens in the tool. */
+/** Record the fetch or caption result. Capture/terminate happens in the tool. */
 export function writerToolResultState(contract, state, event) {
   const current = state || initialWriterGuardState();
   if (!contract?.ok) return current;
   const toolName = String(event?.toolName || "").toLowerCase();
-  if (toolName !== WRITER_ACK_TOOL) return current;
+  if (toolName !== WRITER_ACK_TOOL && toolName !== WRITER_CAPTION_TOOL) return current;
   const key = String(event?.toolCallId || "");
   const pending = { ...current.pending };
   if (key) delete pending[key];
   const next = { ...current, pending };
   if (event?.isError === true) {
-    return { ...next, terminalFailure: { error: conciseError(event, "ack_cli_data failed") } };
+    return {
+      ...next,
+      terminalFailure: {
+        error: conciseError(event, toolName === WRITER_CAPTION_TOOL ? "submit_card_caption failed" : "ack_cli_data failed"),
+      },
+    };
   }
-  return { ...next, fetchResult: event?.details || null };
+  if (toolName === WRITER_CAPTION_TOOL) {
+    return { ...next, captionSubmitted: true };
+  }
+  return { ...next, fetchResult: fetchReceiptFromEvent(event) };
 }
 
-/** Schema-invalid first fetch is terminal. */
+/** Schema-invalid first fetch or caption is terminal. */
 export function writerUnvalidatedSubmitFailureState(contract, state, event) {
   const current = state || initialWriterGuardState();
-  if (
-    String(event?.toolName || "").toLowerCase() !== WRITER_ACK_TOOL ||
-    event?.isError !== true ||
-    !contract?.ok ||
-    current.structuredAttempts !== 0
-  ) {
-    return current;
-  }
+  const toolName = String(event?.toolName || "").toLowerCase();
+  if (event?.isError !== true || !contract?.ok) return current;
   const errorEvent = event?.result && typeof event.result === "object"
     ? event.result
     : event;
-  return {
-    ...current,
-    structuredAttempts: 1,
-    fetchAttempts: Math.max(1, current.fetchAttempts),
-    terminalFailure: current.terminalFailure || {
-      error: conciseError(errorEvent, "ack_cli_data 参数校验失败；首次取数机会已消费"),
-    },
-  };
+  if (toolName === WRITER_ACK_TOOL && current.fetchAttempts === 0) {
+    return {
+      ...current,
+      fetchAttempts: 1,
+      terminalFailure: current.terminalFailure || {
+        error: conciseError(errorEvent, "ack_cli_data 参数校验失败；首次取数机会已消费"),
+      },
+    };
+  }
+  if (toolName === WRITER_CAPTION_TOOL && current.captionAttempts === 0 && current.fetchResult?.fetchStatus === "success") {
+    return {
+      ...current,
+      captionAttempts: 1,
+      structuredAttempts: Math.max(1, current.structuredAttempts),
+      terminalFailure: current.terminalFailure || {
+        error: conciseError(errorEvent, "submit_card_caption 参数校验失败；首次交稿机会已消费"),
+      },
+    };
+  }
+  return current;
 }
 
 /** Backward-compatible direct guard used by older focused tests. */
@@ -214,6 +269,6 @@ export function writerCoordinationDecision(event) {
   }
   return {
     block: true,
-    reason: "Report Writer 不允许进入 supervisor/intercom 等待；只调用一次 ack_cli_data。",
+    reason: "Report Writer 不允许进入 supervisor/intercom 等待；只调用 ack_cli_data 与 submit_card_caption。",
   };
 }

@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const WRITER_ACK_TOOL = "ack_cli_data";
+export const WRITER_CAPTION_TOOL = "submit_card_caption";
 
 export function sanitizeCardId(raw) {
   const value = String(raw || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -27,6 +28,8 @@ export function writerReturnPaths({ sessionDir, cardId }) {
     cardId: String(cardId),
     dataPath: join(cardDir, "entry.json"),
     metaPath: join(cardDir, "entry.meta.json"),
+    evidencePath: join(cardDir, "caption-evidence.json"),
+    captionPath: join(cardDir, "caption.md"),
   };
 }
 
@@ -96,7 +99,7 @@ function receiptFromToolMessage(message) {
   const role = String(message.role || "");
   if (role !== "toolResult" && role !== "tool") return null;
   const toolName = String(message.toolName || message.name || "").toLowerCase();
-  if (toolName !== WRITER_ACK_TOOL) return null;
+  if (toolName !== WRITER_ACK_TOOL && toolName !== WRITER_CAPTION_TOOL) return null;
   const fromDetails = asReceiptCandidate(message.details);
   if (fromDetails) return fromDetails;
   const text = messageText(message.content) || (typeof message.text === "string" ? message.text : "");
