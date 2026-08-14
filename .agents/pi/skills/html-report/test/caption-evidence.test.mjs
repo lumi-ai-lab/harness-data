@@ -22,10 +22,10 @@ test("caption axis keeps three in-group dims and drops the rest", () => {
     "manageAreaId",
     "sapArea2Id",
     "totalArea",
-    "incDate",
+    "bizDate",
   ]);
   assert.deepEqual(built.axis, ["sapArea2Id", "manageAreaId", "cityId"]);
-  assert.deepEqual(built.droppedDimensions, ["totalArea", "incDate", "storeId"]);
+  assert.deepEqual(built.droppedDimensions, ["totalArea", "bizDate", "storeId"]);
   assert.deepEqual(captionPrefixes(built.axis), [
     ["sapArea2Id"],
     ["sapArea2Id", "manageAreaId"],

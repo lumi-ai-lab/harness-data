@@ -165,7 +165,7 @@ async function seedTrustedResearcherSession(session, { claimText } = {}) {
           metrics: ["profitAmt", "custNum", "profitRate"],
           statisticPolicy: "SUMMARY",
           time: { startDate: "2026-07-01", endDate: "2026-07-04" },
-          dimensions: ["incDate"],
+          dimensions: ["bizDate"],
           filters: {},
         },
         comparisons: [],
@@ -257,7 +257,7 @@ async function seedTrustedNewQuerySession(session, { claimText } = {}) {
     metrics: ["profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-02" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: {},
   });
   const resultPath = join(session, "result.json");

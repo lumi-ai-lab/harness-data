@@ -31,6 +31,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectRecommendationContractErrors } from "./recommendation-contract.mjs";
 
 export const PIPELINE_STATE_VERSION = 1;
 export const PIPELINE_STATE_PRODUCER = "stage-gate.mjs";
@@ -354,6 +355,23 @@ function resultPathFor(sessionDir) {
   return join(resolve(sessionDir), "result.json");
 }
 
+async function requireAConfigArtifacts(sessionDir) {
+  const abs = resolve(sessionDir);
+  const missing = [];
+  for (const rel of ["recommendations.json", "server-meta.json"]) {
+    if (!(await exists(join(abs, rel)))) missing.push(rel);
+  }
+  if (missing.length) {
+    throw new Error(`A_CONFIG cannot finish before UI confirmation server is ready; missing ${missing.join(", ")} in ${abs}`);
+  }
+  const recommendationsPath = join(abs, "recommendations.json");
+  const recommendations = JSON.parse(await readFile(recommendationsPath, "utf8"));
+  const contractErrors = collectRecommendationContractErrors(recommendations);
+  if (contractErrors.length) {
+    throw new Error(`A_CONFIG recommendations violate qdm-metric-cli contract: ${contractErrors.join("; ")}`);
+  }
+}
+
 async function exists(path) {
   try {
     await access(path);
@@ -607,6 +625,7 @@ export async function finishPipelineStage(sessionDir, stageId, { now } = {}) {
     if (stage.status !== "running") {
       throw new Error(`cannot finish ${stageId} while status=${stage.status}`);
     }
+    if (stageId === "A_CONFIG") await requireAConfigArtifacts(abs);
 
     closeExecution(stage, at);
     const attempt = activeAttempt(stage);

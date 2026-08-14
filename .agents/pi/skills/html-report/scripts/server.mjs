@@ -14,6 +14,8 @@ import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { metricQueryFromCard } from "./metric-query-contract.mjs";
+import { runMetricQuery } from "./metric-cli-executor.mjs";
 
 const argv = process.argv.slice(2);
 const hasFlag = (name) => argv.includes(name);
@@ -408,6 +410,8 @@ function runIndicatorsCli(argv, timeoutMs = 120000) {
 
 function validateCardWithCli(card) {
   const title = card?.title || card?.id || "未命名卡片";
+  if (card?.query) return validateCardWithMetricCli(card, title);
+
   const requestBody = card?.requestBody || {};
   if (!Array.isArray(requestBody.indicatorFieldList) || !requestBody.indicatorFieldList.length) {
     return {
@@ -477,6 +481,62 @@ function validateCardWithCli(card) {
   };
 }
 
+function validateCardWithMetricCli(card, title) {
+  let query;
+  try {
+    query = metricQueryFromCard(card);
+  } catch (error) {
+    return {
+      ok: false,
+      cardId: card?.id || "",
+      title,
+      error: explainCliError(error.message || String(error)),
+    };
+  }
+
+  const smokeQuery = {
+    ...query,
+    pageNo: 1,
+    pageSize: Math.min(Number(query.pageSize) || 20, 20),
+  };
+  const started = Date.now();
+  const result = runMetricQuery(smokeQuery, {
+    projectRoot: root,
+    sessionId,
+    timeoutMs: 120000,
+  });
+  const durationMs = Date.now() - started;
+  const command = `qdm-metric-cli analysis execute --payload-json '<query.request>' --page-size ${smokeQuery.pageSize}`;
+  if (result.timedOut) {
+    return {
+      ok: false,
+      cardId: card?.id || "",
+      title,
+      command,
+      durationMs,
+      error: explainCliError(`CLI timed out after ${durationMs}ms`),
+    };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      cardId: card?.id || "",
+      title,
+      command,
+      durationMs,
+      error: explainCliError((result.stderr || result.stdout || result.error || "").trim()),
+    };
+  }
+  return {
+    ok: true,
+    cardId: card?.id || "",
+    title,
+    command,
+    durationMs,
+    stdoutBytes: Buffer.byteLength(result.stdout || "", "utf8"),
+  };
+}
+
 const json = (res, status, body) => {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -534,6 +594,18 @@ async function clearMeta() {
 
 function touchActivity() {
   lastActivityAt = Date.now();
+}
+
+async function readRecommendations() {
+  return JSON.parse(await readFile(resolvedConfig, "utf8"));
+}
+
+function hasCompletePageValidation(validation, cards) {
+  if (!Array.isArray(validation) || validation.length !== cards.length) return false;
+  return cards.every((card, index) => {
+    const item = validation[index];
+    return item?.ok === true && (!item.cardId || !card?.id || item.cardId === card.id);
+  });
 }
 
 async function shutdown(reason) {
@@ -610,7 +682,8 @@ const server = http.createServer(async (req, res) => {
       }
 
       // Optional server-side re-validation when client skips per-card calls.
-      const skipValidate = body.skip_validate === true || body.already_validated === true;
+      const pageValidation = Array.isArray(body.validation) ? body.validation : [];
+      const skipValidate = body.skip_validate === true || body.already_validated === true || hasCompletePageValidation(pageValidation, cards);
       const validation = [];
       if (!skipValidate) {
         for (let i = 0; i < cards.length; i += 1) {
@@ -628,13 +701,25 @@ const server = http.createServer(async (req, res) => {
             });
           }
         }
-      } else if (Array.isArray(body.validation)) {
-        validation.push(...body.validation);
+      } else if (pageValidation.length) {
+        validation.push(...pageValidation);
       }
+
+      let recommendations = {};
+      try {
+        recommendations = await readRecommendations();
+      } catch {
+        recommendations = {};
+      }
+      const userQuestion = String(body.userQuestion || body.question || recommendations.userQuestion || recommendations.question || "").trim();
+      const title = String(body.title || recommendations.title || cards[0]?.title || userQuestion || "Harness Web 报告").trim();
 
       const resultPayload = {
         ...body,
         status: "confirmed",
+        userQuestion,
+        title,
+        mode: body.mode || recommendations.mode || "free",
         submitted_at: body.submitted_at || new Date().toISOString(),
         session_id: sessionId,
         result_path: resultPath,
@@ -672,7 +757,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (path === "/harness/recommendations") {
-    return json(res, 200, JSON.parse(await readFile(resolvedConfig, "utf8")));
+    return json(res, 200, await readRecommendations());
   }
   if (path === "/harness/result") {
     try {
@@ -695,7 +780,7 @@ const server = http.createServer(async (req, res) => {
   if (path === "/harness/page-state") {
     let recommendations = null;
     try {
-      recommendations = JSON.parse(await readFile(resolvedConfig, "utf8"));
+      recommendations = await readRecommendations();
     } catch {
       recommendations = null;
     }

@@ -24,8 +24,8 @@ import {
 } from "../scripts/stage-gate.mjs";
 
 const rows = [
-  { incDate: "2026-07-01", custNum: 120, perCustAmt: 80, profitLostRate: "20%", profitAmt: 1920 },
-  { incDate: "2026-07-02", custNum: 150, perCustAmt: 82, profitLostRate: "21%", profitAmt: 2583 },
+  { bizDate: "2026-07-01", custNum: 120, perCustAmt: 80, profitLostRate: "20%", profitAmt: 1920 },
+  { bizDate: "2026-07-02", custNum: 150, perCustAmt: 82, profitLostRate: "21%", profitAmt: 2583 },
 ];
 
 async function fakeMetricCli(root) {

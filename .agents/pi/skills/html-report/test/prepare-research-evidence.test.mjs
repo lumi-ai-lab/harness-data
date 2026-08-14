@@ -30,7 +30,7 @@ function sourceCard() {
         metrics: ["profitAmt"],
         statisticPolicy: "SUMMARY",
         time: { startDate: "2026-07-01", endDate: "2026-07-31" },
-        dimensions: ["incDate"],
+        dimensions: ["bizDate"],
         filters: {},
       },
       comparisons: [],

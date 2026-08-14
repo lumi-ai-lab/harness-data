@@ -226,6 +226,7 @@ export function buildConfirmPayload(recommendations, { submittedAt = new Date().
   return {
     status: "confirmed",
     submitted_at: submittedAt,
+    userQuestion: text(first(recommendations.userQuestion, recommendations.question)),
     title: text(recommendations.title) || cards[0]?.title || "Harness Web 报告",
     mode: text(recommendations.mode) || "free",
     cards,

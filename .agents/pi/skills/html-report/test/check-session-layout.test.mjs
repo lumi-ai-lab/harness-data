@@ -866,7 +866,7 @@ test("explore phase accepts a version-2 reuse_entry task without explore query a
     metrics: ["profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-02" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: {},
   };
   await writeFile(join(session, "result.json"), JSON.stringify({
@@ -963,7 +963,7 @@ test("explore phase recomputes joint decision query scope before validating view
     metrics: ["traffic", "ticket", "profit"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-31" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: { storeId: ["sample-store"] },
   };
   const resultPath = join(session, "result.json");
@@ -1102,7 +1102,7 @@ test("explore phase validates version-2 new_query evidence and material query me
     metrics: ["profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-02" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: {},
   });
   await writeFile(resultPath, JSON.stringify({
@@ -1242,7 +1242,7 @@ test("zero-row new_query evidence assembles and passes with noData summary", asy
     metrics: ["profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-02" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: {},
   });
   await writeFile(resultPath, JSON.stringify({

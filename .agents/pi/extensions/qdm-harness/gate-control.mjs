@@ -553,6 +553,16 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         "- 模型不得自行调用 subagent list 或 stage-gate；自动检查成功后扩展会完成 A_CONFIG。",
         "- 自动检查失败、超时或缺少 Agent 时，扩展会 fail 当前 Gate；不要重试或继续其他工作。"
       );
+    } else if (stageId === "A_CONFIG") {
+      const prepareCommand = `node .agents/pi/skills/html-report/scripts/prepare.mjs --question '<原始用户问题>' --session-id ${shellArg(state.sessionId || basename(sessionDir))}`;
+      lines.push(
+        "- 动态 A_CONFIG：当前阶段还没有完成推荐配置，禁止调用 stage-gate finish/fail。",
+        `- 下一步必须先运行：\`${prepareCommand}\`。`,
+        "- 推荐卡时间行维度必须使用当前 qdm-metric-cli Registry 的 `bizDate`；禁止写旧版 inc* 时间维度码。",
+        "- 根据 prepare 输出读取 Spec，写入 `$SESSION/recommendations.json`，再启动 `server.mjs --config $SESSION/recommendations.json --detach`；不要传 `--open`，测试 helper 会用 `qdm-metric-cli ui --session-upstream` 打开真正前端。",
+        "- 只有确认 `$SESSION/recommendations.json` 与 `$SESSION/server-meta.json` 都存在后，才允许最后单独调用 stage-gate finish。",
+        "- 不要把动态模式误判为固定推荐模式；缺少 recommendations/server-meta 说明 A_CONFIG 工作尚未完成，不是固定推荐失败。"
+      );
     } else if (!["B0_PREFLIGHT", "B2_WRITER", "B2_MAIN", "B3_RESEARCH"].includes(stageId)) {
       lines.push(
         "- 只执行当前阶段；顺序必须是：start（扩展已完成）→ 工作 → layout → finish → stop。",

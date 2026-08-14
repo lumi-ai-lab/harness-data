@@ -1198,6 +1198,34 @@ type recallDebugResult struct {
 	ContextFiles       []harness.FileRef `json:"contextFiles"`
 }
 
+func specContextFiles(root string, refs []harness.FileRef) []harness.FileRef {
+	out := make([]harness.FileRef, 0, len(refs))
+	seen := map[string]bool{}
+	add := func(path, reason string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" || seen[path] {
+			return
+		}
+		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+			return
+		}
+		seen[path] = true
+		out = append(out, harness.FileRef{Path: path, Reason: reason})
+	}
+	for _, ref := range refs {
+		path := filepath.ToSlash(filepath.Clean(ref.Path))
+		reason := ref.Reason
+		if strings.HasSuffix(path, "/spec.md") || path == "spec.md" {
+			add(path, reason)
+			continue
+		}
+		if strings.HasSuffix(path, "/playbook.md") || path == "playbook.md" {
+			add(strings.TrimSuffix(path, "playbook.md")+"spec.md", "spec for "+reason)
+		}
+	}
+	return out
+}
+
 type recallDebugPlan struct {
 	Mode              string                                `json:"mode"`
 	SelectedPlaybook  string                                `json:"selectedPlaybook,omitempty"`
@@ -1214,6 +1242,7 @@ func runWikiRecallDebug(root string, args []string) error {
 	question := fs.String("question", "", "question")
 	topN := fs.Int("top", 20, "number of matches to print; 0 means all")
 	jsonOut := fs.Bool("json", false, "print json")
+	docSet := fs.String("doc-set", "all", "context document set: all or specs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1226,6 +1255,9 @@ func runWikiRecallDebug(root string, args []string) error {
 	if *topN < 0 {
 		return fmt.Errorf("--top must be >= 0")
 	}
+	if *docSet != "all" && *docSet != "specs" {
+		return fmt.Errorf("--doc-set must be all or specs")
+	}
 	index, err := wikis.LoadRuntimeIndex(root)
 	if err != nil {
 		return err
@@ -1235,6 +1267,10 @@ func runWikiRecallDebug(root string, args []string) error {
 		return err
 	}
 	normalizedQuestion := retrieval.NormalizeChinese(*question)
+	contextFiles := response.ContextFiles
+	if *docSet == "specs" {
+		contextFiles = specContextFiles(root, contextFiles)
+	}
 	result := recallDebugResult{
 		Question:           *question,
 		NormalizedQuestion: normalizedQuestion,
@@ -1242,7 +1278,7 @@ func runWikiRecallDebug(root string, args []string) error {
 		QueryTrigrams:      retrieval.Ngrams(normalizedQuestion, 3),
 		Matches:            dhcontext.RecallMatches(index, *question, *topN),
 		Plan:               recallDebugPlanFromWikiPlan(plan),
-		ContextFiles:       response.ContextFiles,
+		ContextFiles:       contextFiles,
 	}
 	if *jsonOut {
 		return printJSON(result)

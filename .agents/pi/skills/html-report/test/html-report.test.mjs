@@ -13,6 +13,7 @@ import {
   inclusiveDaySpan,
   MAX_CARD_DATE_SPAN_DAYS,
 } from "../scripts/validate-config.mjs";
+import { collectRecommendationContractErrors } from "../scripts/recommendation-contract.mjs";
 import {
   defaultFixedDateRange,
   fixedRecommendations,
@@ -31,7 +32,7 @@ const valid = () => ({
     analysisFocus: "趋势",
     headingLevel: 2,
     indicatorFieldList: ["saleAmt"],
-    aggDimUniqueCodeList: ["incDate"],
+    aggDimUniqueCodeList: ["bizDate"],
     columnAggDimUniqueCodeList: [],
     startDate: "2026-07-01",
     endDate: "2026-07-14",
@@ -126,8 +127,31 @@ test("fixed debug recommendation is a valid known-good 101001 daily card", () =>
   assert.deepEqual(validateShape(recommendations), []);
   assert.equal(recommendations.cards.length, 1);
   assert.deepEqual(recommendations.cards[0].indicatorFieldList, ["custNum", "perCustAmt", "profitLostRate", "profitAmt"]);
-  assert.deepEqual(recommendations.cards[0].aggDimUniqueCodeList, ["incDate"]);
+  assert.deepEqual(recommendations.cards[0].aggDimUniqueCodeList, ["bizDate"]);
   assert.deepEqual(recommendations.cards[0].filters, [{ type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] }]);
+});
+
+test("recommendation contract rejects legacy inc time dimension fields", () => {
+  const data = valid();
+  const legacyDayDim = `inc${"Date"}`;
+  const legacyWeekDim = `inc${"Week"}`;
+  data.cards[0].aggDimUniqueCodeList = [legacyDayDim];
+  data.cards[0].columnAggDimUniqueCodeList = [legacyWeekDim];
+  data.cards[0].filters = [{ type: "DIMENSION", dimUniqueCode: legacyDayDim, values: ["2026-07-01"] }];
+  data.cards[0].query = {
+    request: {
+      metrics: ["saleAmt"],
+      statisticPolicy: "SUMMARY",
+      time: { startDate: "2026-07-01", endDate: "2026-07-01" },
+      dimensions: [legacyDayDim],
+      filters: { [legacyWeekDim]: ["2026-07-01"] },
+    },
+    comparisons: [],
+  };
+
+  const errors = collectRecommendationContractErrors(data);
+  assert.ok(errors.length >= 5);
+  assert.ok(errors.every((error) => /legacy time dimension|bizDate/.test(error)));
 });
 
 test("prepare identifies single, multi_single, report and free modes", () => {
@@ -166,10 +190,12 @@ test("prepare allows empty Spec recall for free no-hit (LLM explores indexes)", 
   assert.match(payload.next, /index\.md/);
 });
 
-test("prepare refuses a recalled non-Indicators report", () => {
+test("prepare accepts recalled Metric-native reports", () => {
   const out = spawnSync(process.execPath, [prepare, "--question", "生成经营综合分析报告", "--session-id", "test-cmr"], { cwd: root, encoding: "utf8" });
   assert.equal(out.status, 0, out.stderr || out.stdout);
-  assert.equal(JSON.parse(out.stdout).supported, false);
+  const payload = JSON.parse(out.stdout);
+  assert.equal(payload.supported, true);
+  assert.ok(payload.specs.some((p) => /经营综合分析报告\/spec\.md$/.test(p)), JSON.stringify(payload.specs));
 });
 
 test("skill instructions require Spec-only flow and forbid analysis execute", async () => {
@@ -221,7 +247,7 @@ test("skill instructions require Spec-only flow and forbid analysis execute", as
   assert.match(skill, /31|≤ 31|<= 31/);
   assert.match(skill, /1st of the current calendar month|current month 1st|当月 1/);
   assert.match(skill, /through yesterday|→ yesterday|～昨天/);
-  assert.match(skill, /Card diversity|避免重复|time grain|incWeek/);
+  assert.match(skill, /Card diversity|避免重复|time grain|bizDate/);
   assert.match(skill, /same indicator|同指标|Forbidden|禁止/);
   assert.match(skill, /tasks\.json/);
   const b25Planner = skill.slice(skill.indexOf("### B2.5"), skill.indexOf("### B3.5"));
@@ -426,7 +452,8 @@ test("local server serves page, recommendations, health, token config and page-s
   const recommendations = await (await fetch(`${base}harness/recommendations`)).json();
   assert.equal(recommendations.cards.length, 1);
   assert.deepEqual(recommendations.cards[0].indicatorFieldList, ["saleAmt"]);
-  assert.deepEqual(recommendations.cards[0].aggDimUniqueCodeList, ["incDate"]);
+  assert.deepEqual(recommendations.cards[0].aggDimUniqueCodeList, ["bizDate"]);
+  assert.deepEqual(JSON.parse(await readFile(file, "utf8")).cards[0].aggDimUniqueCodeList, ["bizDate"]);
   assert.match(await (await fetch(base)).text(), /确认生成报告/);
 
   const initialState = await (await fetch(`${base}harness/page-state`)).json();
@@ -443,7 +470,7 @@ test("local server serves page, recommendations, health, token config and page-s
       id: "c1",
       title: "销售额",
       indicatorFieldList: ["saleAmt"],
-      aggDimUniqueCodeList: ["incDate"],
+      aggDimUniqueCodeList: ["bizDate"],
       startDate: "2026-07-01",
       endDate: "2026-07-14",
       filters: [{ type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] }],
@@ -581,7 +608,7 @@ test("server --detach returns quickly and keeps serving after launcher exits", a
 test("confirm validates cards and writes result.json into session dir", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "html-report-confirm-"));
   const file = join(dir, "recommendations.json");
-  await writeFile(file, JSON.stringify(valid()));
+  await writeFile(file, JSON.stringify({ ...valid(), userQuestion: "分析销售额" }));
   const child = spawn(process.execPath, [serverScript, "--config", file, "--max-idle-ms", "0", "--max-lifetime-ms", "0"], {
     cwd: root,
     env: { ...process.env, QDM_INDICATORS_TOKEN: "test-token" },
@@ -609,7 +636,7 @@ test("confirm validates cards and writes result.json into session dir", async (t
         title: "坏卡片",
         requestBody: {
           indicatorFieldList: [],
-          aggDimUniqueCodeList: ["incDate"],
+          aggDimUniqueCodeList: ["bizDate"],
           startDate: "2026-07-01",
           endDate: "2026-07-14",
         },
@@ -629,10 +656,10 @@ test("confirm validates cards and writes result.json into session dir", async (t
       id: "c1",
       title: "销售额",
       indicatorFieldList: ["saleAmt"],
-      aggDimUniqueCodeList: ["incDate"],
+      aggDimUniqueCodeList: ["bizDate"],
       requestBody: {
         indicatorFieldList: ["saleAmt"],
-        aggDimUniqueCodeList: ["incDate"],
+        aggDimUniqueCodeList: ["bizDate"],
         startDate: "2026-07-01",
         endDate: "2026-07-14",
         storeCollectType: 1,
@@ -649,7 +676,7 @@ test("confirm validates cards and writes result.json into session dir", async (t
   const saved = await fetch(`${base}harness/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, already_validated: true, validation: [{ ok: true, cardId: "c1" }] }),
+    body: JSON.stringify({ ...payload, validation: [{ ok: true, cardId: "c1" }] }),
   });
   assert.equal(saved.status, 200);
   const savedBody = await saved.json();
@@ -658,11 +685,84 @@ test("confirm validates cards and writes result.json into session dir", async (t
 
   const onDisk = JSON.parse(await readFile(join(dir, "result.json"), "utf8"));
   assert.equal(onDisk.status, "confirmed");
+  assert.equal(onDisk.already_validated, true);
+  assert.equal(onDisk.userQuestion, "分析销售额");
   assert.equal(onDisk.cards.length, 1);
   assert.equal(onDisk.cards[0].indicatorFieldList[0], "saleAmt");
 
   const got = await (await fetch(`${base}harness/result`)).json();
   assert.equal(got.cards[0].id, "c1");
+});
+
+test("confirm accepts card.query and validates through qdm-metric-cli", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "html-report-query-confirm-"));
+  const file = join(dir, "recommendations.json");
+  const fakeMetricCli = join(dir, "qdm-metric-cli");
+  const fakeMetricLog = join(dir, "metric-cli.log");
+  await writeFile(file, JSON.stringify(valid()));
+  await writeFile(fakeMetricCli, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QDM_FAKE_METRIC_LOG\"\nprintf '[]\\n'\n", { mode: 0o755 });
+  const child = spawn(process.execPath, [serverScript, "--config", file, "--max-idle-ms", "0", "--max-lifetime-ms", "0"], {
+    cwd: root,
+    env: { ...process.env, QDM_METRIC_CLI: fakeMetricCli, QDM_FAKE_METRIC_LOG: fakeMetricLog },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(async () => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  const [chunk] = await once(child.stdout, "data");
+  const base = chunk.toString().trim();
+
+  const payload = {
+    status: "confirmed",
+    title: "销售额",
+    mode: "builder",
+    cards: [{
+      id: "c1",
+      title: "销售额",
+      headingLevel: 2,
+      analysisFocus: "趋势",
+      chartType: "table",
+      indicatorBizId: "1",
+      query: {
+        request: {
+          metrics: ["saleAmt"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-14", grain: "DAY" },
+          dimensions: ["bizDate"],
+          filters: { storeId: ["101001"] },
+          pageNo: 1,
+          pageSize: 500,
+        },
+        comparisons: [],
+      },
+    }],
+  };
+  const checked = await fetch(`${base}harness/confirm/validate-card`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ index: 0, total: 1, card: payload.cards[0] }),
+  });
+  assert.equal(checked.status, 200);
+  const checkedBody = await checked.json();
+  assert.equal(checkedBody.ok, true);
+
+  const saved = await fetch(`${base}harness/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  assert.equal(saved.status, 200);
+
+  const onDisk = JSON.parse(await readFile(join(dir, "result.json"), "utf8"));
+  assert.deepEqual(onDisk.cards[0].query.request.metrics, ["saleAmt"]);
+  assert.equal(Object.hasOwn(onDisk.cards[0], "requestBody"), false);
+  const metricLog = await readFile(fakeMetricLog, "utf8");
+  assert.match(metricLog, /analysis execute --payload-json/);
 });
 
 test("server --stop terminates a running instance for the same config", async (t) => {

@@ -61,7 +61,7 @@ function fixture(label = "ok") {
   });
   const pageMetadata = {
     dimensions: [
-      { dimUniqueCode: "incDate", dimName: "日维度", dimGroupCode: "dim_date_group" },
+      { dimUniqueCode: "bizDate", dimName: "日维度", dimGroupCode: "dim_date_group" },
       { dimUniqueCode: "storeId", dimName: "门店", dimGroupCode: "dim_store_group" },
     ],
     indicators: [

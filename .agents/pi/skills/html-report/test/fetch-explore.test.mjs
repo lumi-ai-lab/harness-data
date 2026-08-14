@@ -27,7 +27,7 @@ function metricQuery(overrides = {}) {
     metrics: ["profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-27" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: { storeId: ["101001"] },
     pageNo: 1,
     pageSize: 500,
@@ -107,7 +107,7 @@ test("normalizeEntryPayload still all-pages for explore payloads", () => {
 });
 
 test("material query delta ignores ordering, pagination, and chart presentation", () => {
-  const original = metricQuery({ metrics: ["custNum", "profitAmt"], orderBy: { field: "incDate", direction: "ASC" } });
+  const original = metricQuery({ metrics: ["custNum", "profitAmt"], orderBy: { field: "bizDate", direction: "ASC" } });
   const presentationOnly = {
     ...original,
     metrics: ["profitAmt", "custNum"],
@@ -184,7 +184,7 @@ test("fetchExploreTask rejects orderBy-only re-query before CLI", async (t) => {
   await mkdir(session, { recursive: true });
   const original = metricQuery({
     metrics: ["custNum", "profitAmt"],
-    orderBy: { field: "incDate", direction: "ASC" },
+    orderBy: { field: "bizDate", direction: "ASC" },
   });
   const resultPath = join(session, "result.json");
   await mkdir(join(session, "analysis"), { recursive: true });
@@ -385,7 +385,7 @@ test("fetch-explore Metric CLI success persists rows with derived provenance", a
   t.after(async () => rm(root, { recursive: true, force: true }));
   await mkdir(join(session, "analysis"), { recursive: true });
 
-  const original = metricQuery({ orderBy: { field: "incDate", direction: "ASC" } });
+  const original = metricQuery({ orderBy: { field: "bizDate", direction: "ASC" } });
   const candidate = {
     ...original,
     metrics: ["profitAmt", "saleAmt"],

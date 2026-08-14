@@ -59,7 +59,7 @@ export function fixedRecommendations({ sessionId, userQuestion = "", now = new D
           "调试固定卡：以门店101001为样本，按日展示来客数、客单价、门店毛利率和门店毛利额，验证 HTML 配置确认、数据传递及后续报告章节链路。该预设不代表对当前用户问题的推荐结论。",
         chartType: "table",
         indicatorFieldList: ["custNum", "perCustAmt", "profitLostRate", "profitAmt"],
-        aggDimUniqueCodeList: ["incDate"],
+        aggDimUniqueCodeList: ["bizDate"],
         startDate,
         endDate,
         storeCollectType: 2,

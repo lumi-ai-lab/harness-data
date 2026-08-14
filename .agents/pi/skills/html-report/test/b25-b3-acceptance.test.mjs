@@ -48,7 +48,7 @@ function mockRequestBody() {
     metrics: ["custNum", "perCustAmt", "profitAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-02" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: { storeId: ["101001"] },
     pageNo: 1,
     pageSize: 500,

@@ -19,7 +19,7 @@ Full architecture (P0–P5) is locked in:
 打开既有 HTML builder。它跳过 Spec recall、指标检索和推荐生成，只用于调试
 「推荐 JSON → HTML 确认 → result.json → Markdown 报告与质检」链路。
 
-- 预设字段：`custNum`、`perCustAmt`、`profitLostRate`、`profitAmt`；按 `incDate`，门店
+- 预设字段：`custNum`、`perCustAmt`、`profitLostRate`、`profitAmt`；按 `bizDate`，门店
   `101001`，日期仍为当月 1 日至昨日。
 - 该模式下 A_CONFIG 的固定推荐和 runtime agent list 都由扩展在模型开始前完成。
   runtime list 仍走真实 pi-subagents runtime discovery，并按 Session/Gate attempt 写入
@@ -187,7 +187,7 @@ SESSION="$(pwd)/.harness/state/html-report/${PI_SESSION_ID:?PI_SESSION_ID must b
          "analysisFocus": "…",
          "chartType": "table",
          "indicatorFieldList": ["custNum", "perCustAmt", "profitAmt"],
-         "aggDimUniqueCodeList": ["incDate"],
+         "aggDimUniqueCodeList": ["bizDate"],
          "startDate": "2026-07-01",
          "endDate": "2026-07-21",
          "storeCollectType": 2,
@@ -208,12 +208,12 @@ SESSION="$(pwd)/.harness/state/html-report/${PI_SESSION_ID:?PI_SESSION_ID must b
      Example: today is 2026-07-20 → `startDate=2026-07-01`, `endDate=2026-07-19`.
      If today is the **1st** of the month (no “yesterday” in the current month): use **previous month 1st through previous month last day** (full previous calendar month).
    - If the user asks for a longer period (e.g. last quarter / half year): still emit **only ≤ 31 days** (usually the most recent month), and add a top-level `warnings` note that the window was truncated; deeper/longer history belongs to Phase B Report Researcher — **never** a single 60–90 day card.
-   - Prefer one time grain that fits a ≤31-day window (usually `incDate`). Do **not** open a second same-metric card only to show `incWeek` / `incMonth`.
+   - Prefer one time grain that fits a ≤31-day window (usually `bizDate`). Do **not** use legacy inc* time dimension codes.
 
    **Card diversity（避免重复卡）：**
 
    - Each card must earn its place: **indicator set**, **analysisFocus intent**, or **filters/scope** must differ in a material way.
-   - **Forbidden:** same `indicatorFieldList` (as a set) + same effective filters, split only by time grain (`incDate` vs `incWeek` vs `incMonth`) — e.g. 日趋势 + 周趋势 + 同指标「平衡点」三张同构卡.
+   - **Forbidden:** same `indicatorFieldList` (as a set) + same effective filters, split only by time grain — e.g. 日趋势 + 周趋势 + 同指标「平衡点」三张同构卡.
    - **Anti-pattern:** three cards all with `custNum + perCustAmt + profitAmt`, only day/week dims differ → merge into **one** card (daily + balance narrative in one `analysisFocus`), or at most a second card with a **real** difference (other metrics, structure dim, or different store filter).
    - **OK multi-card examples:** different metrics; trend vs true structural breakdown; same metrics but different store/region filters; report mode layers from Spec.
    - free mode: prefer **1–2** cards; use 3 only when each is clearly non-redundant. Prefer one card when one query answers the question.
@@ -273,7 +273,7 @@ SESSION="$(pwd)/.harness/state/html-report/${PI_SESSION_ID:?PI_SESSION_ID must b
 - Inventing metric values in chat
 - Putting user-named store/region/category **only** in prose (`title`/`analysisFocus`) without `cards[].filters`
 - Card date range longer than **31 inclusive days**
-- Multiple cards that only differ by time grain (`incDate` / `incWeek` / `incMonth`) with the same indicators and filters
+- Multiple cards that only differ by time grain with the same indicators and filters
 
 ### Phase A checklist
 

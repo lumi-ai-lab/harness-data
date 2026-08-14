@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sanitizeCardId } from "./writer-return.mjs";
+import { collectRecommendationContractErrors } from "./recommendation-contract.mjs";
 
 /** Same notion as HTML confirmEmptyFiltersGate: dim + at least one value. */
 export function hasEffectiveFilter(filter) {
@@ -102,7 +103,7 @@ export function validateShape(data) {
 let refreshed = false;
 function cliJson(cli, argv) {
   let out = spawnSync(cli, argv, { encoding: "utf8", env: process.env });
-  const message = () => (out.stderr || out.stdout).trim();
+  const message = () => (out.stderr || out.stdout || out.error?.message || "CLI execution failed").trim();
   if (out.status !== 0 && !refreshed && /token|认证|401|403|460|expired/i.test(message())) {
     refreshed = true;
     const root = resolve(new URL("../../../../../", import.meta.url).pathname);
@@ -113,6 +114,7 @@ function cliJson(cli, argv) {
       out = spawnSync(cli, argv, { encoding: "utf8", env: process.env });
     }
   }
+  if (out.error) throw new Error(message());
   if (out.status !== 0) throw new Error(message());
   return JSON.parse(out.stdout);
 }
@@ -161,7 +163,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!file) throw new Error("config path is required");
   const data = JSON.parse(await readFile(file, "utf8"));
   const root = resolve(new URL("../../../../../", import.meta.url).pathname);
-  const errors = [...validateShape(data)];
+  const errors = [...validateShape(data), ...collectRecommendationContractErrors(data)];
   const warnings = collectFilterWarnings(data);
   if (!errors.length && process.env.HTML_REPORT_SKIP_METADATA !== "1") {
     errors.push(...validateMetadata(data, join(root, "bin/qdm-indicators-cli")));

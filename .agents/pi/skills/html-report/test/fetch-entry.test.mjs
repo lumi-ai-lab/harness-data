@@ -35,7 +35,7 @@ function metricQuery(overrides = {}) {
     metrics: ["saleAmt"],
     statisticPolicy: "SUMMARY",
     time: { startDate: "2026-07-01", endDate: "2026-07-14" },
-    dimensions: ["incDate"],
+    dimensions: ["bizDate"],
     filters: {},
     pageNo: 1,
     pageSize: 500,

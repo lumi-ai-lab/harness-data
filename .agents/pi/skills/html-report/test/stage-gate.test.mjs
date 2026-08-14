@@ -35,10 +35,21 @@ async function confirmResult(session) {
   );
 }
 
+async function writeAConfigArtifacts(session) {
+  await writeFile(join(session, "recommendations.json"), JSON.stringify({ status: "ready", cards: [] }));
+  await writeFile(join(session, "server-meta.json"), JSON.stringify({ url: "http://127.0.0.1:18080" }));
+}
+
+async function writeAConfigArtifactsWithCard(session, card) {
+  await writeFile(join(session, "recommendations.json"), JSON.stringify({ version: 1, cards: [card] }));
+  await writeFile(join(session, "server-meta.json"), JSON.stringify({ url: "http://127.0.0.1:18080" }));
+}
+
 test("stage gate excludes approval and paused waits from execution time", async (t) => {
   const session = await makeSession(t, "timing");
   await initPipeline(session, { mode: "step", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   let output = await finishPipelineStage(session, "A_CONFIG", { now: at(11) });
   assert.equal(output.state.status, "awaiting_approval");
   assert.equal(output.state.stages.A_CONFIG.executionDurationMs, 10_000);
@@ -80,6 +91,7 @@ test("init, start, finish and approve are idempotent without skipping a gate", a
   await startPipelineStage(session, "A_CONFIG", { now: at(2) });
   const repeatedStart = await startPipelineStage(session, "A_CONFIG", { now: at(3) });
   assert.equal(repeatedStart.changed, false);
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(12) });
   const repeatedFinish = await finishPipelineStage(session, "A_CONFIG", { now: at(13) });
   assert.equal(repeatedFinish.changed, false);
@@ -102,6 +114,7 @@ test("A_CONFIG approval requires result.json and stage mismatch cannot advance",
     startPipelineStage(session, "B0_PREFLIGHT", { now: at(2) }),
     /stage mismatch/
   );
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(3) });
   await assert.rejects(
     approvePipelineStage(session, { now: at(4), phrase: "继续" }),
@@ -112,10 +125,26 @@ test("A_CONFIG approval requires result.json and stage mismatch cannot advance",
   assert.equal(status.state.currentStage, "A_CONFIG");
 });
 
+test("A_CONFIG finish rejects legacy inc time dimensions", async (t) => {
+  const session = await makeSession(t, "legacy-dim");
+  await initPipeline(session, { mode: "step", now: at(0) });
+  await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifactsWithCard(session, {
+    id: "c1",
+    aggDimUniqueCodeList: [`inc${"Date"}`],
+    query: { request: { dimensions: [`inc${"Week"}`], filters: {} } },
+  });
+  await assert.rejects(
+    finishPipelineStage(session, "A_CONFIG", { now: at(2) }),
+    /legacy time dimension|qdm-metric-cli contract/
+  );
+});
+
 test("A_CONFIG may fail while awaiting approval when its runtime prerequisite is rejected", async (t) => {
   const session = await makeSession(t, "a-runtime-failure");
   await initPipeline(session, { mode: "step", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   const failed = await failPipelineStage(
     session,
@@ -136,6 +165,7 @@ test("failed stage only retry starts a new timed attempt", async (t) => {
   await confirmResult(session);
   await initPipeline(session, { mode: "auto", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   assert.equal((await pipelineStatus(session, { now: at(2) })).state.currentStage, "B0_PREFLIGHT");
 
@@ -160,6 +190,7 @@ test("failing a paused stage closes the pause interval", async (t) => {
   await confirmResult(session);
   await initPipeline(session, { mode: "auto", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   await pausePipelineStage(session, { now: at(7), reason: "interrupted" });
   await failPipelineStage(session, "B0_PREFLIGHT", "cannot resume", { now: at(17) });
@@ -174,6 +205,7 @@ test("B2.5 is timed separately and B3 gate reports both durations", async (t) =>
   await confirmResult(session);
   await initPipeline(session, { mode: "step", now: at(0), policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   await approvePipelineStage(session, { now: at(3) });
   await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(4) });
@@ -200,6 +232,7 @@ test("auto mode completes every stage without approval records", async (t) => {
   await confirmResult(session);
   await initPipeline(session, { mode: "auto", now: at(0), policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   const stages = [
     "A_CONFIG",
     "B0_PREFLIGHT",
@@ -223,6 +256,7 @@ test("auto mode still pauses A until result.json exists", async (t) => {
   const session = await makeSession(t, "auto-result");
   await initPipeline(session, { mode: "auto", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   let output = await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   assert.equal(output.state.status, "paused");
   assert.equal(output.state.currentStage, "A_CONFIG");
@@ -255,6 +289,7 @@ test("default policy finishes B2_WRITER without waiting and stops at B2_MAIN", a
   await confirmResult(session);
   await initPipeline(session, { mode: "step", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   await approvePipelineStage(session, { now: at(3) });
   await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(4) });
@@ -290,6 +325,7 @@ test("disabled stages are skipped when advancing", async (t) => {
     },
   });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await writeAConfigArtifacts(session);
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   const approved = await approvePipelineStage(session, { now: at(3) });
   assert.equal(approved.state.currentStage, "B2_WRITER");

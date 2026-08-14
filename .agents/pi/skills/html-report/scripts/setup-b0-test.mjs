@@ -41,7 +41,7 @@ const resultJson = {
       analysisFocus: "分析门店101001的客流和客单价日趋势，评估是否有异常波动",
       chartType: "table",
       indicatorFieldList: ["custNum", "perCustAmt"],
-      aggDimUniqueCodeList: ["incDate"],
+      aggDimUniqueCodeList: ["bizDate"],
       startDate: "2026-08-01",
       endDate: "2026-08-10",
       storeCollectType: 2,
@@ -50,7 +50,7 @@ const resultJson = {
       ],
       requestBody: {
         indicatorFieldList: ["custNum", "perCustAmt"],
-        aggDimUniqueCodeList: ["incDate"],
+        aggDimUniqueCodeList: ["bizDate"],
         startDate: "2026-08-01",
         endDate: "2026-08-10",
         storeCollectType: 2,

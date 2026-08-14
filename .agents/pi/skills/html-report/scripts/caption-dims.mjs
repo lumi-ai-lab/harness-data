@@ -2,7 +2,7 @@
  * Dimension catalog and drill axis for first-pass card captions.
  *
  * Only dimensions that appear in card.query.request.dimensions participate.
- * Unknown codes, including totalArea and incDate/incWeek/incMonth, are dropped.
+ * Unknown codes, including totalArea and bizDate/bizWeek/bizMonth, are dropped.
  */
 export const CAPTION_DIM_GROUPS = Object.freeze([
   Object.freeze({

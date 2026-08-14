@@ -517,7 +517,7 @@ export function assertFixedAConfigRecommendations(document, sessionId) {
   if (JSON.stringify(card?.indicatorFieldList) !== JSON.stringify([
     "custNum", "perCustAmt", "profitLostRate", "profitAmt",
   ])) errors.push("fixed indicator list mismatch");
-  if (JSON.stringify(card?.aggDimUniqueCodeList) !== JSON.stringify(["incDate"])) {
+  if (JSON.stringify(card?.aggDimUniqueCodeList) !== JSON.stringify(["bizDate"])) {
     errors.push("fixed dimension list mismatch");
   }
   if (card?.storeCollectType !== 2) errors.push("fixed storeCollectType mismatch");
