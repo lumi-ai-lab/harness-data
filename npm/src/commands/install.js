@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { AUTH_OFF_PASSWORD, assertCodexAuthPlatform, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
-import { ask, askSecret, chooseAgent } from "../lib/prompt.js";
+import { assertCodexAuthPlatform, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { ask, chooseAgent } from "../lib/prompt.js";
+import { collectInstallAuth } from "../lib/install-auth.js";
+import { createInstallSession } from "../lib/install-session.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
@@ -25,10 +27,24 @@ async function requireCommands(commands) {
   ok(commands.join(", "));
 }
 
-async function prepareRuntimeDir(options) {
-  const runtimeDir = resolveWorkspaceDir(options.dir || process.cwd());
-  fs.mkdirSync(runtimeDir, { recursive: true });
-  return runtimeDir;
+async function resolveTokenMode(options = {}) {
+  if (options.githubAuth === true || options.githubAuth === false) return options.githubAuth;
+  return hasGithubAuth(options);
+}
+
+export async function collectInstallAccess(options = {}, runtimeDir) {
+  const tokenMode = await resolveTokenMode(options);
+  if (tokenMode) return { tokenMode: true, wikisSource: "" };
+
+  const auto = path.join(runtimeDir, "harness-data-wikis");
+  if (fs.existsSync(auto)) {
+    validateLocalWikisSource(auto);
+    return { tokenMode: false, wikisSource: auto };
+  }
+  if (options.yes) throw new Error("harness-data-wikis is required when GitHub auth is unavailable");
+  const source = path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
+  validateLocalWikisSource(source);
+  return { tokenMode: false, wikisSource: source };
 }
 
 function replaceRuntimePath(runtimeDir, name, stagedRoot, backups) {
@@ -165,7 +181,8 @@ async function installLocalTools(runtimeDir, options = {}) {
 
 async function installWikis(runtimeDir, options = {}) {
   const target = path.join(runtimeDir, "wikis");
-  if (githubToken(options)) {
+  const tokenMode = options.tokenMode ?? await resolveTokenMode(options);
+  if (tokenMode && githubToken(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
       warn("已有 Wikis 仓库将以远程版本强制同步，本地修改不会保留");
       await forceSyncWikis(target, options);
@@ -177,7 +194,7 @@ async function installWikis(runtimeDir, options = {}) {
     ok(`harness-data-wikis ${shortSha(commit)}`);
     return { mode: "github", path: target, commit };
   }
-  if (await hasGithubAuth(options)) {
+  if (tokenMode) {
     if (fs.existsSync(path.join(target, ".git"))) {
       warn("已有 Wikis 仓库将以远程版本强制同步，本地修改不会保留");
       await forceSyncWikis(target, options);
@@ -191,12 +208,38 @@ async function installWikis(runtimeDir, options = {}) {
   }
 
   const auto = path.join(runtimeDir, "harness-data-wikis");
-  const source = fs.existsSync(auto) ? auto : path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
+  const source = options.wikisSource || (fs.existsSync(auto) ? auto : path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options)));
   validateLocalWikisSource(source);
   fs.rmSync(target, { recursive: true, force: true });
   fs.cpSync(source, target, { recursive: true });
   ok(`harness-data-wikis 本地路径 ${source}`);
   return { mode: "local-path", source, path: target };
+}
+
+function applyInstallAuth(runtimeDir, auth, selectedAgent) {
+  if (auth.mode === "no-auth") {
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (密码已验证)");
+    return;
+  }
+  if (auth.mode === "data-auth") {
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
+    ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled (--data-auth)");
+    return;
+  }
+  writeAuthBlob(runtimeDir, auth.blobContent);
+  writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId: auth.devUserId });
+  ok("config/harness-config.yaml");
+  ok("config/qdm-cli-paths.env");
+  ok("authz.mode: on + user-provided blob");
+  ok(`dev_user_id: ${auth.devUserId}`);
+  if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled");
 }
 
 export function validateLocalWikisSource(source) {
@@ -254,128 +297,99 @@ export async function installCommand(options = {}) {
   const selectedAgent = await chooseAgent(options);
   assertCodexAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
   assertWorkBuddyAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
-  step(1, 7, "检查本机依赖");
+
+  step(1, 7, "授权与访问预检");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
+  const auth = await collectInstallAuth(options);
+  const access = await collectInstallAccess(options, targetRuntimeDir);
+  ok("授权材料已校验");
   blank();
 
-  step(2, 7, "安装 runtime bundle");
-  const runtimeDir = await prepareRuntimeDir(options);
-  const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
-  blank();
+  const session = createInstallSession(targetRuntimeDir);
+  try {
+    session.begin();
+    const runtimeDir = targetRuntimeDir;
 
-  step(3, 7, "安装 CLI 工具");
-  const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
-  const tokenMode = await hasGithubAuth(options);
-  const installState = readWorkspaceState(runtimeDir);
+    step(2, 7, "安装 runtime bundle");
+    const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
+    blank();
 
-  let manifest;
-  let localTools = {};
-  if (tokenMode) {
-    manifest = readManifest(manifestPath);
-    const latestManifest = await resolveLatestManifest(manifest, key, options);
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-  } else {
-    manifest = readManifest(manifestPath);
-    const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
-    manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-    localTools = await installLocalTools(runtimeDir, options);
-  }
-  ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
-  const removedLegacy = removeLegacyDataCLIs(runtimeDir);
-  for (const name of removedLegacy) action(`移除遗留数据 CLI：bin/${name}`);
-  blank();
+    step(3, 7, "安装 CLI 工具");
+    const manifestPath = path.resolve(options.manifest || path.join(runtimeDir, "bootstrap", "cli-manifest.json"));
+    const tokenMode = access.tokenMode;
+    const installState = readWorkspaceState(runtimeDir);
 
-  // 及时持久化 CLI 安装状态，后续步骤失败时重新安装可跳过已下载的 CLI
-  writeState(runtimeDir, {
-    installMode: tokenMode ? "github-token" : "local-path",
-    runtimeTag: bundle.tag,
-    localTools,
-    tools: manifest.installedTools || {},
-    manifestSha256: manifestDigest(manifest),
-    packageVersion: packageVersion()
-  });
-  blank();
-
-  step(4, 7, "同步 Wikis 知识库");
-  await installWikis(runtimeDir, options);
-  blank();
-
-  step(5, 7, "生成本地配置");
-  if (options.noAuth) {
-    const password = options.authOffPassword || await askSecret("请输入关闭权限密码：", options);
-    if (password !== AUTH_OFF_PASSWORD) throw new Error("关闭权限密码错误，安装中止");
-    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
-    ok("config/harness-config.yaml");
-    ok("config/qdm-cli-paths.env");
-    ok("authz.mode: off (密码已验证)");
-  } else if (options.dataAuth) {
-    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
-    ok("config/harness-config.yaml");
-    ok("config/qdm-cli-paths.env");
-    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
-    ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
-    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled (--data-auth)");
-  } else {
-    const blobContent = options.authBlob
-      || process.env.HARNESS_AUTH_BLOB
-      || await askSecret("请输入权限 BLOB（加密 JSON，qdm1enc...）：", options);
-    if (!blobContent) throw new Error("auth blob is required; use --no-auth to skip");
-
-    const devUserId = options.authUserId
-      || process.env.HARNESS_AUTH_USER_ID
-      || await ask("请输入 dev_user_id：", options);
-    if (!devUserId) throw new Error("dev_user_id is required; use --no-auth to skip");
-
-    writeAuthBlob(runtimeDir, blobContent);
-    writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId });
-    ok("config/harness-config.yaml");
-    ok("config/qdm-cli-paths.env");
-    ok("authz.mode: on + user-provided blob");
-    ok(`dev_user_id: ${devUserId}`);
-    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled");
-  }
-  blank();
-
-  step(6, 7, "构建 Wikis 索引");
-  await buildAndCheck(runtimeDir, options);
-  blank();
-
-  step(7, 7, "配置 Agent Hook");
-  const linkedAgents = linkAgents(runtimeDir, selectedAgent);
-  for (const [source, target] of linkedAgents) {
-    if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
-  }
-  patchCodexHooksForWindows(runtimeDir);
-  if (agentIncludesWorkBuddy(selectedAgent)) {
-    const plugin = inspectWorkBuddyPlugin(runtimeDir);
-    if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
-    if (!plugin.versionMatchesPackage) {
-      throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}; update the runtime bundle`);
+    let manifest;
+    let localTools = {};
+    if (tokenMode) {
+      manifest = readManifest(manifestPath);
+      const latestManifest = await resolveLatestManifest(manifest, key, options);
+      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
+    } else {
+      manifest = readManifest(manifestPath);
+      const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
+      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
+      localTools = await installLocalTools(runtimeDir, options);
     }
-    ok(`WorkBuddy Marketplace prepared: ${path.relative(runtimeDir, plugin.marketplaceRoot)}`);
-    action(`需要 WorkBuddy ${workBuddyMinimumVersion}+；在插件管理中 Add Marketplace：${plugin.marketplaceRoot}`);
-    action(`安装并启用 qdm-harness@${plugin.marketplaceName}，reload plugins 后在 Harness runtime workspace 中新建会话`);
+    ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+    const removedLegacy = removeLegacyDataCLIs(runtimeDir);
+    for (const name of removedLegacy) action(`移除遗留数据 CLI：bin/${name}`);
+    blank();
+
+    step(4, 7, "同步 Wikis 知识库");
+    await installWikis(runtimeDir, { ...options, tokenMode, wikisSource: access.wikisSource });
+    blank();
+
+    step(5, 7, "生成本地配置");
+    applyInstallAuth(runtimeDir, auth, selectedAgent);
+    blank();
+
+    step(6, 7, "构建 Wikis 索引");
+    await buildAndCheck(runtimeDir, options);
+    blank();
+
+    step(7, 7, "配置 Agent Hook");
+    const linkedAgents = linkAgents(runtimeDir, selectedAgent);
+    for (const [source, target] of linkedAgents) {
+      if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
+    }
+    patchCodexHooksForWindows(runtimeDir);
+    if (agentIncludesWorkBuddy(selectedAgent)) {
+      const plugin = inspectWorkBuddyPlugin(runtimeDir);
+      if (!plugin.prepared) throw new Error(`WorkBuddy plugin package is incomplete: ${plugin.errors.join("; ")}`);
+      if (!plugin.versionMatchesPackage) {
+        throw new Error(`WorkBuddy plugin version ${plugin.version || "missing"} does not match installer ${packageVersion()}; update the runtime bundle`);
+      }
+      ok(`WorkBuddy Marketplace prepared: ${path.relative(runtimeDir, plugin.marketplaceRoot)}`);
+      action(`需要 WorkBuddy ${workBuddyMinimumVersion}+；在插件管理中 Add Marketplace：${plugin.marketplaceRoot}`);
+      action(`安装并启用 qdm-harness@${plugin.marketplaceName}，reload plugins 后在 Harness runtime workspace 中新建会话`);
+    }
+    blank();
+
+    console.log("安装校验");
+    const doctor = await collectDoctor(runtimeDir, { ...options, agent: selectedAgent });
+    printDoctorSummary(doctor);
+    if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
+    blank();
+
+    writeState(runtimeDir, {
+      installMode: tokenMode ? "github-token" : "local-path",
+      runtimeTag: bundle.tag,
+      localTools,
+      tools: manifest.installedTools || {},
+      manifestSha256: manifestDigest(manifest),
+      packageVersion: packageVersion(),
+      agent: selectedAgent,
+      lastCheckAt: new Date().toISOString()
+    });
+    session.commit();
+    console.log(`安装完成：${runtimeDir}`);
+    console.log("");
+    console.log("下一步：");
+    console.log(`cd ${runtimeDir}`);
+  } catch (error) {
+    session.rollback();
+    warn("安装失败，已回滚本次写入");
+    throw error;
   }
-  blank();
-
-  console.log("安装校验");
-  const doctor = await collectDoctor(runtimeDir, { ...options, agent: selectedAgent });
-  printDoctorSummary(doctor);
-  if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
-  blank();
-
-  writeState(runtimeDir, {
-    installMode: tokenMode ? "github-token" : "local-path",
-    runtimeTag: bundle.tag,
-    localTools,
-    tools: manifest.installedTools || {},
-    manifestSha256: manifestDigest(manifest),
-    packageVersion: packageVersion(),
-    agent: selectedAgent,
-    lastCheckAt: new Date().toISOString()
-  });
-  console.log(`安装完成：${runtimeDir}`);
-  console.log("");
-  console.log("下一步：");
-  console.log(`cd ${runtimeDir}`);
 }
