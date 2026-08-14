@@ -111,7 +111,9 @@ export async function collectDoctor(workspace, options = {}) {
   const workBuddySelected = configuredAgent === "workbuddy";
   if (workBuddySelected && authz?.mode === "on") {
     const platform = options.platform || process.platform;
-    add("WorkBuddy auth platform", platform === "darwin", platform === "darwin" ? "macOS" : `${platform}; auth hook currently supports macOS only`);
+    const supported = platform === "darwin" || platform === "win32";
+    const platformName = platform === "darwin" ? "macOS" : (platform === "win32" ? "Windows" : platform);
+    add("WorkBuddy auth platform", supported, supported ? platformName : `${platform}; auth hook supports macOS and Windows only`);
     const auth = inspectWorkBuddyAuth(workspace, authz, { ...options, platform });
     add("WorkBuddy auth source", auth.ok, auth.detail);
   }

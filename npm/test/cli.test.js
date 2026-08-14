@@ -1425,9 +1425,10 @@ test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
   assert.equal(agentIncludesWorkBuddy("both"), false);
 });
 
-test("WorkBuddy auth installer parameters are macOS-only", () => {
+test("WorkBuddy auth installer parameters support macOS and Windows", () => {
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "darwin"));
-  assert.throws(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"), /supports macOS only/);
+  assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"));
+  assert.throws(() => assertWorkBuddyAuthPlatform("workbuddy", true, "linux"), /supports macOS and Windows only/);
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", false, "win32"));
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("all", true, "win32"));
 });
@@ -1703,14 +1704,15 @@ test("Windows Codex hook patch fails closed when a required hook cannot be rewri
   assert.equal(fs.readFileSync(hooksFile, "utf8"), original);
 });
 
-test("Windows Codex auth uses the cross-platform adapter", async () => {
+test("Windows keeps Codex default, allows explicit WorkBuddy, and supports both auth adapters", async () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
   try {
-    assert.equal(await chooseAgent({ agent: "workbuddy" }), "codex");
+    assert.equal(await chooseAgent({ agent: "workbuddy" }), "workbuddy");
     assert.equal(await chooseAgent({ agent: " CODEX " }), "codex");
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", false, "win32"));
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "win32"));
+    assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"));
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "linux"));
   } finally {
     Object.defineProperty(process, "platform", platformDescriptor);
@@ -1818,6 +1820,7 @@ test("detects whether any agent hook exists", () => {
 
 test("update restore recreates agent hooks only when all are missing", async () => {
   const missingWorkspace = createAgentWorkspace();
+  copyCodexHooks(missingWorkspace);
 
   const restored = await restoreAgentHooksIfMissing(missingWorkspace, { agent: "codex" });
 
@@ -1825,6 +1828,7 @@ test("update restore recreates agent hooks only when all are missing", async () 
   assert.equal(fs.realpathSync(path.join(missingWorkspace, ".codex")), fs.realpathSync(path.join(missingWorkspace, "agents", "codex")));
 
   const existingWorkspace = createAgentWorkspace();
+  copyCodexHooks(existingWorkspace);
   linkAgents(existingWorkspace, "codex");
   const before = fs.realpathSync(path.join(existingWorkspace, ".codex"));
 
@@ -1986,7 +1990,7 @@ test("update doctor treats missing agent hooks as non-blocking only", async () =
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "config CLI paths" }), false);
 });
 
-test("skip wikis check passes skip checks to build-index", async () => {
+test("skip wikis check passes skip checks to build-index", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });
@@ -2014,7 +2018,7 @@ test("skip wikis check passes skip checks to build-index", async () => {
   ]);
 });
 
-test("update wikis fetch uses GitHub token for HTTPS remotes", async () => {
+test("update wikis fetch uses GitHub token for HTTPS remotes", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const fakeBin = path.join(workspace, "fake-bin");
   const wikisDir = path.join(workspace, "wikis");
@@ -2064,7 +2068,7 @@ esac
   assert.equal(fs.readFileSync(authLog, "utf8").trim(), "x-access-token:secret-token");
 });
 
-test("update wikis switches a feature branch to the remote default branch", async () => {
+test("update wikis switches a feature branch to the remote default branch", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const fakeBin = path.join(workspace, "fake-bin");
   const wikisDir = path.join(workspace, "wikis");
@@ -2146,14 +2150,14 @@ test("update wikis discards local commits, tracked changes, and untracked files"
 
   const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
 
-  assert.equal(fs.readFileSync(path.join(wikisDir, "index.md"), "utf8"), "remote-v2\n");
+  assert.equal(fs.readFileSync(path.join(wikisDir, "index.md"), "utf8").replace(/\r\n/g, "\n"), "remote-v2\n");
   assert.equal(fs.existsSync(path.join(wikisDir, "local-only.md")), false);
   assert.equal(git(["status", "--porcelain"], wikisDir), "");
   assert.equal(git(["rev-parse", "HEAD"], wikisDir), git(["rev-parse", "origin/master"], wikisDir));
   assert.deepEqual(result, { commit: git(["rev-parse", "HEAD"], wikisDir) });
 });
 
-test("build index prints concise Chinese summary", async () => {
+test("build index prints concise Chinese summary", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const binDir = path.join(workspace, "bin");
   fs.mkdirSync(binDir, { recursive: true });

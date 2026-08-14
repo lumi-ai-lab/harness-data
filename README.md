@@ -105,7 +105,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；macOS WorkBuddy 支持同一套 auth 参数，其他平台需使用 `--no-auth`。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；macOS 和 Windows WorkBuddy 支持同一套 auth 参数，其他平台需使用 `--no-auth`。
 
 更新工作目录：
 
@@ -271,7 +271,7 @@ authz:
 
 ### 数据权限（qdm-metric-cli，默认开启）
 
-macOS WorkBuddy 与 Codex 共用本地 Blob auth 流程。WorkBuddy auth 要求 Desktop `5.3.11+`、内置 CodeBuddy CLI `2.115.0+`；非 macOS 平台安装 WorkBuddy 时仅支持 `--no-auth`。
+macOS 与 Windows WorkBuddy 共用本地 Blob auth 流程。WorkBuddy auth 要求 Desktop `5.3.11+`、内置 CodeBuddy CLI `2.115.0+`；Windows 的受控 QDM 命令使用 Bash，PowerShell 路径在读取凭据前 fail-closed。
 
 安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`；使用 `--no-auth` 并通过密码验证后才写入 `off`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
 

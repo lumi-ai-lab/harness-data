@@ -31,26 +31,28 @@ type HookPayload struct {
 	ToolInput     map[string]any
 }
 
+const AdapterEnvelopeSchemaVersion = 1
+
+const (
+	AdapterStatusDisabled = "disabled"
+	AdapterStatusNoop     = "noop"
+	AdapterStatusAllow    = "allow"
+	AdapterStatusDeny     = "deny"
+)
+
+// AdapterEnvelope makes the Go authorization decision explicit for the
+// WorkBuddy transport adapter.
+type AdapterEnvelope struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Status        string `json:"status"`
+	HookOutput    any    `json:"hookOutput"`
+}
+
 func ReadHookStdin() ([]byte, error) {
 	return io.ReadAll(os.Stdin)
 }
 
 func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
-	if agent != "codex" && agent != "workbuddy" {
-		return false, HookOutput{}, fmt.Errorf("unsupported authz agent: %s", agent)
-	}
-	payload, ok := parseHookPayload(input)
-	if !ok {
-		return false, HookOutput{}, nil
-	}
-	if payload.HookEventName != "" && payload.HookEventName != "PreToolUse" {
-		return false, HookOutput{}, nil
-	}
-	command, ok := payload.ToolInput["command"].(string)
-	if !ok || strings.TrimSpace(command) == "" {
-		return false, HookOutput{}, nil
-	}
-
 	cfg, err := harness.LoadConfig(root)
 	if err != nil {
 		return false, HookOutput{}, err
@@ -58,16 +60,96 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 	if !cfg.Authz.AuthzEnabled() {
 		return false, HookOutput{}, nil
 	}
+	return runEnabled(cfg, root, agent, input, false)
+}
 
-	if !IsMetricAuthzGatedCommand(command) {
-		if runtime.GOOS != "windows" && AuthSourceEnvPresent(nil) {
-			return true, allowOutput(replaceCommand(payload.ToolInput, ScrubAuthSourceEnvCommand(command)), "Auth source environment scrubbed for non-gated shell command"), nil
+// RunAdapterEnvelope evaluates a WorkBuddy authorization hook with Go as the
+// sole source of configuration and business semantics.
+func RunAdapterEnvelope(root string, agent string, input []byte) (AdapterEnvelope, error) {
+	cfg, err := harness.LoadConfig(root)
+	if err != nil {
+		return AdapterEnvelope{}, err
+	}
+	if !cfg.Authz.AuthzEnabled() {
+		return adapterEnvelope(AdapterStatusDisabled, map[string]any{}), nil
+	}
+	ok, output, err := runEnabled(cfg, root, agent, input, true)
+	if err != nil {
+		return AdapterEnvelope{}, err
+	}
+	if !ok {
+		return adapterEnvelope(AdapterStatusNoop, map[string]any{}), nil
+	}
+	var status string
+	switch output.HookSpecificOutput.PermissionDecision {
+	case "allow":
+		status = AdapterStatusAllow
+	case "deny":
+		status = AdapterStatusDeny
+	default:
+		return AdapterEnvelope{}, fmt.Errorf("unsupported authorization decision: %q", output.HookSpecificOutput.PermissionDecision)
+	}
+	return adapterEnvelope(status, output), nil
+}
+
+func adapterEnvelope(status string, output any) AdapterEnvelope {
+	return AdapterEnvelope{SchemaVersion: AdapterEnvelopeSchemaVersion, Status: status, HookOutput: output}
+}
+
+func runEnabled(cfg harness.Config, root string, agent string, input []byte, strictInput bool) (bool, HookOutput, error) {
+	payload, ok := parseHookPayload(input)
+	if !ok {
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided invalid PreToolUse JSON"), nil
+	}
+	toolName := strings.ToLower(strings.TrimSpace(payload.ToolName))
+	if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && toolName != "" &&
+		toolName != "bash" && toolName != "powershell" && toolName != "execute_command" {
+		return false, HookOutput{}, nil
+	}
+	dialect, accepted := resolveDialect(agent, payload.ToolName, payload.ToolInput)
+	if !accepted {
+		return false, HookOutput{}, fmt.Errorf("unsupported authz agent: %s", agent)
+	}
+	if payload.HookEventName != "" && payload.HookEventName != "PreToolUse" {
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an invalid PreToolUse event"), nil
+	}
+	command, ok := payload.ToolInput["command"].(string)
+	if !ok || strings.TrimSpace(command) == "" {
+		if !strictInput {
+			return false, HookOutput{}, nil
+		}
+		return true, denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an incomplete PreToolUse payload"), nil
+	}
+	if dialect == "" {
+		if AuthSourceEnvPresent(nil) || looksLikeGatedMetricCommand(command) {
+			return true, denyOutput("QDM_AUTHZ_DIALECT_UNSUPPORTED: the command executor cannot be authorized safely"), nil
 		}
 		return false, HookOutput{}, nil
 	}
-	dialect, supported := shellDialect(payload.ToolName, command)
-	if !supported {
-		return true, denyOutput("authz could not safely rewrite the controlled command: unsupported shell tool " + payload.ToolName), nil
+
+	if !isMetricAuthzGatedCommand(dialect, command) {
+		if looksLikeGatedMetricCommand(command) {
+			if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && dialect == ShellPowerShell {
+				return true, denyOutput("QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED: Windows WorkBuddy PowerShell sandbox cannot return command output reliably; retry with the Bash tool"), nil
+			}
+			return true, denyOutput("QDM_AUTHZ_COMMAND_UNSUPPORTED: the QDM data command shape cannot be authorized safely"), nil
+		}
+		if AuthSourceEnvPresent(nil) {
+			return true, allowOutput(replaceCommand(payload.ToolInput, scrubAuthSourceEnvCommand(dialect, command)), "Auth source environment scrubbed for non-gated shell command"), nil
+		}
+		return false, HookOutput{}, nil
+	}
+	if metricInvocationCount(dialect, command) != 1 {
+		return true, denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple or ambiguous QDM data invocations into separate tool calls"), nil
+	}
+	if strings.EqualFold(strings.TrimSpace(agent), "workbuddy") && dialect == ShellPowerShell {
+		return true, denyOutput("QDM_AUTHZ_POWERSHELL_HOST_UNSUPPORTED: Windows WorkBuddy PowerShell sandbox cannot return command output reliably; retry with the Bash tool"), nil
 	}
 
 	resolved, err := ResolveAuthBlob(ResolveOptions{
@@ -75,20 +157,68 @@ func Run(root string, agent string, input []byte) (bool, HookOutput, error) {
 		Config:      cfg.Authz,
 	})
 	if err != nil {
-		return true, denyOutput(missingAuthReason(command, cfg.Authz, err)), nil
+		return true, denyOutput(missingAuthReason(dialect, command, cfg.Authz, err)), nil
 	}
+
 	metricCliPath, err := ResolveMetricCLIPath(root, cfg)
 	if err != nil {
-		return true, denyOutput("authz mode is on but no trusted qdm-metric-cli is available: " + err.Error()), nil
+		return true, denyOutput("QDM_AUTHZ_CLI_UNAVAILABLE: authz mode is on but no trusted qdm-metric-cli is available"), nil
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, resolved.Blob, metricCliPath, dialect)
-	if err != nil {
-		return true, denyOutput("authz could not safely rewrite every gated qdm-metric-cli invocation: " + err.Error()), nil
+	rewritten, err := injectAuthForCommand(dialect, command, resolved.Blob, metricCliPath)
+	if err != nil || strings.TrimSpace(rewritten) == "" || rewritten == command {
+		return true, denyOutput("QDM_AUTHZ_REWRITE_FAILED: refusing to execute a QDM data command whose authorization could not be rewritten safely"), nil
 	}
-	if runtime.GOOS != "windows" {
-		rewritten = ScrubAuthSourceEnvCommand(rewritten)
+	if AuthSourceEnvPresent(nil) {
+		rewritten = scrubAuthSourceEnvCommand(dialect, rewritten)
 	}
-	return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Current requester authorization is bound to this QDM data command"), nil
+	return true, allowOutput(replaceCommand(payload.ToolInput, rewritten), "Configured authorization is bound to this QDM data command"), nil
+}
+
+func resolveDialect(agent, toolName string, toolInput map[string]any) (ShellDialect, bool) {
+	agent = strings.ToLower(strings.TrimSpace(agent))
+	tool := strings.ToLower(strings.TrimSpace(toolName))
+	if agent != "codex" && agent != "workbuddy" {
+		return "", false
+	}
+	if agent == "codex" {
+		command, _ := toolInput["command"].(string)
+		dialect, supported := shellDialect(toolName, command)
+		if !supported {
+			return "", true
+		}
+		return dialect, true
+	}
+	if agent == "workbuddy" && tool != "bash" && tool != "powershell" && tool != "execute_command" {
+		return "", true
+	}
+	if tool == "powershell" {
+		return ShellPowerShell, true
+	}
+	for _, key := range []string{"shell", "shell_name", "executor"} {
+		value, _ := toolInput[key].(string)
+		value = strings.ToLower(strings.TrimSpace(value))
+		switch {
+		case strings.Contains(value, "powershell"), strings.Contains(value, "pwsh"):
+			return ShellPowerShell, true
+		case value == "bash", value == "sh", strings.Contains(value, "git-bash"):
+			return ShellBash, true
+		case value == "cmd", strings.Contains(value, "cmd.exe"):
+			return "", true
+		}
+	}
+	if tool == "bash" {
+		return ShellBash, true
+	}
+	// execute_command is host-defined. Without an explicit executor hint it is
+	// unsafe to infer PowerShell merely because the hook binary runs on Windows.
+	return "", true
+}
+
+func isMetricAuthzGatedCommand(dialect ShellDialect, command string) bool {
+	if dialect == ShellPowerShell {
+		return IsPowerShellMetricAuthzGatedCommand(command)
+	}
+	return IsMetricAuthzGatedCommand(command)
 }
 
 func shellDialect(toolName, command string) (ShellDialect, bool) {
@@ -96,11 +226,7 @@ func shellDialect(toolName, command string) (ShellDialect, bool) {
 		return ShellBash, true
 	}
 	normalizedTool := strings.ToLower(strings.TrimSpace(toolName))
-	// Codex may expose the generic shell_command tool even when the user
-	// explicitly invokes CMD. Detect the wrapper from the payload before
-	// falling back to the tool name; otherwise CMD would receive PowerShell
-	// quoting and the rewritten command would not execute.
-	if isCMDWrapper(command) {
+	if regexp.MustCompile(`(?i)^\s*cmd(?:\.exe)?\s+/(?:c|k)\b`).MatchString(command) {
 		return ShellCMD, true
 	}
 	switch normalizedTool {
@@ -115,8 +241,25 @@ func shellDialect(toolName, command string) (ShellDialect, bool) {
 	}
 }
 
-func isCMDWrapper(command string) bool {
-	return regexp.MustCompile(`(?i)^\s*cmd(?:\.exe)?\s+/(?:c|k)\b`).MatchString(command)
+func metricInvocationCount(dialect ShellDialect, command string) int {
+	if dialect == ShellPowerShell {
+		return PowerShellMetricInvocationCount(command)
+	}
+	return MetricInvocationCount(command)
+}
+
+func scrubAuthSourceEnvCommand(dialect ShellDialect, command string) string {
+	if dialect == ShellPowerShell {
+		return ScrubAuthSourceEnvPowerShellCommand(command)
+	}
+	if dialect == ShellCMD {
+		parts := make([]string, 0, len(AuthSourceEnvKeys))
+		for _, key := range AuthSourceEnvKeys {
+			parts = append(parts, `set "`+key+`="`)
+		}
+		return strings.Join(parts, " && ") + " && " + command
+	}
+	return ScrubAuthSourceEnvCommand(command)
 }
 
 func parseHookPayload(input []byte) (HookPayload, bool) {
@@ -124,6 +267,10 @@ func parseHookPayload(input []byte) (HookPayload, bool) {
 	decoder.UseNumber()
 	var raw map[string]any
 	if err := decoder.Decode(&raw); err != nil {
+		return HookPayload{}, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return HookPayload{}, false
 	}
 	toolInput, _ := raw["tool_input"].(map[string]any)
@@ -165,15 +312,35 @@ func replaceCommand(input map[string]any, command string) map[string]any {
 	return out
 }
 
-func missingAuthReason(command string, cfg harness.AuthzConfig, err error) string {
-	if !cfg.LocalBlobAllowed() && CommandHasModelAuthFlags(command) {
-		return "authz: no local blob available; refusing model-supplied --auth-blob under allow_local_blob=false"
+func missingAuthReason(dialect ShellDialect, command string, cfg harness.AuthzConfig, sourceErr error) string {
+	hasModelFlags := CommandHasModelAuthFlags(command)
+	if dialect == ShellPowerShell {
+		hasModelFlags = PowerShellCommandHasModelAuthFlags(command)
 	}
-	message := err.Error()
-	if IsMetricAuthDescribe(command) {
-		return "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli auth describe: " + message
+	if !cfg.LocalBlobAllowed() && hasModelFlags {
+		return "QDM_AUTHZ_SOURCE_MISSING: refusing model-supplied --auth-blob or related authorization flags while local authorization is disabled"
 	}
-	return "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute: " + message
+	if sourceErr != nil {
+		reason := sourceErr.Error()
+		if strings.Contains(reason, "must be an encrypted qdm1enc blob") ||
+			strings.Contains(reason, "must contain a qdm1enc blob") ||
+			strings.Contains(reason, "auth blob file is empty") ||
+			strings.Contains(reason, "auth blob file must be a regular file") {
+			return "QDM_AUTHZ_SOURCE_INVALID: the configured authorization source is invalid"
+		}
+	}
+	isDescribe := IsMetricAuthDescribe(command)
+	if dialect == ShellPowerShell {
+		isDescribe = IsPowerShellMetricAuthDescribe(command)
+	}
+	if isDescribe {
+		return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli auth describe"
+	}
+	return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli analysis execute"
+}
+
+func injectAuthForCommand(dialect ShellDialect, command, blob, metricCliPath string) (string, error) {
+	return RewriteGatedMetricCommands(command, blob, metricCliPath, dialect)
 }
 
 func ResolveMetricCLIPath(root string, cfg harness.Config) (string, error) {
@@ -185,7 +352,7 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) (string, error) {
 		candidates = append(candidates, resolveProjectPath(root, cfg.CLI.QDMMetricCLI))
 	}
 	metricName := "qdm-metric-cli"
-	if runtime.GOOS == "windows" {
+	if filepath.Separator == '\\' {
 		metricName += ".exe"
 	}
 	candidates = append(candidates, filepath.Join(root, "bin", metricName))
@@ -194,7 +361,7 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) (string, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		if filepath.Separator != '\\' && info.Mode().Perm()&0o111 == 0 {
 			continue
 		}
 		absolute, err := filepath.Abs(candidate)
@@ -207,7 +374,7 @@ func ResolveMetricCLIPath(root string, cfg harness.Config) (string, error) {
 }
 
 func resolveProjectPath(root, value string) string {
-	if filepath.IsAbs(value) {
+	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") {
 		return value
 	}
 	return filepath.Join(root, filepath.FromSlash(value))

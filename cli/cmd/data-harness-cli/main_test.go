@@ -1,10 +1,30 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestAuthzHookAdapterEnvelopeFormatValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "requires workbuddy", args: []string{"--agent", "codex", "--format", "adapter-envelope"}},
+		{name: "rejects unknown format", args: []string{"--agent", "workbuddy", "--format", "unknown"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runAuthzHook(t.TempDir(), tc.args)
+			var exitErr exitCodeError
+			if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+				t.Fatalf("expected exit code 2, got %v", err)
+			}
+		})
+	}
+}
 
 func TestFindShowDocumentUsesWikisCorpusForStructuredLayout(t *testing.T) {
 	root := t.TempDir()

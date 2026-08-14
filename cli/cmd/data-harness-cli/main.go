@@ -184,7 +184,8 @@ func usageText() string {
 func runAuthzHook(root string, args []string) error {
 	fs := flag.NewFlagSet("authz-hook", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agent := fs.String("agent", "codex", "agent name")
+	agent := fs.String("agent", "codex", "agent name: codex or workbuddy")
+	format := fs.String("format", "hook", "output format: hook or adapter-envelope")
 	if err := fs.Parse(args); err != nil {
 		return exitCodeError{Code: 2, Err: err}
 	}
@@ -194,6 +195,19 @@ func runAuthzHook(root string, args []string) error {
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return exitCodeError{Code: 2, Err: err}
+	}
+	if *format == "adapter-envelope" {
+		if !strings.EqualFold(strings.TrimSpace(*agent), "workbuddy") {
+			return exitCodeError{Code: 2, Err: fmt.Errorf("adapter-envelope format requires --agent workbuddy")}
+		}
+		envelope, err := agentauthz.RunAdapterEnvelope(root, *agent, input)
+		if err != nil {
+			return exitCodeError{Code: 2, Err: err}
+		}
+		return printCompactJSON(envelope)
+	}
+	if *format != "hook" {
+		return exitCodeError{Code: 2, Err: fmt.Errorf("unsupported authz-hook format %q", *format)}
 	}
 	ok, output, err := agentauthz.Run(root, *agent, input)
 	if err != nil {

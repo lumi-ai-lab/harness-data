@@ -20,6 +20,27 @@ import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPl
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
 
+export function validateInstallAuthOptions(options = {}) {
+  const noAuth = options.noAuth === true;
+  const dataAuth = options.dataAuth === true;
+  const hasBlob = typeof options.authBlob === "string" && options.authBlob.trim() !== "";
+  const hasUserID = typeof options.authUserId === "string" && options.authUserId.trim() !== "";
+  const hasOffPassword = typeof options.authOffPassword === "string" && options.authOffPassword !== "";
+
+  if (noAuth && (dataAuth || hasBlob || hasUserID)) {
+    throw new Error("--no-auth cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
+  }
+  if (dataAuth && (hasBlob || hasUserID)) {
+    throw new Error("--data-auth cannot be combined with --auth-blob or --auth-user-id");
+  }
+  if (hasOffPassword && !noAuth) {
+    throw new Error("--auth-off-password requires --no-auth");
+  }
+  if (hasBlob !== hasUserID) {
+    throw new Error("--auth-blob and --auth-user-id must be provided together");
+  }
+}
+
 async function requireCommands(commands) {
   for (const command of commands) {
     if (!(await commandExists(command))) throw new Error(`missing required command: ${command}`);
@@ -230,7 +251,7 @@ function applyInstallAuth(runtimeDir, auth, selectedAgent) {
     ok("config/qdm-cli-paths.env");
     const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
     ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
-    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled (--data-auth)");
+    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled (--data-auth)");
     return;
   }
   writeAuthBlob(runtimeDir, auth.blobContent);
@@ -239,7 +260,7 @@ function applyInstallAuth(runtimeDir, auth, selectedAgent) {
   ok("config/qdm-cli-paths.env");
   ok("authz.mode: on + user-provided blob");
   ok(`dev_user_id: ${auth.devUserId}`);
-  if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy macOS PreToolUse auth enabled");
+  if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled");
 }
 
 export function validateLocalWikisSource(source) {
@@ -287,6 +308,7 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
+  validateInstallAuthOptions(options);
   const key = platformKey();
   const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [

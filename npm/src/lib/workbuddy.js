@@ -18,8 +18,8 @@ export function agentIncludesWorkBuddy(agent) {
 }
 
 export function assertWorkBuddyAuthPlatform(agent, authEnabled, platform = process.platform) {
-  if (authEnabled && agentIncludesWorkBuddy(agent) && platform !== "darwin") {
-    throw new Error("WorkBuddy auth currently supports macOS only; use --no-auth on this platform");
+  if (authEnabled && agentIncludesWorkBuddy(agent) && !["darwin", "win32"].includes(platform)) {
+    throw new Error("WorkBuddy auth currently supports macOS and Windows only; use --no-auth on this platform");
   }
 }
 
@@ -86,14 +86,14 @@ export function inspectWorkBuddyPlugin(workspace) {
     if (!Array.isArray(preTool) || preTool.length !== 1) errors.push("PreToolUse hook must be declared once");
     if (!Array.isArray(userPrompt) || userPrompt.length !== 1) errors.push("UserPromptSubmit hook must be declared once");
     if (!Array.isArray(postTool) || postTool.length !== 1) errors.push("PostToolUse hook must be declared once");
-    if ((preTool?.[0]?.matcher || "") !== "Bash|execute_command") errors.push("PreToolUse matcher must be Bash|execute_command");
+    if ((preTool?.[0]?.matcher || "") !== "Bash|PowerShell|execute_command") errors.push("PreToolUse matcher must be Bash|PowerShell|execute_command");
     if ((postTool?.[0]?.matcher || "") !== "Bash|PowerShell|execute_command") errors.push("PostToolUse matcher must be Bash|PowerShell|execute_command");
     const commands = [
       preTool?.[0]?.hooks?.[0]?.command || "",
       userPrompt?.[0]?.hooks?.[0]?.command || "",
       postTool?.[0]?.hooks?.[0]?.command || "",
     ];
-    if (!commands[0].includes("harness-hook.mjs\" authz") || !commands[0].includes("|| exit 2")) errors.push("PreToolUse must call adapter authz mode and fail with exit 2");
+    if (!commands[0].includes("harness-hook.mjs\" authz")) errors.push("PreToolUse must call adapter authz mode");
     if (!commands[1].includes("harness-hook.mjs\" context")) errors.push("UserPromptSubmit must call adapter context mode");
     if (!commands[2].includes("harness-hook.mjs\" posttool")) errors.push("PostToolUse must call adapter posttool mode");
     if (commands.some((command) => !command.includes("bin/run-node"))) errors.push("hooks must use the managed Node launcher");
@@ -171,8 +171,16 @@ export function detectWorkBuddyVersion(options = {}) {
 export function detectCodeBuddyVersion(options = {}) {
   if (options.codeBuddyVersion) return String(options.codeBuddyVersion);
   const explicitPath = options.workBuddyAppPath || process.env.WORKBUDDY_APP_PATH;
-  const appRoots = explicitPath ? [explicitPath] : ["/Applications/WorkBuddy.app"];
-  for (const appRoot of appRoots) {
+  const appRoots = explicitPath
+    ? [explicitPath]
+    : process.platform === "win32"
+      ? [
+          path.join(process.env.LOCALAPPDATA || "", "Programs", "WorkBuddy"),
+          path.join(process.env.LOCALAPPDATA || "", "WorkBuddy"),
+          path.join(process.env.PROGRAMFILES || "", "WorkBuddy"),
+        ]
+      : ["/Applications/WorkBuddy.app"];
+  for (const appRoot of appRoots.filter(Boolean)) {
     const root = normalizeWorkBuddyAppRoot(appRoot);
     const packageFiles = [
       path.join(root, "Contents", "Resources", "app.asar.unpacked", "cli", "package.json"),

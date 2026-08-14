@@ -1,6 +1,6 @@
 # QDM Harness WorkBuddy Plugin
 
-This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through native plugin hooks. Auth command rewriting requires WorkBuddy 5.3.11+ with embedded CodeBuddy CLI 2.115.0+.
+This package connects WorkBuddy 5.3.5+ to the existing Harness runtime through native plugin hooks. Auth command rewriting on macOS and Windows requires WorkBuddy 5.3.11+ with embedded CodeBuddy CLI 2.115.0+.
 
 ## Runtime flow
 
@@ -41,7 +41,7 @@ The npm installer deliberately does not edit WorkBuddy settings or Marketplace r
 
 ## Hooks
 
-- `PreToolUse` matches macOS `Bash|execute_command`, calls `authz-hook --agent workbuddy`, and only permits gated QDM commands through `updatedInput.command`.
+- `PreToolUse` matches `Bash|PowerShell|execute_command` and calls `authz-hook --agent workbuddy`. macOS uses Bash-compatible executors; Windows gated PowerShell commands fail closed before credentials are resolved and must be retried with Bash.
 - `UserPromptSubmit` calls `context --format workbuddy-hook` and injects the current `authzMode`.
 - `PostToolUse` matches `Bash|PowerShell|execute_command`, normalizes the tool name to `Bash`, and calls `posttool --format workbuddy-hook`.
 - Outside a Harness workspace, all hooks return an empty object and do not alter normal WorkBuddy behavior.
@@ -60,7 +60,7 @@ launchctl setenv HARNESS_AUTH_BLOB_FILE "$HOME/.qdm/auth/qdm-auth.blob"
 launchctl setenv HARNESS_AUTH_USER_ID "<user-id>"
 ```
 
-PowerShell auth rewriting is not supported in this milestone. M1/M2 expose the Blob in `updatedInput.command`; use only for local validation or controlled pilots until a Keychain/Broker integration removes it from command text.
+PowerShell auth rewriting is not supported in this milestone. Direct injection exposes the encrypted Blob in `updatedInput.command` and may persist it in WorkBuddy session history; use only for local validation or controlled pilots until a credential-isolated integration removes it from command text.
 
 ## Manual transport smoke
 
