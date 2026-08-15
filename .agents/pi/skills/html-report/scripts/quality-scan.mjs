@@ -141,13 +141,15 @@ export function collectNumbersFromResult(result, out = []) {
   if (!result || typeof result !== "object") return out;
   const cards = Array.isArray(result.cards) ? result.cards : [];
   cards.forEach((card, ci) => {
-    const filters = card.filters || card.requestBody?.filters || [];
-    for (const f of filters) {
-      const ids = f.dimFieldIdList || f.dimValueList || [];
+    const filters = card?.query?.request?.filters;
+    for (const [field, ids] of Object.entries(
+      filters && typeof filters === "object" && !Array.isArray(filters) ? filters : {}
+    )) {
+      if (!Array.isArray(ids)) continue;
       for (const id of ids) {
         const n = Number(String(id).replace(/,/g, ""));
         if (Number.isFinite(n)) {
-          out.push({ value: n, path: `result.json.cards[${ci}].filters`, raw: String(id) });
+          out.push({ value: n, path: `result.json.cards[${ci}].query.request.filters.${field}`, raw: String(id) });
         }
       }
     }

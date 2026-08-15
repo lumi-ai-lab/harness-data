@@ -16,6 +16,7 @@ import {
   finishPipelineStage,
   initPipeline,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 function scores() {
@@ -47,7 +48,11 @@ async function seedSession(session) {
 }
 
 async function advanceGateToB4Approval(session) {
-  await initPipeline(session, { mode: "step", sessionId: "design-test" });
+  await initPipeline(session, {
+    mode: "step",
+    sessionId: "design-test",
+    policy: LEGACY_STAGE_POLICY,
+  });
   await startPipelineStage(session, "A_CONFIG");
   await finishPipelineStage(session, "A_CONFIG");
   await approvePipelineStage(session);

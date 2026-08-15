@@ -28,15 +28,14 @@ function inputFixture({ empty = false } = {}) {
       title: "样本明细",
       analysisFocus: "观察因素与结果",
       queryCoverage: {
-        indicators: ["metric-a", "metric-b", "metric-c"],
+        metrics: ["metric-a", "metric-b", "metric-c"],
+        statisticPolicy: "SUMMARY",
         dimensions: ["period-key"],
-        columnDimensions: [],
-        startDate: "2026-01-01",
-        endDate: "2026-01-31",
-        compareDate: [],
-        filters: [{ dimUniqueCode: "entity-key", dimFieldIdList: ["entity-a"] }],
-        storeCollectType: 2,
-        indicatorsGroup: 1,
+        time: { startDate: "2026-01-01", endDate: "2026-01-31", grain: null },
+        filters: { "entity-key": ["entity-a"] },
+        scopes: null,
+        measureFilters: [],
+        comparisons: [],
       },
       writer: {
         summary: "观测值 98765 仅存在于 Writer 摘要，不能复制进 main。",
@@ -952,20 +951,22 @@ test("Planner cache is result-fingerprinted and builds compact authoritative inp
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
     title: "中性报告",
+    userQuestion: "比较观测组合",
     cards: [{
       id: "card-a",
       title: "中性卡片",
-      requestBody: {
-        indicatorFieldList: ["metric-a"],
-        aggDimUniqueCodeList: ["period-key"],
-        startDate: "2026-01-01",
-        endDate: "2026-01-31",
+      analysisFocus: "中性分析",
+      query: {
+        request: {
+          metrics: ["metric-a"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-01-01", endDate: "2026-01-31" },
+          dimensions: ["period-key"],
+          filters: {},
+        },
+        comparisons: [],
       },
     }],
-  }));
-  await writeFile(join(session, "recommendations.json"), JSON.stringify({
-    userQuestion: "比较观测组合",
-    cards: [{ id: "card-a", analysisFocus: "中性分析" }],
   }));
   persistEditorSourceInventory(resultPath, {
     version: 1,
@@ -1039,7 +1040,7 @@ test("Planner cache is result-fingerprinted and builds compact authoritative inp
   assert.doesNotMatch(planningContract, /reuse_entry requires evidenceGap=null, candidateIndicators=\[\], and candidateDims=\[\]/);
   assert.doesNotMatch(planningContract, /Merge operations with the same type/);
 
-  await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "card-a", requestBody: {} }], title: "changed" }));
+  await writeFile(resultPath, JSON.stringify({ status: "confirmed", cards: [{ id: "card-a", query: { request: {}, comparisons: [] } }], title: "changed" }));
   assert.throws(() => loadEditorPlannerInput(resultPath), /stale|provenance/);
 });
 
@@ -1079,6 +1080,10 @@ test("materializer validates before writing and delegates one deterministic fina
   ).tasks[0];
   assert.deepEqual(output.researchTasks[0].task, persistedTask);
   assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /待 B3 Researcher 结论/);
+
+  // P2-2 regression: main.md must render date and filter scope from new queryCoverage structure
+  assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /日期 2026-01-01 至 2026-01-31/);
+  assert.match(await readFile(join(session, "analysis", "main.md"), "utf8"), /筛选 entity-key=entity-a/);
 
   const newQuerySession = await mkdtemp(join(tmpdir(), "html-report-editor-materialize-new-query-"));
   const newQueryResult = join(newQuerySession, "result.json");

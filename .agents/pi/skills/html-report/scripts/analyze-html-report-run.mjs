@@ -13,7 +13,7 @@ export const DEFAULT_PERFORMANCE_CONFIG_PATH = resolve(
   new URL("../html-report-self-test.config.json", import.meta.url).pathname
 );
 const RETRIES = new Set(["auto_retry_start", "summarization_retry_scheduled", "summarization_retry_attempt_start"]);
-const INDICATORS = /qdm-indicators|indicators-cli|fetch_report_entry|fetch_explore|fetch-entry|fetch-explore/i;
+const INDICATORS = /qdm-indicators|indicators-cli|ack_cli_data|fetch_report_entry|fetch_explore|fetch-entry|fetch-explore/i;
 const SCRIPTS = /check-session-layout|assemble-report|quality-scan|prepare-research-evidence|write-verdict|submit-review-scorecard|compile-report|compose-report|render-report|capture-report|finalize-design/i;
 const INFRA = /token|unauthori[sz]ed|\b40[13]\s+(?:forbidden|unauthori[sz]ed)\b|network|provider|rate.?limit|(?:http|status|response|code)[^\n]{0,16}\b(?:401|403|5\d\d)\b|ECONN|ENOTFOUND|backend|CAS|认证|网络|限流/i;
 

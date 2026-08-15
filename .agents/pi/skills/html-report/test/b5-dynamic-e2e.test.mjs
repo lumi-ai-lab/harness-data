@@ -20,6 +20,7 @@ import {
   initPipeline,
   readPipelineState,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 const rows = [
@@ -27,13 +28,22 @@ const rows = [
   { incDate: "2026-07-02", custNum: 150, perCustAmt: 82, profitLostRate: "21%", profitAmt: 2583 },
 ];
 
-async function fakeIndicatorsCli(root) {
-  const path = join(root, "fake-qdm-indicators-cli.mjs");
-  const meta = { rows, rowCount: rows.length, rowsSha256: rowsSha256(rows) };
+async function fakeMetricCli(root) {
+  const path = join(root, "fake-qdm-metric-cli.mjs");
   await writeFile(path, [
     "#!/usr/bin/env node",
-    `const meta = ${JSON.stringify(meta)};`,
-    'process.stdout.write(process.argv.includes("--meta") ? JSON.stringify(meta) : "{}");',
+    `const rows = ${JSON.stringify(rows)};`,
+    'process.stdout.write(JSON.stringify(rows));',
+  ].join("\n"));
+  await chmod(path, 0o755);
+  return path;
+}
+
+async function fakeIndicatorsCli(root) {
+  const path = join(root, "fake-qdm-indicators-cli.mjs");
+  await writeFile(path, [
+    "#!/usr/bin/env node",
+    'process.stdout.write(JSON.stringify({ rows: [], rowCount: 0, rowsSha256: "0".repeat(64) }));',
   ].join("\n"));
   await chmod(path, 0o755);
   return path;
@@ -80,19 +90,16 @@ test("real Phase A confirmation result drives the dynamic B5 delivery chain", as
     now: new Date(2026, 6, 25),
   }), null, 2)}\n`);
   const indicatorsCli = await fakeIndicatorsCli(root);
+  const metricCli = await fakeMetricCli(root);
   const playwrightCli = await fakePlaywrightCli(root);
-  const previousIndicatorsCli = process.env.QDM_INDICATORS_CLI;
-  const previousIndicatorsToken = process.env.QDM_INDICATORS_TOKEN;
-  process.env.QDM_INDICATORS_CLI = indicatorsCli;
-  process.env.QDM_INDICATORS_TOKEN = "b5-e2e-token";
+  const previousMetricCli = process.env.QDM_METRIC_CLI;
+  process.env.QDM_METRIC_CLI = metricCli;
   t.after(() => {
-    if (previousIndicatorsCli === undefined) delete process.env.QDM_INDICATORS_CLI;
-    else process.env.QDM_INDICATORS_CLI = previousIndicatorsCli;
-    if (previousIndicatorsToken === undefined) delete process.env.QDM_INDICATORS_TOKEN;
-    else process.env.QDM_INDICATORS_TOKEN = previousIndicatorsToken;
+    if (previousMetricCli === undefined) delete process.env.QDM_METRIC_CLI;
+    else process.env.QDM_METRIC_CLI = previousMetricCli;
   });
 
-  await initPipeline(session, { mode: "step", sessionId });
+  await initPipeline(session, { mode: "step", sessionId, policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(session, "A_CONFIG");
   const confirmed = await headlessConfirm({
     recommendationsPath,
@@ -100,7 +107,7 @@ test("real Phase A confirmation result drives the dynamic B5 delivery chain", as
     env: {
       ...process.env,
       QDM_INDICATORS_CLI: indicatorsCli,
-      QDM_INDICATORS_TOKEN: "b5-e2e-token",
+      QDM_INDICATORS_TOKEN: "b5-a-confirm-token",
     },
     startupTimeoutMs: 10_000,
     confirmTimeoutMs: 10_000,
@@ -115,9 +122,30 @@ test("real Phase A confirmation result drives the dynamic B5 delivery chain", as
 
   await finishAndApprove(session, "A_CONFIG");
   await finishAndApprove(session, "B0_PREFLIGHT");
+  result.cards = result.cards.map((card) => {
+    const { requestBody, metrics, dimensions, startDate, endDate, filters, statisticPolicy, ...rest } = card;
+    return {
+      ...rest,
+      query: {
+        request: {
+          metrics: card.metrics || card.indicatorFieldList,
+          statisticPolicy: card.statisticPolicy || "SUMMARY",
+          time: { startDate: card.startDate, endDate: card.endDate },
+          dimensions: card.dimensions || card.aggDimUniqueCodeList,
+          filters: Object.fromEntries(
+            (Array.isArray(card.filters) ? card.filters : []).map((filter) => [filter.dimUniqueCode, filter.values || []])
+          ),
+          pageNo: 1,
+          pageSize: 500,
+        },
+        comparisons: [],
+      },
+    };
+  });
+  await writeFile(confirmed.resultPath, `${JSON.stringify(result, null, 2)}\n`);
   const { fetchAllEntries } = await import(`../scripts/fetch-entry.mjs?b5-e2e=${Date.now()}`);
   const fetched = await fetchAllEntries(confirmed.resultPath);
-  assert.equal(fetched.cards[0].fetchStatus, "success");
+  assert.equal(fetched.cards[0].fetchStatus, "success", JSON.stringify(fetched.cards[0]));
   await finishAndApprove(session, "B2_WRITER");
 
   await mkdir(join(session, "analysis"), { recursive: true });

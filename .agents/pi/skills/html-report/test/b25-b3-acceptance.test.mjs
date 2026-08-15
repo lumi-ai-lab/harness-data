@@ -10,6 +10,7 @@ import {
   finishPipelineStage,
   approvePipelineStage,
   readPipelineState,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 import { finalizeEditorStage } from "../scripts/finalize-editor-stage.mjs";
 import { finalizeResearchStage } from "../scripts/finalize-research-stage.mjs";
@@ -44,13 +45,13 @@ function mockRows() {
 
 function mockRequestBody() {
   return {
-    indicatorFieldList: ["custNum", "perCustAmt", "profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    filterDimUniqueCodeList: [{ type: "DIMENSION", dimUniqueCode: "storeId", dimFieldIdList: ["101001"] }],
-    startDate: "2026-07-01",
-    endDate: "2026-07-02",
-    storeCollectType: 2,
-    chartType: "table",
+    metrics: ["custNum", "perCustAmt", "profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+    dimensions: ["incDate"],
+    filters: { storeId: ["101001"] },
+    pageNo: 1,
+    pageSize: 500,
   };
 }
 
@@ -71,14 +72,11 @@ function resultJson(sessionDir) {
         headingLevel: 2,
         analysisFocus: "按日分析来客数、客单价与门店毛利额的关系",
         chartType: "table",
-        statisticPolicy: "SUMMARY",
         indicatorBizId: "retail",
-        dimensions: ["incDate"],
-        metrics: ["custNum", "perCustAmt", "profitAmt"],
-        startDate: "2026-07-01",
-        endDate: "2026-07-02",
-        filters: [{ type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] }],
-        requestBody: mockRequestBody(),
+        query: {
+          request: mockRequestBody(),
+          comparisons: [],
+        },
       },
     ],
   };
@@ -165,7 +163,7 @@ async function setupSession(root) {
 }
 
 async function advanceGateToB25(sessionDir) {
-  await initPipeline(sessionDir, { mode: "step", sessionId: "test-b3" });
+  await initPipeline(sessionDir, { mode: "step", sessionId: "test-b3", policy: LEGACY_STAGE_POLICY });
   await startPipelineStage(sessionDir, "A_CONFIG");
   await finishPipelineStage(sessionDir, "A_CONFIG");
   await approvePipelineStage(sessionDir);
@@ -282,7 +280,7 @@ test("new_query path: no evidenceGap is rejected, unauthorized fields are reject
   const resultPath = join(sessionDir, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: CARD_ID, requestBody: original }],
+    cards: [{ id: CARD_ID, query: { request: original, comparisons: [] } }],
   }));
 
   // B1: new_query without evidenceGap → rejected
@@ -299,7 +297,7 @@ test("new_query path: no evidenceGap is rejected, unauthorized fields are reject
   const noGapResult = await fetchExploreTask(resultPath, {
     taskId: "gap-test",
     fromCardId: CARD_ID,
-    payload: { ...original, indicatorFieldList: ["saleAmt"] },
+    payload: { ...original, metrics: ["saleAmt"] },
   });
   assert.equal(noGapResult.status, "failed");
   assert.equal(noGapResult.errorCode, "TASK_EVIDENCE_GAP_MISSING");
@@ -307,20 +305,23 @@ test("new_query path: no evidenceGap is rejected, unauthorized fields are reject
   // B2: evidenceGap present but changes an unauthorized field → material delta detects it
   const gap = { type: "missing_indicator", reason: "需要补充销售额指标" };
   assert.equal(isValidEvidenceGap(gap), true);
-  // Only indicatorFieldList is authorized by the gap
-  assert.equal(evidenceGapMatchesChangedKeys(gap, ["indicatorFieldList"]), true);
-  // Adding startDate change makes it unauthorized
-  assert.equal(evidenceGapMatchesChangedKeys(gap, ["indicatorFieldList", "startDate"]), false);
+  // Only metrics is authorized by the gap
+  assert.equal(evidenceGapMatchesChangedKeys(gap, ["metrics"]), true);
+  // Adding time.startDate makes it unauthorized
+  assert.equal(evidenceGapMatchesChangedKeys(gap, ["metrics", "time.startDate"]), false);
 
   // B3: evidenceGap present, only authorized field changed → passes material delta check
-  const candidatePayload = { ...original, indicatorFieldList: ["custNum", "perCustAmt", "profitAmt", "saleAmt"] };
+  const candidatePayload = { ...original, metrics: ["custNum", "perCustAmt", "profitAmt", "saleAmt"] };
   const delta = materialQueryDelta(original, candidatePayload);
   assert.equal(delta.material, true);
-  assert.deepEqual(delta.changedKeys, ["indicatorFieldList"]);
+  assert.deepEqual(delta.changedKeys, ["metrics"]);
   assert.equal(evidenceGapMatchesChangedKeys(gap, delta.changedKeys), true);
 
   // B4: orderBy-only change → no material delta, should be rejected as NO_MATERIAL_QUERY_DELTA
-  const orderByOnly = materialQueryDelta(original, { ...original, orderBy: "门店毛利额 DESC" });
+  const orderByOnly = materialQueryDelta(original, {
+    ...original,
+    orderBy: { field: "profitAmt", direction: "DESC" },
+  });
   assert.equal(orderByOnly.material, false);
   assert.deepEqual(orderByOnly.changedKeys, []);
 });

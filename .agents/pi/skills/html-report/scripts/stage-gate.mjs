@@ -39,6 +39,7 @@ export const STAGE_ORDER = Object.freeze([
   "A_CONFIG",
   "B0_PREFLIGHT",
   "B2_WRITER",
+  "B2_MAIN",
   "B25_EDITOR",
   "B3_RESEARCH",
   "B4_REVIEW",
@@ -53,6 +54,8 @@ export const STAGE_DEFINITIONS = Object.freeze({
     nextLabel: "B0 Preflight",
     approvalRequired: true,
     humanGate: "A_CONFIG",
+    enabled: true,
+    gate: true,
   },
   B0_PREFLIGHT: {
     id: "B0_PREFLIGHT",
@@ -61,14 +64,28 @@ export const STAGE_DEFINITIONS = Object.freeze({
     nextLabel: "B2 Writer",
     approvalRequired: true,
     humanGate: "B0_PREFLIGHT",
+    enabled: true,
+    gate: true,
   },
   B2_WRITER: {
     id: "B2_WRITER",
     label: "B2 Writer",
     gateLabel: "B2 Writer",
-    nextLabel: "B2.5 Editor + B3.5 Researcher",
-    approvalRequired: true,
+    nextLabel: "B2 Main",
+    approvalRequired: false,
     humanGate: "B2_WRITER",
+    enabled: true,
+    gate: false,
+  },
+  B2_MAIN: {
+    id: "B2_MAIN",
+    label: "B2 Main",
+    gateLabel: "B2 Main",
+    nextLabel: "已完成",
+    approvalRequired: true,
+    humanGate: "B2_MAIN",
+    enabled: true,
+    gate: true,
   },
   B25_EDITOR: {
     id: "B25_EDITOR",
@@ -78,6 +95,8 @@ export const STAGE_DEFINITIONS = Object.freeze({
     approvalRequired: false,
     humanGate: "B3_RESEARCH",
     internal: true,
+    enabled: false,
+    gate: false,
   },
   B3_RESEARCH: {
     id: "B3_RESEARCH",
@@ -86,6 +105,8 @@ export const STAGE_DEFINITIONS = Object.freeze({
     nextLabel: "B4 Review",
     approvalRequired: true,
     humanGate: "B3_RESEARCH",
+    enabled: false,
+    gate: true,
   },
   B4_REVIEW: {
     id: "B4_REVIEW",
@@ -94,6 +115,8 @@ export const STAGE_DEFINITIONS = Object.freeze({
     nextLabel: "B5 Design",
     approvalRequired: true,
     humanGate: "B4_REVIEW",
+    enabled: false,
+    gate: true,
   },
   B5_DESIGN: {
     id: "B5_DESIGN",
@@ -102,8 +125,51 @@ export const STAGE_DEFINITIONS = Object.freeze({
     nextLabel: "已完成",
     approvalRequired: false,
     humanGate: "B5_DESIGN",
+    enabled: false,
+    gate: false,
   },
 });
+
+/** Old A→B5 path for tests that still cover Planner / Researcher / Reviewer. */
+export const LEGACY_STAGE_POLICY = Object.freeze({
+  B2_WRITER: { enabled: true, gate: true },
+  B2_MAIN: { enabled: false },
+  B25_EDITOR: { enabled: true, gate: false },
+  B3_RESEARCH: { enabled: true, gate: true },
+  B4_REVIEW: { enabled: true, gate: true },
+  B5_DESIGN: { enabled: true, gate: false },
+});
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function resolveStagePolicy(state, stageId) {
+  const definition = stageDefinition(stageId);
+  const override = isPlainObject(state?.policy) ? state.policy[stageId] : null;
+  const enabled = override && typeof override.enabled === "boolean"
+    ? override.enabled
+    : definition.enabled !== false;
+  const gate = override && typeof override.gate === "boolean"
+    ? override.gate
+    : definition.gate === true || definition.approvalRequired === true;
+  return { enabled, gate };
+}
+
+export function nextEnabledStage(state, stageId) {
+  const index = STAGE_ORDER.indexOf(stageId);
+  if (index < 0) return null;
+  for (let cursor = index + 1; cursor < STAGE_ORDER.length; cursor += 1) {
+    const candidate = STAGE_ORDER[cursor];
+    if (resolveStagePolicy(state, candidate).enabled) return candidate;
+  }
+  return null;
+}
+
+function nextStageLabel(state, stageId) {
+  const next = nextEnabledStage(state, stageId);
+  return next ? stageDefinition(next).gateLabel : "已完成";
+}
 
 function stageDefinition(stageId) {
   const definition = STAGE_DEFINITIONS[stageId];
@@ -111,11 +177,6 @@ function stageDefinition(stageId) {
     throw new Error(`unknown stage ${JSON.stringify(stageId)}; allowed: ${STAGE_ORDER.join(", ")}`);
   }
   return definition;
-}
-
-function nextStageId(stageId) {
-  const index = STAGE_ORDER.indexOf(stageId);
-  return index >= 0 && index + 1 < STAGE_ORDER.length ? STAGE_ORDER[index + 1] : null;
 }
 
 function normalizeMode(mode) {
@@ -400,7 +461,7 @@ function startStageInState(state, stageId, at, { retryOf = null } = {}) {
   }
   state.currentStage = stageId;
   state.status = "running";
-  state.nextStage = nextStageId(stageId);
+  state.nextStage = nextEnabledStage(state, stageId);
   state.pauseReason = null;
   return { changed: true, stage };
 }
@@ -423,12 +484,26 @@ function stageResult(state, at, changed, extra = {}) {
  * fixed parent here removes any need for an Editor shell discovery/mkdir turn.
  */
 async function prepareStageWorkspace(sessionDir, stageId) {
-  if (stageId === "B25_EDITOR") {
+  if (stageId === "B25_EDITOR" || stageId === "B2_MAIN") {
     await mkdir(join(resolve(sessionDir), "analysis"), { recursive: true });
   }
 }
 
-export async function initPipeline(sessionDir, { mode = "step", sessionId, now } = {}) {
+function normalizePolicy(raw) {
+  if (!isPlainObject(raw)) return {};
+  const policy = {};
+  for (const stageId of STAGE_ORDER) {
+    const item = raw[stageId];
+    if (!isPlainObject(item)) continue;
+    const next = {};
+    if (typeof item.enabled === "boolean") next.enabled = item.enabled;
+    if (typeof item.gate === "boolean") next.gate = item.gate;
+    if (Object.keys(next).length) policy[stageId] = next;
+  }
+  return policy;
+}
+
+export async function initPipeline(sessionDir, { mode = "step", sessionId, now, policy } = {}) {
   const abs = resolve(sessionDir);
   const at = nowIso(now);
   return withStateLock(abs, async () => {
@@ -444,7 +519,8 @@ export async function initPipeline(sessionDir, { mode = "step", sessionId, now }
       mode: normalizedMode,
       status: "paused",
       currentStage: firstStage,
-      nextStage: nextStageId(firstStage),
+      policy: normalizePolicy(policy),
+      nextStage: null,
       pauseReason: "initialized",
       createdAt: at,
       updatedAt: at,
@@ -455,8 +531,21 @@ export async function initPipeline(sessionDir, { mode = "step", sessionId, now }
       cumulativeExecutionDurationMs: 0,
       cumulativeHumanWaitingDurationMs: 0,
     };
+    state.nextStage = nextEnabledStage(state, firstStage);
     await writeState(abs, state, at);
     return stageResult(state, at, true, { statePath: pipelineStatePath(abs) });
+  });
+}
+
+export async function applyPipelinePolicy(sessionDir, policy, { now } = {}) {
+  const abs = resolve(sessionDir);
+  const at = nowIso(now);
+  return withStateLock(abs, async () => {
+    const state = await readPipelineState(abs);
+    state.policy = { ...state.policy, ...normalizePolicy(policy) };
+    state.nextStage = nextEnabledStage(state, state.currentStage);
+    await writeState(abs, state, at);
+    return stageResult(state, at, true);
   });
 }
 
@@ -468,6 +557,9 @@ export async function startPipelineStage(sessionDir, stageId, { now } = {}) {
     if (state.currentStage !== stageId) {
       throw new Error(`stage mismatch: current=${state.currentStage}, requested=${stageId}`);
     }
+    if (!resolveStagePolicy(state, stageId).enabled) {
+      throw new Error(`stage ${stageId} is disabled by policy`);
+    }
     await prepareStageWorkspace(abs, stageId);
     const outcome = startStageInState(state, stageId, at);
     if (outcome.changed) await writeState(abs, state, at);
@@ -476,7 +568,7 @@ export async function startPipelineStage(sessionDir, stageId, { now } = {}) {
 }
 
 async function advanceAfterCompletion(state, sessionDir, stageId, at) {
-  const next = nextStageId(stageId);
+  const next = nextEnabledStage(state, stageId);
   state.nextStage = next;
   if (!next) {
     state.status = "completed";
@@ -524,10 +616,10 @@ export async function finishPipelineStage(sessionDir, stageId, { now } = {}) {
     stage.failedAt = null;
     stage.failureReason = null;
 
-    const definition = stageDefinition(stageId);
-    const next = nextStageId(stageId);
+    const policy = resolveStagePolicy(state, stageId);
+    const next = nextEnabledStage(state, stageId);
     state.nextStage = next;
-    if (state.mode === "step" && definition.approvalRequired && next) {
+    if (state.mode === "step" && policy.gate) {
       stage.status = "awaiting_approval";
       state.status = "awaiting_approval";
       state.pauseReason = null;
@@ -606,7 +698,7 @@ export async function approvePipelineStage(
       approvedAt: at,
       actor: String(actor || "user"),
       phrase: String(phrase || "继续"),
-      nextStage: nextStageId(stageId),
+      nextStage: nextEnabledStage(state, stageId),
     });
     await advanceAfterCompletion(state, abs, stageId, at);
     await writeState(abs, state, at);
@@ -707,7 +799,7 @@ export async function resumePipeline(
         approvedAt: at,
         actor: String(actor),
         phrase: String(phrase),
-        nextStage: nextStageId(state.currentStage),
+        nextStage: nextEnabledStage(state, state.currentStage),
         automatic: true,
       });
       await advanceAfterCompletion(state, abs, state.currentStage, at);
@@ -801,22 +893,23 @@ export function formatGateMessage(state, { stageId: requestedStageId } = {}) {
   }
   lines.push(`累计执行耗时：${formatDuration(state.cumulativeExecutionDurationMs)}`);
 
-  if (stageId === "B5_DESIGN" && stage.status === "completed") {
+  const nextLabel = nextStageLabel(state, stageId);
+  if ((stageId === "B5_DESIGN" || !nextEnabledStage(state, stageId)) && stage.status === "completed") {
     lines.push("下一阶段：已完成");
   } else if (stageId === state.currentStage && state.status === "awaiting_approval") {
     lines.push(
-      `下一阶段：${definition.nextLabel}`,
-      "回复“继续”进入下一阶段",
+      `下一阶段：${nextLabel}`,
+      nextEnabledStage(state, stageId) ? "回复“继续”进入下一阶段" : "回复“继续”结束本阶段",
       "当前必须立即停止工具调用，并将以上 Gate 文本原样返回用户；不要主动检查目录或文件"
     );
   } else if (stageId === state.currentStage && state.status === "paused") {
     lines.push(`暂停原因：${state.pauseReason || "等待恢复"}`, "回复“继续”恢复当前阶段");
   } else if (stage.status === "completed" && state.mode === "auto") {
-    lines.push(`下一阶段：${definition.nextLabel}`, "Gate 模式：auto（已自动进入下一阶段）");
+    lines.push(`下一阶段：${nextLabel}`, "Gate 模式：auto（已自动进入下一阶段）");
   } else if (stageId === "B25_EDITOR" && stage.status === "completed") {
     lines.push("下一阶段：B3.5 Researcher（无需人工回复）");
   } else {
-    lines.push(`下一阶段：${definition.nextLabel}`);
+    lines.push(`下一阶段：${nextLabel}`);
   }
   return lines.join("\n");
 }

@@ -13,7 +13,7 @@ import {
   rowsSha256,
 } from "../scripts/prepare-research-evidence.mjs";
 import { normalizeEntryPayload } from "../scripts/fetch-entry.mjs";
-import { materialQueryDelta, semanticQueryShape } from "../scripts/fetch-explore.mjs";
+import { computeQueryPatch, materialQueryDelta } from "../scripts/fetch-explore.mjs";
 import {
   collectNumbersFromJson,
   collectNumbersFromResult,
@@ -160,11 +160,15 @@ async function seedTrustedResearcherSession(session, { claimText } = {}) {
     cards: [{
       id: "c1",
       title: "经营明细",
-      requestBody: {
-        indicatorFieldList: ["profitAmt", "custNum", "profitRate"],
-        aggDimUniqueCodeList: ["incDate"],
-        startDate: "2026-07-01",
-        endDate: "2026-07-04",
+      query: {
+        request: {
+          metrics: ["profitAmt", "custNum", "profitRate"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-04" },
+          dimensions: ["incDate"],
+          filters: {},
+        },
+        comparisons: [],
       },
     }],
   }));
@@ -250,16 +254,17 @@ async function seedTrustedNewQuerySession(session, { claimText } = {}) {
   await mkdir(sectionDir, { recursive: true });
 
   const sourcePayload = normalizeEntryPayload({
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-02",
+    metrics: ["profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+    dimensions: ["incDate"],
+    filters: {},
   });
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
     question: "新增品类维度后，各品类毛利表现如何",
-    cards: [{ id: "c1", title: "来源卡", requestBody: sourcePayload }],
+    cards: [{ id: "c1", title: "来源卡", query: { request: sourcePayload, comparisons: [] } }],
   }));
   const writerRows = [{ 日期: "2026-07-01", 毛利额: 100 }];
   await writeFile(join(cardDir, "entry.json"), JSON.stringify(writerRows));
@@ -301,30 +306,27 @@ async function seedTrustedNewQuerySession(session, { claimText } = {}) {
   const rows = [{ 品类: "A", 毛利额: 1111 }, { 品类: "B", 毛利额: 2222 }];
   const payload = normalizeEntryPayload({
     ...sourcePayload,
-    aggDimUniqueCodeList: ["categoryLevel1Id"],
+    dimensions: ["categoryLevel1Id"],
   });
-  const payloadPath = join(exploreDir, "new-1.payload.json");
   const dataPath = join(exploreDir, "new-1.json");
-  const sourceQueryShape = semanticQueryShape(sourcePayload);
-  const queryShape = semanticQueryShape(payload);
+  const queryPatch = computeQueryPatch(sourcePayload, payload);
   const queryDelta = materialQueryDelta(sourcePayload, payload);
-  await writeFile(payloadPath, JSON.stringify(payload));
   await writeFile(dataPath, JSON.stringify(rows));
   await writeFile(join(exploreDir, "new-1.meta.json"), JSON.stringify({
     producer: "fetch-explore.mjs",
-    producerVersion: 2,
+    producerVersion: 3,
+    cacheContractVersion: 3,
     taskId: "new-1",
     fromCardId: "c1",
     status: "ok",
     attempts: [{ attempt: 1, status: 0 }],
     pagination: { mode: "all-pages", singlePage: false },
     queryDelta,
-    payloadPath,
-    payloadSha256: fingerprintJson(payload),
-    sourceQueryShape,
-    sourceQueryShapeSha256: fingerprintJson(sourceQueryShape),
-    queryShape,
-    queryShapeSha256: fingerprintJson(queryShape),
+    queryDeltaSha256: fingerprintJson(queryDelta),
+    queryPatch,
+    queryPatchSha256: fingerprintJson(queryPatch),
+    sourceQuerySha256: fingerprintJson(sourcePayload),
+    executedQuerySha256: fingerprintJson(payload),
     rowCount: rows.length,
     rowsSha256: rowsSha256(rows),
   }));
@@ -355,7 +357,7 @@ async function seedTrustedNewQuerySession(session, { claimText } = {}) {
     suggestedDeeper: [],
   }));
   await assembleReport(session);
-  return { dataPath, evidence, payload, payloadPath, rows, task };
+  return { dataPath, evidence, payload, rows, task };
 }
 
 test("runQualityScan trusts validated Researcher view statistics without model-derived percentages", async (t) => {
@@ -425,21 +427,21 @@ test("runQualityScan fails fast when authoritative B3 explore rows are stale", a
   await assert.rejects(() => readFile(join(session, "quality", "scan.json"), "utf8"));
 });
 
-test("runQualityScan fails fast when the authoritative B3 explore payload is tampered", async (t) => {
+test("runQualityScan fails fast when the B3 explore meta queryPatch hash is tampered", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-qscan-forged-payload-"));
   const session = join(root, ".harness", "state", "html-report", "forged-payload");
   t.after(async () => rm(root, { recursive: true, force: true }));
   const seeded = await seedTrustedNewQuerySession(session, {
     claimText: "新增品类查询的毛利额高达 888888 元。",
   });
-  await writeFile(seeded.payloadPath, JSON.stringify({
-    ...seeded.payload,
-    forgedBusinessAmount: 888888,
-  }));
+  const metaPath = join(seeded.dataPath, "..", "new-1.meta.json");
+  const meta = JSON.parse(await readFile(metaPath, "utf8"));
+  meta.queryPatchSha256 = "0".repeat(64);
+  await writeFile(metaPath, JSON.stringify(meta));
 
   await assert.rejects(
     () => runQualityScan(session),
-    /B3_EXPLORE_LAYOUT_INVALID:.*payload/i
+    /B3_EXPLORE_LAYOUT_INVALID:.*(?:queryPatch hash mismatch|fingerprint mismatch)/i
   );
   await assert.rejects(() => readFile(join(session, "quality", "scan.json"), "utf8"));
 });

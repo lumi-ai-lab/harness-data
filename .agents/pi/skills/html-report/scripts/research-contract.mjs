@@ -36,13 +36,13 @@ export function isValidEvidenceGap(gap) {
 }
 
 const GAP_QUERY_KEYS = {
-  missing_indicator: new Set(["indicatorFieldList"]),
-  missing_dimension: new Set(["aggDimUniqueCodeList", "columnAggDimUniqueCodeList"]),
-  missing_granularity: new Set(["aggDimUniqueCodeList", "columnAggDimUniqueCodeList"]),
-  missing_range: new Set(["startDate", "endDate"]),
-  missing_scope: new Set(["filterDimUniqueCodeList", "storeCollectType"]),
-  missing_comparison: new Set(["compareDate"]),
-  metric_definition: new Set(["indicatorFieldList", "indicatorsGroup", "storeCollectType"]),
+  missing_indicator: new Set(["metrics"]),
+  missing_dimension: new Set(["dimensions"]),
+  missing_granularity: new Set(["time.grain", "dimensions"]),
+  missing_range: new Set(["time.startDate", "time.endDate"]),
+  missing_scope: new Set(["filters", "scopes", "measureFilters"]),
+  missing_comparison: new Set(["comparisons"]),
+  metric_definition: new Set(["metrics", "statisticPolicy"]),
 };
 
 export function evidenceGapMatchesChangedKeys(gap, changedKeys) {

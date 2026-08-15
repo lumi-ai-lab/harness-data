@@ -56,7 +56,7 @@ function fixture(baseDir) {
     rpcEvents: [
       { type: "tool_execution_start", toolCallId: "w1", toolName: "subagent", args: { chain: [{ agent: "report-writer" }] }, timestamp: "2026-07-29T03:00:05.000Z" },
       { type: "tool_execution_end", toolCallId: "w1", durationMs: 30000, timestamp: "2026-07-29T03:00:35.000Z", details: { results: [{ transcriptPath: "/tmp/writer.jsonl" }] } },
-      { type: "tool_execution_end", toolName: "fetch_report_entry", durationMs: 10000, timestamp: "2026-07-29T03:00:50.000Z" },
+      { type: "tool_execution_end", toolName: "ack_cli_data", durationMs: 10000, timestamp: "2026-07-29T03:00:50.000Z" },
       { type: "tool_execution_start", toolCallId: "r1", toolName: "subagent", input: { chain: [{ agent: "report-researcher" }] }, timestamp: "2026-07-29T03:03:05.000Z" },
       { type: "auto_retry_start", timestamp: "2026-07-29T03:03:20.000Z" },
       { receivedAt: "2026-07-29T03:03:30.000Z", event: { type: "extension_error", error: "guard contract exploded" } },
@@ -221,7 +221,7 @@ test("finds the first anomaly and measures stages, budgets, agents, tools, retry
   const writer = report.stages.find((stage) => stage.id === "B2_WRITER");
   assert.deepEqual(writer.subagents, [{ agent: "report-writer", dispatches: 1, durationMs: 30000, failures: 0 }]);
   assert.deepEqual(writer.tools, [
-    { toolName: "fetch_report_entry", calls: 1, durationMs: 10000, failures: 0 },
+    { toolName: "ack_cli_data", calls: 1, durationMs: 10000, failures: 0 },
     { toolName: "subagent", calls: 1, durationMs: 30000, failures: 0 },
   ]);
   assert.equal(writer.indicatorsCliDurationMs, 10000);

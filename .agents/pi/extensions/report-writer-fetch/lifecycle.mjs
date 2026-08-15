@@ -2,15 +2,11 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   sanitizeCardId,
   writerReturnPaths,
+  WRITER_ACK_TOOL,
+  WRITER_CAPTION_TOOL,
 } from "../../skills/html-report/scripts/writer-return.mjs";
 
-export const WRITER_SUBMIT_TOOL = "submit_writer_result";
-const FINAL_TOOLS = new Set([WRITER_SUBMIT_TOOL]);
-const FAILURE_ANALYSIS = {
-  summary: "取数失败，未形成业务判断。",
-  findings: [],
-  recommendations: [],
-};
+export { WRITER_ACK_TOOL, WRITER_ACK_TOOL as WRITER_FETCH_TOOL, WRITER_CAPTION_TOOL };
 
 function allow(state) {
   return { decision: undefined, state };
@@ -101,57 +97,21 @@ export function parseWriterAssignment(prompt, { projectRoot } = {}) {
     cardId,
     dataPath: paths.dataPath,
     metaPath: paths.metaPath,
+    evidencePath: paths.evidencePath,
+    captionPath: paths.captionPath,
   };
 }
 
 export function initialWriterGuardState() {
   return {
     fetchAttempts: 0,
-    reads: {},
-    readSuccess: {},
+    captionAttempts: 0,
     pending: {},
     fetchResult: null,
+    captionSubmitted: false,
     terminalFailure: null,
     structuredAttempts: 0,
   };
-}
-
-/** Consume a typed Writer submit rejected by core schema validation. */
-export function writerUnvalidatedSubmitFailureState(contract, state, event) {
-  const current = state || initialWriterGuardState();
-  if (
-    String(event?.toolName || "").toLowerCase() !== WRITER_SUBMIT_TOOL ||
-    event?.isError !== true ||
-    !contract?.ok ||
-    current.structuredAttempts !== 0
-  ) {
-    return current;
-  }
-  const errorEvent = event?.result && typeof event.result === "object"
-    ? event.result
-    : event;
-  return {
-    ...current,
-    structuredAttempts: 1,
-    terminalFailure: current.terminalFailure || {
-      error: conciseError(errorEvent, "submit_writer_result 参数校验失败；首次提交机会已消费"),
-    },
-  };
-}
-
-function increment(record, key) {
-  return { ...record, [key]: (record[key] || 0) + 1 };
-}
-
-function eventPath(input) {
-  if (!input || typeof input !== "object") return "";
-  return textValue(input.path ?? input.filePath ?? input.file_path);
-}
-
-function structuredValue(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-  if (input.value && typeof input.value === "object" && !Array.isArray(input.value)) return input.value;
-  return input;
 }
 
 function exactKeys(value, keys) {
@@ -161,133 +121,76 @@ function exactKeys(value, keys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function validFailureReturn(value, contract, expectedError = "") {
-  if (!value || value.cardId !== contract.cardId || value.fetchStatus !== "failed") {
-    return "失败返回必须绑定 assignment cardId 且 fetchStatus=failed";
+function pendingKey(event, fallbackTool) {
+  return String(event?.toolCallId || `<unknown:${fallbackTool}>`);
+}
+
+function fetchReceiptFromEvent(event) {
+  const details = event?.details;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    if (details.fetchStatus === "success" || details.fetchStatus === "failed") return details;
+    if (details.receipt && typeof details.receipt === "object") return details.receipt;
   }
-  if (value.dataPath !== null || value.metaPath !== null) return "失败返回的 dataPath/metaPath 必须为 null";
-  if (typeof value.error !== "string" || !value.error.trim()) return "失败返回 error 不能为空";
-  if (expectedError && value.error !== expectedError) {
-    return "失败返回 error 必须逐字等于 guard 已记录的真实终端错误";
-  }
-  if (!exactKeys(value.analysis, ["summary", "findings", "recommendations"])) {
-    return "失败返回 analysis 必须是固定三字段对象";
-  }
-  if (
-    value.analysis.summary !== FAILURE_ANALYSIS.summary ||
-    !Array.isArray(value.analysis.findings) || value.analysis.findings.length !== 0 ||
-    !Array.isArray(value.analysis.recommendations) || value.analysis.recommendations.length !== 0
-  ) return "失败返回 analysis 必须使用固定无业务判断内容";
-  return "";
+  return null;
 }
 
-function validSuccessReturn(value, contract) {
-  if (!value || value.cardId !== contract.cardId || value.fetchStatus !== "success") {
-    return "成功返回必须绑定 assignment cardId 且 fetchStatus=success";
-  }
-  if (value.metaPath !== contract.metaPath || value.dataPath !== contract.dataPath) {
-    return "成功返回必须使用 fetch 结果绑定的固定 metaPath/dataPath";
-  }
-  return "";
-}
-
-function terminalBlock(state, reason) {
-  const next = state.terminalFailure
-    ? state
-    : { ...state, terminalFailure: { error: reason } };
-  return block(`${reason}；当前 run 已终止，只允许一次匹配的 submit_writer_result fetchStatus=failed`, next);
-}
-
-function pendingKey(event, operation) {
-  return String(event?.toolCallId || `<unknown:${operation.type}:${operation.path || "fetch"}>`);
-}
-
-function addPending(state, event, operation) {
-  const key = pendingKey(event, operation);
-  if (state.pending[key]) return null;
-  return { ...state, pending: { ...state.pending, [key]: operation } };
-}
-
-function isQueuedDataRead(contract, state, event) {
-  if (!state.fetchResult || String(event?.toolName || "").toLowerCase() !== "read") return false;
-  if (eventPath(event?.input) !== contract.dataPath) return false;
-  if (state.reads[contract.metaPath] !== 1 || state.reads[contract.dataPath]) return false;
-  const pending = Object.values(state.pending);
-  return pending.length === 1 &&
-    pending[0]?.type === "read" &&
-    pending[0]?.path === contract.metaPath;
-}
-
-/** Pure fail-fast Writer tool-call transition. */
+/** Pure fail-fast Writer tool-call transition: ack once, then caption once. */
 export function writerToolDecision(contract, state, event) {
   const current = state || initialWriterGuardState();
   const toolName = String(event?.toolName || "").toLowerCase();
 
-  if (FINAL_TOOLS.has(toolName)) {
-    if (current.structuredAttempts > 0) return block("submit_writer_result 最多调用一次", current);
-    const next = { ...current, structuredAttempts: current.structuredAttempts + 1 };
-    if (!contract?.ok) {
-      return block(`任务契约解析失败，无法验证 submit_writer_result：${contract?.errors?.join("；") || "unknown error"}`, next);
-    }
-    const value = structuredValue(event?.input);
-    if (current.terminalFailure) {
-      const error = validFailureReturn(value, contract, current.terminalFailure.error);
-      return error ? block(error, next) : allow(next);
-    }
-    if (Object.keys(current.pending).length) return block("工具结果尚未返回，submit_writer_result 过早", next);
-    if (!current.fetchResult || !current.readSuccess[contract.metaPath] || !current.readSuccess[contract.dataPath]) {
-      return block("成功 submit_writer_result 前必须完成一次 fetch、metaPath read、dataPath read", next);
-    }
-    const error = validSuccessReturn(value, contract);
-    return error ? block(error, next) : allow(next);
-  }
-
   if (!contract?.ok) {
     return block(`任务契约解析失败，已 fail closed：${contract?.errors?.join("；") || "unknown error"}`, current);
   }
-  if (current.structuredAttempts > 0) {
-    return block("submit_writer_result 已调用；禁止其后的任何 I/O、协调或其他工具", current);
+  if (current.terminalFailure || current.captionSubmitted || current.captionAttempts > 0) {
+    return block("submit_card_caption 最多调用一次；禁止其它工具或重试", current);
   }
-  if (current.terminalFailure) {
-    return block("run 已失败终止；禁止后续 I/O、协调或重试，只允许 submit_writer_result fetchStatus=failed", current);
-  }
-  // Pi may emit the two immutable, assignment-bound reads in one assistant
-  // message. Queue only the exact dataPath read behind the already-authorized
-  // metaPath read; every other overlapping or interleaved call still fails.
-  if (Object.keys(current.pending).length && !isQueuedDataRead(contract, current, event)) {
-    return terminalBlock(current, "上一工具结果尚未返回，禁止并行或穿插调用");
+  if (current.fetchResult?.fetchStatus === "failed") {
+    return block("ack_cli_data 已失败，禁止其它工具", current);
   }
 
-  if (toolName === "fetch_report_entry") {
-    if (current.fetchAttempts > 0) return terminalBlock(current, "fetch_report_entry 最多调用一次，禁止重试");
+  if (!current.fetchResult) {
+    if (current.fetchAttempts > 0) {
+      return block("ack_cli_data 最多调用一次；禁止其它工具或重试", current);
+    }
+    if (toolName !== WRITER_ACK_TOOL) {
+      return block(`先调用 ack_cli_data 一次，禁止 ${toolName || "unknown"}`, current);
+    }
     const input = event?.input;
     if (
       !input || typeof input !== "object" || Array.isArray(input) ||
       input.resultPath !== contract.resultPath || input.cardId !== contract.cardId ||
       !exactKeys(input, ["resultPath", "cardId"])
-    ) return terminalBlock(current, "fetch_report_entry 参数必须逐字等于 assignment 的 result.json 与 cardId");
-    const withPending = addPending(current, event, { type: "fetch_report_entry" });
-    if (!withPending) return terminalBlock(current, "fetch_report_entry toolCallId 重复");
-    return allow({ ...withPending, fetchAttempts: 1 });
-  }
-
-  if (toolName === "read") {
-    if (!current.fetchResult) return terminalBlock(current, "read 必须在唯一 fetch_report_entry 成功后执行");
-    const path = eventPath(event?.input);
-    const expected = !current.reads[contract.metaPath] ? contract.metaPath : contract.dataPath;
-    if (path !== expected) {
-      return terminalBlock(current, `read 顺序固定为 metaPath 后 dataPath；当前只允许 ${expected}`);
+    ) {
+      return block("ack_cli_data 参数必须逐字等于 assignment 的 result.json 与 cardId", current);
     }
-    if (current.reads[path]) return terminalBlock(current, `固定文件最多读取一次：${path}`);
-    const withPending = addPending(current, event, { type: "read", path });
-    if (!withPending) return terminalBlock(current, "read toolCallId 重复");
-    return allow({ ...withPending, reads: increment(current.reads, path) });
+    const key = pendingKey(event, WRITER_ACK_TOOL);
+    if (current.pending[key]) return block("ack_cli_data toolCallId 重复", current);
+    return allow({
+      ...current,
+      fetchAttempts: 1,
+      pending: { ...current.pending, [key]: { type: WRITER_ACK_TOOL } },
+    });
   }
 
-  return terminalBlock(
-    current,
-    `禁止其他 read、目录扫描、协调、召回、命令或未授权工具：${toolName || "unknown"}`
-  );
+  if (toolName !== WRITER_CAPTION_TOOL) {
+    return block(`取数成功后只允许调用 submit_card_caption 一次，禁止 ${toolName || "unknown"}`, current);
+  }
+  const input = event?.input;
+  if (
+    !input || typeof input !== "object" || Array.isArray(input) ||
+    !exactKeys(input, ["paragraphs", "pointers"])
+  ) {
+    return block("submit_card_caption 只接受 paragraphs 与 pointers", current);
+  }
+  const key = pendingKey(event, WRITER_CAPTION_TOOL);
+  if (current.pending[key]) return block("submit_card_caption toolCallId 重复", current);
+  return allow({
+    ...current,
+    captionAttempts: 1,
+    structuredAttempts: Math.max(1, current.structuredAttempts),
+    pending: { ...current.pending, [key]: { type: WRITER_CAPTION_TOOL } },
+  });
 }
 
 function resultText(event) {
@@ -299,75 +202,64 @@ function resultText(event) {
     .join("\n");
 }
 
-function resultFailed(event) {
-  if (event?.isError === true) return true;
-  const details = event?.details;
-  if (!details || typeof details !== "object") return false;
-  for (const key of ["exitCode", "code", "statusCode"]) {
-    const value = details[key];
-    if (value === undefined || value === null || value === 0 || value === "0" || value === "") continue;
-    return true;
-  }
-  return false;
-}
-
 function conciseError(event, fallback) {
   const detailsError = typeof event?.details?.error === "string" ? event.details.error : "";
   const text = (detailsError || resultText(event) || fallback).trim().replace(/\s+/g, " ");
   return text.slice(0, 1200);
 }
 
-function matchingPending(state, event) {
-  const requestedKey = String(event?.toolCallId || "");
-  const toolName = String(event?.toolName || "").toLowerCase();
-  if (requestedKey && state.pending[requestedKey]) {
-    const operation = state.pending[requestedKey];
-    return operation.type === toolName ? [requestedKey, operation] : ["", null];
-  }
-  if (requestedKey) return ["", null];
-  const candidates = Object.entries(state.pending).filter(([, operation]) => operation.type === toolName);
-  return candidates.length === 1 ? candidates[0] : ["", null];
-}
-
-function validFetchDetails(details, contract) {
-  return details && typeof details === "object" && !Array.isArray(details) &&
-    details.fetchStatus === "success" &&
-    details.cardId === contract.cardId &&
-    details.metaPath === contract.metaPath &&
-    details.dataPath === contract.dataPath &&
-    Number.isSafeInteger(details.rowCount) && details.rowCount >= 0 &&
-    typeof details.rowsSha256 === "string" && /^[a-f0-9]{64}$/i.test(details.rowsSha256);
-}
-
-/** Record the exact one-shot fetch/read result; any failure is terminal. */
+/** Record the fetch or caption result. Capture/terminate happens in the tool. */
 export function writerToolResultState(contract, state, event) {
   const current = state || initialWriterGuardState();
-  if (!contract?.ok || current.terminalFailure || current.structuredAttempts > 0) return current;
-  if (FINAL_TOOLS.has(String(event?.toolName || "").toLowerCase())) return current;
-  const [key, operation] = matchingPending(current, event);
-  if (!operation) {
-    return { ...current, terminalFailure: { error: "收到无法匹配已授权调用的 tool_result" } };
-  }
+  if (!contract?.ok) return current;
+  const toolName = String(event?.toolName || "").toLowerCase();
+  if (toolName !== WRITER_ACK_TOOL && toolName !== WRITER_CAPTION_TOOL) return current;
+  const key = String(event?.toolCallId || "");
   const pending = { ...current.pending };
-  delete pending[key];
+  if (key) delete pending[key];
   const next = { ...current, pending };
-  if (resultFailed(event)) {
-    return { ...next, terminalFailure: { error: conciseError(event, `${operation.type} failed`) } };
+  if (event?.isError === true) {
+    return {
+      ...next,
+      terminalFailure: {
+        error: conciseError(event, toolName === WRITER_CAPTION_TOOL ? "submit_card_caption failed" : "ack_cli_data failed"),
+      },
+    };
   }
+  if (toolName === WRITER_CAPTION_TOOL) {
+    return { ...next, captionSubmitted: true };
+  }
+  return { ...next, fetchResult: fetchReceiptFromEvent(event) };
+}
 
-  if (operation.type === "fetch_report_entry") {
-    if (event?.details?.fetchStatus === "failed") {
-      return {
-        ...next,
-        terminalFailure: { error: conciseError(event, event.details.error || "fetch_report_entry returned failed") },
-      };
-    }
-    if (!validFetchDetails(event?.details, contract)) {
-      return { ...next, terminalFailure: { error: "fetch_report_entry 返回未绑定 assignment 的路径/cardId/meta" } };
-    }
-    return { ...next, fetchResult: { ...event.details } };
+/** Schema-invalid first fetch or caption is terminal. */
+export function writerUnvalidatedSubmitFailureState(contract, state, event) {
+  const current = state || initialWriterGuardState();
+  const toolName = String(event?.toolName || "").toLowerCase();
+  if (event?.isError !== true || !contract?.ok) return current;
+  const errorEvent = event?.result && typeof event.result === "object"
+    ? event.result
+    : event;
+  if (toolName === WRITER_ACK_TOOL && current.fetchAttempts === 0) {
+    return {
+      ...current,
+      fetchAttempts: 1,
+      terminalFailure: current.terminalFailure || {
+        error: conciseError(errorEvent, "ack_cli_data 参数校验失败；首次取数机会已消费"),
+      },
+    };
   }
-  return { ...next, readSuccess: increment(next.readSuccess, operation.path) };
+  if (toolName === WRITER_CAPTION_TOOL && current.captionAttempts === 0 && current.fetchResult?.fetchStatus === "success") {
+    return {
+      ...current,
+      captionAttempts: 1,
+      structuredAttempts: Math.max(1, current.structuredAttempts),
+      terminalFailure: current.terminalFailure || {
+        error: conciseError(errorEvent, "submit_card_caption 参数校验失败；首次交稿机会已消费"),
+      },
+    };
+  }
+  return current;
 }
 
 /** Backward-compatible direct guard used by older focused tests. */
@@ -377,6 +269,6 @@ export function writerCoordinationDecision(event) {
   }
   return {
     block: true,
-    reason: "Report Writer 不允许进入 supervisor/intercom 等待；请直接按固定 schema 提交 submit_writer_result。",
+    reason: "Report Writer 不允许进入 supervisor/intercom 等待；只调用 ack_cli_data 与 submit_card_caption。",
   };
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * FETCH-EXPLORE (Phase B3.5 / P3): run a self-built Indicators analysis query for one explore task.
+ * FETCH-EXPLORE (Phase B3.5 / P3): run a self-built Metric query for one explore task.
  *
  * Invoked by report-researcher (or Report Editor) after the agent designs the payload:
  *   node fetch-explore.mjs --result <result.json> --task-id <id> --payload-json '<json>'
@@ -12,9 +12,9 @@
  * Rules (same spirit as fetch-entry):
  * - Never --single-page; all-pages only.
  * - Retry only explicit transient failures returned within 15s, up to 3×
- *   with 5s delay. CAS + sleeps + all attempts share a 540s hard budget;
+ *   with 5s delay. Sleeps + all attempts share a 540s hard budget;
  *   timeout stops immediately instead of starting another long query.
- * - Uses CLI --meta; persists rows plus rowCount + rowsSha256 provenance.
+ * - Parses qdm-metric-cli rows and persists rowCount + rowsSha256 provenance.
  * - A completed query can be reused after a parent/structured-return failure,
  *   but only when the complete result/task/query/payload/rows contract still
  *   validates.
@@ -30,40 +30,33 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  normalizeEntryPayload,
-  buildExecuteArgs,
-  parseEntryMetaResponse,
-  rowsSha256,
-} from "./fetch-entry.mjs";
+import { parseEntryMetaResponse, rowsSha256, buildColumnLabels, columnMetaPathFor } from "./fetch-entry.mjs";
+import { normalizeMetricQuery, metricQueryFromCard } from "./metric-query-contract.mjs";
+import { runMetricQuery } from "./metric-cli-executor.mjs";
 import {
   evidenceGapTypes,
   evidenceGapMatchesChangedKeys,
-  isJsonObject,
   isValidEvidenceGap,
 } from "./research-contract.mjs";
-import { isIndicatorsTimeout } from "./indicators-timeout.mjs";
+import { isMetricTimeout } from "./metric-timeout.mjs";
 import {
-  indicatorsFetchBudgetMs,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
-} from "./indicators-retry.mjs";
+  metricFetchBudgetMs,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
+} from "./metric-retry.mjs";
 
-export { isIndicatorsTimeout } from "./indicators-timeout.mjs";
+export { isMetricTimeout } from "./metric-timeout.mjs";
 export {
-  indicatorsFetchBudgetMs,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
-} from "./indicators-retry.mjs";
+  metricFetchBudgetMs,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
+} from "./metric-retry.mjs";
 
 const root = resolve(new URL("../../../../../", import.meta.url).pathname);
-const indicatorsCli = process.env.QDM_INDICATORS_CLI || join(root, "bin/qdm-indicators-cli");
-const casCli = process.env.QDM_CAS_CLI || join(root, "bin/cas-cli");
-
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 5000;
-const DEFAULT_INDICATORS_TIMEOUT_MS = 600000;
-const EXPLORE_CACHE_CONTRACT_VERSION = 1;
+const DEFAULT_METRIC_TIMEOUT_MS = 600000;
+const EXPLORE_CACHE_CONTRACT_VERSION = 3;
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -79,38 +72,23 @@ function sleepSync(ms) {
   );
 }
 
-function ensureToken({ timeoutMs = 25000 } = {}) {
-  if (process.env.QDM_INDICATORS_TOKEN) return process.env.QDM_INDICATORS_TOKEN;
-  const auth = spawnSync(casCli, ["token", "--app", "indicators", "--timeout", "20s"], {
-    encoding: "utf8",
-    timeout: Math.max(1, Math.min(25000, Math.floor(timeoutMs))),
-    killSignal: "SIGKILL",
-  });
-  if (auth.status === 0 && auth.stdout.trim()) {
-    process.env.QDM_INDICATORS_TOKEN = auth.stdout.trim();
-    return process.env.QDM_INDICATORS_TOKEN;
-  }
-  return "";
-}
-
-const NON_SEMANTIC_QUERY_KEYS = new Set(["orderBy", "currPage", "pageSize", "chartType"]);
+const NON_SEMANTIC_QUERY_KEYS = new Set(["requestId", "orderBy", "pageNo", "pageSize"]);
 const MATERIAL_QUERY_KEYS = new Set([
-  "indicatorFieldList",
-  "aggDimUniqueCodeList",
-  "columnAggDimUniqueCodeList",
-  "filterDimUniqueCodeList",
-  "startDate",
-  "endDate",
-  "compareDate",
-  "storeCollectType",
-  "indicatorsGroup",
+  "metrics",
+  "statisticPolicy",
+  "time.startDate",
+  "time.endDate",
+  "time.grain",
+  "dimensions",
+  "filters",
+  "scopes",
+  "measureFilters",
+  "comparisons",
 ]);
 const SET_LIKE_QUERY_KEYS = new Set([
-  "indicatorFieldList",
-  "aggDimUniqueCodeList",
-  "columnAggDimUniqueCodeList",
-  "compareDate",
-  "filterDimUniqueCodeList",
+  "metrics",
+  "dimensions",
+  "comparisons",
 ]);
 const RUNNABLE_TASK_STATUSES = new Set(["pending", "running"]);
 
@@ -176,11 +154,11 @@ async function assertSafeExploreFile(path) {
   }
 }
 
-function indicatorsTimeoutMs() {
-  const configured = Number(process.env.QDM_INDICATORS_TIMEOUT_MS);
+function metricTimeoutMs() {
+  const configured = Number(process.env.QDM_METRIC_TIMEOUT_MS);
   return Number.isFinite(configured) && configured > 0
-    ? Math.min(Math.floor(configured), DEFAULT_INDICATORS_TIMEOUT_MS)
-    : DEFAULT_INDICATORS_TIMEOUT_MS;
+    ? Math.min(Math.floor(configured), DEFAULT_METRIC_TIMEOUT_MS)
+    : DEFAULT_METRIC_TIMEOUT_MS;
 }
 
 function taskQueryContract(task, fromCardId) {
@@ -199,82 +177,78 @@ function taskQueryContract(task, fromCardId) {
  * Validate a previous successful explore fetch without trusting its producer
  * label alone. Any missing, stale, symlinked, or mismatched field is a cache
  * miss; callers then follow the normal query path.
+ *
+ * Cache contract v3 no longer persists the full candidate query payload.
+ * Instead it stores a minimal queryPatch (only authorized changed fields) plus
+ * fingerprints of the source query and the executed candidate.  Validation
+ * reconstructs the candidate from source + patch and verifies all hashes.
  */
 export async function reusableExplore({
   sessionDir,
   outDir,
   dataPath,
   metaPath,
-  payloadPath,
   resultPath,
   resultMtimeMs,
   resultSha256,
   taskId,
   taskQueryContractSha256,
   fromCardId,
-  payload,
-  payloadSha256,
+  queryPatch,
+  queryPatchSha256,
+  sourceQuerySha256,
+  executedQuerySha256,
   queryDelta,
-  sourceQueryShape,
-  queryShape,
 }) {
   try {
-    const [outInfo, dataInfo, metaInfo, payloadInfo] = await Promise.all([
+    const columnMetaPath = columnMetaPathFor(dataPath);
+    const [outInfo, dataInfo, metaInfo, colMetaInfo] = await Promise.all([
       lstat(outDir),
       lstat(dataPath),
       lstat(metaPath),
-      lstat(payloadPath),
+      lstat(columnMetaPath).catch(() => null),
     ]);
     if (
       outInfo.isSymbolicLink() || !outInfo.isDirectory() ||
       dataInfo.isSymbolicLink() || !dataInfo.isFile() ||
       metaInfo.isSymbolicLink() || !metaInfo.isFile() ||
-      payloadInfo.isSymbolicLink() || !payloadInfo.isFile()
+      !colMetaInfo || colMetaInfo.isSymbolicLink() || !colMetaInfo.isFile()
     ) return null;
 
-    const [realSession, realOut, realData, realMeta, realPayload] = await Promise.all([
+    const [realSession, realOut, realData, realMeta] = await Promise.all([
       realpath(sessionDir),
       realpath(outDir),
       realpath(dataPath),
       realpath(metaPath),
-      realpath(payloadPath),
     ]);
     if (
       !isInside(realSession, realOut) ||
       dirname(realData) !== realOut ||
-      dirname(realMeta) !== realOut ||
-      dirname(realPayload) !== realOut
+      dirname(realMeta) !== realOut
     ) return null;
 
-    const [rowsText, metaText, payloadText, dataStat, metaStat, payloadStat] = await Promise.all([
+    const [rowsText, metaText, dataStat, metaStat] = await Promise.all([
       readFile(dataPath, "utf8"),
       readFile(metaPath, "utf8"),
-      readFile(payloadPath, "utf8"),
       stat(dataPath),
       stat(metaPath),
-      stat(payloadPath),
     ]);
     if (
       !Number.isFinite(resultMtimeMs) ||
       dataStat.mtimeMs < resultMtimeMs ||
-      metaStat.mtimeMs < resultMtimeMs ||
-      payloadStat.mtimeMs < resultMtimeMs
+      metaStat.mtimeMs < resultMtimeMs
     ) return null;
 
     const rows = JSON.parse(rowsText);
     const meta = JSON.parse(metaText);
-    const persistedPayload = JSON.parse(payloadText);
     if (!Array.isArray(rows) || rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) return null;
     if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
-    if (!persistedPayload || typeof persistedPayload !== "object" || Array.isArray(persistedPayload)) return null;
 
     const computedRowsSha256 = rowsSha256(rows);
     const expectedQueryDeltaSha256 = queryFingerprint(queryDelta);
-    const expectedSourceShapeSha256 = queryFingerprint(sourceQueryShape);
-    const expectedQueryShapeSha256 = queryFingerprint(queryShape);
     if (
       meta.producer !== "fetch-explore.mjs" ||
-      meta.producerVersion !== 2 ||
+      meta.producerVersion !== 3 ||
       meta.cacheContractVersion !== EXPLORE_CACHE_CONTRACT_VERSION ||
       meta.status !== "ok" ||
       meta.sessionDir !== sessionDir ||
@@ -283,17 +257,13 @@ export async function reusableExplore({
       meta.taskId !== taskId ||
       meta.taskQueryContractSha256 !== taskQueryContractSha256 ||
       meta.fromCardId !== fromCardId ||
-      meta.payloadPath !== payloadPath ||
       meta.dataPath !== dataPath ||
-      meta.payloadSha256 !== payloadSha256 ||
-      queryFingerprint(persistedPayload) !== payloadSha256 ||
-      !jsonEqual(persistedPayload, payload) ||
+      meta.queryPatchSha256 !== queryPatchSha256 ||
+      !jsonEqual(meta.queryPatch, queryPatch) ||
+      meta.sourceQuerySha256 !== sourceQuerySha256 ||
+      meta.executedQuerySha256 !== executedQuerySha256 ||
       !jsonEqual(meta.queryDelta, queryDelta) ||
       meta.queryDeltaSha256 !== expectedQueryDeltaSha256 ||
-      !jsonEqual(meta.sourceQueryShape, sourceQueryShape) ||
-      meta.sourceQueryShapeSha256 !== expectedSourceShapeSha256 ||
-      !jsonEqual(meta.queryShape, queryShape) ||
-      meta.queryShapeSha256 !== expectedQueryShapeSha256 ||
       meta.rowCount !== rows.length ||
       meta.rowsSha256 !== computedRowsSha256 ||
       meta.pagination?.mode !== "all-pages" ||
@@ -314,7 +284,7 @@ export async function reusableExplore({
 }
 
 function normalizeSetLike(value) {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) return value;
   const normalized = value
     .map((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return item;
@@ -331,9 +301,24 @@ function normalizeSetLike(value) {
   return [...new Map(normalized.map((entry) => [canonicalQueryJson(entry), entry])).values()];
 }
 
-/** Query shape used to reject presentation-only explore requests. */
+function flattenMaterialQuery(query) {
+  return {
+    metrics: query.metrics,
+    statisticPolicy: query.statisticPolicy,
+    "time.startDate": query.time.startDate,
+    "time.endDate": query.time.endDate,
+    ...(query.time.grain ? { "time.grain": query.time.grain } : {}),
+    dimensions: query.dimensions,
+    filters: query.filters,
+    ...(query.scopes ? { scopes: query.scopes } : {}),
+    ...(query.measureFilters ? { measureFilters: query.measureFilters } : {}),
+    comparisons: query.comparisons,
+  };
+}
+
+/** Query shape used to reject execution-only explore requests. */
 export function semanticQueryShape(rawPayload = {}) {
-  const normalized = normalizeEntryPayload(rawPayload);
+  const normalized = flattenMaterialQuery(normalizeMetricQuery(rawPayload));
   const shape = {};
   for (const key of Object.keys(normalized).sort()) {
     if (!MATERIAL_QUERY_KEYS.has(key) || normalized[key] === undefined) continue;
@@ -350,8 +335,12 @@ export function materialQueryDelta(originalPayload, candidatePayload) {
   const changedKeys = [...new Set([...Object.keys(original), ...Object.keys(candidate)])]
     .filter((key) => canonicalQueryJson(original[key]) !== canonicalQueryJson(candidate[key]))
     .sort();
+  const supportedTopLevel = new Set([
+    "metrics", "statisticPolicy", "time", "dimensions", "filters", "scopes",
+    "measureFilters", "comparisons", ...NON_SEMANTIC_QUERY_KEYS,
+  ]);
   const unclassifiedKeys = [...new Set([...Object.keys(originalPayload || {}), ...Object.keys(candidatePayload || {})])]
-    .filter((key) => !MATERIAL_QUERY_KEYS.has(key) && !NON_SEMANTIC_QUERY_KEYS.has(key))
+    .filter((key) => !supportedTopLevel.has(key))
     .sort();
   return {
     material: changedKeys.length > 0,
@@ -364,6 +353,49 @@ export function materialQueryDelta(originalPayload, candidatePayload) {
   };
 }
 
+/**
+ * Compute a minimal query patch: only the top-level query keys that differ
+ * between source and candidate, with the candidate's new values.  This patch
+ * plus the source query (recomputed from the card) is sufficient to reconstruct
+ * the full candidate without persisting a second complete query copy.
+ *
+ * Deleted optional fields (present in source but absent in candidate) are
+ * stored as `null` — an explicit deletion marker that survives JSON
+ * serialization.  Non-semantic fields (requestId, orderBy, pageNo, pageSize)
+ * are NOT skipped: if they differ, they are captured so the reconstructed
+ * candidate matches the executed query exactly.
+ */
+export function computeQueryPatch(sourceQuery, candidateQuery) {
+  const patch = {};
+  for (const key of new Set([...Object.keys(sourceQuery), ...Object.keys(candidateQuery)])) {
+    if (canonicalQueryJson(sourceQuery[key]) !== canonicalQueryJson(candidateQuery[key])) {
+      // Use null as an explicit deletion marker for keys absent from the candidate.
+      // This survives JSON serialization, unlike `undefined`.
+      patch[key] = candidateQuery[key] === undefined ? null : structuredClone(candidateQuery[key]);
+    }
+  }
+  return patch;
+}
+
+/**
+ * Reconstruct the candidate query by shallow-merging the source query with
+ * the persisted patch, then re-normalizing.  `null` values in the patch are
+ * treated as explicit deletions (the key is removed before normalization).
+ * The result is the exact candidate that was executed, derived from the
+ * single card query plus the minimal authorized delta.
+ */
+export function applyQueryPatch(sourceQuery, queryPatch) {
+  const merged = { ...sourceQuery };
+  for (const [key, value] of Object.entries(queryPatch)) {
+    if (value === null) {
+      delete merged[key];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return normalizeMetricQuery(merged);
+}
+
 /** Safe task id for filesystem paths. */
 export function sanitizeTaskId(raw) {
   const s = String(raw || "task").trim();
@@ -371,39 +403,18 @@ export function sanitizeTaskId(raw) {
   return cleaned || "task";
 }
 
-function runExecute(payload, { timeoutMs = DEFAULT_INDICATORS_TIMEOUT_MS } = {}) {
-  const args = buildExecuteArgs(payload, { meta: true });
-  const env = { ...process.env };
-  const started = Date.now();
-  const out = spawnSync(indicatorsCli, args, {
-    encoding: "utf8",
-    env,
-    timeout: Math.max(1, Math.min(indicatorsTimeoutMs(), Math.floor(timeoutMs))),
-    killSignal: "SIGKILL",
-    maxBuffer: 64 * 1024 * 1024,
-    cwd: root,
-  });
-  const result = {
-    status: out.status,
-    signal: out.signal,
-    errorCode: out.error?.code || null,
-    error: out.error ? String(out.error.message || out.error) : "",
-    stdout: out.stdout || "",
-    stderr: out.stderr || "",
-    durationMs: Date.now() - started,
-    argsSummary: {
-      mode: "all-pages",
-      meta: true,
-      singlePage: false,
-      pageSize: payload.pageSize,
-      currPage: payload.currPage,
-      indicatorFieldList: payload.indicatorFieldList,
-      aggDimUniqueCodeList: payload.aggDimUniqueCodeList,
-      startDate: payload.startDate,
-      endDate: payload.endDate,
-    },
+function executeSummary(payload) {
+  return {
+    mode: "all-pages",
+    singlePage: false,
+    pageSize: payload.pageSize,
+    pageNo: payload.pageNo,
+    metrics: payload.metrics,
+    dimensions: payload.dimensions,
+    startDate: payload.time.startDate,
+    endDate: payload.time.endDate,
+    comparisons: payload.comparisons,
   };
-  return { ...result, timedOut: isIndicatorsTimeout(result) };
 }
 
 /**
@@ -425,23 +436,19 @@ export async function fetchExploreTask(resultPath, opts) {
 
   const dataPath = join(outDir, `${taskId}.json`);
   const metaPath = join(outDir, `${taskId}.meta.json`);
-  const payloadPath = join(outDir, `${taskId}.payload.json`);
   await Promise.all([
     assertSafeExploreFile(dataPath),
     assertSafeExploreFile(metaPath),
-    assertSafeExploreFile(payloadPath),
   ]);
   const writeFailure = async ({
     errorCode,
     message,
     fromCardId = null,
     queryDelta = null,
-    sourceQueryShape = null,
-    queryShape = null,
   }) => {
     const meta = {
       producer: "fetch-explore.mjs",
-      producerVersion: 2,
+      producerVersion: 3,
       sessionDir,
       resultPath: absResult,
       writtenAt: new Date().toISOString(),
@@ -453,12 +460,11 @@ export async function fetchExploreTask(resultPath, opts) {
       errorCode,
       error: message,
       queryDelta,
-      payloadPath: null,
-      payloadSha256: null,
-      sourceQueryShape,
-      sourceQueryShapeSha256: sourceQueryShape ? queryFingerprint(sourceQueryShape) : null,
-      queryShape,
-      queryShapeSha256: queryShape ? queryFingerprint(queryShape) : null,
+      queryDeltaSha256: queryFingerprint(queryDelta),
+      queryPatch: null,
+      queryPatchSha256: null,
+      sourceQuerySha256: null,
+      executedQuerySha256: null,
       attempts: [],
       failedMessage: message,
       dataPath: null,
@@ -607,18 +613,10 @@ export async function fetchExploreTask(resultPath, opts) {
   fromCardId = contractCardId;
 
   const rawPayload = opts.payload || {};
-  if (!Array.isArray(rawPayload.indicatorFieldList) || !rawPayload.indicatorFieldList.length) {
-    return writeFailure({
-      errorCode: "INDICATORS_EMPTY",
-      message: "indicatorFieldList is empty",
-      fromCardId: fromCardId || null,
-    });
-  }
-
-  const payload = normalizeEntryPayload(rawPayload);
   let queryDelta = null;
-  let sourceQueryShape = null;
-  const queryShape = semanticQueryShape(payload);
+  let queryPatch = null;
+  let sourceQuery = null;
+  let payload = null;
   if (fromCardId) {
     const fromCard = (Array.isArray(confirmedResult.cards) ? confirmedResult.cards : []).find(
       (card) => String(card?.id) === String(fromCardId)
@@ -630,24 +628,35 @@ export async function fetchExploreTask(resultPath, opts) {
         fromCardId,
       });
     }
-    if (!isJsonObject(fromCard.requestBody)) {
+    try {
+      sourceQuery = metricQueryFromCard(fromCard);
+    } catch (error) {
       return writeFailure({
-        errorCode: "FROM_CARD_REQUEST_BODY_INVALID",
-        message: `fromCardId ${fromCardId} has no valid requestBody baseline`,
+        errorCode: "FROM_CARD_QUERY_INVALID",
+        message: `fromCardId ${fromCardId} has invalid canonical query: ${error.message || error}`,
         fromCardId,
-        queryShape,
       });
     }
-    sourceQueryShape = semanticQueryShape(fromCard.requestBody);
-    queryDelta = materialQueryDelta(fromCard.requestBody, payload);
+    try {
+      payload = normalizeMetricQuery(rawPayload, {
+        defaultComparisons: sourceQuery.comparisons,
+      });
+    } catch (error) {
+      return writeFailure({
+        errorCode: String(error.message || error).startsWith("LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED")
+          ? "LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED"
+          : "METRIC_QUERY_INVALID",
+        message: String(error.message || error),
+        fromCardId,
+      });
+    }
+    queryDelta = materialQueryDelta(sourceQuery, payload);
     if (queryDelta.changedUnclassifiedKeys.length > 0) {
       return writeFailure({
         errorCode: "UNCLASSIFIED_QUERY_CHANGE",
         message: `candidate query changes unclassified fields: ${queryDelta.changedUnclassifiedKeys.join(", ")}`,
         fromCardId,
         queryDelta,
-        sourceQueryShape,
-        queryShape,
       });
     }
     if (!queryDelta.material) {
@@ -658,8 +667,6 @@ export async function fetchExploreTask(resultPath, opts) {
         message,
         fromCardId,
         queryDelta,
-        sourceQueryShape,
-        queryShape,
       });
     }
     if (!evidenceGapMatchesChangedKeys(contractedEvidenceGap, queryDelta.changedKeys)) {
@@ -668,30 +675,45 @@ export async function fetchExploreTask(resultPath, opts) {
         message: `query delta does not address evidenceGap types=${evidenceGapTypes(contractedEvidenceGap).join(",")}`,
         fromCardId,
         queryDelta,
-        sourceQueryShape,
-        queryShape,
+      });
+    }
+    // Minimal patch: only the changed top-level fields with candidate values.
+    // The full candidate query is reconstructable from source + patch, so no
+    // second complete query copy is persisted.
+    queryPatch = computeQueryPatch(sourceQuery, payload);
+  } else {
+    try {
+      payload = normalizeMetricQuery(rawPayload);
+    } catch (error) {
+      return writeFailure({
+        errorCode: String(error.message || error).startsWith("LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED")
+          ? "LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED"
+          : "METRIC_QUERY_INVALID",
+        message: String(error.message || error),
+        fromCardId: null,
       });
     }
   }
-  const payloadSha256 = queryFingerprint(payload);
+  const queryPatchSha256 = queryPatch ? queryFingerprint(queryPatch) : null;
+  const sourceQuerySha256 = sourceQuery ? queryFingerprint(sourceQuery) : null;
+  const executedQuerySha256 = queryFingerprint(payload);
   const taskQueryContractSha256 = queryFingerprint(taskQueryContract(task, fromCardId));
   const cached = await reusableExplore({
     sessionDir,
     outDir,
     dataPath,
     metaPath,
-    payloadPath,
     resultPath: absResult,
     resultMtimeMs,
     resultSha256,
     taskId,
     taskQueryContractSha256,
     fromCardId,
-    payload,
-    payloadSha256,
+    queryPatch,
+    queryPatchSha256,
+    sourceQuerySha256,
+    executedQuerySha256,
     queryDelta,
-    sourceQueryShape,
-    queryShape,
   });
   if (cached) {
     return {
@@ -703,38 +725,20 @@ export async function fetchExploreTask(resultPath, opts) {
     };
   }
 
-  // Bound CAS + sleeps + all CLI attempts as one operation so the 720-second
+  // Bound sleeps + all CLI attempts as one operation so the 720-second
   // Researcher envelope retains time for recall/Spec work and structured return.
-  const fetchDeadlineMs = Date.now() + indicatorsFetchBudgetMs();
-  await writeFile(payloadPath, `${JSON.stringify(payload, null, 2)}\n`);
-  const authRemainingMs = fetchDeadlineMs - Date.now();
-  const budgetExpiredBeforeAuth = authRemainingMs <= 0;
-  const authToken = budgetExpiredBeforeAuth ? "" : ensureToken({ timeoutMs: authRemainingMs });
+  const fetchDeadlineMs = Date.now() + metricFetchBudgetMs();
 
   const attempts = [];
-  let last = authToken
-    ? null
-    : {
-        status: null,
-        signal: null,
-        error: budgetExpiredBeforeAuth
-          ? "INDICATORS_FETCH_BUDGET_EXHAUSTED: no time remains for authentication"
-          : "AUTH_TOKEN_FAILED: unable to obtain Indicators token",
-        stdout: "",
-        stderr: "",
-        parseError: "",
-        timedOut: budgetExpiredBeforeAuth,
-        authFailed: !budgetExpiredBeforeAuth,
-        argsSummary: null,
-      };
+  let last = null;
   let entry = null;
-  for (let attempt = 1; authToken && attempt <= MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const remainingMs = fetchDeadlineMs - Date.now();
     if (remainingMs <= 0) {
       last = {
         status: null,
         signal: null,
-        error: "INDICATORS_FETCH_BUDGET_EXHAUSTED: no time remains for another CLI attempt",
+        error: "METRIC_FETCH_BUDGET_EXHAUSTED: no time remains for another CLI attempt",
         stdout: "",
         stderr: "",
         parseError: "",
@@ -743,7 +747,27 @@ export async function fetchExploreTask(resultPath, opts) {
       };
       break;
     }
-    const result = runExecute(payload, { timeoutMs: remainingMs });
+    let result;
+    try {
+      result = runMetricQuery(payload, {
+        projectRoot: root,
+        sessionId: String(confirmedResult.session_id || ""),
+        timeoutMs: Math.min(metricTimeoutMs(), remainingMs),
+      });
+      result.argsSummary = executeSummary(payload);
+    } catch (error) {
+      last = {
+        status: null,
+        signal: null,
+        error: String(error.message || error),
+        stdout: "",
+        stderr: "",
+        parseError: "",
+        timedOut: false,
+        argsSummary: executeSummary(payload),
+      };
+      break;
+    }
     let parseError = "";
     if (result.status === 0 && !result.error) {
       try {
@@ -765,12 +789,12 @@ export async function fetchExploreTask(resultPath, opts) {
     last = { ...result, parseError };
     if (entry) break;
     if (result.timedOut) break;
-    if (!shouldRetryIndicatorsFailure(result, { parseError })) break;
+    if (!shouldRetryMetricFailure(result, { parseError })) break;
     if (attempt < MAX_ATTEMPTS) {
       if (fetchDeadlineMs - Date.now() <= RETRY_DELAY_MS) {
         last = {
           ...last,
-          error: `${last?.error || last?.stderr || "transient failure"}\nINDICATORS_FETCH_BUDGET_EXHAUSTED: retry delay would exceed the adapter deadline`,
+          error: `${last?.error || last?.stderr || "transient failure"}\nMETRIC_FETCH_BUDGET_EXHAUSTED: retry delay would exceed the adapter deadline`,
           timedOut: true,
         };
         break;
@@ -783,11 +807,12 @@ export async function fetchExploreTask(resultPath, opts) {
 
   if (ok) {
     await writeFile(dataPath, `${JSON.stringify(entry.rows, null, 2)}\n`);
+    await writeFile(columnMetaPathFor(dataPath), `${JSON.stringify(buildColumnLabels(entry.columnMeta), null, 2)}\n`);
   }
 
   const meta = {
     producer: "fetch-explore.mjs",
-    producerVersion: 2,
+    producerVersion: 3,
     cacheContractVersion: EXPLORE_CACHE_CONTRACT_VERSION,
     sessionDir,
     resultPath: absResult,
@@ -801,12 +826,10 @@ export async function fetchExploreTask(resultPath, opts) {
     queryDelta,
     queryDeltaSha256: queryFingerprint(queryDelta),
     taskQueryContractSha256,
-    payloadPath,
-    payloadSha256,
-    sourceQueryShape,
-    sourceQueryShapeSha256: sourceQueryShape ? queryFingerprint(sourceQueryShape) : null,
-    queryShape,
-    queryShapeSha256: queryFingerprint(queryShape),
+    queryPatch,
+    queryPatchSha256,
+    sourceQuerySha256,
+    executedQuerySha256,
     dataPath: ok ? dataPath : null,
     rowCount: entry?.rowCount ?? null,
     rowsSha256: entry?.rowsSha256 ?? null,
@@ -823,11 +846,9 @@ export async function fetchExploreTask(resultPath, opts) {
       : (last?.stderr || last?.error || last?.parseError || last?.stdout || "unknown error").slice(0, 4000),
     errorCode: ok
       ? null
-      : last?.authFailed
-        ? "AUTH_TOKEN_FAILED"
-        : last?.timedOut
-          ? "INDICATORS_TIMEOUT"
-          : "INDICATORS_FETCH_FAILED",
+      : last?.timedOut
+        ? "METRIC_TIMEOUT"
+        : "METRIC_FETCH_FAILED",
   };
   await writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
   return meta;

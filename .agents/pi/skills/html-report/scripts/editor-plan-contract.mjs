@@ -270,18 +270,23 @@ function checkedCache(path, kind, resultPath, resultSha256) {
   return document;
 }
 
-function compactQueryCoverage(requestBody) {
-  const request = isPlainObject(requestBody) ? requestBody : {};
+function compactQueryCoverage(cardQuery) {
+  const request = isPlainObject(cardQuery) && isPlainObject(cardQuery.request) ? cardQuery.request : {};
   return {
-    indicators: Array.isArray(request.indicatorFieldList) ? request.indicatorFieldList : [],
-    dimensions: Array.isArray(request.aggDimUniqueCodeList) ? request.aggDimUniqueCodeList : [],
-    columnDimensions: Array.isArray(request.columnAggDimUniqueCodeList) ? request.columnAggDimUniqueCodeList : [],
-    startDate: typeof request.startDate === "string" ? request.startDate : null,
-    endDate: typeof request.endDate === "string" ? request.endDate : null,
-    compareDate: Array.isArray(request.compareDate) ? request.compareDate : [],
-    filters: Array.isArray(request.filterDimUniqueCodeList) ? request.filterDimUniqueCodeList : [],
-    storeCollectType: request.storeCollectType ?? null,
-    indicatorsGroup: request.indicatorsGroup ?? null,
+    metrics: Array.isArray(request.metrics) ? request.metrics : [],
+    statisticPolicy: typeof request.statisticPolicy === "string" ? request.statisticPolicy : null,
+    dimensions: Array.isArray(request.dimensions) ? request.dimensions : [],
+    time: isPlainObject(request.time)
+      ? {
+          startDate: typeof request.time.startDate === "string" ? request.time.startDate : null,
+          endDate: typeof request.time.endDate === "string" ? request.time.endDate : null,
+          grain: typeof request.time.grain === "string" ? request.time.grain : null,
+        }
+      : null,
+    filters: isPlainObject(request.filters) ? request.filters : {},
+    scopes: isPlainObject(request.scopes) ? request.scopes : null,
+    measureFilters: Array.isArray(request.measureFilters) ? request.measureFilters : [],
+    comparisons: Array.isArray(cardQuery?.comparisons) ? cardQuery.comparisons : [],
   };
 }
 
@@ -307,14 +312,6 @@ export function loadEditorPlannerInput(resultPath) {
   }
   if (!isPlainObject(writerCache.cards)) throw new Error("Writer cache is missing cards{}");
 
-  const recommendationsPath = join(paths.sessionDir, "recommendations.json");
-  if (!inside(paths.sessionDir, recommendationsPath)) throw new Error("recommendations path escaped SESSION");
-  const recommendations = readJson(recommendationsPath, "recommendations.json");
-  const recommendationCards = new Map(
-    (Array.isArray(recommendations?.cards) ? recommendations.cards : [])
-      .filter((card) => isPlainObject(card) && typeof card.id === "string")
-      .map((card) => [card.id, card])
-  );
   const sources = new Map();
   for (const source of inventory.sources) {
     if (!isPlainObject(source) || typeof source.cardId !== "string") {
@@ -324,6 +321,8 @@ export function loadEditorPlannerInput(resultPath) {
     sources.set(source.cardId, source);
   }
 
+  // All card metadata (title, analysisFocus) and the user question come from
+  // result.json — the sole A/B hard interface.  No recommendations.json read.
   const cards = result.value.cards.map((card, index) => {
     if (!isPlainObject(card) || typeof card.id !== "string" || !card.id.trim()) {
       throw new Error(`result.cards[${index}] is missing a non-empty id`);
@@ -334,12 +333,11 @@ export function loadEditorPlannerInput(resultPath) {
     if (!isPlainObject(writer) || writer.fetchStatus !== "success" || writer.cardId !== card.id) {
       throw new Error(`validated Writer return cache is missing cardId=${card.id}`);
     }
-    const recommendation = recommendationCards.get(card.id) || {};
     return {
       id: card.id,
-      title: String(card.title || recommendation.title || card.id),
-      analysisFocus: typeof recommendation.analysisFocus === "string" ? recommendation.analysisFocus : null,
-      queryCoverage: compactQueryCoverage(card.requestBody),
+      title: String(card.title || card.id),
+      analysisFocus: typeof card.analysisFocus === "string" ? card.analysisFocus : null,
+      queryCoverage: compactQueryCoverage(card.query),
       writer: {
         summary: String(writer.analysis?.summary || ""),
         findings: Array.isArray(writer.analysis?.findings) ? writer.analysis.findings : [],
@@ -350,8 +348,8 @@ export function loadEditorPlannerInput(resultPath) {
   });
   if (sources.size !== cards.length) throw new Error("source inventory card set does not match result.json");
 
-  const userQuestion = String(recommendations?.userQuestion || "").trim();
-  if (!userQuestion) throw new Error("recommendations.json is missing userQuestion");
+  const userQuestion = String(result.value.userQuestion || "").trim();
+  if (!userQuestion) throw new Error("result.json is missing userQuestion");
   return {
     version: EDITOR_PLAN_INPUT_VERSION,
     producer: "editor-plan-contract.mjs",
@@ -1332,14 +1330,16 @@ function inline(value) {
 function scopeLine(card) {
   const coverage = card.queryCoverage || {};
   const parts = [];
-  if (coverage.startDate || coverage.endDate) parts.push(`日期 ${inline(coverage.startDate || "未指定")} 至 ${inline(coverage.endDate || "未指定")}`);
+  // Read time as an object (new compactQueryCoverage structure).
+  const time = isPlainObject(coverage.time) ? coverage.time : {};
+  if (time.startDate || time.endDate) parts.push(`日期 ${inline(time.startDate || "未指定")} 至 ${inline(time.endDate || "未指定")}`);
   if (Array.isArray(coverage.dimensions) && coverage.dimensions.length) parts.push(`维度 ${coverage.dimensions.map(inline).join("、")}`);
-  if (Array.isArray(coverage.filters) && coverage.filters.length) {
-    const filters = coverage.filters.map((filter) => {
-      if (!isPlainObject(filter)) return inline(filter);
-      const code = inline(filter.dimUniqueCode || filter.field || "筛选");
-      const values = Array.isArray(filter.dimFieldIdList) ? filter.dimFieldIdList.map(inline).join("、") : "已确认";
-      return `${code}=${values}`;
+  // Read filters as a map object { field: [values] } (new compactQueryCoverage structure).
+  if (isPlainObject(coverage.filters) && Object.keys(coverage.filters).length) {
+    const filters = Object.entries(coverage.filters).map(([field, values]) => {
+      const code = inline(field || "筛选");
+      const valueList = Array.isArray(values) ? values.map(inline).join("、") : "已确认";
+      return `${code}=${valueList}`;
     });
     parts.push(`筛选 ${filters.join("；")}`);
   }

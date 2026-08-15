@@ -9,121 +9,202 @@ import {
   normalizeEntryPayload,
   buildExecuteArgs,
   fetchAllEntries,
-  indicatorsFetchBudgetMs,
-  isIndicatorsTimeout,
-  isRetryableIndicatorsFailure,
-  shouldRetryIndicatorsFailure,
+  metricFetchBudgetMs,
+  isMetricTimeout,
+  isRetryableMetricFailure,
+  shouldRetryMetricFailure,
   parseEntryMetaResponse,
   reusableEntry,
   rowsSha256,
 } from "../scripts/fetch-entry.mjs";
 import {
   buildWriterReturnSchema,
-  buildWriterSubmitSchema,
+  captionPathFor,
+  extractWriterReceipt,
   parseWriterReturnText,
   validateWriterReturn,
   writerReturnPaths,
+  WRITER_ACK_TOOL,
 } from "../scripts/writer-return.mjs";
 import { writerCoordinationDecision } from "../../../extensions/report-writer-fetch/lifecycle.mjs";
+import { metricQueryFromCard } from "../scripts/metric-query-contract.mjs";
 
 const root = resolve(new URL("../../../../../", import.meta.url).pathname);
 
-test("normalizeEntryPayload keeps all-pages friendly pageSize and currPage=1", () => {
-  const payload = normalizeEntryPayload({
-    indicatorFieldList: ["saleAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-14",
-    currPage: 3,
+function metricQuery(overrides = {}) {
+  return {
+    metrics: ["saleAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-14" },
+    dimensions: ["incDate"],
+    filters: {},
+    pageNo: 1,
     pageSize: 500,
-    chartType: "table",
-  });
-  assert.equal(payload.currPage, 1);
+    ...overrides,
+  };
+}
+
+test("normalizeEntryPayload keeps all-pages friendly pageSize and pageNo=1", () => {
+  const payload = normalizeEntryPayload(metricQuery({ pageNo: 3 }));
+  assert.equal(payload.pageNo, 1);
   assert.equal(payload.pageSize, 500);
-  assert.deepEqual(payload.indicatorFieldList, ["saleAmt"]);
+  assert.deepEqual(payload.metrics, ["saleAmt"]);
 });
 
-test("normalizeEntryPayload caps pageSize at 5000", () => {
-  const payload = normalizeEntryPayload({ pageSize: 99999, indicatorFieldList: ["a"] });
-  assert.equal(payload.pageSize, 5000);
+test("normalizeEntryPayload caps pageSize at the Metric CLI limit", () => {
+  const payload = normalizeEntryPayload(metricQuery({ pageSize: 99999 }));
+  assert.equal(payload.pageSize, 2000);
 });
 
-test("B2 execute args enable meta but never single-page", () => {
-  const args = buildExecuteArgs(
-    normalizeEntryPayload({
-      indicatorFieldList: ["saleAmt"],
-      aggDimUniqueCodeList: ["incDate"],
-      startDate: "2026-07-01",
-      endDate: "2026-07-02",
-      pageSize: 500,
-    }),
-    { meta: true }
-  );
+test("B2 execute args request envelope output with dim-labels only", () => {
+  const args = buildExecuteArgs(normalizeEntryPayload(metricQuery()));
   assert.equal(args[0], "analysis");
   assert.equal(args[1], "execute");
   assert.ok(args.includes("--payload-json"));
   assert.ok(!args.includes("--single-page"), "report fetch must pull all pages");
-  assert.ok(args.includes("--meta"), "B2 must request the minimal CLI metadata contract");
+  assert.ok(!args.includes("--meta"), "qdm-metric-cli has no legacy --meta mode");
+  assert.deepEqual(args.slice(args.indexOf("--output"), args.indexOf("--output") + 2), ["--output", "envelope"]);
+  assert.deepEqual(args.slice(args.indexOf("--dim-labels"), args.indexOf("--dim-labels") + 2), ["--dim-labels", "only"]);
   const json = JSON.parse(args[args.indexOf("--payload-json") + 1]);
   assert.equal(json.pageSize, 500);
-  assert.equal(json.currPage, 1);
+  assert.equal(json.pageNo, 1);
 });
 
-test("execute args omit meta unless a report adapter opts in", () => {
-  const args = buildExecuteArgs({ chartType: "table" });
-  assert.ok(!args.includes("--meta"));
+test("legacy Indicators payload is rejected explicitly", () => {
+  assert.throws(
+    () => normalizeEntryPayload({ indicatorFieldList: ["saleAmt"] }),
+    /LEGACY_INDICATORS_PAYLOAD_UNSUPPORTED/
+  );
+});
+
+test("Metric query rejects unsupported policies and comparison without dimensions", () => {
+  assert.throws(
+    () => normalizeEntryPayload(metricQuery({ statisticPolicy: "VALID_DATA" })),
+    /only supports SUMMARY and SALES_STORE_DAY_AVG/
+  );
+  assert.throws(
+    () => normalizeEntryPayload(metricQuery({ dimensions: [], comparisons: ["YOY"] })),
+    /requires at least one dimension/
+  );
+});
+
+test("query.comparisons adds only CLI flags and stays out of the payload", () => {
+  const withComparisons = metricQueryFromCard({
+    id: "card-1",
+    query: {
+      request: metricQuery(),
+      comparisons: ["YOY", "MOM"],
+    },
+  });
+  assert.deepEqual(withComparisons.comparisons, ["MOM", "YOY"]);
+  const args = buildExecuteArgs(withComparisons);
+  assert.equal(args.filter((arg) => arg === "--yoy").length, 1);
+  assert.equal(args.filter((arg) => arg === "--mom").length, 1);
+  const payload = JSON.parse(args[args.indexOf("--payload-json") + 1]);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, "comparisons"), false);
+});
+
+test("query without comparisons defaults to empty", () => {
+  const noComparisons = metricQueryFromCard({
+    id: "card-2",
+    query: {
+      request: metricQuery(),
+      comparisons: [],
+    },
+  });
+  assert.deepEqual(noComparisons.comparisons, []);
+  const args = buildExecuteArgs(noComparisons);
+  assert.equal(args.filter((arg) => arg === "--yoy").length, 0);
+  assert.equal(args.filter((arg) => arg === "--mom").length, 0);
+});
+
+test("legacy requestBody and queryProof are rejected", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", requestBody: metricQuery() }),
+    /LEGACY_QUERY_FIELD_UNSUPPORTED.*requestBody/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", queryProof: { comparisons: ["YOY"] } }),
+    /LEGACY_QUERY_FIELD_UNSUPPORTED.*queryProof/
+  );
+});
+
+test("non-array query.comparisons is rejected (fail-closed)", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: "YOY" } }),
+    /card\.query\.comparisons must be an array/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: 42 } }),
+    /card\.query\.comparisons must be an array/
+  );
+});
+
+test("unknown query wrapper fields are rejected (fail-closed)", () => {
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), comparisons: [], foo: "bar" } }),
+    /unsupported fields.*foo/
+  );
+  assert.throws(
+    () => metricQueryFromCard({ id: "c", query: { request: metricQuery(), typo: 123 } }),
+    /unsupported fields.*typo/
+  );
 });
 
 test("Writer timeout classifier stops backend timeouts but preserves fast retries", () => {
-  assert.equal(isIndicatorsTimeout({ errorCode: "ETIMEDOUT" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stdout: "指标查询超时" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "HTTP 504" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "status code: 408" }), true);
-  assert.equal(isIndicatorsTimeout({ status: 1, stderr: "connection reset" }), false);
+  assert.equal(isMetricTimeout({ errorCode: "ETIMEDOUT" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "upstream request timeout exceeded" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stdout: "指标查询超时" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "HTTP 504" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "status code: 408" }), true);
+  assert.equal(isMetricTimeout({ status: 1, stderr: "connection reset" }), false);
   assert.equal(
-    isIndicatorsTimeout({ status: 0, error: "", stdout: '{"rows":[{"label":"timeout"}]}' }),
+    isMetricTimeout({ status: 0, error: "", stdout: '[{"label":"timeout"}]' }),
     false
   );
 });
 
-test("Indicators retries use a transient allowlist", () => {
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, errorCode: "ECONNRESET" }), true);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 503 service unavailable" }), true);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "invalid record id 503" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 425 too early" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 418 service unavailable" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "temporarily invalid parameter" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, stderr: "HTTP 401 unauthorized" }), false);
+test("Metric retries use a transient allowlist", () => {
+  assert.equal(isRetryableMetricFailure({ status: 1, errorCode: "ECONNRESET" }), true);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 503 service unavailable" }), true);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "invalid record id 503" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 425 too early" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 418 service unavailable" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "temporarily invalid parameter" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 1, stderr: "HTTP 401 unauthorized" }), false);
   assert.equal(
-    isRetryableIndicatorsFailure({ status: 1, errorCode: "ECONNRESET", stderr: "HTTP 401 unauthorized" }),
+    isRetryableMetricFailure({ status: 1, errorCode: "ECONNRESET", stderr: "HTTP 401 unauthorized" }),
     false
   );
-  assert.equal(isRetryableIndicatorsFailure({ status: 1, errorCode: "ENOENT" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: null, signal: "SIGKILL" }), false);
-  assert.equal(isRetryableIndicatorsFailure({ status: 0, stdout: "not json" }, { parseError: "invalid JSON" }), false);
-  assert.equal(shouldRetryIndicatorsFailure({ status: 1, stderr: "HTTP 503", durationMs: 100 }), true);
-  assert.equal(shouldRetryIndicatorsFailure({ status: 1, stderr: "HTTP 503", durationMs: 15_001 }), false);
-  assert.equal(indicatorsFetchBudgetMs({}), 540_000);
-  assert.equal(indicatorsFetchBudgetMs({ QDM_INDICATORS_FETCH_BUDGET_MS: "900000" }), 540_000);
-  assert.equal(indicatorsFetchBudgetMs({ QDM_INDICATORS_FETCH_BUDGET_MS: "1000" }), 1_000);
+  assert.equal(isRetryableMetricFailure({ status: 1, errorCode: "ENOENT" }), false);
+  assert.equal(isRetryableMetricFailure({ status: null, signal: "SIGKILL" }), false);
+  assert.equal(isRetryableMetricFailure({ status: 0, stdout: "not json" }, { parseError: "invalid JSON" }), false);
+  assert.equal(shouldRetryMetricFailure({ status: 1, stderr: "HTTP 503", durationMs: 100 }), true);
+  assert.equal(shouldRetryMetricFailure({ status: 1, stderr: "HTTP 503", durationMs: 15_001 }), false);
+  assert.equal(metricFetchBudgetMs({}), 540_000);
+  assert.equal(metricFetchBudgetMs({ QDM_METRIC_FETCH_BUDGET_MS: "900000" }), 540_000);
+  assert.equal(metricFetchBudgetMs({ QDM_METRIC_FETCH_BUDGET_MS: "1000" }), 1_000);
 });
 
-test("parseEntryMetaResponse accepts only the three-field CLI contract", () => {
-  const parsed = parseEntryMetaResponse(JSON.stringify({
-    rows: [{ id: 1 }, { id: 2 }],
-    rowCount: 2,
-    rowsSha256: "a".repeat(64),
-  }));
+test("parseEntryMetaResponse accepts envelope stdout and derives meta", () => {
+  const rows = [{ id: 1 }, { id: 2 }];
+  const meta = { metrics: [{ code: "saleAmt", name: "销售额" }], dimensionMetas: [{ code: "storeId", name: "门店" }] };
+  const parsed = parseEntryMetaResponse(JSON.stringify({ code: "OK", message: "OK", meta, data: rows }));
   assert.equal(parsed.rowCount, 2);
-  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows, rows);
+  assert.equal(parsed.rowsSha256, rowsSha256(rows));
+  assert.deepEqual(parsed.columnMeta, meta);
   assert.throws(
-    () => parseEntryMetaResponse(JSON.stringify({ rows: [], rowCount: 0, rowsSha256: "a".repeat(64), extra: true })),
-    /exactly rows, rowCount, rowsSha256/
+    () => parseEntryMetaResponse(JSON.stringify({ rows: [] })),
+    /rows array/
   );
   assert.throws(
-    () => parseEntryMetaResponse(JSON.stringify({ rows: [{ id: 1 }], rowCount: 2, rowsSha256: "a".repeat(64) })),
-    /rowCount/
+    () => parseEntryMetaResponse(JSON.stringify({ code: "OK", data: [1] })),
+    /data\[0\]/
+  );
+  assert.throws(
+    () => parseEntryMetaResponse(JSON.stringify({ code: "ERROR", message: "bad" })),
+    /bad/
   );
 });
 
@@ -134,7 +215,7 @@ test("fetchAllEntries rejects result.json without confirmed status before CLI", 
   await mkdir(session, { recursive: true });
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
   await assert.rejects(
     () => fetchAllEntries(resultPath, { cardId: "c1" }),
@@ -142,7 +223,7 @@ test("fetchAllEntries rejects result.json without confirmed status before CLI", 
   );
 });
 
-test("fetch-entry attempts CAS once and skips Indicators when auth fails", async (t) => {
+test("fetch-entry authz on fails closed before invoking Metric CLI when no bound blob exists", async (t) => {
   const rootDir = await mkdtemp(join(tmpdir(), "html-report-fetch-entry-auth-"));
   const session = join(rootDir, ".harness", "state", "html-report", "auth");
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
@@ -150,50 +231,40 @@ test("fetch-entry attempts CAS once and skips Indicators when auth fails", async
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    session_id: "auth-session",
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
 
-  const casCountPath = join(rootDir, "cas-count.txt");
-  const indicatorsCountPath = join(rootDir, "indicators-count.txt");
-  const fakeCas = join(rootDir, "fake-cas.sh");
-  const fakeIndicators = join(rootDir, "fake-indicators.sh");
-  await writeFile(fakeCas, [
+  const countPath = join(rootDir, "metric-count.txt");
+  const fakeMetric = join(rootDir, "fake-metric.sh");
+  await writeFile(fakeMetric, [
     "#!/bin/sh",
-    "count=0",
-    "if [ -f \"$FAKE_CAS_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_CAS_COUNT_PATH\"); fi",
-    "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_CAS_COUNT_PATH\"",
-    "exit 1",
+    "printf 'called' > \"$FAKE_METRIC_COUNT_PATH\"",
+    "printf '%s\\n' '{\"code\":\"OK\",\"meta\":{},\"data\":[]}'",
     "",
   ].join("\n"));
-  await writeFile(fakeIndicators, [
-    "#!/bin/sh",
-    "printf 'called' > \"$FAKE_INDICATORS_COUNT_PATH\"",
-    "exit 1",
-    "",
-  ].join("\n"));
-  await Promise.all([chmod(fakeCas, 0o755), chmod(fakeIndicators, 0o755)]);
+  await chmod(fakeMetric, 0o755);
 
   const fetchEntryScript = fileURLToPath(new URL("../scripts/fetch-entry.mjs", import.meta.url));
   const env = {
     ...process.env,
-    QDM_CAS_CLI: fakeCas,
-    QDM_INDICATORS_CLI: fakeIndicators,
-    FAKE_CAS_COUNT_PATH: casCountPath,
-    FAKE_INDICATORS_COUNT_PATH: indicatorsCountPath,
+    QDM_METRIC_CLI: fakeMetric,
+    HARNESS_AUTHZ_MODE: "on",
+    FAKE_METRIC_COUNT_PATH: countPath,
   };
-  delete env.QDM_INDICATORS_TOKEN;
-  const run = spawnSync(process.execPath, [
-    fetchEntryScript,
-    "--result", resultPath,
-    "--card-id", "c1",
-  ], { encoding: "utf8", env });
+  delete env.HARNESS_AUTH_BLOB;
+  delete env.HARNESS_AUTH_BLOB_FILE;
+  delete env.HARNESS_AUTH_USER_ID;
+  delete env.LUMI_REQUESTER_CONTEXT_DIR;
+  const run = spawnSync(process.execPath, [fetchEntryScript, "--result", resultPath, "--card-id", "c1"], {
+    encoding: "utf8",
+    env,
+  });
 
   assert.equal(run.status, 1, run.stderr || run.stdout);
-  assert.equal(await readFile(casCountPath, "utf8"), "1");
-  await assert.rejects(() => stat(indicatorsCountPath), /ENOENT/);
+  await assert.rejects(() => stat(countPath), /ENOENT/);
   const output = JSON.parse(run.stdout);
-  assert.equal(output.cards[0].error, "AUTH_TOKEN_FAILED: unable to obtain Indicators token");
+  assert.match(output.cards[0].error, /METRIC_AUTH_CONTEXT_REQUIRED/);
   assert.deepEqual(output.cards[0].attempts, []);
 });
 
@@ -201,14 +272,14 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
   const rootDir = await mkdtemp(join(tmpdir(), "html-report-fetch-entry-terminal-"));
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
 
-  const fakeIndicators = join(rootDir, "fake-indicators.sh");
-  await writeFile(fakeIndicators, [
+  const fakeMetric = join(rootDir, "fake-metric.sh");
+  await writeFile(fakeMetric, [
     "#!/bin/sh",
     "count=0",
-    "if [ -f \"$FAKE_INDICATORS_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_INDICATORS_COUNT_PATH\"); fi",
+    "if [ -f \"$FAKE_METRIC_COUNT_PATH\" ]; then count=$(sed -n '1p' \"$FAKE_METRIC_COUNT_PATH\"); fi",
     "count=$((count + 1))",
-    "printf '%s' \"$count\" > \"$FAKE_INDICATORS_COUNT_PATH\"",
-    "if [ \"$FAKE_INDICATORS_MODE\" = \"unauthorized\" ]; then",
+    "printf '%s' \"$count\" > \"$FAKE_METRIC_COUNT_PATH\"",
+    "if [ \"$FAKE_METRIC_MODE\" = \"unauthorized\" ]; then",
     "  printf '%s\\n' 'HTTP 401 unauthorized' >&2",
     "  exit 1",
     "fi",
@@ -216,7 +287,7 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
     "exit 0",
     "",
   ].join("\n"));
-  await chmod(fakeIndicators, 0o755);
+  await chmod(fakeMetric, 0o755);
 
   const fetchEntryScript = fileURLToPath(new URL("../scripts/fetch-entry.mjs", import.meta.url));
   for (const mode of ["unauthorized", "invalid-json"]) {
@@ -225,7 +296,8 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
     const resultPath = join(session, "result.json");
     await writeFile(resultPath, JSON.stringify({
       status: "confirmed",
-      cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+      session_id: mode,
+      cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
     }));
     const countPath = join(rootDir, `${mode}-count.txt`);
     const run = spawnSync(process.execPath, [
@@ -236,10 +308,10 @@ test("fetch-entry does not retry permanent CLI or response-contract failures", a
       encoding: "utf8",
       env: {
         ...process.env,
-        QDM_INDICATORS_TOKEN: "test-token",
-        QDM_INDICATORS_CLI: fakeIndicators,
-        FAKE_INDICATORS_COUNT_PATH: countPath,
-        FAKE_INDICATORS_MODE: mode,
+        QDM_METRIC_CLI: fakeMetric,
+        HARNESS_AUTHZ_MODE: "off",
+        FAKE_METRIC_COUNT_PATH: countPath,
+        FAKE_METRIC_MODE: mode,
       },
     });
 
@@ -264,15 +336,19 @@ test("Writer retry reuses an intact entry/meta pair without calling CLI or rewri
   const rows = [{ 日期: "2026-07-01", 销售额: 100 }, { 日期: "2026-07-02", 销售额: 120 }];
   const entryText = `${JSON.stringify(rows, null, 2)}\n`;
   const metaText = `${JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) }, null, 2)}\n`;
+  const columnMetaText = `${JSON.stringify({ saleAmt: "销售额" }, null, 2)}\n`;
   const entryPath = join(cardDir, "entry.json");
   const metaPath = join(cardDir, "entry.meta.json");
+  const columnMetaPath = join(cardDir, "entry.column-meta.json");
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", requestBody: { indicatorFieldList: ["saleAmt"] } }],
+    session_id: "reuse",
+    cards: [{ id: "c1", query: { request: metricQuery(), comparisons: [] } }],
   }));
   await writeFile(entryPath, entryText);
   await writeFile(metaPath, metaText);
+  await writeFile(columnMetaPath, columnMetaText);
 
   const output = await fetchAllEntries(resultPath, { cardId: "c1" });
   assert.equal(output.cards.length, 1);
@@ -372,10 +448,12 @@ test("Writer retry can reuse a valid zero-row CLI result", async (t) => {
     rowCount: 0,
     rowsSha256: rowsSha256([]),
   }));
+  await writeFile(join(rootDir, "entry.column-meta.json"), JSON.stringify({}));
   assert.deepEqual(await reusableEntry(rootDir, { notBeforeMs: 0 }), {
     rows: [],
     rowCount: 0,
     rowsSha256: rowsSha256([]),
+    columnLabels: {},
   });
 });
 
@@ -412,8 +490,7 @@ test("B2.5 uses one typed Planner and extension-owned deterministic materializat
   assert.match(b25, /researchTasks\[\][\s\S]*完整[\s\S]*task[\s\S]*evidencePath/);
   assert.match(b25, /禁止手工 `write\/edit`[\s\S]*禁止手工[\s\S]*stage-gate finish/);
   assert.match(b25, /失败后扩展自动 fail[\s\S]*不得重派/);
-  assert.match(skill, /always replaces them with the exact per-card schema/i);
-  assert.match(skill, /valid persisted\s+entry\/meta pair is reused automatically/i);
+  assert.match(skill, /valid persisted entry\/meta pair is reused automatically/i);
   assert.match(pipeline, /不得重新列举或读取 Writer 的 entry\/meta 目录/);
   assert.match(pipeline, /--source-fields/);
   assert.match(pipeline, /同源需求必须合并/);
@@ -434,47 +511,32 @@ test("B2 dispatch keeps status but does not duplicate confirmed card content", a
   assert.doesNotMatch(b2, /listed order fixes only the\s+message shape[\s\S]*do not wait/i);
   assert.doesNotMatch(b2, /本卡配置:\s*<JSON>/);
   assert.doesNotMatch(b2, /用户问题:\s*<…>/);
-  assert.match(b2, /at most one[\s\S]*entry\.json#\/0[\s\S]*exactly one short/i);
+  assert.match(b2, /ack_cli_data/i);
 });
 
-test("report-writer persists only the CLI contract and returns analysis", async () => {
+test("report-writer persists only the CLI contract and submits the fetch receipt", async () => {
   const worker = await readFile(
     join(root, ".agents/pi/skills/html-report/agents/report-writer.md"),
     "utf8"
   );
-  assert.match(worker, /fetch_report_entry/);
+  assert.match(worker, /ack_cli_data/);
+  assert.match(worker, /submit_card_caption/);
   assert.doesNotMatch(worker, /fetch-entry\.mjs/);
   assert.match(worker, /entry\.json/);
   assert.match(worker, /entry\.meta\.json/);
   assert.doesNotMatch(worker, /entry\.profile\.json/);
   assert.doesNotMatch(worker, /entry\.facts\.json/);
-  assert.match(worker, /submit_writer_result/);
-  assert.match(worker, /Never call `structured_output` yourself/);
-  assert.match(worker, /"dataPath"/);
-  assert.match(worker, /"metaPath"/);
-  assert.match(worker, /JSON Pointer/);
-  assert.match(worker, /never calculate|Do not calculate/i);
-  assert.match(worker, /Python, Node\.js, `jq`, shell expressions, SQL/i);
-  assert.match(worker, /period-wide\s+or cross-row claim/i);
-  assert.match(worker, /qualitative and must not introduce a numeric target/i);
-  assert.match(worker, /recommendations.*next actions only/i);
-  assert.match(worker, /Do not repeat a number, date, or\s+sample row/i);
-  assert.match(worker, /silently check these three field\s+rules/i);
-  assert.doesNotMatch(worker, /outliers or comparisons/i);
+  assert.match(worker, /Do not call `submit_writer_result` or `structured_output`/);
   assert.match(worker, /report-writer/);
   assert.match(worker, /禁止.*worker|Unknown agent: report-writer/i);
 });
 
-test("runtime report-writer prompt carries the exact return contract", async () => {
+test("runtime report-writer prompt carries the fetch-only contract", async () => {
   const runtime = await readFile(join(root, ".agents/pi/agents/report-writer.md"), "utf8");
-  assert.match(runtime, /"dataPath"/);
-  assert.match(runtime, /"metaPath"/);
-  assert.match(runtime, /"findings"/);
-  assert.match(runtime, /JSON Pointer/);
-  assert.match(runtime, /rowCount \+ rowsSha256/);
+  assert.match(runtime, /entry\.json` \+ `entry\.meta\.json/);
   assert.doesNotMatch(runtime, /entry\.profile\.json/);
   assert.doesNotMatch(runtime, /entry\.facts\.json/);
-  assert.match(runtime, /^tools:\s*read, fetch_report_entry, submit_writer_result$/m);
+  assert.match(runtime, /^tools:\s*ack_cli_data, submit_card_caption$/m);
   assert.match(runtime, /^extensions:\s*$/m);
   assert.match(runtime, /^subagentOnlyExtensions:\s*\.agents\/pi\/extensions\/report-writer-fetch\/index\.mjs$/m);
   assert.match(runtime, /^inheritProjectContext:\s*false$/m);
@@ -482,76 +544,85 @@ test("runtime report-writer prompt carries the exact return contract", async () 
   assert.match(runtime, /^completionGuard:\s*false$/m);
   assert.match(runtime, /^acceptanceRole:\s*read-only$/m);
   assert.match(runtime, /^acceptance:\s*\{"level":"none",/m);
-  assert.match(runtime, /period-wide or cross-row claim/i);
-  assert.match(runtime, /Python, Node\.js, `jq`, shell expressions, SQL/i);
-  assert.match(runtime, /recommendations.*next actions only/i);
-  assert.match(runtime, /Do not repeat a number, date, or\s+sample row/i);
-  assert.match(runtime, /silently check these three field\s+rules/i);
-  assert.match(runtime, /do not spend\s+a turn searching skills,\s+wikis, Git state/i);
-  assert.match(runtime, /fetch_report_entry.*exactly once/i);
-  assert.match(runtime, /Finish by calling.*submit_writer_result/i);
-  assert.match(runtime, /Do not wrap it in `value`[\s\S]*do not call[\s\S]*`structured_output`/i);
-  assert.match(runtime, /取数失败，未形成业务判断/);
-  assert.match(runtime, /literal token `null`[\s\S]*never the quoted string `"null"`/i);
+  assert.match(runtime, /ack_cli_data.*exactly once/i);
+  assert.match(runtime, /submit_card_caption.*exactly once/i);
+  assert.match(runtime, /Do \*\*not\*\* call `read`[\s\S]*`submit_writer_result`[\s\S]*`structured_output`/i);
 });
 
-test("Writer return contract rejects prose, wrong paths, and ungrounded findings", () => {
+test("Writer return contract accepts the fetch receipt and rejects extras", () => {
   const expected = writerReturnPaths({
     sessionDir: "/tmp/html-report-session",
-    cardId: "card/a",
+    cardId: "card-a",
   });
   const valid = {
-    cardId: "card/a",
+    cardId: "card-a",
     fetchStatus: "success",
     dataPath: expected.dataPath,
     metaPath: expected.metaPath,
-    analysis: {
-      summary: "明细中包含门店日度记录。",
-      findings: [{ statement: "第一行包含一个日期字段。", evidence: ["entry.json#/0"] }],
-      recommendations: ["结合业务场景核对该日记录。"],
-    },
+    rowCount: 2,
+    rowsSha256: "a".repeat(64),
   };
   assert.deepEqual(validateWriterReturn(valid, expected), { ok: true, errors: [] });
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: {
-        ...valid.analysis,
-        findings: [{ statement: "跨行事实", evidence: ["entry.json#/0", "entry.json#/1"] }],
-      },
-    }, expected).ok,
-    false
-  );
   assert.equal(validateWriterReturn({ ...valid, dataPath: "/tmp/other/entry.json" }, expected).ok, false);
+  assert.equal(validateWriterReturn({ ...valid, error: null }, expected).ok, false);
   assert.equal(
     validateWriterReturn({
-      ...valid,
-      analysis: { ...valid.analysis, findings: [{ statement: "x", evidence: ["entry.json#/bad~2"] }] },
+      cardId: "card-a",
+      fetchStatus: "failed",
+      dataPath: null,
+      metaPath: null,
+      error: "cli failed",
     }, expected).ok,
-    false
-  );
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: {
-        ...valid.analysis,
-        findings: [
-          { statement: "第一行。", evidence: ["entry.json#/0"] },
-          { statement: "第二行。", evidence: ["entry.json#/1"] },
-        ],
-      },
-    }, expected).ok,
-    false
-  );
-  assert.equal(
-    validateWriterReturn({
-      ...valid,
-      analysis: { ...valid.analysis, recommendations: [] },
-    }, expected).ok,
-    false
+    true
   );
   assert.throws(() => parseWriterReturnText("说明：" + JSON.stringify(valid)), /without prose/);
   assert.deepEqual(parseWriterReturnText(JSON.stringify(valid)), valid);
+  assert.deepEqual(extractWriterReceipt({
+    exitCode: 1,
+    error: "Subagent produced no output (possible model cold-start or empty response).",
+    messages: [{
+      role: "toolResult",
+      toolName: WRITER_ACK_TOOL,
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(valid) }],
+      details: valid,
+    }],
+  }), valid);
+});
+
+test("extractWriterReceipt reads ack_cli_data from the child transcript when messages are omitted", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "writer-ack-transcript-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const expected = writerReturnPaths({
+    sessionDir: "/tmp/html-report-session",
+    cardId: "card-a",
+  });
+  const valid = {
+    cardId: "card-a",
+    fetchStatus: "success",
+    dataPath: expected.dataPath,
+    metaPath: expected.metaPath,
+    rowCount: 2,
+    rowsSha256: "a".repeat(64),
+  };
+  const transcriptPath = join(dir, "writer.transcript.jsonl");
+  await writeFile(transcriptPath, `${JSON.stringify({
+    recordType: "message",
+    role: "toolResult",
+    text: JSON.stringify(valid, null, 2),
+    message: {
+      role: "toolResult",
+      toolName: WRITER_ACK_TOOL,
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(valid, null, 2) }],
+      details: valid,
+    },
+  })}\n`);
+  assert.deepEqual(extractWriterReceipt({
+    exitCode: 1,
+    error: "Subagent produced no output (possible model cold-start or empty response).",
+    transcriptPath,
+  }), valid);
 });
 
 test("Writer return output schema fixes the assigned card and absolute paths", () => {
@@ -561,17 +632,9 @@ test("Writer return output schema fixes the assigned card and absolute paths", (
   assert.equal(schema.oneOf[0].properties.cardId.const, "card-1");
   assert.equal(schema.oneOf[0].properties.dataPath.const, expected.dataPath);
   assert.equal(schema.oneOf[0].properties.metaPath.const, expected.metaPath);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.findings.maxItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.findings.items.properties.evidence.maxItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.recommendations.minItems, 1);
-  assert.equal(schema.oneOf[0].properties.analysis.properties.recommendations.maxItems, 1);
+  assert.equal(schema.oneOf[0].required.includes("rowCount"), true);
   assert.equal(schema.oneOf[1].properties.dataPath.const, null);
-  const submitSchema = buildWriterSubmitSchema();
-  assert.equal(submitSchema.oneOf[0].properties.cardId.type, "string");
-  assert.equal(submitSchema.oneOf[0].properties.fetchStatus.const, "success");
-  assert.equal(submitSchema.oneOf[0].properties.analysis.type, "object");
-  assert.equal(submitSchema.oneOf[1].properties.fetchStatus.const, "failed");
-  assert.deepEqual(submitSchema.oneOf[1].properties.dataPath, { type: "null" });
+  assert.equal(schema.oneOf[1].required.includes("error"), true);
 });
 
 test("Writer paths reject dot-segment card ids", () => {
@@ -579,6 +642,65 @@ test("Writer paths reject dot-segment card ids", () => {
     () => writerReturnPaths({ sessionDir: "/tmp/html-report-safe", cardId: ".." }),
     /dot path segment/
   );
+});
+
+test("captionPathFor derives caption.md from entry.json path", () => {
+  assert.equal(
+    captionPathFor("/session/data/cards/card-1/entry.json"),
+    "/session/data/cards/card-1/caption.md"
+  );
+  assert.equal(captionPathFor("entry.json"), "caption.md");
+  assert.equal(captionPathFor("path/to/entry.json"), "path/to/caption.md");
+});
+
+test("fetchAllEntries parallel mode fetches all cards concurrently", async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), "html-report-parallel-"));
+  t.after(async () => rm(rootDir, { recursive: true, force: true }));
+
+  const fakeMetric = join(rootDir, "fake-metric.sh");
+  const envelope = JSON.stringify({
+    meta: { metrics: [{ code: "saleAmt", name: "销售额" }] },
+    data: [{ incDate: "2026-07-01", saleAmt: 1000 }],
+  });
+  await writeFile(fakeMetric, `#!/bin/sh\necho '${envelope}'\n`);
+  await chmod(fakeMetric, 0o755);
+
+  const session = join(rootDir, ".harness", "state", "html-report", "test-parallel");
+  await mkdir(session, { recursive: true });
+  const resultPath = join(session, "result.json");
+  const cards = Array.from({ length: 4 }, (_, i) => ({
+    id: `card-${i + 1}`,
+    query: { request: metricQuery(), comparisons: [] },
+  }));
+  await writeFile(resultPath, JSON.stringify({
+    status: "confirmed",
+    session_id: "test-parallel",
+    cards,
+  }));
+
+  const fetchEntryScript = fileURLToPath(new URL("../scripts/fetch-entry.mjs", import.meta.url));
+  const run = spawnSync(process.execPath, [
+    fetchEntryScript,
+    "--result", resultPath,
+    "--parallel",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      QDM_METRIC_CLI: fakeMetric,
+      HARNESS_AUTHZ_MODE: "off",
+    },
+    timeout: 15000,
+  });
+
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const output = JSON.parse(run.stdout);
+  assert.equal(output.cards.length, 4);
+  for (const card of output.cards) {
+    assert.equal(card.fetchStatus, "success", `card ${card.cardId} must succeed`);
+    assert.ok(card.dataPath.endsWith("entry.json"));
+    assert.ok(card.metaPath.endsWith("entry.meta.json"));
+  }
 });
 
 test("four report-* agents registered under .pi/agents", async () => {

@@ -21,10 +21,12 @@ import {
 } from "../../../extensions/qdm-harness/gate-control.mjs";
 import {
   approvePipelineStage,
+  applyPipelinePolicy,
   finishPipelineStage,
   formatGateMessage,
   pipelineStatePath,
   pipelineStatus,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 import { researcherReturnPaths } from "../scripts/researcher-return.mjs";
 import { reviewerReturnPaths } from "../scripts/reviewer-return.mjs";
@@ -586,6 +588,34 @@ function contractResult(call, overrides = {}) {
   };
 }
 
+async function writeWriterCaptionArtifacts(cardDir, cardId = "card-1") {
+  await writeFile(join(cardDir, "caption.md"), "本卡最高为 100。\n");
+  await writeFile(join(cardDir, "caption-evidence.json"), JSON.stringify({
+    producer: "prepare-card-caption-evidence.mjs",
+    cardId,
+    rowCount: 1,
+    query: { metrics: [], statisticPolicy: "SUMMARY", dimensions: [], time: null, comparisons: [] },
+    axis: [],
+    groups: [],
+    droppedDimensions: [],
+    views: {},
+  }));
+}
+
+function writerAckChildResult(receipt, extras = {}) {
+  return {
+    exitCode: extras.exitCode ?? 0,
+    error: extras.error,
+    messages: [{
+      role: "toolResult",
+      toolName: "ack_cli_data",
+      isError: extras.toolIsError === true,
+      content: [{ type: "text", text: JSON.stringify(receipt) }],
+      details: receipt,
+    }],
+  };
+}
+
 async function seedMinimalReviewerInputs(session) {
   await mkdir(join(session, "analysis"), { recursive: true });
   await writeFile(
@@ -756,7 +786,6 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   assert.equal(correctedSameAttempt, undefined, "failed Gate still permits its read-only status command");
   assert.equal(readGateState(repoRoot, fused.sid).status, "failed");
   const writerAfterFailure = await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-writer", task: "must remain blocked" }],
   }, "b2-fused-writer-after-failure"), fused.ctx);
   assert.equal(writerAfterFailure.block, true);
@@ -796,7 +825,6 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
     `result.json=${join(sibling.session, "result.json")}`,
   ].join("\n");
   assert.equal(await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-writer", task: siblingTask }],
   }, "b2-sibling-writer"), sibling.ctx), undefined);
   assert.deepEqual(handlers.activeTools(), initialTools);
@@ -809,6 +837,16 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   assert.deepEqual(handlers.activeTools(), ["bash"], "status 前模型只能看到 bash");
   assert.equal(handlers.activeTools().includes("read"), false);
   assert.equal(handlers.activeTools().includes("subagent"), false);
+  const hiddenRead = await toolResult({
+    toolCallId: "b2-hidden-read",
+    toolName: "read",
+    input: { path: join(repoRoot, ".pi/skills/html-report/SKILL.md") },
+    isError: true,
+    content: [{ type: "text", text: "Tool read not found" }],
+  }, valid.ctx);
+  assert.equal(hiddenRead.isError, false);
+  assert.match(hiddenRead.content[0].text, /已忽略：B2 启动只允许 stage-gate status，read 未执行/);
+  assert.equal(readGateState(repoRoot, valid.sid).status, "running");
   const statusCall = {
     toolCallId: "b2-valid-status",
     toolName: "bash",
@@ -824,12 +862,11 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   }, valid.ctx);
   assert.equal(statusResult.isError, false);
   assert.match(statusResult.content.at(-1).text, /startup status 已验证/);
-  assert.match(statusResult.content.at(-1).text, /NEXT_TOOL_ONLY[\s\S]*subagent\(\{"context":"fresh","chain":\[\{"agent":"report-writer"/);
+  assert.match(statusResult.content.at(-1).text, /NEXT_TOOL_ONLY[\s\S]*subagent\(\{"chain":\[\{"agent":"report-writer"/);
   assert.match(statusResult.content.at(-1).text, /cardId=card-1/);
   assert.deepEqual(handlers.activeTools(), ["subagent"], "status 成功后只暴露首个 Writer 工具");
 
   const driftedWriter = await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-writer", task: "自行重构的错误任务" }],
   }, "b2-drifted-writer"), valid.ctx);
   assert.equal(driftedWriter.block, true);
@@ -845,7 +882,6 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   const missingToolCallId = await toolCall({
     toolName: "subagent",
     input: {
-      context: "fresh",
       chain: [{ agent: "report-writer", task }],
     },
   }, valid.ctx);
@@ -859,7 +895,6 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   );
 
   const writerCall = contractCall({
-    context: "fresh",
     chain: [{ agent: "report-writer", task }],
   }, "b2-after-status-writer");
   assert.equal(await toolCall(writerCall, valid.ctx), undefined);
@@ -875,9 +910,33 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   };
   const invalidDecision = await toolCall(wrongStatus, invalid.ctx);
   assert.equal(invalidDecision.block, true);
-  assert.match(invalidDecision.reason, /status 成功前只允许/);
-  assert.equal(readGateState(repoRoot, invalid.sid).status, "failed");
-  assert.deepEqual(handlers.activeTools(), initialTools, "错误 status fail closed 后也恢复原工具集");
+  assert.match(invalidDecision.reason, /该工具未执行.*Gate attempt 保持有效/);
+  assert.equal(readGateState(repoRoot, invalid.sid).status, "running");
+  assert.deepEqual(handlers.activeTools(), ["bash"], "无害多余工具不得废掉 B2 启动");
+  const recoveredStatus = {
+    toolCallId: "b2-invalid-recovered-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${invalid.session}' --format text`,
+    },
+  };
+  assert.equal(await toolCall(recoveredStatus, invalid.ctx), undefined);
+  const recoveredResult = await toolResult({
+    ...recoveredStatus,
+    isError: false,
+    content: [{ type: "text", text: "阶段：B2 Writer\n状态：running" }],
+  }, invalid.ctx);
+  assert.equal(recoveredResult.isError, false);
+  assert.match(recoveredResult.content.at(-1).text, /startup status 已验证/);
+  const recoveredTask = [
+    "按 report-writer 处理 cardId=card-1",
+    `SESSION=${invalid.session}`,
+    `result.json=${join(invalid.session, "result.json")}`,
+  ].join("\n");
+  assert.equal(await toolCall(contractCall({
+    chain: [{ agent: "report-writer", task: recoveredTask }],
+  }, "b2-invalid-recovered-writer"), invalid.ctx), undefined);
+  assert.deepEqual(handlers.activeTools(), initialTools);
 
   const executionError = await seed("execution-error");
   await input({ text: "继续" }, executionError.ctx);
@@ -1300,7 +1359,6 @@ test("running html-report Gates only allow their stage-specific subagent role", 
 
   assert.equal(
     runningGateSubagentDecision(state("B25_EDITOR"), call({
-      context: "fresh",
       chain: [{
         agent: "report-researcher",
         task: "HTML_REPORT_EDITOR_PLAN_V1\nSESSION=/tmp/session\nresult.json=/tmp/session/result.json",
@@ -1312,7 +1370,7 @@ test("running html-report Gates only allow their stage-specific subagent role", 
   for (const input of [
     { agent: "report-researcher", task: "ordinary Researcher" },
     { chain: [{ agent: "report-researcher", task: "ordinary Researcher" }] },
-    { context: "fresh", chain: [{ agent: "report-writer", task: "wrong child" }] },
+    { chain: [{ agent: "report-writer", task: "wrong child" }] },
   ]) {
     assert.equal(
       runningGateSubagentDecision(state("B25_EDITOR"), call(input)).block,
@@ -1350,8 +1408,18 @@ test("B2.5 auto-dispatches one typed Planner only after status and source-fields
     await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
     await writeFile(resultPath, JSON.stringify({
       status: "confirmed",
+      userQuestion: "哪一条已观察记录的结果更好？",
       title: "通用排序分析",
-      cards: [{ id: "card-a", title: "观测明细", requestBody: {} }],
+      cards: [{ id: "card-a", title: "观测明细", query: {
+        request: {
+          metrics: ["outcome"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-01-01", endDate: "2026-01-31" },
+          dimensions: ["period"],
+          filters: {},
+        },
+        comparisons: [],
+      } }],
     }));
     await writeFile(join(session, "recommendations.json"), JSON.stringify({
       userQuestion: "哪一条已观察记录的结果更好？",
@@ -1576,17 +1644,20 @@ test("B2.5 runs one fresh report-researcher Planner and automatically materializ
   await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
+    userQuestion: "哪一种观测组合对应更好的结果？",
     title: "中性组合分析",
     cards: [{
       id: "card-a",
       title: "中性样本明细",
-      requestBody: {
-        indicatorFieldList: ["metric-a", "metric-b"],
-        aggDimUniqueCodeList: ["period-key"],
-        columnAggDimUniqueCodeList: [],
-        startDate: "2026-01-01",
-        endDate: "2026-01-31",
-        filterDimUniqueCodeList: [{ dimUniqueCode: "entity-key", dimFieldIdList: ["entity-a"] }],
+      query: {
+        request: {
+          metrics: ["metric-a", "metric-b"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-01-01", endDate: "2026-01-31" },
+          dimensions: ["period-key"],
+          filters: { "entity-key": ["entity-a"] },
+        },
+        comparisons: [],
       },
     }],
   }));
@@ -1645,7 +1716,6 @@ test("B2.5 runs one fresh report-researcher Planner and automatically materializ
   ].join("\n");
   const input = {
     ...hostileContractOverrides(),
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: plannerTask, ...hostileStepOverrides() }],
   };
   // A parallel top-level tasks[] shape is rejected before contract sanitizing.
@@ -1759,7 +1829,6 @@ test("B2.5 runs one fresh report-researcher Planner and automatically materializ
     "机器契约：由 qdm-harness 根据当前 task、mode、requirements 和 outputSchema 注入；父代理不得在这里展开、转述或追加规则。",
   ].join("\n");
   const researchInput = {
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: researchTask }],
   };
   const exactDispatch = `subagent(${JSON.stringify(researchInput)})`;
@@ -1783,7 +1852,6 @@ test("B2.5 runs one fresh report-researcher Planner and automatically materializ
   assert.deepEqual(handlers.activeTools(), ["read", "bash", "subagent", "write"], "精确派发后恢复原工具集");
 
   const duplicate = await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: plannerTask }],
   }, "editor-planner-duplicate"), ctx);
   assert.equal(duplicate.block, true);
@@ -1805,8 +1873,9 @@ test("B2.5 zero-row plan hands an empty B3 directly to the fixed finalizer", asy
   await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
+    userQuestion: "确认范围内是否有匹配明细？",
     title: "空范围核对",
-    cards: [{ id: "card-a", title: "空范围", requestBody: {} }],
+    cards: [{ id: "card-a", title: "空范围", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(session, "recommendations.json"), JSON.stringify({
     userQuestion: "确认范围内是否有匹配明细？",
@@ -1850,7 +1919,6 @@ test("B2.5 zero-row plan hands an empty B3 directly to the fixed finalizer", asy
 
   const plannerTask = `HTML_REPORT_EDITOR_PLAN_V1\nSESSION=${session}\nresult.json=${resultPath}`;
   const plannerCall = contractCall({
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: plannerTask }],
   }, "editor-planner-empty");
   assert.equal(await toolCall(plannerCall, ctx), undefined);
@@ -1878,7 +1946,6 @@ test("B2.5 zero-row plan hands an empty B3 directly to the fixed finalizer", asy
   ));
   assert.deepEqual(handlers.activeTools(), ["bash"]);
   const fakeResearcher = await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: "fake empty task" }],
   }, "editor-planner-empty-fake"), ctx);
   assert.equal(fakeResearcher.block, true);
@@ -2073,8 +2140,9 @@ test("B2.5 Planner missing structured output auto-fails once without writing or 
   await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
+    userQuestion: "是否需要继续分析？",
     title: "中性报告",
-    cards: [{ id: "card-a", title: "中性卡片", requestBody: {} }],
+    cards: [{ id: "card-a", title: "中性卡片", query: { request: {}, comparisons: [] } }],
   }));
   await writeFile(join(session, "recommendations.json"), JSON.stringify({
     userQuestion: "是否需要继续分析？",
@@ -2110,7 +2178,6 @@ test("B2.5 Planner missing structured output auto-fails once without writing or 
   writeHtmlReportRuntimeContract(repoRoot, sid);
   const plannerTask = `HTML_REPORT_EDITOR_PLAN_V1\nSESSION=${session}\nresult.json=${resultPath}`;
   const first = contractCall({
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: plannerTask }],
   }, "editor-planner-missing-output");
   assert.equal(await toolCall(first, ctx), undefined);
@@ -2124,7 +2191,6 @@ test("B2.5 Planner missing structured output auto-fails once without writing or 
   await assert.rejects(readFile(join(session, "analysis", "tasks.json")), /ENOENT/);
 
   const retry = await toolCall(contractCall({
-    context: "fresh",
     chain: [{ agent: "report-researcher", task: plannerTask }],
   }, "editor-planner-forbidden-retry"), ctx);
   assert.equal(retry.block, true);
@@ -2518,15 +2584,10 @@ test("runtime allows one Writer dispatch per Gate attempt and treats valid failu
     dataPath: null,
     metaPath: null,
     error: "INVALID_JSON_RESPONSE: backend returned HTML",
-    analysis: {
-      summary: "取数失败，未形成业务判断。",
-      findings: [],
-      recommendations: [],
-    },
   };
   const failedAccepted = await toolResult(contractResult(failedCall, {
     isError: false,
-    details: { results: [{ exitCode: 0, structuredOutput: failedReturn }] },
+    details: { results: [writerAckChildResult(failedReturn)] },
   }), ctx);
   assert.equal(failedAccepted.isError, true);
   assert.match(failedAccepted.content[0].text, /B2 Writer cardId=card-1 取数失败/);
@@ -2983,11 +3044,10 @@ test("contract results are bound to one toolCallId, frozen input and launch atte
     dataPath: null,
     metaPath: null,
     error: "deterministic failure",
-    analysis: { summary: "取数失败。", findings: [], recommendations: [] },
   };
   const resultPayload = {
     isError: false,
-    details: { results: [{ exitCode: 0, structuredOutput: failedOutput }] },
+    details: { results: [writerAckChildResult(failedOutput)] },
   };
 
   const firstCall = contractCall(makeInput(), "binding-input");
@@ -3689,11 +3749,11 @@ test("parent accepts Report Writer only through checked structured output and pe
 
   const direct = await toolCall({ toolName: "subagent", input: { agent: "report-writer", task } }, ctx);
   assert.equal(direct.block, true);
-  assert.match(direct.reason, /outputSchema/);
+  assert.match(direct.reason, /单步骤 chain|自由文本/);
 
   const missingSchemaInput = { chain: [{ agent: "report-writer", task }] };
   assert.equal(await toolCall(contractCall(missingSchemaInput, "writer-schema-attach"), ctx), undefined);
-  assert.ok(missingSchemaInput.chain[0].outputSchema, "extension must attach Writer outputSchema");
+  assert.equal(missingSchemaInput.chain[0].outputSchema.oneOf.length, 2);
   assert.equal(missingSchemaInput.chain[0].outputSchema.oneOf[0].properties.cardId.const, "card-1");
 
   writerState.stages.B2_WRITER.attempts.push({
@@ -3725,18 +3785,18 @@ test("parent accepts Report Writer only through checked structured output and pe
   const writerCall = contractCall(input, "writer-valid-result");
   assert.equal(await toolCall(writerCall, ctx), undefined);
   assertFixedContractEnvelope(input);
-  assert.equal(input.chain[0].outputSchema.oneOf.length, 2, "caller schema must be replaced by the exact contract");
+  assert.equal(input.chain[0].outputSchema.oneOf.length, 2, "caller schema must be replaced by the receipt contract");
   assert.equal(input.chain[0].outputSchema.oneOf[0].properties.cardId.const, "card-1");
   assert.equal(input.chain[0].outputSchema.oneOf[0].properties.dataPath.const, `${session}/data/cards/card-1/entry.json`);
   assert.equal(input.async, false, "Writer must remain a foreground run");
   assert.equal(input.clarify, false);
-  assert.deepEqual(input.turnBudget, { maxTurns: 6, graceTurns: 1 });
+  assert.deepEqual(input.turnBudget, { maxTurns: 3, graceTurns: 1 });
   assert.equal(input.maxRuntimeMs, 720_000);
   assert.equal(input.timeoutMs, undefined);
   assert.equal(input.toolBudget, undefined);
   assert.deepEqual(input.chain[0].toolBudget, {
-    hard: 8,
-    block: ["read", "fetch_report_entry"],
+    hard: 2,
+    block: "*",
   });
   assert.equal(input.chain[0].timeoutMs, undefined);
 
@@ -3761,11 +3821,8 @@ test("parent accepts Report Writer only through checked structured output and pe
     fetchStatus: "success",
     dataPath: `${session}/data/cards/card-1/entry.json`,
     metaPath: `${session}/data/cards/card-1/entry.meta.json`,
-    analysis: {
-      summary: "明细存在日度记录。",
-      findings: [{ statement: "第 0 行包含记录。", evidence: ["entry.json#/0"] }],
-      recommendations: ["结合业务场景核对该记录。"],
-    },
+    rowCount: 1,
+    rowsSha256: rowsSha256([{ 日期: "2026-07-01", 毛利额: 100 }]),
   };
   const writerRows = [{ 日期: "2026-07-01", 毛利额: 100 }];
   await mkdir(dirname(valid.dataPath), { recursive: true });
@@ -3778,19 +3835,19 @@ test("parent accepts Report Writer only through checked structured output and pe
     rowCount: writerRows.length,
     rowsSha256: rowsSha256(writerRows),
   }));
+  await writeWriterCaptionArtifacts(dirname(valid.dataPath), "card-1");
   const accepted = await toolResult(
     contractResult(writerCall, {
       isError: false,
-      details: { results: [{ exitCode: 0, structuredOutput: valid }] },
+      details: { results: [writerAckChildResult(valid)] },
     }),
     ctx
   );
   assert.equal(accepted.isError, false);
-  assert.match(accepted.content[0].text, /B2 Report Writer 已通过结构化契约验证/);
+  assert.match(accepted.content[0].text, /B2 Report Writer 已通过 ack_cli_data 回执验收/);
   assert.match(accepted.content[0].text, /"cardId":"card-1"/);
   assert.match(accepted.content[0].text, /尚待串行派发的 cardId：card-2/);
   assert.doesNotMatch(accepted.content[0].text, /phase-writer layout：passed/);
-  assert.equal(accepted.details.results[0].structuredOutput, valid);
 
   const task2 = `按 report-writer 处理 cardId=card-2\nSESSION=${session}\nresult.json=${session}/result.json`;
   const input2 = { chain: [{ agent: "report-writer", task: task2 }] };
@@ -3808,10 +3865,11 @@ test("parent accepts Report Writer only through checked structured output and pe
     rowCount: writerRows.length,
     rowsSha256: rowsSha256(writerRows),
   }));
+  await writeWriterCaptionArtifacts(dirname(valid2.dataPath), "card-2");
   const accepted2 = await toolResult(
     contractResult(writerCall2, {
       isError: false,
-      details: { results: [{ exitCode: 0, structuredOutput: valid2 }] },
+      details: { results: [writerAckChildResult(valid2)] },
     }),
     ctx
   );
@@ -3869,7 +3927,7 @@ test("parent accepts Report Writer only through checked structured output and pe
   const missingArtifacts = await toolResult(
     contractResult(missingArtifactCall, {
       isError: false,
-      details: { results: [{ exitCode: 0, structuredOutput: valid }] },
+      details: { results: [writerAckChildResult(valid)] },
     }),
     ctx
   );
@@ -3881,7 +3939,7 @@ test("parent accepts Report Writer only through checked structured output and pe
   const bad = await toolResult(
     contractResult(badPathCall, {
       isError: false,
-      details: { results: [{ exitCode: 0, structuredOutput: { ...valid, metaPath: "/tmp/forged.meta.json" } }] },
+      details: { results: [writerAckChildResult({ ...valid, metaPath: "/tmp/forged.meta.json" })] },
     }),
     ctx
   );
@@ -3895,8 +3953,41 @@ test("parent accepts Report Writer only through checked structured output and pe
     details: { results: [{ exitCode: 0 }] },
   }), ctx);
   assert.equal(missing.isError, true);
-  assert.match(missing.content[0].text, /typed submit.*outputSchema capture/);
-  assertWriterGateFailed("missing structured output");
+  assert.match(missing.content[0].text, /ack_cli_data 返回回执/);
+  assertWriterGateFailed("missing ack receipt");
+
+  await writeFile(valid.dataPath, JSON.stringify(writerRows));
+  await writeFile(valid.metaPath, JSON.stringify({
+    rowCount: writerRows.length,
+    rowsSha256: rowsSha256(writerRows),
+  }));
+  await writeWriterCaptionArtifacts(dirname(valid.dataPath), "card-1");
+  const transcriptPath = join(session, "writer-ack.transcript.jsonl");
+  await writeFile(transcriptPath, `${JSON.stringify({
+    recordType: "message",
+    role: "toolResult",
+    message: {
+      role: "toolResult",
+      toolName: "ack_cli_data",
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(valid, null, 2) }],
+      details: valid,
+    },
+  })}\n`);
+  const emptyOutputCall = await nextWriterCall("writer-empty-output-ack");
+  const emptyAccepted = await toolResult(contractResult(emptyOutputCall, {
+    isError: true,
+    details: {
+      results: [{
+        exitCode: 1,
+        error: "Subagent produced no output (possible model cold-start or empty response).",
+        transcriptPath,
+        finalOutput: "",
+      }],
+    },
+  }), ctx);
+  assert.equal(emptyAccepted.isError, false);
+  assert.match(emptyAccepted.content[0].text, /ack_cli_data 回执验收/);
 });
 
 test("parent accepts Report Researcher only through a checked structured chain and evidence artifacts", async (t) => {
@@ -3941,7 +4032,16 @@ test("parent accepts Report Researcher only through a checked structured chain a
   writeHtmlReportRuntimeContract(repoRoot, sid);
   await writeFile(paths.resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "card-1", requestBody: { indicatorFieldList: ["profitAmt"] } }],
+    cards: [{ id: "card-1", query: {
+      request: {
+        metrics: ["profitAmt"],
+        statisticPolicy: "SUMMARY",
+        time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+        dimensions: [],
+        filters: {},
+      },
+      comparisons: [],
+    } }],
   }));
   await writeFile(paths.tasksPath, JSON.stringify({ version: 2, round: 0, maxRounds: 2, tasks: [taskObject] }));
   t.after(async () => rm(session, { recursive: true, force: true }));
@@ -4130,7 +4230,6 @@ test("parent normalizes only the observed Chinese evidencePath label drift befor
   ].join("\n");
 
   const input = {
-    context: "fresh",
     chain: [{
       agent: "report-researcher",
       task: assignment(`证据路径: ${paths.evidencePath}`),
@@ -4214,7 +4313,6 @@ test("parent normalizes only the observed Chinese evidencePath label drift befor
   const invalidHandlers = registerHarnessExtension();
   const invalidToolCall = invalidHandlers.get("tool_call")[0];
   const relativeInput = {
-    context: "fresh",
     chain: [{
       agent: "report-researcher",
       task: assignment("证据路径: analysis/evidence/drill-label.json"),
@@ -4228,7 +4326,6 @@ test("parent normalizes only the observed Chinese evidencePath label drift befor
   assert.match(rejectedRelative.reason, /规范绝对路径/);
 
   const unsupportedInput = {
-    context: "fresh",
     chain: [{
       agent: "report-researcher",
       task: assignment(`证据路径 = ${paths.evidencePath}`),
@@ -4282,7 +4379,6 @@ test("B4 parent scan hard issues fail the Gate before Reviewer dispatch", async 
   t.after(async () => rm(session, { recursive: true, force: true }));
 
   const input = {
-    context: "fresh",
     chain: [{
       agent: "report-reviewer",
       task: `B4 scorecard\nSESSION=${session}\nresult.json=${session}/result.json`,
@@ -5256,6 +5352,7 @@ test("fixed debug mode automatically completes B5 without dispatching Report Des
   // Drive only the persistent Gate to B4. The fixed-A_CONFIG hook above is
   // what marks this live Session as Debug; no Designer task is fabricated.
   await writeFile(join(session, "result.json"), JSON.stringify({ status: "confirmed", cards: [] }));
+  await applyPipelinePolicy(session, LEGACY_STAGE_POLICY);
   await approvePipelineStage(session, { phrase: "继续" });
   await finishPipelineStage(session, "B0_PREFLIGHT");
   await approvePipelineStage(session, { phrase: "继续" });

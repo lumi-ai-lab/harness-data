@@ -58,6 +58,71 @@ test("assemble-report exposes generic row extraction and markdown escaping", () 
   assert.match(table.markdown, /x\\\|y/);
 });
 
+test("rowsToMarkdown converts headers to Chinese via columnLabels", () => {
+  const rows = [{ storeName: "深圳店", saleAmt: 100 }];
+  const columnLabels = { storeName: "门店", saleAmt: "销售额" };
+  const table = rowsToMarkdown(rows, { columnLabels });
+  const lines = table.markdown.split("\n");
+  assert.equal(lines[0], "| 门店 | 销售额 |");
+  assert.deepEqual(table.headers, ["门店", "销售额"]);
+});
+
+test("rowsToMarkdown reorders dimension columns to front by two-level priority", () => {
+  // Dimensions out of order; --dim-labels replaced *Id with *Name.
+  const rows = [{
+    saleAmt: 100,
+    storeName: "深圳店",
+    bizDate: "2026-07-01",
+    cityName: "深圳",
+  }];
+  const columnLabels = {
+    storeName: "门店", cityName: "城市", bizDate: "日期", saleAmt: "销售额",
+  };
+  const dimensions = ["storeId", "cityId", "bizDate"];
+  const table = rowsToMarkdown(rows, { columnLabels, dimensions });
+  const header = table.markdown.split("\n")[0];
+  // date group (bizDate) first, then store group (cityName, storeName),
+  // then non-dimension (saleAmt).
+  assert.equal(header, "| 日期 | 城市 | 门店 | 销售额 |");
+});
+
+test("rowsToMarkdown keeps unknown dimensions at end after known dims", () => {
+  const rows = [{ customDim: "X", bizDate: "2026-07-01", saleAmt: 50 }];
+  const columnLabels = { bizDate: "日期", saleAmt: "销售额" };
+  const dimensions = ["customDim", "bizDate"];
+  const table = rowsToMarkdown(rows, { columnLabels, dimensions });
+  const header = table.markdown.split("\n")[0];
+  // bizDate (date group) first, customDim (unknown) next, then saleAmt.
+  assert.equal(header, "| 日期 | customDim | 销售额 |");
+});
+
+test("rowsToMarkdown without options behaves like before (raw headers)", () => {
+  const rows = [{ a: 1, b: 2 }];
+  const table = rowsToMarkdown(rows);
+  assert.deepEqual(table.headers, ["a", "b"]);
+  assert.match(table.markdown, /^\| a \| b \|/);
+});
+
+test("rowsToMarkdown resolves Chinese labels via dimension code when --dim-labels replaced Id with Name", () => {
+  // CLI --dim-labels=only replaced sapArea2Id→sapArea2Name, categoryLevel1Id→categoryLevel1Name.
+  // buildColumnLabels uses dimension *code* (*Id) as key, not the resolved *Name column.
+  const rows = [{
+    sapArea2Name: "华南大区",
+    categoryLevel1Name: "生鲜",
+    saleAmt: 100,
+  }];
+  const columnLabels = {
+    sapArea2Id: "大区",
+    categoryLevel1Id: "一级品类",
+    saleAmt: "销售额",
+  };
+  const dimensions = ["sapArea2Id", "categoryLevel1Id"];
+  const table = rowsToMarkdown(rows, { columnLabels, dimensions });
+  const header = table.markdown.split("\n")[0];
+  // Dimension columns resolved to *Name keys, but labels looked up via original *Id code.
+  assert.equal(header, "| 大区 | 一级品类 | 销售额 |");
+});
+
 test("assemble-report preserves a successful zero-row Writer result", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "html-report-assemble-empty-"));
   const session = join(root, ".harness", "state", "html-report", "empty");
@@ -128,4 +193,52 @@ test("assemble-report reuses Writer table for reuse_entry and auto-renders new_q
   );
   assert.equal(manifest.tasks.find((task) => task.taskId === "reuse-1").fullTableSource, "writer_entry");
   assert.equal(manifest.tasks.find((task) => task.taskId === "new-1").renderedRows, 2);
+});
+
+test("assemble-report renders Chinese headers and dimension-first ordering from column-meta + query", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "html-report-assemble-cn-"));
+  const session = join(root, ".harness", "state", "html-report", "cn");
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(join(session, "analysis"), { recursive: true });
+  await mkdir(join(session, "data", "cards", "c1"), { recursive: true });
+  // CLI --dim-labels=only replaced storeId→storeName, cityId→cityName.
+  const rows = [
+    { saleAmt: 100, storeName: "深圳店", bizDate: "2026-07-01", cityName: "深圳" },
+  ];
+  const columnLabels = {
+    storeName: "门店", cityName: "城市", bizDate: "日期", saleAmt: "销售额",
+  };
+  await writeFile(join(session, "result.json"), JSON.stringify({
+    status: "confirmed",
+    cards: [{
+      id: "c1", title: "区域销售",
+      query: {
+        request: {
+          metrics: ["saleAmt"],
+          statisticPolicy: "SUMMARY",
+          dimensions: ["storeId", "cityId", "bizDate"],
+          time: { startDate: "2026-07-01", endDate: "2026-07-01" },
+          filters: {},
+          pageNo: 1, pageSize: 500,
+        },
+        comparisons: [],
+      },
+    }],
+  }));
+  await writeFile(join(session, "analysis", "main.md"), "# 主报告\n");
+  await writeFile(join(session, "analysis", "tasks.json"), JSON.stringify({
+    version: 2, round: 0, maxRounds: 2, tasks: [],
+  }));
+  await writeFile(join(session, "data", "cards", "c1", "entry.json"), JSON.stringify(rows));
+  await writeFile(join(session, "data", "cards", "c1", "entry.meta.json"),
+    JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) }));
+  await writeFile(join(session, "data", "cards", "c1", "entry.column-meta.json"),
+    JSON.stringify(columnLabels));
+
+  const output = await assembleReport(session);
+  const report = await readFile(output.reportPath, "utf8");
+  // Dimension columns first (date group: 日期, then store group: 城市, 门店),
+  // then non-dimension (销售额).
+  assert.match(report, /\| 日期 \| 城市 \| 门店 \| 销售额 \|/);
+  assert.match(report, /\| 2026-07-01 \| 深圳 \| 深圳店 \| 100 \|/);
 });

@@ -79,17 +79,20 @@ The qdm-harness extension initializes every new html-report Pi session in
 $SESSION/debug/pipeline-state.json
 ```
 
-There are six human Gates and one separately timed internal stage:
+There are human Gates plus skippable later stages. Each stage has `enabled`
+(run or skip) and `gate` (wait for 「继续」or auto-advance). Current first
+slice:
 
-| Order | Timed stage | Human stop |
-| --- | --- | --- |
-| 1 | `A_CONFIG` | yes |
-| 2 | `B0_PREFLIGHT` | yes |
-| 3 | `B2_WRITER` | yes |
-| 4 | `B25_EDITOR` | no; included in the B3 Gate |
-| 5 | `B3_RESEARCH` | yes; reports Editor and Researcher times separately |
-| 6 | `B4_REVIEW` | yes; every failed repair attempt is a new Gate |
-| 7 | `B5_DESIGN` | final completion（固定推荐调试模式由扩展自动跳过；动态模式执行 Designer） |
+| Order | Timed stage | Human stop | Default |
+| --- | --- | --- | --- |
+| 1 | `A_CONFIG` | yes | on |
+| 2 | `B0_PREFLIGHT` | yes | on |
+| 3 | `B2_WRITER` | no | on; journalists fetch then caption |
+| 4 | `B2_MAIN` | yes | on; `compose-main.mjs` writes `analysis/main.md` |
+| 5 | `B25_EDITOR` | no | **off** until later slices |
+| 6 | `B3_RESEARCH` | yes | **off** |
+| 7 | `B4_REVIEW` | yes | **off** |
+| 8 | `B5_DESIGN` | final | **off** |
 
 For every stage, the mandatory order is `start → 工作 → layout → finish/fail → stop`:
 
@@ -296,7 +299,7 @@ approved and `result.json` exists. Never jump directly to Writer work.
 | Display | Technical id | Asset |
 | --- | --- | --- |
 | **Report Editor** (you) | — | Own stages and consume typed handoffs; B2.5 artifacts are materialized deterministically |
-| **Report Writer** | `report-writer` | Per-card SubAgent: fetch + concise analysis return |
+| **Report Writer** | `report-writer` | Per-card SubAgent: `ack_cli_data` then `submit_card_caption`; caption tool writes the receipt |
 | **Report Researcher** | `report-researcher` | Drill-down SubAgent per pending task |
 | **Report Reviewer** | `report-reviewer` | Final R1–R7 scorecard SubAgent (B4) |
 | **Report Designer** | `report-designer` | Isolated frontend design + visual QA SubAgent (B5) |
@@ -402,27 +405,86 @@ The extension owns this latency-critical stage:
 1. Its initial `NEXT_TOOL_ONLY` is the exact mandatory stage-start status call;
    issue it alone. A successful result reveals one exact Writer call. Issue only
    that call—never merge calls, read `result.json`, or reconstruct arguments.
-   If a provider emits an extra sibling beside the exact in-flight status, the
-   extension blocks that sibling without executing it or invalidating the Gate;
-   wait for the status result. After success only the exact revealed Writer is
-   admitted until the handoff completes; parameter drift remains blocked.
+   Extra tools before that status, or siblings beside an in-flight status, are
+   blocked without executing and without invalidating the Gate; wait for the
+   status result. After success only the exact revealed Writer is admitted
+   until the handoff completes; parameter drift remains blocked.
 2. Run the revealed `report-writer` calls one card at a time, including when
    there is only one card. Never bulk-fetch, impersonate Writer, or use parallel
    `tasks[]`. Each card/Gate attempt has one dispatch; do not retry or inspect
    child/session artifacts.
-3. Accept only the extension-validated typed result. The child contract owns
-   fetch/read/submit details and limits first-pass analysis to at most one
-   literal `entry.json#/0` finding plus exactly one short qualitative action.
-   Its `fetch-entry.mjs` path is all-pages and never uses `--single-page`.
-   `qdm-harness` always replaces them with the exact per-card schema; a valid persisted
-   entry/meta pair is reused automatically on a user-approved retry.
+3. Accept only the extension-validated Writer receipt. The child calls
+   `ack_cli_data` once, then `submit_card_caption` once on success. Fetch
+   writes entry/meta and a compact evidence packet; caption writes
+   `caption.md` and the parent-owned `outputSchema` receipt. Do not write
+   or rewrite `outputSchema`. The fetch path is all-pages and never uses
+   `--single-page`. A valid persisted entry/meta pair is reused automatically
+   on a user-approved retry; caption may be rewritten.
 4. After a valid result, follow only the next exact call returned by the
-   extension. It dispatches the next card or deterministically performs B2
-   layout and finish/fail. Return the final Gate text and stop; never run parent
-   layout/Gate commands or write/edit Writer data.
+   extension. It dispatches the next card or, when all cards are done, runs
+   the caption gate check (see B2 Caption Gate below). If no caption
+   violations, it deterministically performs B2 layout, runs
+   `compose-main.mjs`, finishes `B2_MAIN`, and stops at that Gate.
+   Return the Gate text; never write/edit `analysis/main.md` or Writer data.
 
-Shallow or unanswered analysis becomes a B2.5 Researcher task; never re-spawn
-Writer for depth.
+Shallow or unanswered analysis is later work. Do not re-spawn Writer for depth.
+
+### B2 Caption Gate — 逐卡校验放行
+
+全部 Writer 完成后，扩展自动运行 `caption-gate.mjs --check` 扫描所有卡的
+`caption.md.violations.json`。如果无违规，直接进入 B2_MAIN（原流程）。如果有
+违规，扩展返回违规列表并保持 B2_WRITER 为 `running`，由 Report Editor
+引导用户逐卡处理。
+
+**违规列表格式**：每张卡列出每条违规的规则名、触发值、出处段落和上下文片段。
+
+**Report Editor 处理流程**：
+
+1. 将违规列表原样展示给用户
+2. 用户逐卡回复哪些放行、哪些需要修改：
+   - **放行**：用户回复卡 ID。Editor 执行：
+     ```bash
+     node .agents/pi/skills/html-report/scripts/caption-gate.mjs \
+       --waive --session-dir "$SESSION" --card-id <ID>
+     ```
+   - **修改**：用户给出修改内容。Editor 直接编辑对应卡的
+     `$SESSION/data/cards/<ID>/caption.md`，然后执行：
+     ```bash
+     node .agents/pi/skills/html-report/scripts/caption-gate.mjs \
+       --revalidate --session-dir "$SESSION" --card-id <ID>
+     ```
+3. 检查剩余违规：
+   ```bash
+   node .agents/pi/skills/html-report/scripts/caption-gate.mjs \
+     --status --session-dir "$SESSION"
+   ```
+4. 如果仍有未处理的卡，回到步骤 1 展示剩余违规
+5. 全部处理完毕（waived 或 resolved）后，执行：
+   ```bash
+   node .agents/pi/skills/html-report/scripts/caption-gate.mjs \
+     --finish --session-dir "$SESSION"
+   ```
+   该脚本内部串行完成：`stage-gate finish B2_WRITER` → `compose-main.mjs` →
+   `stage-gate finish B2_MAIN`，并输出 B2_MAIN Gate 文本。
+
+**注意**：
+- `caption-gate.mjs --finish` 是 B2 caption gate 的最终 standalone 工具调用
+- 不要手工运行 `stage-gate finish B2_WRITER` 或 `compose-main.mjs`
+- 放行的卡其 caption.md 原样保留（包含违规数字）；修改的卡需重新校验通过
+- 如果用户修改后仍有违规，继续展示剩余违规，直到全部解决或放行
+
+### B2_MAIN — 初版 MAIN Gate
+
+全部 Writer 取数通过 `--phase writer` 后，扩展自动：
+
+1. `finish B2_WRITER`（本阶段默认不等待「继续」）
+2. `start B2_MAIN` 并调用 `compose-main.mjs`
+3. 按 `result.json` 卡片顺序把各卡 `entry.json` 原表和 `caption.md` 写入 `analysis/main.md`
+4. `finish B2_MAIN` 后停在人工 Gate
+
+主编只看 `$SESSION/analysis/main.md`。回复 **「继续」** 才进入下一启用阶段。
+当前后续 Planner / Researcher / Review / Design 默认关闭，所以「继续」后本段
+skill 结束。不要手写 MAIN，不要派 Planner。
 
 ### B2.5 — Report Editor Planner（单次语义规划 + 确定性落盘）
 
@@ -437,8 +499,8 @@ Writer for depth.
    `stage-gate status` 与 `--source-fields`。列表顺序只定义消息形状，
    不要求等待第一项完成；调用前不要复述、解释或重新规划。
 2. 两个 Bash 都成功后，qdm-harness 直接通过真实 pi-subagents 事件桥派发
-   一次 `context: "fresh"`、单步骤 `report-researcher` Planner；不再等待父模型
-   生成固定的 Planner tool call。父模型不得手工派发、修改 marker/path/context/
+   一次单步骤 `report-researcher` Planner（扩展自动注入 `context: "fresh"`）；不再等待父模型
+   生成固定的 Planner tool call。父模型不得手工派发、修改 marker/path/
    chain，或重复 Planner。
 3. 当前 attempt 只允许这一次扩展拥有的 Planner 派发。失败后扩展自动 fail
    `B25_EDITOR`；不得重派、修补文件或改走普通 Researcher。
@@ -670,7 +732,6 @@ typed `submit_research_findings`；工具会提交同一结构化返回并终止
 
 ```text
 subagent({
-  context: "fresh",
   chain: [{
     agent: "report-researcher",
     task: `按 report-researcher 处理 taskId=<ID>
@@ -688,10 +749,7 @@ evidencePath=<ABS>/analysis/evidence/<ID>.json
 其中 `evidencePath=<ABS>` 是机器协议行，必须逐字保留键名与 `=`；不得翻译成
 “证据路径”、添加括注或改用其他分隔符。
 
-**Spawn 参数必填：** `chain` 恰好一步 + `context: "fresh"` + 绝对路径。
-`context` 必须位于 subagent 顶层、与 `chain` 同级；`chain[0]` 只放 `agent` 和
-`task`，绝不能写成 `chain:[{..., context:"fresh"}]`。参数 schema 在扩展处理前
-校验，层级错误会直接终止当前 Gate。
+**Spawn 参数必填：** `chain` 恰好一步 + 绝对路径。**不要写 `context` 字段**——`qdm-harness` 会在 `tool_call` hook 中通过 `resetContractRunEnvelope` 自动注入 `context: "fresh"`。`chain[0]` 只放 `agent` 和 `task`；pi-subagents 的 `prepareArguments` 会在扩展修正前校验 chain step 属性，多余字段会直接终止当前 Gate。
 `完整 task 对象` 必须逐字使用 B2.5 tool result 中该项的 `task` JSON，包含
 所有空数组、null 和状态字段；尤其不得省略 `evidenceGap`、
 `candidateIndicators`、`candidateDims` 或 `status`。不要摘要、重排语义或手工挑
@@ -836,7 +894,6 @@ For the current Gate attempt:
 
 ```text
 subagent({
-  context: "fresh",
   chain: [{
     agent: "report-reviewer",
     task: `B4 scorecard for SESSION=<ABS_SESSION>
@@ -963,7 +1020,6 @@ bytes/hash，并只接受当前 Session 的 `design-result.draft.json`。
 
 ```text
 subagent({
-  context: "fresh",
   chain: [{
     agent: "report-designer",
     task: `B5 autonomous design
@@ -1027,7 +1083,7 @@ There is no further approval after B5.
 
 | After | Command | Provenance required |
 | --- | --- | --- |
-| B2 Writer | `--phase writer` | `entry.json` + minimal `entry.meta.json` pairs; no profile/facts, sections, tasks or main |
+| B2 Writer | `--phase writer` | `entry.json` + minimal `entry.meta.json` + caption pair; no profile/facts, sections, tasks or main |
 | B2.5 | `--phase b2` | Writer data pairs + Editor tasks/main |
 | B3.5 | `--phase explore` | 两模式均验 evidence producer/source Hash；仅 new_query 验 material explore；fresh assembly |
 | B4 | `--phase quality` | approved prior step Gates + assembled `report.md` + verdict producer/fingerprint |

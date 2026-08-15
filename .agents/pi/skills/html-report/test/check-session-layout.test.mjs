@@ -13,13 +13,14 @@ import {
   rowsSha256,
 } from "../scripts/prepare-research-evidence.mjs";
 import { normalizeEntryPayload } from "../scripts/fetch-entry.mjs";
-import { materialQueryDelta, semanticQueryShape } from "../scripts/fetch-explore.mjs";
+import { computeQueryPatch, materialQueryDelta } from "../scripts/fetch-explore.mjs";
 import { submitResearchFindings } from "../scripts/submit-research-findings.mjs";
 import {
   approvePipelineStage,
   finishPipelineStage,
   initPipeline,
   startPipelineStage,
+  LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 
 function fingerprintJson(value) {
@@ -42,6 +43,17 @@ async function seedWriterSession(session) {
     rowsSha256: rowsSha256(rows),
   };
   await writeFile(join(cardDir, "entry.meta.json"), JSON.stringify(meta));
+  await writeFile(join(cardDir, "caption.md"), "本卡最高为 200。\n");
+  await writeFile(join(cardDir, "caption-evidence.json"), JSON.stringify({
+    producer: "prepare-card-caption-evidence.mjs",
+    cardId,
+    rowCount: rows.length,
+    query: { metrics: ["销售额"], statisticPolicy: "SUMMARY", dimensions: [], time: null, comparisons: [] },
+    axis: [],
+    groups: [],
+    droppedDimensions: [],
+    views: {},
+  }));
   return { cardDir, entryPath, rows, meta };
 }
 
@@ -56,6 +68,17 @@ test("writer phase validates Writer artifacts without requiring Editor tasks/mai
   const b2 = await checkSessionLayout(session, { phase: "b2" });
   assert.equal(b2.ok, false);
   assert.ok(b2.errors.some((error) => /main\.md|tasks\.json/.test(error)));
+});
+
+test("writer phase requires caption artifacts after a successful entry pair", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "html-report-layout-writer-caption-"));
+  const session = join(root, ".harness", "state", "html-report", "writer-caption");
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const seeded = await seedWriterSession(session);
+  await rm(join(seeded.cardDir, "caption.md"));
+
+  const report = await checkSessionLayout(session, { phase: "writer" });
+  assert.ok(report.errors.some((error) => /missing caption\.md/.test(error)));
 });
 
 test("writer phase requires a minimal entry/meta pair and rejects legacy artifacts", async (t) => {
@@ -253,9 +276,15 @@ async function seedTypedResearchTask(session, {
     cards: [{
       id: cardId,
       title: "通用样本卡",
-      requestBody: {
-        indicatorFieldList: ["genericMetric"],
-        aggDimUniqueCodeList: ["genericDimension"],
+      query: {
+        request: {
+          metrics: ["genericMetric"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+          dimensions: ["genericDimension"],
+          filters: {},
+        },
+        comparisons: [],
       },
     }],
   }));
@@ -342,7 +371,11 @@ test("quality phase requires preceding approvals when the session is in step mod
   const session = join(root, ".harness", "state", "html-report", "sess-qgate");
   t.after(async () => rm(root, { recursive: true, force: true }));
   await seedQualitySession(session);
-  await initPipeline(session, { mode: "step", sessionId: "sess-qgate" });
+  await initPipeline(session, {
+    mode: "step",
+    sessionId: "sess-qgate",
+    policy: LEGACY_STAGE_POLICY,
+  });
   await startPipelineStage(session, "A_CONFIG");
   await finishPipelineStage(session, "A_CONFIG");
   await approvePipelineStage(session);
@@ -830,14 +863,15 @@ test("explore phase accepts a version-2 reuse_entry task without explore query a
   await mkdir(cardDir, { recursive: true });
   const rows = [{ 日期: "07-01", 毛利额: 100 }, { 日期: "07-02", 毛利额: 200 }];
   const reuseRequestBody = {
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-02",
+    metrics: ["profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+    dimensions: ["incDate"],
+    filters: {},
   };
   await writeFile(join(session, "result.json"), JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", title: "卡1", requestBody: reuseRequestBody }],
+    cards: [{ id: "c1", title: "卡1", query: { request: reuseRequestBody, comparisons: [] } }],
   }));
   await writeFile(join(cardDir, "entry.json"), JSON.stringify(rows));
   await writeFile(join(cardDir, "entry.meta.json"), JSON.stringify({ rowCount: 2, rowsSha256: rowsSha256(rows) }));
@@ -877,7 +911,7 @@ test("explore phase accepts a version-2 reuse_entry task without explore query a
     join(session, "result.json"),
     JSON.stringify({
       status: "confirmed",
-      cards: [{ id: "c1", title: "卡1（改名）", requestBody: reuseRequestBody }],
+      cards: [{ id: "c1", title: "卡1（改名）", query: { request: reuseRequestBody, comparisons: [] } }],
     })
   );
   const staleResult = await checkSessionLayout(session, { phase: "explore" });
@@ -926,20 +960,16 @@ test("explore phase recomputes joint decision query scope before validating view
     { traffic: 22, ticket: 5, profit: 110 },
   ];
   const requestBody = {
-    indicatorFieldList: ["traffic", "ticket", "profit"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-31",
-    filterDimUniqueCodeList: [{
-      type: "DIMENSION",
-      dimUniqueCode: "storeId",
-      dimFieldIdList: ["sample-store"],
-    }],
+    metrics: ["traffic", "ticket", "profit"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-31" },
+    dimensions: ["incDate"],
+    filters: { storeId: ["sample-store"] },
   };
   const resultPath = join(session, "result.json");
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", title: "通用平衡样本", requestBody }],
+    cards: [{ id: "c1", title: "通用平衡样本", query: { request: requestBody, comparisons: [] } }],
   }));
   await writeFile(join(cardDir, "entry.json"), JSON.stringify(rows));
   await writeFile(join(cardDir, "entry.meta.json"), JSON.stringify({
@@ -1069,14 +1099,15 @@ test("explore phase validates version-2 new_query evidence and material query me
   await mkdir(join(session, "data", "cards", "c1"), { recursive: true });
   const resultPath = join(session, "result.json");
   const sourcePayload = normalizeEntryPayload({
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-02",
+    metrics: ["profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+    dimensions: ["incDate"],
+    filters: {},
   });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", title: "来源卡", requestBody: sourcePayload }],
+    cards: [{ id: "c1", title: "来源卡", query: { request: sourcePayload, comparisons: [] } }],
   }));
   const writerRows = [{ 日期: "2026-07-01", 毛利额: 100 }];
   await writeFile(join(session, "data", "cards", "c1", "entry.json"), JSON.stringify(writerRows));
@@ -1103,29 +1134,25 @@ test("explore phase validates version-2 new_query evidence and material query me
   const rows = [{ 品类: "A", 毛利额: 100 }, { 品类: "B", 毛利额: 200 }];
   const payload = normalizeEntryPayload({
     ...sourcePayload,
-    aggDimUniqueCodeList: ["categoryLevel1Id"],
+    dimensions: ["categoryLevel1Id"],
   });
-  const payloadPath = join(session, "data", "explore", "new-1.payload.json");
-  const sourceQueryShape = semanticQueryShape(sourcePayload);
-  const queryShape = semanticQueryShape(payload);
+  const queryPatch = computeQueryPatch(sourcePayload, payload);
   const queryDelta = materialQueryDelta(sourcePayload, payload);
-  await writeFile(payloadPath, JSON.stringify(payload));
   await writeFile(join(session, "data", "explore", "new-1.json"), JSON.stringify(rows));
   await writeFile(join(session, "data", "explore", "new-1.meta.json"), JSON.stringify({
     producer: "fetch-explore.mjs",
-    producerVersion: 2,
+    producerVersion: 3,
+    cacheContractVersion: 3,
     taskId: "new-1",
     fromCardId: "c1",
     status: "ok",
     attempts: [{ attempt: 1, status: 0 }],
     pagination: { mode: "all-pages", singlePage: false },
     queryDelta,
-    payloadPath,
-    payloadSha256: fingerprintJson(payload),
-    sourceQueryShape,
-    sourceQueryShapeSha256: fingerprintJson(sourceQueryShape),
-    queryShape,
-    queryShapeSha256: fingerprintJson(queryShape),
+    queryPatch,
+    queryPatchSha256: fingerprintJson(queryPatch),
+    sourceQuerySha256: fingerprintJson(sourcePayload),
+    executedQuerySha256: fingerprintJson(payload),
     rowCount: 2,
     rowsSha256: rowsSha256(rows),
   }));
@@ -1158,25 +1185,27 @@ test("explore phase validates version-2 new_query evidence and material query me
   assert.ok(report.errors.some((error) => /material queryDelta/.test(error)));
 
   await writeFile(metaPath, JSON.stringify(validMeta));
-  await writeFile(payloadPath, JSON.stringify({ ...payload, endDate: "2026-07-03" }));
+  const badDelta = structuredClone(validMeta);
+  badDelta.queryDelta = { ...badDelta.queryDelta, changedKeys: [] };
+  await writeFile(metaPath, JSON.stringify(badDelta));
   report = await checkSessionLayout(session, { phase: "explore" });
-  assert.ok(report.errors.some((error) => /payloadSha256 mismatch|query shape mismatch|queryDelta cannot be reproduced/.test(error)));
-  await writeFile(payloadPath, JSON.stringify(payload));
+  assert.ok(report.errors.some((error) => /queryDelta cannot be reproduced from patch/.test(error)));
+  await writeFile(metaPath, JSON.stringify(validMeta));
 
-  const badPayloadHash = { ...validMeta, payloadSha256: "0".repeat(64) };
-  await writeFile(metaPath, JSON.stringify(badPayloadHash));
+  const badPatchHash = { ...validMeta, queryPatchSha256: "0".repeat(64) };
+  await writeFile(metaPath, JSON.stringify(badPatchHash));
   report = await checkSessionLayout(session, { phase: "explore" });
-  assert.ok(report.errors.some((error) => /payloadSha256 mismatch/.test(error)));
+  assert.ok(report.errors.some((error) => /queryPatch hash mismatch/.test(error)));
 
-  const badSourceShape = { ...validMeta, sourceQueryShape: {} };
-  await writeFile(metaPath, JSON.stringify(badSourceShape));
+  const badSourceFp = { ...validMeta, sourceQuerySha256: "0".repeat(64) };
+  await writeFile(metaPath, JSON.stringify(badSourceFp));
   report = await checkSessionLayout(session, { phase: "explore" });
-  assert.ok(report.errors.some((error) => /source query shape mismatch/.test(error)));
+  assert.ok(report.errors.some((error) => /source query fingerprint mismatch/.test(error)));
 
-  const badQueryShape = { ...validMeta, queryShape: {} };
-  await writeFile(metaPath, JSON.stringify(badQueryShape));
+  const badExecutedFp = { ...validMeta, executedQuerySha256: "0".repeat(64) };
+  await writeFile(metaPath, JSON.stringify(badExecutedFp));
   report = await checkSessionLayout(session, { phase: "explore" });
-  assert.ok(report.errors.some((error) => /query shape mismatch/.test(error)));
+  assert.ok(report.errors.some((error) => /executed query fingerprint mismatch/.test(error)));
   await writeFile(metaPath, JSON.stringify(validMeta));
 
   const evidencePath = evidence.evidencePath;
@@ -1210,14 +1239,15 @@ test("zero-row new_query evidence assembles and passes with noData summary", asy
   await mkdir(join(session, "data", "cards", "c1"), { recursive: true });
   const resultPath = join(session, "result.json");
   const sourcePayload = normalizeEntryPayload({
-    indicatorFieldList: ["profitAmt"],
-    aggDimUniqueCodeList: ["incDate"],
-    startDate: "2026-07-01",
-    endDate: "2026-07-02",
+    metrics: ["profitAmt"],
+    statisticPolicy: "SUMMARY",
+    time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+    dimensions: ["incDate"],
+    filters: {},
   });
   await writeFile(resultPath, JSON.stringify({
     status: "confirmed",
-    cards: [{ id: "c1", title: "来源卡", requestBody: sourcePayload }],
+    cards: [{ id: "c1", title: "来源卡", query: { request: sourcePayload, comparisons: [] } }],
   }));
   const writerRows = [];
   await writeFile(join(session, "data", "cards", "c1", "entry.json"), JSON.stringify(writerRows));
@@ -1245,30 +1275,26 @@ test("zero-row new_query evidence assembles and passes with noData summary", asy
   );
   const payload = normalizeEntryPayload({
     ...sourcePayload,
-    aggDimUniqueCodeList: ["categoryLevel1Id"],
+    dimensions: ["categoryLevel1Id"],
   });
-  const payloadPath = join(session, "data", "explore", "empty-new-1.payload.json");
-  const sourceQueryShape = semanticQueryShape(sourcePayload);
-  const queryShape = semanticQueryShape(payload);
+  const queryPatch = computeQueryPatch(sourcePayload, payload);
   const queryDelta = materialQueryDelta(sourcePayload, payload);
   const rows = [];
-  await writeFile(payloadPath, JSON.stringify(payload));
   await writeFile(join(session, "data", "explore", "empty-new-1.json"), JSON.stringify(rows));
   await writeFile(join(session, "data", "explore", "empty-new-1.meta.json"), JSON.stringify({
     producer: "fetch-explore.mjs",
-    producerVersion: 2,
+    producerVersion: 3,
+    cacheContractVersion: 3,
     taskId: "empty-new-1",
     fromCardId: "c1",
     status: "ok",
     attempts: [{ attempt: 1, status: 0 }],
     pagination: { mode: "all-pages", singlePage: false },
     queryDelta,
-    payloadPath,
-    payloadSha256: fingerprintJson(payload),
-    sourceQueryShape,
-    sourceQueryShapeSha256: fingerprintJson(sourceQueryShape),
-    queryShape,
-    queryShapeSha256: fingerprintJson(queryShape),
+    queryPatch,
+    queryPatchSha256: fingerprintJson(queryPatch),
+    sourceQuerySha256: fingerprintJson(sourcePayload),
+    executedQuerySha256: fingerprintJson(payload),
     rowCount: 0,
     rowsSha256: rowsSha256(rows),
   }));

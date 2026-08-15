@@ -1,11 +1,14 @@
 /**
  * Report Writer's small, machine-checkable return contract.
  *
- * The B2 parent passes `buildWriterReturnSchema()` to pi-subagents as the
- * one-step chain's `outputSchema`.  Pi then rejects a Writer that does not
- * submit this exact structured output through `structured_output`.
+ * ack_cli_data returns this receipt and writes the same object to the
+ * parent-owned outputSchema capture. The editor LLM never authors the schema.
  */
+import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+
+export const WRITER_ACK_TOOL = "ack_cli_data";
+export const WRITER_CAPTION_TOOL = "submit_card_caption";
 
 export function sanitizeCardId(raw) {
   const value = String(raw || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -25,76 +28,31 @@ export function writerReturnPaths({ sessionDir, cardId }) {
     cardId: String(cardId),
     dataPath: join(cardDir, "entry.json"),
     metaPath: join(cardDir, "entry.meta.json"),
+    columnMetaPath: join(cardDir, "entry.column-meta.json"),
+    evidencePath: join(cardDir, "caption-evidence.json"),
+    captionPath: join(cardDir, "caption.md"),
   };
 }
 
-function analysisSchema({ failure = false } = {}) {
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      summary: { type: "string", minLength: 1 },
-      findings: failure
-        ? { type: "array", maxItems: 0 }
-        : {
-            type: "array",
-            maxItems: 1,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                statement: { type: "string", minLength: 1 },
-                evidence: {
-                  type: "array",
-                  minItems: 1,
-                  maxItems: 1,
-                  items: {
-                    type: "string",
-                    pattern: "^entry\\.json#(?:/(?:[^~/]|~[01])*)*$",
-                  },
-                },
-              },
-              required: ["statement", "evidence"],
-            },
-          },
-      recommendations: failure
-        ? { type: "array", maxItems: 0 }
-        : {
-            type: "array",
-            minItems: 1,
-            maxItems: 1,
-            items: { type: "string", minLength: 1 },
-          },
-    },
-    required: ["summary", "findings", "recommendations"],
-  };
-}
-
-/**
- * Build an exact per-card JSON Schema for pi-subagents' `outputSchema`.
- * `dataPath`/`metaPath` are constants, so a Writer cannot point the parent at
- * another card or another session.
- */
+/** Programmatic outputSchema for the ack_cli_data receipt. */
 export function buildWriterReturnSchema({ cardId, dataPath, metaPath }) {
   if (!cardId || !dataPath || !metaPath || !isAbsolute(dataPath) || !isAbsolute(metaPath)) {
     throw new Error("cardId, dataPath, and metaPath must be supplied as absolute per-card values");
   }
-  const common = {
-    cardId: { const: String(cardId) },
-    analysis: analysisSchema(),
-  };
   return {
     oneOf: [
       {
         type: "object",
         additionalProperties: false,
         properties: {
-          ...common,
+          cardId: { const: String(cardId) },
           fetchStatus: { const: "success" },
           dataPath: { const: dataPath },
           metaPath: { const: metaPath },
+          rowCount: { type: "integer", minimum: 0 },
+          rowsSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         },
-        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "analysis"],
+        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "rowCount", "rowsSha256"],
       },
       {
         type: "object",
@@ -105,89 +63,11 @@ export function buildWriterReturnSchema({ cardId, dataPath, metaPath }) {
           dataPath: { const: null },
           metaPath: { const: null },
           error: { type: "string", minLength: 1 },
-          analysis: analysisSchema({ failure: true }),
         },
-        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "error", "analysis"],
+        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "error"],
       },
     ],
   };
-}
-
-/**
- * Model-facing parameters for the Writer's typed terminal tool.
- *
- * Assignment-specific card/path authority remains a runtime validation in
- * validateWriterReturn(), while this schema makes the direct success/failure
- * shape explicit without the extra structured_output.value wrapper.
- */
-export function buildWriterSubmitSchema() {
-  return {
-    oneOf: [
-      {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          cardId: { type: "string", minLength: 1 },
-          fetchStatus: { const: "success" },
-          dataPath: { type: "string", minLength: 1 },
-          metaPath: { type: "string", minLength: 1 },
-          analysis: analysisSchema(),
-        },
-        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "analysis"],
-      },
-      {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          cardId: { type: "string", minLength: 1 },
-          fetchStatus: { const: "failed" },
-          dataPath: { type: "null" },
-          metaPath: { type: "null" },
-          error: { type: "string", minLength: 1 },
-          analysis: analysisSchema({ failure: true }),
-        },
-        required: ["cardId", "fetchStatus", "dataPath", "metaPath", "error", "analysis"],
-      },
-    ],
-  };
-}
-
-/**
- * Normalize the only provider-dependent part of the typed tool transport.
- *
- * Some OpenAI-compatible relays occasionally serialize a nested object tool
- * argument as JSON text. Accept that transport form at the tool boundary, but
- * immediately restore it to an object; the persisted/parent return still goes
- * through the unchanged strict Writer schema and can never contain the string.
- */
-export function normalizeWriterSubmitValue(value) {
-  if (!isPlainObject(value)) return value;
-  let normalized = value;
-  if (typeof value.analysis === "string") {
-    let analysis;
-    try {
-      analysis = JSON.parse(value.analysis);
-    } catch (error) {
-      throw new Error(`analysis string must contain one JSON object: ${error.message || error}`);
-    }
-    if (!isPlainObject(analysis)) {
-      throw new Error("analysis string must contain one JSON object");
-    }
-    normalized = { ...normalized, analysis };
-  }
-
-  // Some OpenAI-compatible relays stringify JSON null tool arguments. Restore
-  // only the exact, paired failed-branch transport form. Partial conversion,
-  // other spellings, and every success payload remain invalid; the canonical
-  // return still passes the unchanged strict schema and semantic validator.
-  if (
-    normalized.fetchStatus === "failed" &&
-    normalized.dataPath === "null" &&
-    normalized.metaPath === "null"
-  ) {
-    normalized = { ...normalized, dataPath: null, metaPath: null };
-  }
-  return normalized;
 }
 
 function isPlainObject(value) {
@@ -200,53 +80,92 @@ function hasExactlyKeys(value, keys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function validPointer(value) {
-  return typeof value === "string" && /^entry\.json#(?:\/(?:[^~/]|~[01])*)*$/.test(value);
+function messageText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((item) => (item && item.type === "text" && typeof item.text === "string" ? item.text : ""))
+    .filter(Boolean)
+    .join("\n");
 }
 
-function validateAnalysis(analysis, { failure }, errors) {
-  if (!isPlainObject(analysis) || !hasExactlyKeys(analysis, ["summary", "findings", "recommendations"])) {
-    errors.push("analysis must contain only summary, findings, and recommendations");
-    return;
-  }
-  if (typeof analysis.summary !== "string" || !analysis.summary.trim()) {
-    errors.push("analysis.summary must be a non-empty string");
-  }
-  if (!Array.isArray(analysis.findings)) {
-    errors.push("analysis.findings must be an array");
-  } else if (failure && analysis.findings.length) {
-    errors.push("a failed fetch must return no findings");
-  } else if (!failure) {
-    if (analysis.findings.length > 1) {
-      errors.push("a successful Writer return may contain at most one finding");
-    }
-    for (const [index, finding] of analysis.findings.entries()) {
-      if (!isPlainObject(finding) || !hasExactlyKeys(finding, ["statement", "evidence"])) {
-        errors.push(`analysis.findings[${index}] must contain only statement and evidence`);
-        continue;
-      }
-      if (typeof finding.statement !== "string" || !finding.statement.trim()) {
-        errors.push(`analysis.findings[${index}].statement must be a non-empty string`);
-      }
-      if (!Array.isArray(finding.evidence) || finding.evidence.length !== 1 || !finding.evidence.every(validPointer)) {
-        errors.push(`analysis.findings[${index}].evidence must contain exactly one entry.json row JSON Pointer`);
-      }
-    }
-  }
-  if (!Array.isArray(analysis.recommendations) || !analysis.recommendations.every((item) => typeof item === "string" && item.trim())) {
-    errors.push("analysis.recommendations must be an array of non-empty strings");
-  } else if (failure && analysis.recommendations.length) {
-    errors.push("a failed fetch must return no recommendations");
-  } else if (!failure && analysis.recommendations.length !== 1) {
-    errors.push("a successful Writer return must contain exactly one recommendation");
+function asReceiptCandidate(value) {
+  if (!isPlainObject(value)) return null;
+  if (value.fetchStatus !== "success" && value.fetchStatus !== "failed") return null;
+  return value;
+}
+
+function receiptFromToolMessage(message) {
+  if (!isPlainObject(message)) return null;
+  const role = String(message.role || "");
+  if (role !== "toolResult" && role !== "tool") return null;
+  const toolName = String(message.toolName || message.name || "").toLowerCase();
+  if (toolName !== WRITER_ACK_TOOL && toolName !== WRITER_CAPTION_TOOL) return null;
+  const fromDetails = asReceiptCandidate(message.details);
+  if (fromDetails) return fromDetails;
+  const text = messageText(message.content) || (typeof message.text === "string" ? message.text : "");
+  if (!text.trim()) return null;
+  try {
+    return asReceiptCandidate(JSON.parse(text));
+  } catch {
+    return null;
   }
 }
 
-/**
- * Useful for local checks and tests. Runtime enforcement is the chain
- * `outputSchema`; this gives the parent the same semantic validation when it
- * needs to inspect a captured structured result.
- */
+function extractWriterReceiptFromMessages(messages) {
+  if (!Array.isArray(messages)) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const direct = receiptFromToolMessage(message);
+    if (direct) return direct;
+    if (isPlainObject(message) && isPlainObject(message.message)) {
+      const nested = receiptFromToolMessage(message.message);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function extractWriterReceiptFromTranscript(transcriptPath) {
+  if (typeof transcriptPath !== "string" || !isAbsolute(transcriptPath) || !transcriptPath.endsWith(".jsonl")) {
+    return null;
+  }
+  let text;
+  try {
+    text = readFileSync(transcriptPath, "utf8");
+  } catch {
+    return null;
+  }
+  const records = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      // Skip a damaged line and keep looking for a later ack.
+    }
+  }
+  return extractWriterReceiptFromMessages(records);
+}
+
+/** Read the last ack_cli_data tool result from a pi-subagents child result. */
+export function extractWriterReceipt(result) {
+  if (!isPlainObject(result)) return null;
+  const fromMessages = extractWriterReceiptFromMessages(result.messages);
+  if (fromMessages) return fromMessages;
+  const transcriptPath = typeof result.transcriptPath === "string"
+    ? result.transcriptPath
+    : (isPlainObject(result.artifactPaths) && typeof result.artifactPaths.transcriptPath === "string"
+      ? result.artifactPaths.transcriptPath
+      : "");
+  return extractWriterReceiptFromTranscript(transcriptPath);
+}
+
+export function isWriterEmptyOutputError(error) {
+  return typeof error === "string" && /produced no output/i.test(error);
+}
+
+/** Semantic check for the ack_cli_data receipt the parent lifted from the child. */
 export function validateWriterReturn(value, expected) {
   const errors = [];
   if (!isPlainObject(value)) return { ok: false, errors: ["Writer return must be one JSON object"] };
@@ -255,19 +174,23 @@ export function validateWriterReturn(value, expected) {
   }
   if (value.cardId !== String(expected.cardId)) errors.push("cardId does not match the assigned card");
   if (value.fetchStatus === "success") {
-    if (!hasExactlyKeys(value, ["cardId", "fetchStatus", "dataPath", "metaPath", "analysis"])) {
+    if (!hasExactlyKeys(value, ["cardId", "fetchStatus", "dataPath", "metaPath", "rowCount", "rowsSha256"])) {
       errors.push("successful Writer return has unexpected or missing fields");
     }
     if (value.dataPath !== expected.dataPath) errors.push("dataPath does not match this card's entry.json");
     if (value.metaPath !== expected.metaPath) errors.push("metaPath does not match this card's entry.meta.json");
-    validateAnalysis(value.analysis, { failure: false }, errors);
+    if (!Number.isSafeInteger(value.rowCount) || value.rowCount < 0) {
+      errors.push("successful Writer return requires a non-negative rowCount");
+    }
+    if (typeof value.rowsSha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.rowsSha256)) {
+      errors.push("successful Writer return requires a 64-character rowsSha256");
+    }
   } else if (value.fetchStatus === "failed") {
-    if (!hasExactlyKeys(value, ["cardId", "fetchStatus", "dataPath", "metaPath", "error", "analysis"])) {
+    if (!hasExactlyKeys(value, ["cardId", "fetchStatus", "dataPath", "metaPath", "error"])) {
       errors.push("failed Writer return has unexpected or missing fields");
     }
     if (value.dataPath !== null || value.metaPath !== null) errors.push("failed Writer return must use null dataPath and metaPath");
     if (typeof value.error !== "string" || !value.error.trim()) errors.push("failed Writer return requires a non-empty error");
-    validateAnalysis(value.analysis, { failure: true }, errors);
   } else {
     errors.push('fetchStatus must be "success" or "failed"');
   }
@@ -288,4 +211,9 @@ export function parseWriterReturnText(text) {
 export function writerReturnPathsForResult({ resultPath, cardId }) {
   const absResult = resolve(resultPath);
   return writerReturnPaths({ sessionDir: dirname(absResult), cardId });
+}
+
+/** Derive the caption.md path from an entry.json data path. */
+export function captionPathFor(dataPath) {
+  return String(dataPath || "").replace(/entry\.json$/, "caption.md");
 }

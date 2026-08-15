@@ -553,7 +553,7 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         "- 模型不得自行调用 subagent list 或 stage-gate；自动检查成功后扩展会完成 A_CONFIG。",
         "- 自动检查失败、超时或缺少 Agent 时，扩展会 fail 当前 Gate；不要重试或继续其他工作。"
       );
-    } else if (!["B0_PREFLIGHT", "B2_WRITER", "B3_RESEARCH"].includes(stageId)) {
+    } else if (!["B0_PREFLIGHT", "B2_WRITER", "B2_MAIN", "B3_RESEARCH"].includes(stageId)) {
       lines.push(
         "- 只执行当前阶段；顺序必须是：start（扩展已完成）→ 工作 → layout → finish → stop。",
         `- 成功时最后一个且独立的工具调用必须是：\`${finishCommand}\``,
@@ -568,8 +568,8 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
     }[stageId];
     if (chainAgent && stageId !== "B2_WRITER") {
       lines.push(
-        `- 当前阶段的 contract 子代理必须复制此参数外形：\`subagent({"context":"fresh","chain":[{"agent":"${chainAgent}","task":"<完整任务>"}]})\`。`,
-        "- `context` 是顶层 `chain` 的同级字段，绝不能写进 `chain[0]`；工具参数 schema 会在扩展修正前拒绝错误层级。"
+        `- 当前阶段的 contract 子代理必须复制此参数外形：\`subagent({"chain":[{"agent":"${chainAgent}","task":"<完整任务>"}]})\`。`,
+        "- 不要在调用中写 `context` 字段；`qdm-harness` 会在 `tool_call` hook 中自动注入 `context: \"fresh\"`。`chain[0]` 只放 `agent` 和 `task`，多余字段会被 pi-subagents 的 `prepareArguments` 在扩展修正前拒绝。"
       );
     }
     if (stageId === "B0_PREFLIGHT") {
@@ -588,6 +588,12 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
           "- 不得在同一消息并发或嵌入 subagent，不得复述、解释或规划后续。status 成功的 tool result 会给出下一条唯一 Writer 调用。"
         );
       }
+    }
+    if (stageId === "B2_MAIN") {
+      lines.push(
+        "- 扩展正在调用 compose-main 合并初版 analysis/main.md；不要派发子代理，不要手写 MAIN，不要调用 stage-gate。",
+        "- 合并完成后扩展会 finish B2_MAIN 并停在人工 Gate。"
+      );
     }
     if (stageId === "B3_RESEARCH") {
       const finalizer = join(
@@ -642,6 +648,17 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         "- CURRENT INPUT IS CONSUMED：本轮开始前，扩展已把当前用户的“继续”只用于进入并完成 B0；同一输入不能再次批准 B0，也不能启动 B2。",
         "- 下一条 assistant 响应必须只原样返回上面的 B0 Gate 文本，不得回顾上一阶段、比较旧状态、调用工具或继续推理。返回后立即停止。",
         "- 只有用户随后新发的一条“继续”才会批准 B0 并启动 B2 Writer。"
+      );
+    } else if (stageId === "B2_MAIN") {
+      const message = formatGateMessage(state)
+        .split("\n")
+        .filter((line) => !line.startsWith("当前必须立即停止工具调用"))
+        .join("\n");
+      lines.push(
+        `\n${message}`,
+        "- 初版 `$SESSION/analysis/main.md` 已由 compose-main 按卡片顺序合并。",
+        "- 立即原样返回上面的 Gate 文本并停止；不要改 MAIN、不要派 Planner/Researcher。",
+        "- 用户回复“继续”后才进入下一启用阶段。"
       );
     } else {
       lines.push(

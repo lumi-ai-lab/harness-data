@@ -42,6 +42,9 @@ plan/
 *-cmr-response.json
 scripts/*.json
 
+# Node dependencies
+node_modules/
+
 # Local logs and temp files
 *.log
 *.tmp

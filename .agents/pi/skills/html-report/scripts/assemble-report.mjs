@@ -17,6 +17,10 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rowsSha256 } from "./prepare-research-evidence.mjs";
+import { sortDimensionColumns, resolveDimensionColumn } from "./caption-dims.mjs";
+import { columnMetaPathFor } from "./fetch-entry.mjs";
+import { metricQueryFromCard } from "./metric-query-contract.mjs";
+import { applyQueryPatch } from "./fetch-explore.mjs";
 
 const argv = process.argv.slice(2);
 const value = (name) => {
@@ -56,21 +60,41 @@ function sha256(text) {
   return createHash("sha256").update(String(text), "utf8").digest("hex");
 }
 
-export function rowsToMarkdown(rows) {
+export function rowsToMarkdown(rows, { columnLabels = {}, dimensions = [] } = {}) {
   const objects = rows.filter((row) => row && typeof row === "object" && !Array.isArray(row));
   if (!objects.length) return { markdown: "", headers: [], rowCount: 0 };
-  const headers = [];
+  const allKeys = [];
   for (const row of objects) {
-    for (const key of Object.keys(row)) if (!headers.includes(key)) headers.push(key);
+    for (const key of Object.keys(row)) if (!allKeys.includes(key)) allKeys.push(key);
   }
+  // Sort dimension columns to the front using two-level group/dim priority
+  // (no caps), then resolve actual column keys via --dim-labels mapping.
+  const sampleRow = objects[0];
+  const dimColumns = [];
+  const dimCodeByCol = new Map();
+  for (const dim of sortDimensionColumns(dimensions)) {
+    const col = resolveDimensionColumn(dim, sampleRow);
+    if (allKeys.includes(col) && !dimColumns.includes(col)) {
+      dimColumns.push(col);
+      dimCodeByCol.set(col, dim);
+    }
+  }
+  const nonDimColumns = allKeys.filter((key) => !dimColumns.includes(key));
+  const orderedColumns = [...dimColumns, ...nonDimColumns];
+  const displayHeaders = orderedColumns.map((key) => {
+    if (columnLabels[key]) return columnLabels[key];
+    const dimCode = dimCodeByCol.get(key);
+    if (dimCode && columnLabels[dimCode]) return columnLabels[dimCode];
+    return key;
+  });
   const lines = [
-    `| ${headers.map(cellText).join(" | ")} |`,
-    `| ${headers.map(() => "---").join(" | ")} |`,
+    `| ${displayHeaders.map(cellText).join(" | ")} |`,
+    `| ${displayHeaders.map(() => "---").join(" | ")} |`,
   ];
   for (const row of objects) {
-    lines.push(`| ${headers.map((key) => cellText(row[key])).join(" | ")} |`);
+    lines.push(`| ${orderedColumns.map((key) => cellText(row[key])).join(" | ")} |`);
   }
-  return { markdown: lines.join("\n"), headers, rowCount: objects.length };
+  return { markdown: lines.join("\n"), headers: displayHeaders, rowCount: objects.length };
 }
 
 function titleForCard(card, cardId) {
@@ -110,7 +134,14 @@ export async function assembleReport(sessionDir) {
     if (!(await exists(entryPath))) throw new Error(`missing entry.json for successful card ${cardId}`);
     const payload = JSON.parse(await readFile(entryPath, "utf8"));
     const rows = extractRows(payload);
-    const table = rowsToMarkdown(rows);
+    const columnMetaPath = join(abs, "data", "cards", cardId, "entry.column-meta.json");
+    let columnLabels = {};
+    if (await exists(columnMetaPath)) {
+      columnLabels = JSON.parse(await readFile(columnMetaPath, "utf8"));
+    }
+    let cardDimensions = [];
+    try { cardDimensions = metricQueryFromCard(card).dimensions || []; } catch { /* card query unreadable */ }
+    const table = rowsToMarkdown(rows, { columnLabels, dimensions: cardDimensions });
     if (meta.rowCount !== rows.length) {
       throw new Error(`entry.meta.json rowCount does not match entry.json for card ${cardId}`);
     }
@@ -214,7 +245,20 @@ export async function assembleReport(sessionDir) {
     const meta = JSON.parse(await readFile(metaPath, "utf8"));
     const payload = JSON.parse(await readFile(dataPath, "utf8"));
     const rows = extractRows(payload);
-    const table = rowsToMarkdown(rows);
+    const exploreColumnMetaPath = columnMetaPathFor(dataPath);
+    let columnLabels = {};
+    if (await exists(exploreColumnMetaPath)) {
+      columnLabels = JSON.parse(await readFile(exploreColumnMetaPath, "utf8"));
+    }
+    let exploreDimensions = [];
+    const sourceCard = cards.find((c) => c?.id === meta.fromCardId);
+    if (sourceCard) {
+      try {
+        const sourceQuery = metricQueryFromCard(sourceCard);
+        exploreDimensions = applyQueryPatch(sourceQuery, meta.queryPatch || {}).dimensions || [];
+      } catch { /* explore query unreadable */ }
+    }
+    const table = rowsToMarkdown(rows, { columnLabels, dimensions: exploreDimensions });
     if (meta.status !== "ok" || meta.rowCount !== rows.length || !meta.rowsSha256) {
       throw new Error(`invalid explore data/meta pair for task ${taskId}`);
     }

@@ -1,9 +1,12 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat, lstat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { loadAuthzConfig, resolveAuthBlob, resolveMetricCliPath } from "./authz-config.mjs";
+import { applyAuthzToToolCall } from "./authz-inject.mjs";
+import { AuthzStateStore } from "./authz-store.mjs";
 import {
   applyGateInput,
   b25EditorBootstrapContract,
@@ -25,10 +28,13 @@ import {
 } from "../../skills/html-report/scripts/stage-gate.mjs";
 import {
   buildWriterReturnSchema,
+  captionPathFor,
+  extractWriterReceipt,
+  isWriterEmptyOutputError,
   validateWriterReturn,
   writerReturnPathsForResult,
 } from "../../skills/html-report/scripts/writer-return.mjs";
-import { reusableEntry } from "../../skills/html-report/scripts/fetch-entry.mjs";
+import { reusableEntry, fetchAllEntries } from "../../skills/html-report/scripts/fetch-entry.mjs";
 import {
   buildResearcherReturnSchema,
   researcherExpectedFromAssignment,
@@ -46,6 +52,7 @@ import {
   validateDesignerArtifacts,
 } from "../../skills/html-report/scripts/designer-return.mjs";
 import { checkSessionLayout } from "../../skills/html-report/scripts/check-session-layout.mjs";
+import { composeMain } from "../../skills/html-report/scripts/compose-main.mjs";
 import {
   PARENT_REVIEWER_SCAN_MARKER,
   REVIEWER_INPUT_MAX_BYTES,
@@ -82,6 +89,9 @@ interface PiEventBus {
 
 interface PiContextEvent {
   messages?: unknown[];
+  /** Host may attach encrypted auth material outside user-visible prompt text. */
+  _auth?: string;
+  _auth_user_id?: string;
 }
 
 interface PiBeforeAgentStartEvent {
@@ -323,9 +333,11 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/writer-return.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-entry.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-explore.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-cli-executor.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-query-contract.mjs",
   ".agents/pi/skills/html-report/scripts/research-contract.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-retry.mjs",
-  ".agents/pi/skills/html-report/scripts/indicators-timeout.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-retry.mjs",
+  ".agents/pi/skills/html-report/scripts/metric-timeout.mjs",
   ".agents/pi/skills/html-report/scripts/researcher-return.mjs",
   ".agents/pi/skills/html-report/scripts/submit-research-findings.mjs",
   ".agents/pi/skills/html-report/scripts/prepare-research-evidence.mjs",
@@ -336,6 +348,7 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/reviewer-return.mjs",
   ".agents/pi/skills/html-report/scripts/designer-return.mjs",
   ".agents/pi/skills/html-report/scripts/assemble-report.mjs",
+  ".agents/pi/skills/html-report/scripts/compose-main.mjs",
   ".agents/pi/skills/html-report/scripts/quality-scan.mjs",
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",
@@ -740,13 +753,14 @@ function parentDataFetchDecision(
   if (String(event.toolName || "").toLowerCase() !== "bash") return undefined;
   const command = typeof event.input?.command === "string" ? event.input.command : "";
   if (
-    /\bqdm-indicators-cli\b/i.test(command) ||
+    /\bqdm-(?:metric|indicators)-cli\b/i.test(command) ||
+    /\bQDM_METRIC_CLI\b/i.test(command) ||
     /\banalysis\s+execute\b/i.test(command) ||
     /\bfetch-(?:entry|explore)\.mjs\b/i.test(command)
   ) {
     return {
       block: true,
-      reason: "running html-report Gate 的父代理禁止直接取数；qdm-indicators-cli、analysis execute 与 fetch-entry/fetch-explore 只能由 Writer/Researcher 固定子链执行。",
+      reason: "running html-report Gate 的父代理禁止直接取数；qdm-metric-cli、analysis execute 与 fetch-entry/fetch-explore 只能由 Writer/Researcher 固定子链执行。",
     };
   }
   return undefined;
@@ -1248,6 +1262,19 @@ function sessionId(ctx?: PiExtensionContext): string {
   );
 }
 
+/**
+ * Raw logical session id for Lumi requester-context lookup.
+ * A session file path or the synthetic "unknown" value must never be hashed.
+ */
+function envelopeSessionId(ctx?: PiExtensionContext): string | null {
+  const id =
+    ctx?.sessionManager?.getSessionId?.() ||
+    process.env.PI_SESSION_ID ||
+    process.env.CLAUDE_SESSION_ID ||
+    "";
+  return id || null;
+}
+
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -1370,6 +1397,7 @@ const HTML_REPORT_STAGE_SUBAGENTS: Record<string, readonly string[] | "list" | "
   A_CONFIG: "list",
   B0_PREFLIGHT: "list",
   B2_WRITER: ["report-writer"],
+  B2_MAIN: "none",
   B25_EDITOR: ["report-researcher"],
   B3_RESEARCH: ["report-researcher"],
   B4_REVIEW: ["report-researcher", "report-reviewer"],
@@ -1876,7 +1904,7 @@ function writerInvocationFromSubagentInput(input: JsonObject | undefined): {
   const unsupported = unsupportedParallelReportAgent(input, "report-writer");
   if (unsupported) return { error: parallelReportAgentError("Report Writer", unsupported) };
   if (input.agent === "report-writer") {
-    return { error: "Report Writer 必须使用带 outputSchema 的单步骤 chain 调用，不能使用自由文本单代理调用。" };
+    return { error: "Report Writer 必须使用单步骤 chain 调用，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const writers = input.chain.filter(
@@ -1887,9 +1915,6 @@ function writerInvocationFromSubagentInput(input: JsonObject | undefined): {
     return { error: "每张卡的 Report Writer 必须是独立的一步 chain，且不得混入其他步骤。" };
   }
   const [writer] = writers;
-  if (!isObject(writer.outputSchema)) {
-    return { error: "Report Writer chain 必须提供 outputSchema；父代理不能接受自由格式返回。" };
-  }
   if (typeof writer.task !== "string" || !writer.task.trim()) {
     return { error: "Report Writer chain 缺少 task，无法校验 cardId 与数据路径。" };
   }
@@ -1961,11 +1986,10 @@ function verifiedB2WriterCardIds(projectRoot: string, session: string, gateState
 }
 
 /**
- * `outputSchema` is deterministic from the assigned card and session. The
- * extension owns the complete Writer run envelope: model-provided schemas and
- * lifecycle controls are never trusted for this narrow structured-return job.
+ * The extension owns the Writer run envelope. outputSchema is the receipt
+ * schema, generated here from the assignment — never from model JSON.
  */
-function attachWriterOutputSchema(
+function attachWriterRunEnvelope(
   input: JsonObject | undefined,
   {
     projectRoot,
@@ -1990,23 +2014,16 @@ function attachWriterOutputSchema(
   if ("error" in expected) return { error: expected.error };
   const envelope = resetContractRunEnvelope(input, writer, projectRoot);
   if (envelope.error) return envelope;
-  // Always replace caller input. A partial or serialization-damaged schema can
-  // otherwise trap the child in repeated structured_output validation turns.
   writer.outputSchema = buildWriterReturnSchema(expected);
-  // Writer is deliberately foreground-only. If it cannot return within this
-  // small read/fetch/structured sequence, pi-subagents must terminate it
-  // instead of leaving a retry or detached run alive in the background.
-  input.turnBudget = { maxTurns: 6, graceTurns: 1 };
+  // Writer is deliberately foreground-only. If it cannot return after
+  // ack_cli_data + submit_card_caption, pi-subagents must terminate it.
+  input.turnBudget = { maxTurns: 3, graceTurns: 1 };
   delete input.toolBudget;
   delete input.timeoutMs;
-  // The adapter caps CAS + retry sleeps + CLI attempts at 540s, leaving this
-  // foreground envelope headroom for model setup, evidence reads, and the
-  // final structured return.
+  // The adapter caps CAS + retry sleeps + CLI attempts at 540s. Success
+  // uses two tools; the caption tool writes the receipt as outputSchema.
   input.maxRuntimeMs = 720_000;
-  // At the hard limit, stop only further data access. `structured_output` must
-  // remain callable so the child can submit its final contract instead of
-  // looping on a budget-blocked completion tool until maxRuntimeMs.
-  writer.toolBudget = { hard: 8, block: ["read", "fetch_report_entry"] };
+  writer.toolBudget = { hard: 2, block: "*" };
   delete writer.async;
   delete writer.turnBudget;
   delete writer.timeoutMs;
@@ -2032,7 +2049,7 @@ type EditorPlannerToolResultPatch = ToolResultPatch & {
  */
 function writerSuccessText(value: unknown): string {
   return [
-    "B2 Report Writer 已通过结构化契约验证。以下 JSON 是本卡唯一可用返回：",
+    "B2 Report Writer 已通过 ack_cli_data 回执验收。以下 JSON 是本卡唯一可用返回：",
     JSON.stringify(value),
     "不要扫描 .pi-subagents 临时目录，也不要手工 ls/read entry 目录或 entry.meta.json。",
   ].join("\n");
@@ -2071,7 +2088,9 @@ async function finishWriterStageIfReady(
   value: JsonObject
 ): Promise<{ ok: boolean; text: string }> {
   if (value.fetchStatus !== "success") {
-    const reason = `B2 Writer cardId=${String(value.cardId || "unknown")} 取数失败：${String(value.error || "unknown error")}`;
+    const error = String(value.error || "unknown error");
+    const kind = error.startsWith("caption rejected:") ? "交稿失败" : "取数失败";
+    const reason = `B2 Writer cardId=${String(value.cardId || "unknown")} ${kind}：${error}`;
     return { ok: false, text: failWriterStage(projectRoot, session, reason) };
   }
 
@@ -2113,13 +2132,43 @@ async function finishWriterStageIfReady(
   const remaining: string[] = [];
   for (const expected of expectedCards) {
     const persisted = await reusableEntry(dirname(expected.dataPath), { notBeforeMs: resultMtimeMs });
-    if (!persisted) remaining.push(expected.cardId);
+    let hasCaption = false;
+    if (persisted) {
+      try {
+        const captionStat = await lstat(captionPathFor(expected.dataPath));
+        hasCaption = captionStat.isFile() && !captionStat.isSymbolicLink();
+      } catch {
+        hasCaption = false;
+      }
+    }
+    if (!persisted || !hasCaption) remaining.push(expected.cardId);
   }
   if (remaining.length) {
     return {
       ok: true,
       text: `B2 已验收当前 Writer；尚待串行派发的 cardId：${remaining.join(", ")}。不要运行 layout 或 stage-gate。`,
     };
+  }
+
+  // Caption gate: scan per-card violations after all Writers complete.
+  // If violations exist, B2_WRITER stays running; the parent model presents
+  // them to the user for per-card waive/fix decisions via caption-gate.mjs.
+  const captionGateScript = join(
+    resolve(projectRoot), ".agents", "pi", "skills", "html-report", "scripts", "caption-gate.mjs",
+  );
+  const captionGate = spawnSync(
+    process.execPath,
+    [captionGateScript, "--check", "--session-dir", sessionDir],
+    { cwd: resolve(projectRoot), encoding: "utf8" },
+  );
+  if (captionGate.status === 0 && captionGate.stdout?.trim()) {
+    const gateText = captionGate.stdout.trim();
+    if (!gateText.includes("无违规")) {
+      return {
+        ok: true,
+        text: gateText,
+      };
+    }
   }
 
   let layout;
@@ -2138,11 +2187,58 @@ async function finishWriterStageIfReady(
     const reason = `B2 Writer 产物已验收，但扩展无法自动 finish：${finished.error || "unknown stage-gate error"}`;
     return { ok: false, text: reason };
   }
+  return finalizeMainDraftIfReady(projectRoot, session);
+}
+
+function failMainStage(projectRoot: string | undefined, session: string | undefined, reason: string): string {
+  const concise = String(reason || "B2 Main compose failed").slice(0, 500);
+  if (!projectRoot || !session || session === "unknown") {
+    return `${concise}\n缺少当前项目或 Session，扩展无法自动 fail B2_MAIN。`;
+  }
+  const failed = runStageGate(projectRoot, session, "fail", [
+    "--stage",
+    "B2_MAIN",
+    "--reason",
+    concise,
+  ]);
   const state = readGateState(projectRoot, session);
-  const gateText = state ? formatGateMessage(state, { stageId: "B2_WRITER" }) : "B2_WRITER completed";
+  if (!failed.ok) return `${concise}\n扩展无法自动 fail B2_MAIN：${failed.error || "unknown stage-gate error"}`;
+  return state ? `${concise}\n${formatGateMessage(state, { stageId: "B2_MAIN" })}` : concise;
+}
+
+async function finalizeMainDraftIfReady(
+  projectRoot: string,
+  session: string,
+): Promise<{ ok: boolean; text: string }> {
+  const afterWriter = readGateState(projectRoot, session);
+  if (!isObject(afterWriter) || afterWriter.currentStage !== "B2_MAIN") {
+    const gateText = afterWriter
+      ? formatGateMessage(afterWriter, { stageId: String(afterWriter.currentStage || "B2_WRITER") })
+      : "B2_WRITER completed";
+    return {
+      ok: true,
+      text: `phase-writer layout：passed（扩展已确定性检查并完成 B2）\n${gateText}`,
+    };
+  }
+
+  const sessionDir = htmlReportSessionDir(projectRoot, session);
+  try {
+    await composeMain(sessionDir);
+  } catch (error) {
+    const reason = `B2 Main 合并 analysis/main.md 失败：${error instanceof Error ? error.message : String(error)}`;
+    return { ok: false, text: failMainStage(projectRoot, session, reason) };
+  }
+
+  const finishedMain = runStageGate(projectRoot, session, "finish", ["--stage", "B2_MAIN"]);
+  if (!finishedMain.ok) {
+    const reason = `初版 MAIN 已写出，但扩展无法自动 finish B2_MAIN：${finishedMain.error || "unknown stage-gate error"}`;
+    return { ok: false, text: reason };
+  }
+  const state = readGateState(projectRoot, session);
+  const gateText = state ? formatGateMessage(state, { stageId: "B2_MAIN" }) : "B2_MAIN completed";
   return {
     ok: true,
-    text: `phase-writer layout：passed（扩展已确定性检查并完成 B2）\n${gateText}`,
+    text: `phase-writer layout：passed；初版 analysis/main.md 已由 compose-main 合并\n${gateText}`,
   };
 }
 
@@ -2154,13 +2250,6 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     return failWriterResult(projectRoot, session, `B2 Report Writer 拒绝：${invocation.error}`);
   }
   if (!invocation.invocation) return undefined;
-  if (event.isError) {
-    return failWriterResult(
-      projectRoot,
-      session,
-      `B2 Report Writer 子代理失败：${contentText(event.content) || "顶层 tool_result isError=true"}`
-    );
-  }
   const expected = writerExpectedFromTask(invocation.invocation.task, { projectRoot, session });
   if ("error" in expected) {
     return failWriterResult(projectRoot, session, `B2 Report Writer 拒绝：${expected.error}`);
@@ -2172,10 +2261,37 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     return failWriterResult(
       projectRoot,
       session,
-      "B2 Report Writer 拒绝：子代理没有返回唯一 result。"
+      event.isError
+        ? `B2 Report Writer 子代理失败：${contentText(event.content) || "顶层 tool_result isError=true"}`
+        : "B2 Report Writer 拒绝：子代理没有返回唯一 result。"
     );
   }
-  if (result.exitCode !== 0) {
+  const receipt = isObject(result.structuredOutput)
+    ? result.structuredOutput
+    : extractWriterReceipt(result);
+  const emptyOutput = isWriterEmptyOutputError(
+    typeof result.error === "string" ? result.error : contentText(event.content)
+  );
+  if (!receipt) {
+    if (event.isError || result.exitCode !== 0) {
+      const childError = typeof result.error === "string" && result.error.trim()
+        ? `：${result.error.trim()}`
+        : event.isError
+          ? `：${contentText(event.content) || "顶层 tool_result isError=true"}`
+          : "";
+      return failWriterResult(
+        projectRoot,
+        session,
+        `B2 Report Writer 拒绝：子代理 exitCode=${String(result.exitCode ?? "unknown")}${childError}`
+      );
+    }
+    return failWriterResult(
+      projectRoot,
+      session,
+      "B2 Report Writer 拒绝：子代理未通过 ack_cli_data 返回回执。"
+    );
+  }
+  if (!emptyOutput && (event.isError || result.exitCode !== 0)) {
     const childError = typeof result.error === "string" && result.error.trim()
       ? `：${result.error.trim()}`
       : "";
@@ -2185,14 +2301,7 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       `B2 Report Writer 拒绝：子代理 exitCode=${String(result.exitCode)}${childError}`
     );
   }
-  if (!("structuredOutput" in result)) {
-    return failWriterResult(
-      projectRoot,
-      session,
-      "B2 Report Writer 拒绝：子代理未通过 typed submit 与 outputSchema capture 提交唯一 JSON。"
-    );
-  }
-  const checked = validateWriterReturn(result.structuredOutput, expected);
+  const checked = validateWriterReturn(receipt, expected);
   if (!checked.ok) {
     return failWriterResult(
       projectRoot,
@@ -2200,7 +2309,7 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       `B2 Report Writer 拒绝：返回契约不合法：${checked.errors.join("；")}`
     );
   }
-  if (result.structuredOutput.fetchStatus === "success") {
+  if (receipt.fetchStatus === "success") {
     let persisted = null;
     try {
       const resultMtimeMs = (await stat(expected.resultPath)).mtimeMs;
@@ -2224,9 +2333,9 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       "B2 Report Writer 拒绝：缺少当前项目或 Session，无法执行确定性验收。"
     );
   }
-  if (result.structuredOutput.fetchStatus === "success") {
+  if (receipt.fetchStatus === "success") {
     try {
-      persistEditorWriterReturn(expected.resultPath, result.structuredOutput);
+      persistEditorWriterReturn(expected.resultPath, receipt);
     } catch (error) {
       const reason = `B2 Writer 已验收，但无法建立 B2.5 Planner 输入缓存：${error instanceof Error ? error.message : String(error)}`;
       return {
@@ -2235,12 +2344,12 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
       };
     }
   }
-  const finalized = await finishWriterStageIfReady(projectRoot, session, result.structuredOutput);
+  const finalized = await finishWriterStageIfReady(projectRoot, session, receipt);
   return {
     isError: finalized.ok ? false : true,
     content: [{
       type: "text",
-      text: `${writerSuccessText(result.structuredOutput)}\n${finalized.text}`,
+      text: `${writerSuccessText(receipt)}\n${finalized.text}`,
     }],
     // Preserve the original result for extensions and diagnostics. The Editor
     // consumes the validated JSON above, rather than navigating this detail.
@@ -2265,8 +2374,8 @@ function editorPlannerInvocationFromSubagentInput(input: JsonObject | undefined)
       typeof step.task === "string" && isEditorPlannerAssignment(step.task)
   );
   if (!planners.length) return {};
-  if (input.chain.length !== 1 || planners.length !== 1 || input.context !== "fresh") {
-    return { error: "Editor Planner 必须是 context=fresh 的独立一步 report-researcher chain。" };
+  if (input.chain.length !== 1 || planners.length !== 1) {
+    return { error: "Editor Planner 必须是独立一步 report-researcher chain。" };
   }
   const [planner] = planners;
   if (!isObject(planner.outputSchema)) {
@@ -2299,8 +2408,8 @@ function attachEditorPlannerOutputSchema(
       typeof step.task === "string" && isEditorPlannerAssignment(step.task)
   );
   if (!planners.length) return {};
-  if (input.chain.length !== 1 || planners.length !== 1 || input.context !== "fresh") {
-    return { error: "B2.5 Editor Planner 只允许 context=fresh 的单步骤 report-researcher chain。" };
+  if (input.chain.length !== 1 || planners.length !== 1) {
+    return { error: "B2.5 Editor Planner 只允许单步骤 report-researcher chain。" };
   }
   const [planner] = planners;
   const expected = editorPlannerExpected(String(planner.task), projectRoot, session);
@@ -2387,7 +2496,6 @@ function editorPlannerNextTool(
     "机器契约：由 qdm-harness 根据当前 task、mode、requirements 和 outputSchema 注入；父代理不得在这里展开、转述或追加规则。",
   ].join("\n");
   return deterministicNextTool("subagent", {
-    context: "fresh",
     chain: [{ agent: "report-researcher", task }],
   });
 }
@@ -3754,6 +3862,56 @@ function qdmContextMessage(text: string): JsonObject {
   };
 }
 
+function authzGuidance(mode: "off" | "on", bound: boolean): string {
+  if (mode !== "on") return "";
+  if (!bound) {
+    return [
+      "# QDM Data Auth",
+      "",
+      "Authz mode is on but no encrypted auth blob is bound for this turn.",
+      "Do not run `qdm-metric-cli analysis execute` or `qdm-metric-cli auth describe` until auth is available.",
+    ].join("\n");
+  }
+  return [
+    "# QDM Data Auth",
+    "",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`,",
+    "and `--auth-blob` for `qdm-metric-cli auth describe`.",
+    "Do not invent, omit, or override auth flags; the hook replaces them.",
+    "After every successful `analysis execute`, disclose that results are scoped by 账号数据权限.",
+    "Obtain scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
+  ].join("\n");
+}
+
+/** Bind the current Pi turn to Host/Lumi auth, with local fallback only when allowed. */
+function bindAuthzForTurn(
+  projectRoot: string,
+  store: AuthzStateStore,
+  ctx: PiExtensionContext | undefined,
+  event?: PiContextEvent,
+): { mode: "off" | "on"; bound: boolean; error?: string; source?: string } {
+  const config = loadAuthzConfig(projectRoot);
+  const sid = sessionId(ctx);
+  if (config.mode !== "on") {
+    store.clear(sid);
+    return { mode: "off", bound: false };
+  }
+
+  // A failed bind must never leave another user's previous turn active.
+  store.clear(sid);
+  const resolved = resolveAuthBlob({
+    projectRoot,
+    config,
+    hostAuth: event?._auth,
+    hostUserId: event?._auth_user_id,
+    sessionId: envelopeSessionId(ctx),
+  });
+  if (!resolved.ok) return { mode: "on", bound: false, error: resolved.error };
+
+  store.bind(sid, resolved.userId, resolved.blob, resolved.source);
+  return { mode: "on", bound: true, source: resolved.source };
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -3816,6 +3974,7 @@ export default function qdmHarnessExtension(pi: {
 }): void {
   const projectRoot = findProjectRoot(pi.cwd ?? process.cwd());
   const runtimeSourcesAtLoad = captureRuntimeSources(projectRoot);
+  const authzStore = new AuthzStateStore();
   const b2StartupStatuses = new Map<string, B2StartupStatusRecord>();
   const b2StartupStatusCalls = new Map<string, string>();
   const b2StartupToolSnapshots = new Map<string, string[]>();
@@ -4521,6 +4680,34 @@ export default function qdmHarnessExtension(pi: {
     if (active?.startupStatusRequired !== true) return null;
     const attempt = gateAttemptToken(state);
     return attempt ? { key: `${sid}|${attempt}|startup-status`, attempt } : null;
+  }
+
+  function unavailableSiblingToolName(event: PiToolResultEvent): string | null {
+    if (event.isError !== true) return null;
+    const match = /^Tool (\S+) not found$/i.exec(contentText(event.content).trim());
+    return match?.[1] || null;
+  }
+
+  /** Hide the red "Tool read not found" that Pi emits after B2 startup strips non-bash tools. */
+  function quietB2StartupUnavailableTool(
+    sid: string,
+    state: unknown,
+    event: PiToolResultEvent
+  ): ToolResultPatch | undefined {
+    const identity = b2StartupStatusIdentity(sid, state);
+    if (!identity) return undefined;
+    const record = b2StartupStatuses.get(identity.key);
+    if (record?.phase === "failed") return undefined;
+    const missing = unavailableSiblingToolName(event);
+    if (!missing) return undefined;
+    if (String(event.toolName || "").toLowerCase() === "bash") return undefined;
+    return {
+      isError: false,
+      content: [{
+        type: "text",
+        text: `已忽略：B2 启动只允许 stage-gate status，${missing} 未执行。`,
+      }],
+    };
   }
 
   function exactB2StartupStatusCall(sid: string, event: PiToolCallEvent): boolean {
@@ -5538,7 +5725,10 @@ export default function qdmHarnessExtension(pi: {
       const shapeError = foreignToolShapeError(event);
       if (shapeError) return failB2StartupStatus(sid, identity, shapeError);
       if (!exactB2StartupStatusCall(sid, event)) {
-        return failB2StartupStatus(sid, identity, "status 成功前只允许当前 Session 的精确 stage-gate status");
+        return {
+          block: true,
+          reason: "B2 启动只需精确 stage-gate status；该工具未执行。当前 Gate attempt 保持有效。",
+        };
       }
       const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
       if (!toolCallId) return failB2StartupStatus(sid, identity, "status 缺少 toolCallId");
@@ -5729,7 +5919,7 @@ export default function qdmHarnessExtension(pi: {
     const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
     const bound = toolCallId ? inFlightContractCalls.get(toolCallId) : undefined;
     const protectedStage = isObject(gateState) &&
-      ["B2_WRITER", "B25_EDITOR", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(String(gateState.currentStage));
+      ["B2_WRITER", "B2_MAIN", "B25_EDITOR", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(String(gateState.currentStage));
     if (!bound && !contractInvocationPresent(event.input) && !protectedStage) return null;
     if (!toolCallId) return { error: contractResultError("缺少 toolCallId，无法绑定已获准的 contract tool_call。") };
     if (settledContractToolCalls.has(toolCallId)) {
@@ -6084,7 +6274,7 @@ export default function qdmHarnessExtension(pi: {
     const context =
       gateState && classifyGateInput(rawPrompt)
         ? ""
-        : fixedHtmlReportSkill
+        : fixedHtmlReportSkill && gateState?.currentStage === "A_CONFIG"
           ? fixedSeed
             ? fixedAConfigBanner(fixedSeed)
             : fixedAConfigFailureBanner(fixedSeedError)
@@ -6098,9 +6288,20 @@ export default function qdmHarnessExtension(pi: {
     };
   });
 
-  pi.on?.("context", (event, ctx) => {
-    const messages = (event as PiContextEvent).messages;
+  pi.on?.("context", async (event, ctx) => {
+    const payload = event as PiContextEvent;
+    const messages = payload.messages;
     if (!Array.isArray(messages)) return undefined;
+    const authz = bindAuthzForTurn(projectRoot, authzStore, ctx, payload);
+    if (authz.mode === "on" && !authz.bound && authz.error) {
+      ctx?.ui?.notify?.(`QDM Authz: ${authz.error}`, "warning");
+    } else if (
+      authz.bound &&
+      authz.source === "lumi_envelope" &&
+      process.env.QDM_HARNESS_DIAG === "1"
+    ) {
+      ctx?.ui?.notify?.("QDM Authz: bound source=lumi_envelope", "info");
+    }
     const sid = sessionId(ctx);
     const gateState = sid && sid !== "unknown" ? readGateState(projectRoot, sid) : null;
     const effectiveMessages = compactHtmlReportGateHistory(
@@ -6112,20 +6313,38 @@ export default function qdmHarnessExtension(pi: {
       if (runtimeError) {
         rememberStaleHtmlReportSession(sid);
         notifyRuntimeFreshness(sid, runtimeError.reason, ctx);
-        return { messages: effectiveMessages };
+        return {
+          messages: authzGuidance(authz.mode, authz.bound)
+            ? [...effectiveMessages, qdmContextMessage(authzGuidance(authz.mode, authz.bound))]
+            : effectiveMessages,
+        };
       }
     }
     // Suppress recall only for the fixed html-report *skill* turn. Do not use
     // the environment flag alone here: ordinary (non-skill) messages must
     // keep the normal Harness recall path even while debugging is enabled.
-    if (sid && suppressHarnessRecallForSkillSessions.has(sid)) return { messages: effectiveMessages };
+    const authContext = authzGuidance(authz.mode, authz.bound);
+    if (sid && suppressHarnessRecallForSkillSessions.has(sid)) {
+      return {
+        messages: authContext
+          ? [...effectiveMessages, qdmContextMessage(authContext)]
+          : effectiveMessages,
+      };
+    }
     const rawPrompt = latestUserPrompt(event);
     const prompt = harnessQuestion(rawPrompt);
-    if (!prompt || injectedPromptThisTurn === prompt) return { messages: effectiveMessages };
+    if (!prompt || injectedPromptThisTurn === prompt) {
+      return {
+        messages: authContext
+          ? [...effectiveMessages, qdmContextMessage(authContext)]
+          : effectiveMessages,
+      };
+    }
     const context = runHarnessContext(projectRoot, rawPrompt || prompt, ctx);
-    if (!context) return { messages: effectiveMessages };
+    const additional = [context, authContext].filter(Boolean).join("\n\n");
+    if (!additional) return { messages: effectiveMessages };
     injectedPromptThisTurn = prompt;
-    return { messages: [...effectiveMessages, qdmContextMessage(context)] };
+    return { messages: [...effectiveMessages, qdmContextMessage(additional)] };
   });
 
   pi.on?.("tool_call", (event, ctx) => {
@@ -6168,6 +6387,39 @@ export default function qdmHarnessExtension(pi: {
     if (ledgerDecision) return ledgerDecision;
     const parentFetchDecision = parentDataFetchDecision(gateState, toolCall);
     if (parentFetchDecision) return parentFetchDecision;
+
+    const authzConfig = loadAuthzConfig(projectRoot);
+    const metricCliPath = resolveMetricCliPath(projectRoot, authzConfig);
+    let authzTurn = authzStore.getCurrentTurn(sid);
+    let authzMissingReason = "";
+    if (authzConfig.mode === "on" && !authzTurn?.blob) {
+      const rebound = bindAuthzForTurn(projectRoot, authzStore, ctx);
+      authzTurn = authzStore.getCurrentTurn(sid);
+      authzMissingReason = rebound.error || "";
+      if (process.env.QDM_HARNESS_DIAG === "1") {
+        const rawSid = envelopeSessionId(ctx) || "(empty)";
+        const envDir = process.env.LUMI_REQUESTER_CONTEXT_DIR ? "set" : "unset";
+        ctx?.ui?.notify?.(
+          rebound.bound
+            ? `QDM Authz diag: tool_call re-bind ok source=${rebound.source} sid=${rawSid} envDir=${envDir}`
+            : `QDM Authz diag: tool_call re-bind failed sid=${rawSid} envDir=${envDir} err=${rebound.error || "unknown"}`,
+          rebound.bound ? "info" : "warning",
+        );
+      }
+    }
+    const authzDecision = applyAuthzToToolCall(toolCall, {
+      mode: authzConfig.mode,
+      blob: authzTurn?.blob ?? null,
+      metricCliPath,
+      allowLocalBlob: authzConfig.allowLocalBlob,
+      missingReason: authzTurn?.blob
+        ? undefined
+        : authzConfig.allowLocalBlob === false
+          ? "authz: host blob not bound; cannot run gated metric-cli under allow_local_blob=false (refusing any model-supplied --auth-blob)"
+          : `authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe${authzMissingReason ? ` (${authzMissingReason})` : ""}`,
+    });
+    if (authzDecision?.block) return authzDecision;
+
     const waitingAConfigList = isWaitingAConfigAgentList(gateState, toolCall);
     const listIdentity = runtimeAgentListAttempt(gateState);
     if (listIdentity && isExactRuntimeAgentList(toolCall)) {
@@ -6225,7 +6477,7 @@ export default function qdmHarnessExtension(pi: {
     if (stageSubagentDecision) return stageSubagentDecision;
 
     if (isSubagentToolName(toolCall.toolName)) {
-      const schemaAttachment = attachWriterOutputSchema(toolCall.input, { projectRoot, session: sid });
+      const schemaAttachment = attachWriterRunEnvelope(toolCall.input, { projectRoot, session: sid });
       if (schemaAttachment.error) return { block: true, reason: schemaAttachment.error };
       const editorPlannerSchemaAttachment = attachEditorPlannerOutputSchema(toolCall.input, { projectRoot, session: sid });
       if (editorPlannerSchemaAttachment.error) {
@@ -6367,6 +6619,8 @@ export default function qdmHarnessExtension(pi: {
         };
       }
     }
+    const quietUnavailable = quietB2StartupUnavailableTool(sid, gateState, toolResultEvent);
+    if (quietUnavailable) return quietUnavailable;
     const b3FinalizerResult = settleB3FinalizerResult(
       sid,
       gateState,
@@ -6458,13 +6712,34 @@ export default function qdmHarnessExtension(pi: {
         };
       }
       const sessionDir = htmlReportSessionDir(projectRoot, sid);
+      const resultPath = join(sessionDir, "result.json");
+      // Best-effort parallel pre-fetch: if it succeeds, Writers get cache hits
+      // and skip the CLI wait. If it fails (no CLI, test environment, auth not
+      // configured), continue to Writers — they will fetch on-demand via
+      // ack_cli_data. Only fail B2 when some cards succeed and others fail,
+      // which signals a real data-level error rather than an infrastructure gap.
+      try {
+        const preFetch = await fetchAllEntries(resultPath, { parallel: true, concurrency: 6 });
+        const allCards = Array.isArray(preFetch?.cards) ? preFetch.cards : [];
+        const failedCards = allCards.filter((c) => isObject(c) && c.fetchStatus === "failed");
+        if (failedCards.length && failedCards.length < allCards.length) {
+          const failedIds = failedCards.map((c) => String(c.cardId || "unknown")).join(", ");
+          const failed = failB2StartupStatus(sid, record, `预取失败: cardId=${failedIds}`);
+          return {
+            isError: true,
+            content: [{ type: "text", text: failed.reason }],
+          };
+        }
+      } catch {
+        // Infrastructure failure (CLI not available, auth not configured):
+        // skip pre-fetch, continue to Writers for on-demand fetch.
+      }
       const task = [
         `按 report-writer 处理 cardId=${writerCardIds[0]}`,
         `SESSION=${sessionDir}`,
         `result.json=${join(sessionDir, "result.json")}`,
       ].join("\n");
       const firstInput = {
-        context: "fresh",
         chain: [{ agent: "report-writer", task }],
       };
       const firstDispatch = `subagent(${JSON.stringify(firstInput)})`;
@@ -6577,19 +6852,21 @@ export default function qdmHarnessExtension(pi: {
     if (writerDecision) {
       const details = isObject(contractEvent.details) ? contractEvent.details : null;
       const results = Array.isArray(details?.results) ? details.results : [];
-      const output = results.length === 1 && isObject(results[0]) && isObject(results[0].structuredOutput)
-        ? results[0].structuredOutput
+      const output = results.length === 1 && isObject(results[0])
+        ? (isObject(results[0].structuredOutput)
+          ? results[0].structuredOutput
+          : extractWriterReceipt(results[0]))
         : null;
       if (dispatchIdentity?.role === "report-writer") {
         const reason = writerDecision.isError === true
           ? runtimeTimeout
             ? `子代理运行超时：${runtimeTimeout}`
             : output
-              ? `结构化返回已验收但 B2 已终止：fetchStatus=${String(output.fetchStatus || "unknown")}`
+              ? `ack_cli_data 回执已验收但 B2 已终止：fetchStatus=${String(output.fetchStatus || "unknown")}`
               : "Writer 终端结果未通过，B2 已确定性失败"
           : output?.fetchStatus === "success"
             ? "success 已验收"
-            : `结构化 fetchStatus=${String(output?.fetchStatus || "failed")} 已验收`;
+            : `ack_cli_data fetchStatus=${String(output?.fetchStatus || "failed")} 已验收`;
         markContractTerminal(dispatchIdentity, reason);
       }
       return writerDecision;

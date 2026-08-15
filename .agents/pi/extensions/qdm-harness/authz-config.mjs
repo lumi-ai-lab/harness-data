@@ -160,11 +160,11 @@ export function resolveAuthBlob(options) {
     if (!isEncryptedBlob(hostAuth)) {
       return { ok: false, error: "host _auth must be an encrypted qdm1enc blob" };
     }
-    const userId = hostUserId || trim(config.devUserId);
+    const userId = hostUserId;
     if (!userId) {
       return {
         ok: false,
-        error: "authz requires _auth_user_id (or authz.dev_user_id for local fallback only)",
+        error: "authz requires host _auth_user_id; authz.dev_user_id is local fallback only",
       };
     }
     return { ok: true, blob: hostAuth, userId, source: "host" };
@@ -246,7 +246,7 @@ export function resolveAuthBlob(options) {
 }
 
 export function isEncryptedBlob(value) {
-  return typeof value === "string" && value.trim().startsWith("qdm1enc.");
+  return typeof value === "string" && /^qdm1enc\.[A-Za-z0-9_-]+$/.test(value.trim());
 }
 
 /**
