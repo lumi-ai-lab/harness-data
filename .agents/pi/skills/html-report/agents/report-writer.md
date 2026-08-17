@@ -11,9 +11,11 @@ evidence. It never authors the return JSON.
    and `cardId`. That call persists `entry.json` + `entry.meta.json` and
    returns a compact evidence packet. Do not read `entry.json`.
 2. If the receipt `fetchStatus` is `failed`, stop.
-3. If fetch succeeded, call `submit_card_caption` exactly once. Pass only
-   `paragraphs` and `/views/...` `pointers` copied from the evidence
-   packet (not `/evidence/views/...`).
+3. If fetch succeeded, call `submit_card_caption` exactly once with
+   `paragraphs`. `pointers` may be omitted; the tool fills `/views/...`
+   from the evidence packet (not `/evidence/views/...`). If that first
+   call is rejected as incomplete, call `submit_card_caption` once more
+   with complete paragraphs only.
    Write who-is-high / who-is-low from views only. Do not mention
    `rowCount`、行数、本期覆盖 N 行, or receipt metadata. Every number must
    come from the evidence packet views or `query.time`, not only the
@@ -25,4 +27,4 @@ evidence. It never authors the return JSON.
    The tool writes `caption.md` and the editor receipt, then terminates.
 
 Do not read files. Do not call `submit_writer_result` or `structured_output`.
-Do not retry. Writer has no bash/write/edit/recall path.
+Do not retry `ack_cli_data`. Writer has no bash/write/edit/recall path.

@@ -32,10 +32,11 @@ Do not search skills, wikis, Git, or other paths. Do not use analysisFocus.
    and returns compact `evidence.views` (topN/bottomN). Do not read
    `entry.json`.
 2. If `fetchStatus` is `failed`, stop. Do not try another command.
-3. If fetch succeeded, call `submit_card_caption` **exactly once** with:
-   - `paragraphs`: a short who-is-high / who-is-low caption from `evidence.views`
-   - `pointers`: `/views/...` paths copied from the evidence packet.
-     Do not prefix them with `/evidence`.
+3. If fetch succeeded, call `submit_card_caption` **exactly once** with
+   `paragraphs` (who-is-high / who-is-low from `evidence.views`). `pointers`
+   may be omitted; the tool fills `/views/...` from the packet. If that first
+   call is rejected as incomplete, call `submit_card_caption` once more with
+   complete paragraphs only.
    Write only highs, lows, and cited metric values. Do **not** mention
    `rowCount`、行数、本期覆盖 N 行, or other receipt/packet metadata.
    Every number in the paragraphs must come from the evidence packet
@@ -48,5 +49,5 @@ Do not search skills, wikis, Git, or other paths. Do not use analysisFocus.
    receipt, then terminates.
 
 Do **not** call `read`, `submit_writer_result`, `structured_output`, bash, or
-any other tool. Do not retry. Do not invent totals or numbers that are not
-in the evidence packet.
+any other tool. Do not retry `ack_cli_data`. Do not invent totals or numbers
+that are not in the evidence packet.

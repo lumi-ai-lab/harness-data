@@ -106,6 +106,8 @@ export function initialWriterGuardState() {
   return {
     fetchAttempts: 0,
     captionAttempts: 0,
+    captionFailures: 0,
+    lastCaptionFailId: null,
     pending: {},
     fetchResult: null,
     captionSubmitted: false,
@@ -113,6 +115,8 @@ export function initialWriterGuardState() {
     structuredAttempts: 0,
   };
 }
+
+export const WRITER_CAPTION_RETRY_LIMIT = 1;
 
 function exactKeys(value, keys) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -134,7 +138,14 @@ function fetchReceiptFromEvent(event) {
   return null;
 }
 
-/** Pure fail-fast Writer tool-call transition: ack once, then caption once. */
+function captionInputShape(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const keys = Object.keys(input);
+  if (!keys.includes("paragraphs")) return false;
+  return keys.every((key) => key === "paragraphs" || key === "pointers");
+}
+
+/** Ack once, then caption once; one incomplete/schema caption retry is allowed. */
 export function writerToolDecision(contract, state, event) {
   const current = state || initialWriterGuardState();
   const toolName = String(event?.toolName || "").toLowerCase();
@@ -142,7 +153,11 @@ export function writerToolDecision(contract, state, event) {
   if (!contract?.ok) {
     return block(`任务契约解析失败，已 fail closed：${contract?.errors?.join("；") || "unknown error"}`, current);
   }
-  if (current.terminalFailure || current.captionSubmitted || current.captionAttempts > 0) {
+  if (
+    current.terminalFailure ||
+    current.captionSubmitted ||
+    current.captionFailures > WRITER_CAPTION_RETRY_LIMIT
+  ) {
     return block("submit_card_caption 最多调用一次；禁止其它工具或重试", current);
   }
   if (current.fetchResult?.fetchStatus === "failed") {
@@ -177,17 +192,14 @@ export function writerToolDecision(contract, state, event) {
     return block(`取数成功后只允许调用 submit_card_caption 一次，禁止 ${toolName || "unknown"}`, current);
   }
   const input = event?.input;
-  if (
-    !input || typeof input !== "object" || Array.isArray(input) ||
-    !exactKeys(input, ["paragraphs", "pointers"])
-  ) {
-    return block("submit_card_caption 只接受 paragraphs 与 pointers", current);
+  if (!captionInputShape(input)) {
+    return block("submit_card_caption 只接受 paragraphs，pointers 可省略", current);
   }
   const key = pendingKey(event, WRITER_CAPTION_TOOL);
   if (current.pending[key]) return block("submit_card_caption toolCallId 重复", current);
   return allow({
     ...current,
-    captionAttempts: 1,
+    captionAttempts: current.captionAttempts + 1,
     structuredAttempts: Math.max(1, current.structuredAttempts),
     pending: { ...current.pending, [key]: { type: WRITER_CAPTION_TOOL } },
   });
@@ -208,6 +220,24 @@ function conciseError(event, fallback) {
   return text.slice(0, 1200);
 }
 
+function withCaptionFailure(current, error, toolCallId) {
+  const failId = String(toolCallId || "");
+  if (failId && current.lastCaptionFailId === failId) return current;
+  const captionFailures = (current.captionFailures || 0) + 1;
+  const next = {
+    ...current,
+    captionFailures,
+    lastCaptionFailId: failId || current.lastCaptionFailId || null,
+  };
+  if (captionFailures > WRITER_CAPTION_RETRY_LIMIT) {
+    return {
+      ...next,
+      terminalFailure: current.terminalFailure || { error },
+    };
+  }
+  return next;
+}
+
 /** Record the fetch or caption result. Capture/terminate happens in the tool. */
 export function writerToolResultState(contract, state, event) {
   const current = state || initialWriterGuardState();
@@ -218,7 +248,13 @@ export function writerToolResultState(contract, state, event) {
   const pending = { ...current.pending };
   if (key) delete pending[key];
   const next = { ...current, pending };
+  if (toolName === WRITER_CAPTION_TOOL && event?.details && event.details.captionRetry === true) {
+    return withCaptionFailure(next, conciseError(event, "submit_card_caption 未受理，可再交一次"), event?.toolCallId);
+  }
   if (event?.isError === true) {
+    if (toolName === WRITER_CAPTION_TOOL && current.fetchResult?.fetchStatus === "success") {
+      return withCaptionFailure(next, conciseError(event, "submit_card_caption failed"), event?.toolCallId);
+    }
     return {
       ...next,
       terminalFailure: {
@@ -232,7 +268,7 @@ export function writerToolResultState(contract, state, event) {
   return { ...next, fetchResult: fetchReceiptFromEvent(event) };
 }
 
-/** Schema-invalid first fetch or caption is terminal. */
+/** Schema-invalid fetch is terminal. First schema-invalid caption is retryable. */
 export function writerUnvalidatedSubmitFailureState(contract, state, event) {
   const current = state || initialWriterGuardState();
   const toolName = String(event?.toolName || "").toLowerCase();
@@ -249,15 +285,16 @@ export function writerUnvalidatedSubmitFailureState(contract, state, event) {
       },
     };
   }
-  if (toolName === WRITER_CAPTION_TOOL && current.captionAttempts === 0 && current.fetchResult?.fetchStatus === "success") {
-    return {
-      ...current,
-      captionAttempts: 1,
-      structuredAttempts: Math.max(1, current.structuredAttempts),
-      terminalFailure: current.terminalFailure || {
-        error: conciseError(errorEvent, "submit_card_caption 参数校验失败；首次交稿机会已消费"),
+  if (toolName === WRITER_CAPTION_TOOL && current.fetchResult?.fetchStatus === "success") {
+    return withCaptionFailure(
+      {
+        ...current,
+        captionAttempts: Math.max(1, current.captionAttempts),
+        structuredAttempts: Math.max(1, current.structuredAttempts),
       },
-    };
+      conciseError(errorEvent, "submit_card_caption 参数校验失败；可再交一次"),
+      event?.toolCallId,
+    );
   }
   return current;
 }

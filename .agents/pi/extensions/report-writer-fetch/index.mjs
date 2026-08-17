@@ -1,9 +1,10 @@
 /**
  * Child-only Report Writer tools.
  *
- * The journalist calls ack_cli_data once, then submit_card_caption once.
- * Fetch failure writes the parent receipt and terminates. Fetch success
- * returns compact evidence; caption writes caption.md and the parent receipt.
+ * The journalist calls ack_cli_data once, then submit_card_caption.
+ * One incomplete/schema caption retry is allowed. Fetch failure writes the
+ * parent receipt and terminates. Fetch success returns compact evidence;
+ * caption writes caption.md and the parent receipt.
  */
 import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -14,7 +15,12 @@ import {
   persistCaptionEvidence,
   prepareCardCaptionEvidence,
 } from "../../skills/html-report/scripts/prepare-card-caption-evidence.mjs";
-import { writeCardCaption } from "../../skills/html-report/scripts/submit-card-caption.mjs";
+import {
+  captionCitesDataNumber,
+  loadCaptionEvidence,
+  normalizeCaptionToolInput,
+  writeCardCaption,
+} from "../../skills/html-report/scripts/submit-card-caption.mjs";
 import {
   buildWriterReturnSchema,
   sanitizeCardId,
@@ -29,6 +35,7 @@ import {
 import {
   initialWriterGuardState,
   parseWriterAssignment,
+  WRITER_CAPTION_RETRY_LIMIT,
   writerUnvalidatedSubmitFailureState,
   writerToolDecision,
   writerToolResultState,
@@ -272,43 +279,89 @@ export default function registerReportWriterFetch(pi) {
     name: WRITER_CAPTION_TOOL,
     label: "Submit card caption",
     description:
-      "Submit the short per-card analysis. Pass only paragraphs and /views/... pointers copied from the ack_cli_data evidence. The tool writes caption.md and the editor receipt.",
-    promptSnippet: "submit_card_caption: after a successful ack_cli_data, call once with paragraphs and pointers from the compact evidence.",
+      "Submit the short per-card analysis. Pass paragraphs; pointers may be omitted and are filled from evidence.views. The tool writes caption.md and the editor receipt.",
+    promptSnippet: "submit_card_caption: after a successful ack_cli_data, call with paragraphs. pointers are optional.",
     promptGuidelines: [
+      "Pass paragraphs only if you want; pointers are optional and filled from evidence.views when omitted.",
       "Cite only /views/... pointers from the evidence packet (not /evidence/views/...). You may cite every view in that packet.",
       "Every number in paragraphs must appear in the evidence packet views (any view, not only pointed-at nodes). Prefer the views digits; 万/亿元 of the same cell is allowed. Do not write 超/约/近 with a number that is not itself in the packet. Copy metric and dimension names from views; do not translate or guess Chinese labels.",
-      "Do not read files or call structured_output.",
+      "If the first submit is rejected as incomplete or invalid, call submit_card_caption once more with complete paragraphs. Do not read files or call structured_output.",
     ],
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         paragraphs: {
-          type: "array",
-          minItems: 1,
-          maxItems: 8,
-          items: { type: "string", minLength: 1 },
+          anyOf: [
+            {
+              type: "array",
+              minItems: 1,
+              maxItems: 8,
+              items: { type: "string", minLength: 1 },
+            },
+            { type: "string", minLength: 1 },
+          ],
         },
         pointers: {
-          type: "array",
-          items: { type: "string", minLength: 1 },
-          description: "JSON pointers into evidence.views; at most one per view in this card's packet",
+          anyOf: [
+            { type: "array", items: { type: "string", minLength: 1 } },
+            { type: "string", minLength: 1 },
+          ],
+          description: "Optional JSON pointers into evidence.views; omitted or empty pointers are filled from the packet",
         },
       },
-      required: ["paragraphs", "pointers"],
+      required: ["paragraphs"],
     },
     executionMode: "sequential",
     async execute(_toolCallId, params) {
       if (captionUsed) throw new Error("submit_card_caption may be called only once per Report Writer assignment");
-      captionUsed = true;
       if (!contract.ok) throw new Error("submit_card_caption has no parsed Writer assignment");
       if (!acceptedReceipt || acceptedReceipt.fetchStatus !== "success") {
         throw new Error("submit_card_caption requires a successful ack_cli_data in this assignment");
       }
+      let evidence;
+      try {
+        evidence = await loadCaptionEvidence(contract.evidencePath);
+      } catch (error) {
+        throw new Error(String(error?.message || error || "caption evidence is missing"));
+      }
+      const normalized = normalizeCaptionToolInput(params, evidence);
+      const retryableError = !normalized.ok
+        ? normalized.error
+        : captionCitesDataNumber(normalized.input.paragraphs, evidence)
+          ? ""
+          : "段落里没有 evidence 中的数据数字，像是半截交稿";
+      if (retryableError) {
+        if (state.captionFailures >= WRITER_CAPTION_RETRY_LIMIT) {
+          const failed = {
+            cardId: contract.cardId,
+            fetchStatus: "failed",
+            dataPath: null,
+            metaPath: null,
+            error: retryableError,
+          };
+          await captureReceipt(failed);
+          pi.setActiveTools?.([]);
+          return {
+            content: [{ type: "text", text: JSON.stringify(failed, null, 2) }],
+            details: failed,
+            terminate: true,
+          };
+        }
+        return {
+          content: [{
+            type: "text",
+            text: `submit_card_caption 未受理：${retryableError}。补全 who-is-high/who-is-low 后只再调用一次；pointers 可省略。`,
+          }],
+          details: { captionRetry: true, error: retryableError },
+          terminate: false,
+        };
+      }
+      captionUsed = true;
       let captionResult;
       try {
         captionResult = await writeCardCaption({
-          input: params,
+          input: normalized.input,
           evidencePath: contract.evidencePath,
           captionPath: contract.captionPath,
         });

@@ -549,8 +549,10 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
   if (state.status === "running") {
     if (stageId === "A_CONFIG" && options.fixedAConfig === true) {
       lines.push(
-        "- 固定推荐已由扩展写好；runtime agent list 也由扩展通过真实 pi-subagents 事件桥自动执行和验收。",
+        "- 扩展已打开 qdm-metric-cli ui；本轮不写 recommendations.json，也不启动旧 HTML。",
+        "- runtime agent list 由扩展通过真实 pi-subagents 事件桥自动执行和验收。",
         "- 模型不得自行调用 subagent list 或 stage-gate；自动检查成功后扩展会完成 A_CONFIG。",
+        "- 用户点「保存」只写出 result.json；必须再回复「继续」才会批准进入 B0。",
         "- 自动检查失败、超时或缺少 Agent 时，扩展会 fail 当前 Gate；不要重试或继续其他工作。"
       );
     } else if (!["B0_PREFLIGHT", "B2_WRITER", "B2_MAIN", "B3_RESEARCH"].includes(stageId)) {
@@ -636,6 +638,7 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         `\n${message}`,
         "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动验收，并写入当前 attempt 的审计文件。",
         "- 立即原样返回上面的 Gate 文本并停止；不要调用 subagent、status 或其他工具。",
+        "- 用户需先在 qdm-metric-cli ui 点「保存」写出 result.json，再回复「继续」。",
         "- A_CONFIG 只有在四个 report-* Agent 全部存在时才会到达此状态。"
       );
     } else if (stageId === "B0_PREFLIGHT") {

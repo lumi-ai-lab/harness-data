@@ -181,6 +181,7 @@ const RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report-design/references/report-design-system.md",
   ".agents/pi/skills/html-report-design/assets/report-shell-starter.html",
   ".agents/pi/skills/html-report/scripts/stage-gate.mjs",
+  ".agents/pi/skills/html-report/scripts/open-metric-cli-ui.mjs",
   ".agents/pi/skills/html-report/scripts/writer-return.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-entry.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-explore.mjs",

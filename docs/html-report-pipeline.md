@@ -9,19 +9,26 @@
 
 ## 1. 两阶段总览
 
-### 阶段 A — 配置确认（已完成）
+### 阶段 A — 配置确认（qdm-metric-cli ui）
 
 ```text
 用户问题
   -> [A_CONFIG 计时]
-  -> Spec 召回（--doc-set specs）
-  -> recommendations.json
-  -> 本地 HTML 预填选中
-  -> [A_CONFIG Gate：finish 后停止计时]
-  -> 用户确认
-  -> 逐卡 CLI 冒烟（--single-page）
-  -> result.json 落盘
+  -> 扩展打开 qdm-metric-cli ui --session-local-dir $SESSION
+  -> 用户在页面改卡并点击「保存」
+  -> $SESSION/result.json 落盘
+  -> [A_CONFIG Gate 等待「继续」]
+  -> 用户在 Pi 回复「继续」
+  -> 批准进入 B0
 ```
+
+当前默认不做推荐生成，不写 `recommendations.json`，也不打开
+`public/local-report-builder.html`。点「保存」只落盘，不会自动开始阶段 B。
+
+`qdm-metric-cli ui` 由 `open-metric-cli-ui.mjs --detach` 拉起：短生命周期
+launcher 只回 JSON，长生命周期 worker 持有 CLI，并 watch `PI_AGENT_PID` /
+`--watch-pid`。Pi Session 退出（`session_shutdown`）或 Pi 进程退出时，UI 必须
+一起退出，不能留下 PPID=1 的孤儿端口。
 
 ### 阶段 B — 报告生成（建设中）
 

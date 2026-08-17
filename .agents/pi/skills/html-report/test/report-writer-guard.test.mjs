@@ -86,6 +86,13 @@ test("Writer allows ack then caption and blocks every other tool", () => {
   assert.equal(readBlocked.decision.block, true);
   assert.match(readBlocked.decision.reason, /submit_card_caption/);
 
+  const captionOnlyParagraphs = writerToolDecision(bound, afterFetch, {
+    toolCallId: "caption-omit-pointers",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: ["最高为 2。"] },
+  });
+  assert.equal(captionOnlyParagraphs.decision, undefined);
+
   const caption = writerToolDecision(bound, afterFetch, {
     toolCallId: "caption-1",
     toolName: WRITER_CAPTION_TOOL,
@@ -124,6 +131,44 @@ test("Writer rejects wrong fetch arguments", () => {
   });
   assert.equal(wrong.decision.block, true);
   assert.match(wrong.decision.reason, /参数必须逐字等于/);
+});
+
+test("schema-invalid first caption can be retried once", () => {
+  const bound = contract();
+  const afterFetch = {
+    ...initialWriterGuardState(),
+    fetchAttempts: 1,
+    fetchResult: successDetails(bound),
+  };
+  const failed = writerUnvalidatedSubmitFailureState(bound, afterFetch, {
+    toolCallId: "invalid-caption",
+    toolName: WRITER_CAPTION_TOOL,
+    isError: true,
+    result: { content: [{ type: "text", text: "pointers: must have required properties pointers" }] },
+  });
+  assert.equal(failed.captionFailures, 1);
+  assert.equal(failed.terminalFailure, null);
+  const retry = writerToolDecision(bound, failed, {
+    toolCallId: "retry-caption",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: ["最高为 2。"] },
+  });
+  assert.equal(retry.decision, undefined);
+
+  const failedAgain = writerUnvalidatedSubmitFailureState(bound, retry.state, {
+    toolCallId: "invalid-caption-2",
+    toolName: WRITER_CAPTION_TOOL,
+    isError: true,
+    result: { content: [{ type: "text", text: "arguments failed schema validation" }] },
+  });
+  assert.equal(failedAgain.captionFailures, 2);
+  assert.ok(failedAgain.terminalFailure?.error);
+  const blocked = writerToolDecision(bound, failedAgain, {
+    toolCallId: "retry-caption-2",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: ["最高为 2。"] },
+  });
+  assert.equal(blocked.decision.block, true);
 });
 
 test("schema-invalid first fetch is consumed before any retry", () => {
@@ -262,6 +307,124 @@ test("ack_cli_data returns evidence then submit_card_caption writes the receipt"
   assert.deepEqual(validateWriterReturn(receipt, bound), { ok: true, errors: [] });
   assert.deepEqual(caption.details, receipt);
   assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), receipt);
+  assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
+});
+
+test("submit_card_caption fills omitted pointers and retries one incomplete stub", async (t) => {
+  const stateRoot = join(projectRoot, ".harness", "state", "html-report");
+  await mkdir(stateRoot, { recursive: true });
+  const typedSession = await mkdtemp(join(stateRoot, "typed-writer-caption-retry-"));
+  const runtimeDir = await mkdtemp(join(projectRoot, ".harness", "typed-writer-caption-retry-runtime-"));
+  t.after(() => rm(typedSession, { recursive: true, force: true }));
+  t.after(() => rm(runtimeDir, { recursive: true, force: true }));
+
+  const cardId = "card-1";
+  const cardDir = join(typedSession, "data", "cards", cardId);
+  await mkdir(cardDir, { recursive: true });
+  const rows = [{ manageAreaId: "CN01", custNum: 12 }];
+  const resultPath = join(typedSession, "result.json");
+  await writeFile(resultPath, JSON.stringify({
+    status: "confirmed",
+    cards: [{
+      id: cardId,
+      query: {
+        request: {
+          metrics: ["custNum"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+          dimensions: ["manageAreaId"],
+          filters: {},
+          pageNo: 1,
+          pageSize: 500,
+        },
+        comparisons: [],
+      },
+    }],
+  }));
+  await writeFile(join(cardDir, "entry.json"), `${JSON.stringify(rows)}\n`);
+  await writeFile(
+    join(cardDir, "entry.meta.json"),
+    `${JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) })}\n`
+  );
+  await writeFile(
+    join(cardDir, "entry.column-meta.json"),
+    `${JSON.stringify({ custNum: "来客数", manageAreaId: "管理区域" })}\n`
+  );
+
+  const prompt = assignment({ sessionDir: typedSession });
+  const bound = parseWriterAssignment(prompt, { projectRoot });
+  assert.equal(bound.ok, true, bound.errors?.join("; "));
+  const schemaPath = join(runtimeDir, "schema.json");
+  const outputPath = join(runtimeDir, "output.json");
+  await writeFile(schemaPath, JSON.stringify(buildWriterReturnSchema(bound)));
+  const previousSchema = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+  const previousCapture = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+  process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = schemaPath;
+  process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = outputPath;
+  t.after(() => {
+    if (previousSchema === undefined) delete process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+    else process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = previousSchema;
+    if (previousCapture === undefined) delete process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+    else process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = previousCapture;
+  });
+
+  const handlers = new Map();
+  const tools = [];
+  const activeToolSets = [];
+  registerReportWriterFetch({
+    on(event, handler) {
+      const list = handlers.get(event) || [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    setActiveTools(names) {
+      activeToolSets.push(names);
+    },
+  });
+  await handlers.get("before_agent_start")[0]({ prompt });
+  const fetchEvent = {
+    toolCallId: "retry-writer-fetch",
+    toolName: WRITER_ACK_TOOL,
+    input: { resultPath: bound.resultPath, cardId: bound.cardId },
+  };
+  await handlers.get("tool_call")[0](fetchEvent);
+  const fetchResult = await tools[0].execute(fetchEvent.toolCallId, fetchEvent.input);
+  handlers.get("tool_result")[0]({
+    ...fetchEvent,
+    details: fetchResult.details,
+    isError: false,
+  });
+
+  const stubEvent = {
+    toolCallId: "retry-writer-caption-stub",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: ["统计区间2026-07-01至2026-07-02，按"] },
+  };
+  assert.equal(await handlers.get("tool_call")[0](stubEvent), undefined);
+  const stub = await tools[1].execute(stubEvent.toolCallId, stubEvent.input);
+  assert.equal(stub.terminate, false);
+  assert.equal(stub.details.captionRetry, true);
+  handlers.get("tool_result")[0]({
+    ...stubEvent,
+    details: stub.details,
+    isError: false,
+  });
+  assert.deepEqual(activeToolSets.at(-1), [WRITER_CAPTION_TOOL]);
+
+  const retryEvent = {
+    toolCallId: "retry-writer-caption-ok",
+    toolName: WRITER_CAPTION_TOOL,
+    input: {
+      paragraphs: JSON.stringify(["来客最高为 12。"]),
+    },
+  };
+  assert.equal(await handlers.get("tool_call")[0](retryEvent), undefined);
+  const caption = await tools[1].execute(retryEvent.toolCallId, retryEvent.input);
+  assert.equal(caption.terminate, true);
+  assert.equal(caption.details.fetchStatus, "success");
   assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
 });
 

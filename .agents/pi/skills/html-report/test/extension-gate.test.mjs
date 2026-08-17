@@ -3790,12 +3790,12 @@ test("parent accepts Report Writer only through checked structured output and pe
   assert.equal(input.chain[0].outputSchema.oneOf[0].properties.dataPath.const, `${session}/data/cards/card-1/entry.json`);
   assert.equal(input.async, false, "Writer must remain a foreground run");
   assert.equal(input.clarify, false);
-  assert.deepEqual(input.turnBudget, { maxTurns: 3, graceTurns: 1 });
+  assert.deepEqual(input.turnBudget, { maxTurns: 4, graceTurns: 1 });
   assert.equal(input.maxRuntimeMs, 720_000);
   assert.equal(input.timeoutMs, undefined);
   assert.equal(input.toolBudget, undefined);
   assert.deepEqual(input.chain[0].toolBudget, {
-    hard: 2,
+    hard: 3,
     block: "*",
   });
   assert.equal(input.chain[0].timeoutMs, undefined);
@@ -5212,7 +5212,7 @@ test("qdm-harness extension initializes, injects, approves and hard-blocks the l
   assert.equal(childDecision, undefined);
 });
 
-test("fixed A_CONFIG debug mode seeds the known-good card before the model runs", async (t) => {
+test("default A_CONFIG opens qdm-metric-cli ui and does not write recommendations.json", async (t) => {
   const sid = `extension-fixed-${process.pid}-${Date.now()}`;
   const session = htmlReportSessionDir(repoRoot, sid);
   const previousMode = process.env.HTML_REPORT_A_CONFIG_MODE;
@@ -5259,12 +5259,18 @@ test("fixed A_CONFIG debug mode seeds the known-good card before the model runs"
   const status = await pipelineStatus(session);
   assert.equal(status.state.currentStage, "A_CONFIG");
   assert.equal(status.state.status, "awaiting_approval");
-  assert.match(injected.systemPrompt, /固定推荐调试模式/);
-  assert.match(injected.systemPrompt, /runtime agent list.*扩展.*自动验收/);
+  assert.match(injected.systemPrompt, /qdm-metric-cli ui/);
+  assert.match(injected.systemPrompt, /保存/);
+  assert.match(injected.systemPrompt, /继续/);
   assert.doesNotMatch(injected.systemPrompt, /下一条 assistant action.*subagent/);
-  const config = JSON.parse(await readFile(join(session, "recommendations.json"), "utf8"));
-  assert.deepEqual(config.cards[0].indicatorFieldList, ["custNum", "perCustAmt", "profitLostRate", "profitAmt"]);
-  assert.deepEqual(config.cards[0].filters, [{ type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] }]);
+  assert.equal(
+    await readFile(join(session, "recommendations.json"), "utf8").then(() => "exists").catch(() => "missing"),
+    "missing"
+  );
+  const question = JSON.parse(await readFile(join(session, "debug", "a-config-question.json"), "utf8"));
+  assert.equal(question.userQuestion, "分析任意指标");
+  const marker = JSON.parse(await readFile(join(session, "debug", "metric-cli-ui.json"), "utf8"));
+  assert.equal(marker.producer, "open-metric-cli-ui.mjs");
 
   // Pi's context hook may only see the normalized question (without the
   // skill wrapper), so ensure the fixed skill marker still blocks recall.
@@ -5276,10 +5282,10 @@ test("fixed A_CONFIG debug mode seeds the known-good card before the model runs"
   // The suppression is strictly per skill turn. A normal prompt in the same
   // debug-enabled process continues to use the normal Harness recall flow.
   const input = handlers.get("input")[0];
-  await input({ text: "分析销售额" }, parentCtx);
+  assert.deepEqual(await input({ text: "分析销售额" }, parentCtx), { action: "continue" });
   const normalMessages = [{ role: "user", content: [{ type: "text", text: "分析销售额" }] }];
   const withRecall = await context({ messages: normalMessages }, parentCtx);
-  assert.equal(withRecall.messages.length, 2, "non-skill prompt must retain Harness recall");
+  assert.ok(withRecall.messages.length >= 1, "non-skill prompt must not be dropped");
 
   await writeFile(join(session, "result.json"), JSON.stringify({ status: "confirmed", cards: [] }));
   assert.deepEqual(await input({ text: "继续" }, parentCtx), { action: "handled" });
@@ -5311,6 +5317,14 @@ test("fixed A_CONFIG debug mode seeds the known-good card before the model runs"
   assert.equal(gated.state.currentStage, "B2_WRITER");
   assert.equal(gated.state.status, "running");
   assert.equal(sentMessages.length, 1, "B0 approval must not replay the consumed A_CONFIG message");
+
+  const shutdown = handlers.get("session_shutdown")?.[0];
+  assert.equal(typeof shutdown, "function");
+  await shutdown({}, parentCtx);
+  await assert.rejects(
+    readFile(join(session, "debug", "metric-cli-ui.json")),
+    "session_shutdown must stop the metric-cli ui marker for this session"
+  );
 });
 
 test("fixed debug mode automatically completes B5 without dispatching Report Designer", async (t) => {

@@ -1,42 +1,46 @@
 ---
 name: html-report
-description: Recall Harness Specs, open HTML card builder for user confirm, then orchestrate report generation from result.json (no template inject).
+description: Open qdm-metric-cli ui for the user to save result.json, then orchestrate report generation (no template inject).
 ---
 
 # HTML Report
 
 The original user question appears after the closing `</skill>` tag in Pi's expanded prompt. Use only that trailing text for recall/configure; never include this file's instructions in the question.
 
-There are **two phases**. Phase A ends when HTML confirm writes `result.json`. Phase B starts when the user asks to **生成报告** (or equivalent) after confirm.
+There are **two phases**. Phase A ends after the user clicks **保存** in
+`qdm-metric-cli ui` (writes `$SESSION/result.json`) **and** replies **「继续」**
+to pass the A_CONFIG Gate. Phase B starts only after that Gate approval.
 
 Full architecture (P0–P5) is locked in:
 
 `docs/html-report-pipeline.md`
 
-## 固定推荐调试模式
+## 阶段 A 默认路径（先不做推荐）
 
-当前调试期，qdm-harness 扩展会在**模型开始前**直接写入固定的门店 `101001` 推荐配置并
-打开既有 HTML builder。它跳过 Spec recall、指标检索和推荐生成，只用于调试
-「推荐 JSON → HTML 确认 → result.json → Markdown 报告与质检」链路。
+当前默认 A_CONFIG **不生成 `recommendations.json`**，也不打开
+`public/local-report-builder.html`。扩展在模型开始前拉起：
 
-- 预设字段：`custNum`、`perCustAmt`、`profitLostRate`、`profitAmt`；按 `incDate`，门店
-  `101001`，日期仍为当月 1 日至昨日。
-- 该模式下 A_CONFIG 的固定推荐和 runtime agent list 都由扩展在模型开始前完成。
+```text
+qdm-metric-cli ui --session-local-dir $SESSION
+```
+
+用户在该页面自己搭卡，点击 **保存** 写出 `$SESSION/result.json`。
+**保存不会自动进入阶段 B。** 用户必须回到 Pi 回复 **「继续」**，A_CONFIG
+Gate 确认 `result.json` 存在后才会批准进入 B0。
+
+- A_CONFIG 的 UI 启动和 runtime agent list 都由扩展在模型开始前完成。
   runtime list 仍走真实 pi-subagents runtime discovery，并按 Session/Gate attempt 写入
-  `$SESSION/debug/runtime-agent-list/` 审计文件；它不是静态文件替代检查。
-- Agent 不得再次调用 `subagent({ action: "list" })`、`stage-gate status`，也不得重新
-  读取 Spec、改写推荐或检查 Session 目录。看到 completed Gate 后立即原样返回并停止，
-  等待 HTML 静默/人工确认及下一条“继续”。
+  `$SESSION/debug/runtime-agent-list/` 审计文件。
+- Agent 不得再次调用 `subagent({ action: "list" })`、`stage-gate status`，也不得
+  写 `recommendations.json`、启动 `server.mjs` 或检查 Session 目录。看到 completed
+  Gate 后立即原样返回并停止，等待用户点「保存」后再回复“继续”。
 - 仅 `html-report` 技能调用会关闭 Harness recall；同一 Pi 进程中的普通非技能问题仍保留
   原来的召回行为。
-- **B5 当前也属于调试跳过范围**：固定推荐调试 Session 在 B4 通过后由扩展自动完成
-  `B5_DESIGN`，不派发 `report-designer`，也不运行 compile/compose/capture、截图验收或
-  `--phase html` layout。因此不会生成 `report/report.html`、截图或 HTML 设计签章；本轮
-  调试的最终业务产物是已通过 B4 的 `report/report.md` 与 `quality/*`。该规则只作用于
-  当前固定推荐调试 Session，不影响动态推荐模式。
-- 要恢复本技能下面的正常动态推荐流程，显式以
-  `HTML_REPORT_A_CONFIG_MODE=dynamic pi ...` 启动 Pi。动态模式会恢复完整 B5 Report
-  Designer；`fixed` 或未设置该变量均使用固定预设并自动跳过 B5 设计。
+- **B5 当前仍跳过**：该默认 Session 在 B4 通过后由扩展自动完成 `B5_DESIGN`，
+  不派发 `report-designer`。本轮最终业务产物是已通过 B4 的 `report/report.md` 与
+  `quality/*`。
+- 旧的模型写推荐 / `server.mjs` 路径仅在显式
+  `HTML_REPORT_A_CONFIG_MODE=dynamic` 时保留；当前不要走那条路。
 
 ## Pi runtime prerequisite — extension-owned (hard stop)
 
@@ -127,163 +131,57 @@ node .agents/pi/skills/html-report/scripts/stage-gate.mjs \
 
 ---
 
-## Phase A — 配置确认（打开 HTML）
+## Phase A — 配置确认（打开 qdm-metric-cli ui）
 
-**Goal:** Recommend Indicators **card configuration** and open the local HTML builder.
-**Do not** collect business numbers for the final report in this phase. **Do not** run full multi-page report fetch here. **Do not** inject-template.
+**Goal:** Open `qdm-metric-cli ui` so the user can assemble cards and click **保存**.
+**Do not** generate `recommendations.json`. **Do not** open
+`public/local-report-builder.html`. **Do not** collect business numbers here.
 
 ### A workflow
 
-The extension-owned Pi runtime prerequisite above has passed and the extension
-has already started `A_CONFIG`. Resolve its session directory:
+The extension has already started `A_CONFIG`, created
 
-```bash
-SESSION="$(pwd)/.harness/state/html-report/${PI_SESSION_ID:?PI_SESSION_ID must be set}"
+```text
+$SESSION = <repo>/.harness/state/html-report/$PI_SESSION_ID
 ```
 
-1. From the repository root run:
+and launched:
 
-   ```bash
-   node .agents/pi/skills/html-report/scripts/prepare.mjs \
-     --question "<original question>" \
-     --session-id "${PI_SESSION_ID:?PI_SESSION_ID must be set by the Pi extension}"
-   ```
+```bash
+qdm-metric-cli ui --session-local-dir "$SESSION"
+```
 
-   Uses `data-harness-cli wikis recall-debug --doc-set specs` (Spec-only).
-   Default CLI recall without this skill still returns playbooks for single/multi — do not change that path yourself.
+`qdm-metric-cli ui` 的生命周期绑在当前 Pi Session：Session 退出或 Pi 进程退出
+时，扩展会停掉这个 UI。不要再手工 `detach` 一份孤儿进程。
 
-2. **If `specs` is non-empty:** read **only** those Spec paths.
-   **If `emptyRecall`:** explore via `wikis/metrics|reports/**/index.md` then Spec only. Do not use playbooks for 取数.
+The parent model must **not** re-run that command, write recommendations, start
+`server.mjs`, or call `stage-gate finish`. After the injected Gate text, stop
+and tell the user:
 
-3. If `supported` is false, explain non-Indicators/CMR/SQL cannot convert, then
-   make this the final standalone tool call and stop:
+1. 在打开的 `qdm-metric-cli ui` 里改卡。
+2. 点击 **保存**，写出 `$SESSION/result.json`。
+3. 回到 Pi 回复 **「继续」**。保存本身不会开始阶段 B。
 
-   ```bash
-   node .agents/pi/skills/html-report/scripts/stage-gate.mjs fail \
-     --session-dir "$SESSION" --stage A_CONFIG \
-     --reason "recalled report is not supported by Indicators" --format text
-   ```
-
-4. Write version `1` JSON at `recommendationsPath` (cards with indicators/dims/dates/filters; `chartType: table`).
-   Prefer codes from Specs; free-mode may add missing metrics with `warnings`.
-   **Every card must include non-empty `analysisFocus`**（章节写作 brief：分析什么、看什么关系、评估什么指标）。缺少会被 `validate-config` 拒绝。
-
-   **Minimal valid card shape** (field names must match — first validate failures are usually wrong keys):
-
-   `cards[].id` must already be filesystem-safe and unchanged by sanitization:
-   only `A-Z a-z 0-9 . _ -`, never `/`, spaces, `.` or `..` as the whole id.
-
-   ```json
-   {
-     "version": 1,
-     "sessionId": "<session-id>",
-     "mode": "free",
-     "userQuestion": "<user question>",
-     "warnings": [],
-     "cards": [
-       {
-         "id": "sample-card-001",
-         "title": "…",
-         "analysisFocus": "…",
-         "chartType": "table",
-         "indicatorFieldList": ["custNum", "perCustAmt", "profitAmt"],
-         "aggDimUniqueCodeList": ["incDate"],
-         "startDate": "2026-07-01",
-         "endDate": "2026-07-21",
-         "storeCollectType": 2,
-         "filters": [
-           { "type": "DIMENSION", "dimUniqueCode": "storeId", "values": ["101001"] }
-         ]
-       }
-     ]
-   }
-   ```
-
-   Full example: `.agents/pi/skills/html-report/scripts/fixtures/recommendations.example.json`
-
-   **Date range（每卡强制，不超过一个月）：**
-
-   - Inclusive span **≤ 31 days**: for each card, `(endDate - startDate) + 1 ≤ 31`. Longer windows are **rejected** by `validate-config`.
-   - If the user does **not** specify a range: default to **the 1st of the current calendar month through yesterday**.
-     Example: today is 2026-07-20 → `startDate=2026-07-01`, `endDate=2026-07-19`.
-     If today is the **1st** of the month (no “yesterday” in the current month): use **previous month 1st through previous month last day** (full previous calendar month).
-   - If the user asks for a longer period (e.g. last quarter / half year): still emit **only ≤ 31 days** (usually the most recent month), and add a top-level `warnings` note that the window was truncated; deeper/longer history belongs to Phase B Report Researcher — **never** a single 60–90 day card.
-   - Prefer one time grain that fits a ≤31-day window (usually `incDate`). Do **not** open a second same-metric card only to show `incWeek` / `incMonth`.
-
-   **Card diversity（避免重复卡）：**
-
-   - Each card must earn its place: **indicator set**, **analysisFocus intent**, or **filters/scope** must differ in a material way.
-   - **Forbidden:** same `indicatorFieldList` (as a set) + same effective filters, split only by time grain (`incDate` vs `incWeek` vs `incMonth`) — e.g. 日趋势 + 周趋势 + 同指标「平衡点」三张同构卡.
-   - **Anti-pattern:** three cards all with `custNum + perCustAmt + profitAmt`, only day/week dims differ → merge into **one** card (daily + balance narrative in one `analysisFocus`), or at most a second card with a **real** difference (other metrics, structure dim, or different store filter).
-   - **OK multi-card examples:** different metrics; trend vs true structural breakdown; same metrics but different store/region filters; report mode layers from Spec.
-   - free mode: prefer **1–2** cards; use 3 only when each is clearly non-redundant. Prefer one card when one query answers the question.
-
-   **Scope → filters（强制语义，防止只写在文案里）：**
-
-   - If the user question names a **concrete scope** (门店 / 区域 / 品类 / 具体组织等), **every related card** must put that scope into **`cards[].filters`** as structured filters, e.g.
-     `{ "type": "DIMENSION", "dimUniqueCode": "storeId", "values": ["101001"] }`
-     (use the real dim code from Specs when known).
-   - **Does not count as done:** only mentioning the store/region in `title` / `analysisFocus`, or only a top-level custom field like `storeId` **without** `cards[].filters`.
-   - **Empty filters are OK only when:** the user explicitly wants full-store / company-wide / unrestricted scope, **or** the question has no scope constraint. Then add a short entry under top-level `warnings` explaining why filters are empty.
-   - If a card uses row dim `storeId` (or similar) **without** filters, that is a full-cross-store query — prefer adding filters when the user named a store/sample.
-
-5. Validate (metadata only — validator may use preview, not full report fetch):
-
-   ```bash
-   node .agents/pi/skills/html-report/scripts/validate-config.mjs <recommendationsPath>
-   ```
-
-   Notes:
-   - Date span **> 31 days** → **error** (fix and re-validate).
-   - If **all** cards lack effective filters, validate prints a **warning** on stderr but still exits 0 (full-scope queries are allowed). Fix filters when the user named a scope; do not ignore the warning blindly.
-
-6. Start local server (**`--detach`**, auto-detects Pi process; do **not** pass `--watch-pid` / `$PPID`):
-
-   ```bash
-   node .agents/pi/skills/html-report/scripts/server.mjs \
-     --config <recommendationsPath> \
-     --session-id "${PI_SESSION_ID:?PI_SESSION_ID must be set by the Pi extension}" \
-     --detach \
-     --open
-   ```
-
-7. Verify page-state; tell the user to review/adjust in HTML and click **确认生成报告**.
-   Confirm runs per-card **smoke** CLI (`--single-page`) then writes:
-
-   `.harness/state/html-report/<session-id>/result.json`
-
-   HTML will **soft-confirm** if any card still has no effective filters (full store/region/category risk). User may cancel to add filters or proceed intentionally.
-
-8. After the URL is open and the page-state/config validation is complete,
-   make this the final, standalone tool call for A_CONFIG:
-
-   ```bash
-   node .agents/pi/skills/html-report/scripts/stage-gate.mjs finish \
-     --session-dir "$SESSION" --stage A_CONFIG --format text
-   ```
-
-   In `step` mode return the timing text and stop. The user may click the HTML
-   button first and then reply **“继续”** or **“确认生成报告”**; the extension
-   refuses A→B0 approval until `$SESSION/result.json` exists.
+The extension refuses A→B0 approval until `$SESSION/result.json` exists. After
+approval it injects `userQuestion` from the original skill prompt if the file
+omits it, then starts B0.
 
 ### Phase A bans
 
-- Full multi-page report data collection for writing the narrative
-- inject-template / reading templates as inject targets
+- Writing `recommendations.json`
+- Starting `server.mjs` / `public/local-report-builder.html`
+- Full multi-page report data collection
+- inject-template
 - Inventing metric values in chat
-- Putting user-named store/region/category **only** in prose (`title`/`analysisFocus`) without `cards[].filters`
-- Card date range longer than **31 inclusive days**
-- Multiple cards that only differ by time grain (`incDate` / `incWeek` / `incMonth`) with the same indicators and filters
+- Calling `stage-gate finish/fail` yourself in the default A_CONFIG path
+- Treating 「保存」 as approval to enter B0 / B2
 
 ### Phase A checklist
 
-- [ ] `recommendations.json` written
-- [ ] Each card date span ≤ 31 inclusive days (default: current month 1st → yesterday if unspecified)
-- [ ] No redundant same-metric day/week/month-only card splits
-- [ ] User-named scope written into each card `filters` (or `warnings` declare full-scope intentionally)
-- [ ] `validate-config` passed (heed empty-filter warnings; fix date-span errors)
-- [ ] URL opened / reported
-- [ ] User can confirm → `result.json` in session dir
+- [ ] `qdm-metric-cli ui` opened
+- [ ] User clicked **保存** → `$SESSION/result.json` exists
+- [ ] User replied **「继续」**
+- [ ] A_CONFIG approved → B0_PREFLIGHT
 
 ---
 
@@ -414,7 +312,8 @@ The extension owns this latency-critical stage:
    `tasks[]`. Each card/Gate attempt has one dispatch; do not retry or inspect
    child/session artifacts.
 3. Accept only the extension-validated Writer receipt. The child calls
-   `ack_cli_data` once, then `submit_card_caption` once on success. Fetch
+   `ack_cli_data` once, then `submit_card_caption` on success (`pointers`
+   optional; one incomplete retry). Fetch
    writes entry/meta and a compact evidence packet; caption writes
    `caption.md` and the parent-owned `outputSchema` receipt. Do not write
    or rewrite `outputSchema`. The fetch path is all-pages and never uses

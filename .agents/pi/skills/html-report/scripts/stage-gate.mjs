@@ -31,6 +31,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureResultUserQuestion } from "./open-metric-cli-ui.mjs";
 
 export const PIPELINE_STATE_VERSION = 1;
 export const PIPELINE_STATE_PRODUCER = "stage-gate.mjs";
@@ -368,6 +369,7 @@ async function requireConfirmedResult(sessionDir) {
   if (!(await exists(resultPath))) {
     throw new Error(`A_CONFIG cannot be approved before result.json exists: ${resultPath}`);
   }
+  await ensureResultUserQuestion(sessionDir, resultPath);
   return resultPath;
 }
 

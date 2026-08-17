@@ -288,6 +288,7 @@ interface CliContextPayload {
 interface FixedRecommendationSeed {
   preset?: string;
   recommendationsPath?: string;
+  markerPath?: string;
   serverUrl?: string | null;
   cardCount?: number;
 }
@@ -330,6 +331,7 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report-design/references/report-design-system.md",
   ".agents/pi/skills/html-report-design/assets/report-shell-starter.html",
   ".agents/pi/skills/html-report/scripts/stage-gate.mjs",
+  ".agents/pi/skills/html-report/scripts/open-metric-cli-ui.mjs",
   ".agents/pi/skills/html-report/scripts/writer-return.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-entry.mjs",
   ".agents/pi/skills/html-report/scripts/fetch-explore.mjs",
@@ -2016,14 +2018,15 @@ function attachWriterRunEnvelope(
   if (envelope.error) return envelope;
   writer.outputSchema = buildWriterReturnSchema(expected);
   // Writer is deliberately foreground-only. If it cannot return after
-  // ack_cli_data + submit_card_caption, pi-subagents must terminate it.
-  input.turnBudget = { maxTurns: 3, graceTurns: 1 };
+  // ack_cli_data + submit_card_caption (one incomplete caption retry),
+  // pi-subagents must terminate it.
+  input.turnBudget = { maxTurns: 4, graceTurns: 1 };
   delete input.toolBudget;
   delete input.timeoutMs;
   // The adapter caps CAS + retry sleeps + CLI attempts at 540s. Success
-  // uses two tools; the caption tool writes the receipt as outputSchema.
+  // uses two tools; one rejected caption plus a second submit needs three.
   input.maxRuntimeMs = 720_000;
-  writer.toolBudget = { hard: 2, block: "*" };
+  writer.toolBudget = { hard: 3, block: "*" };
   delete writer.async;
   delete writer.turnBudget;
   delete writer.timeoutMs;
@@ -3647,7 +3650,7 @@ function htmlReportModeBanner(): string {
     "- Read Spec documents for business definitions and indicator codes; do not open playbooks for 取数.",
     "- Do not run `analysis execute` / CMR query; do not answer with business metric values in chat.",
     "- If Spec recall is empty: explore `wikis/metrics/index.md` and `wikis/reports/index.md`, then open only relevant `spec.md` files.",
-    "- Finish with `recommendations.json` + `server.mjs --detach --open` (server auto-detects the Pi process; do not pass `$PPID` / hand-written PIDs).",
+    "- Finish by opening `qdm-metric-cli ui --session-local-dir $SESSION`. Do not write recommendations.json or start server.mjs.",
   ].join("\n");
 }
 
@@ -3662,10 +3665,52 @@ function fixedPresetShouldOpenBrowser(): boolean {
   return process.env.HTML_REPORT_FIXED_RECOMMENDATIONS_OPEN !== "0";
 }
 
+function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
+  if (!sid || sid === "unknown") return;
+  const uiScript = join(
+    projectRoot,
+    ".agents",
+    "pi",
+    "skills",
+    "html-report",
+    "scripts",
+    "open-metric-cli-ui.mjs"
+  );
+  try {
+    spawnSync(
+      process.execPath,
+      [uiScript, "--stop", "--session-id", sid, "--project-root", projectRoot],
+      { cwd: projectRoot, encoding: "utf8", timeout: 5000 }
+    );
+  } catch {
+    // Session teardown must not throw back into Pi.
+  }
+  const recommendationsPath = join(htmlReportSessionDir(projectRoot, sid), "recommendations.json");
+  if (!existsSync(recommendationsPath)) return;
+  const serverScript = join(
+    projectRoot,
+    ".agents",
+    "pi",
+    "skills",
+    "html-report",
+    "scripts",
+    "server.mjs"
+  );
+  try {
+    spawnSync(
+      process.execPath,
+      [serverScript, "--config", recommendationsPath, "--stop"],
+      { cwd: projectRoot, encoding: "utf8", timeout: 5000 }
+    );
+  } catch {
+    // ignore leftover-server stop failures
+  }
+}
+
 /**
- * Debug-only deterministic Phase A: seed one known-good card and use the
- * existing builder UI. This is intentionally outside the LLM so recommendation
- * quality cannot delay HTML/pipeline debugging.
+ * Default Phase A: open qdm-metric-cli ui against $SESSION.
+ * The user builds cards in that page, clicks 保存, then replies 「继续」.
+ * This path does not write recommendations.json or start server.mjs.
  */
 function seedFixedAConfig(
   projectRoot: string,
@@ -3679,35 +3724,45 @@ function seedFixedAConfig(
     "skills",
     "html-report",
     "scripts",
-    "seed-debug-recommendations.mjs"
+    "open-metric-cli-ui.mjs"
   );
-  const args = [script, "--session-id", sid, "--question", question];
+  const args = [
+    script,
+    "--session-id",
+    sid,
+    "--question",
+    question,
+    "--detach",
+    "--project-root",
+    projectRoot,
+  ];
   if (fixedPresetShouldOpenBrowser()) args.push("--open");
+  else args.push("--skip-spawn");
   const result = spawnSync(process.execPath, args, {
     cwd: projectRoot,
     encoding: "utf8",
     env: process.env,
   });
   if (result.status !== 0) {
-    return { ok: false, error: (result.stderr || result.stdout || "fixed recommendation seed failed").trim() };
+    return { ok: false, error: (result.stderr || result.stdout || "qdm-metric-cli ui failed to start").trim() };
   }
   try {
     return { ok: true, seed: JSON.parse(result.stdout) as FixedRecommendationSeed };
   } catch {
-    return { ok: false, error: "fixed recommendation seed returned invalid JSON" };
+    return { ok: false, error: "qdm-metric-cli ui launcher returned invalid JSON" };
   }
 }
 
 function fixedAConfigBanner(seed: FixedRecommendationSeed): string {
   return [
-    "# html-report 固定推荐调试模式",
-    "- A_CONFIG 已由扩展直接写入固定推荐，未调用模型、Spec recall 或指标搜索。",
-    `- 预设：\`${seed.preset || "store-101001-customer-ticket-profit"}\`；卡片数：${seed.cardCount || 1}。`,
-    seed.recommendationsPath ? `- 推荐配置：\`${seed.recommendationsPath}\`` : "",
-    seed.serverUrl ? `- HTML 构建器已打开：${seed.serverUrl}` : "- HTML 构建器已按当前设置启动。",
+    "# html-report 阶段 A：qdm-metric-cli ui",
+    "- 本轮不做推荐生成，也不打开 public/local-report-builder.html。",
+    "- 扩展已启动 `qdm-metric-cli ui --session-local-dir $SESSION`。",
+    seed.serverUrl ? `- 本地编辑器：${seed.serverUrl}` : "- 本地编辑器已按当前设置启动；测试环境可能跳过真正拉起进程。",
+    "- 请在该页面改卡后点击「保存」，写出 `$SESSION/result.json`。",
+    "- 保存成功后不要以为阶段 B 已开始；回到 Pi 回复「继续」，A_CONFIG Gate 才会批准进入 B0。",
     "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动执行；模型无需也不得调用 subagent。",
-    "- 扩展会绑定当前 Session/Gate attempt，验收四个 report-* Agent，并把结果写入 debug/runtime-agent-list 审计文件。",
-    "- 自动验收与 A_CONFIG 完成后，原样返回 Gate 文本并停止；不要调用 status、修改推荐 JSON 或重新执行 A_CONFIG。",
+    "- 自动验收与 A_CONFIG 完成后，原样返回 Gate 文本并停止；不要写 recommendations.json，不要启动 server.mjs。",
   ]
     .filter(Boolean)
     .join("\n");
@@ -3715,10 +3770,10 @@ function fixedAConfigBanner(seed: FixedRecommendationSeed): string {
 
 function fixedAConfigFailureBanner(reason: string): string {
   return [
-    "# html-report 固定推荐调试模式",
-    "- 固定推荐初始化失败；调试模式不会回退到模型推荐或 Harness recall。",
-    `- 原因：${reason || "unknown fixed preset initialization failure"}`,
-    "- 请修复固定预设初始化后重新触发该技能调用。",
+    "# html-report 阶段 A：qdm-metric-cli ui",
+    "- 无法启动 qdm-metric-cli ui；不会回退到旧 HTML 或生成 recommendations.json。",
+    `- 原因：${reason || "unknown metric-cli ui startup failure"}`,
+    "- 请确认 config/harness-config.yaml 的 cli.qdm_metric_cli 指向已包含 --session-local-dir 的二进制后重试。",
   ].join("\n");
 }
 
@@ -4018,21 +4073,29 @@ export default function qdmHarnessExtension(pi: {
     if (fixedAConfigSessions.has(sid)) return true;
     // Preserve the Debug B5 rule across a same-version Pi/extension restart.
     // This marker is produced only by the deterministic fixed-preset seeder.
-    const markerPath = join(
-      htmlReportSessionDir(projectRoot, sid),
-      "debug",
-      "fixed-recommendation.json"
-    );
-    try {
-      const marker = JSON.parse(readFileSync(markerPath, "utf8"));
-      return marker?.version === 1 &&
-        marker?.producer === "seed-debug-recommendations.mjs" &&
-        marker?.sessionId === sid &&
-        marker?.preset === "store-101001-customer-ticket-profit" &&
-        marker?.b5Design === "skip";
-    } catch {
-      return false;
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    const markers = [
+      join(sessionDir, "debug", "metric-cli-ui.json"),
+      join(sessionDir, "debug", "fixed-recommendation.json"),
+    ];
+    for (const markerPath of markers) {
+      try {
+        const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+        const knownProducer = marker?.producer === "open-metric-cli-ui.mjs" ||
+          marker?.producer === "seed-debug-recommendations.mjs";
+        if (
+          marker?.version === 1 &&
+          knownProducer &&
+          marker?.sessionId === sid &&
+          marker?.b5Design === "skip"
+        ) {
+          return true;
+        }
+      } catch {
+        // try the next marker
+      }
     }
+    return false;
   }
 
   /**
@@ -6235,13 +6298,13 @@ export default function qdmHarnessExtension(pi: {
       const seeded = seedFixedAConfig(projectRoot, sid, prompt);
       if (!seeded.ok) {
         fixedSeedError = seeded.error;
-        ctx?.ui?.notify?.(`html-report 固定推荐初始化失败：${seeded.error}`, "error");
+        ctx?.ui?.notify?.(`html-report 无法启动 qdm-metric-cli ui：${seeded.error}`, "error");
       } else {
         fixedAConfigSessions.add(sid);
         fixedSeed = seeded.seed;
         gateState = readGateState(projectRoot, sid);
         ctx?.ui?.notify?.(
-          `html-report 固定推荐已就绪${fixedSeed.serverUrl ? `：${fixedSeed.serverUrl}` : ""}`,
+          `html-report 已打开 qdm-metric-cli ui${fixedSeed.serverUrl ? `：${fixedSeed.serverUrl}` : ""}。保存 result.json 后回复「继续」。`,
           "info"
         );
       }
@@ -7013,5 +7076,10 @@ export default function qdmHarnessExtension(pi: {
     return undefined;
   };
   pi.on?.("agent_settled", pauseRunningGate);
-  pi.on?.("session_shutdown", pauseRunningGate);
+  pi.on?.("session_shutdown", (event: unknown, ctx?: PiExtensionContext) => {
+    pauseRunningGate(event, ctx);
+    const sid = sessionId(ctx);
+    if (sid && sid !== "unknown") stopHtmlReportSidecars(projectRoot, sid);
+    return undefined;
+  });
 }

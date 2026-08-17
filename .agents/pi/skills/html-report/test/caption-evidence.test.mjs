@@ -9,9 +9,12 @@ import {
   prepareCardCaptionEvidence,
 } from "../scripts/prepare-card-caption-evidence.mjs";
 import {
+  captionCitesDataNumber,
   captionPointerBudget,
   collectQueryTimeDateComponents,
+  defaultCaptionPointers,
   extractCaptionTokens,
+  normalizeCaptionToolInput,
   validateCaptionSubmission,
   validateCaptionSubmissionDetailed,
   writeCardCaption,
@@ -149,6 +152,39 @@ test("caption tokens do not strip standalone year without month and day", () => 
 test("caption tokens treat thousands separators as one number", () => {
   const tokens = extractCaptionTokens("CN01以4,484,024居首，CN20为1,313,823。");
   assert.deepEqual(tokens.numbers, ["4484024", "1313823"]);
+});
+
+test("caption input coerces JSON-string arrays and fills omitted pointers from views", () => {
+  const evidence = buildCaptionEvidence({
+    cardId: "one",
+    query: {
+      metrics: ["saleAmt"],
+      statisticPolicy: "SUMMARY",
+      dimensions: ["manageAreaId"],
+    },
+    rows: [{ manageAreaId: "CN01", saleAmt: 1000 }],
+  });
+  const filled = normalizeCaptionToolInput({
+    paragraphs: ["销售额最高的是 CN01 的 1000。"],
+  }, evidence);
+  assert.equal(filled.ok, true);
+  assert.deepEqual(filled.input.pointers, defaultCaptionPointers(evidence));
+  assert.ok(filled.input.pointers.includes("/views/topN-saleAmt-manageAreaId"));
+
+  const coerced = normalizeCaptionToolInput({
+    paragraphs: JSON.stringify(["销售额最高的是 CN01 的 1000。"]),
+    pointers: JSON.stringify(["/views/topN-saleAmt-manageAreaId"]),
+  }, evidence);
+  assert.equal(coerced.ok, true);
+  assert.deepEqual(coerced.input.paragraphs, ["销售额最高的是 CN01 的 1000。"]);
+  assert.deepEqual(coerced.input.pointers, ["/views/topN-saleAmt-manageAreaId"]);
+
+  const accepted = validateCaptionSubmission({
+    paragraphs: ["销售额最高的是 CN01 的 1000。"],
+  }, evidence);
+  assert.match(accepted.markdown, /1000/);
+  assert.equal(captionCitesDataNumber(["统计区间2026-08-01至2026-08-10，按"], evidence), false);
+  assert.equal(captionCitesDataNumber(["销售额最高的是 CN01 的 1000。"], evidence), true);
 });
 
 test("submit_card_caption rejects numbers that are not in the evidence packet", () => {

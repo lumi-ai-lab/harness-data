@@ -22,15 +22,61 @@ export function canonicalizeCaptionPointer(pointer) {
   return raw.startsWith("/evidence/views/") ? raw.slice("/evidence".length) : raw;
 }
 
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+/** Parse a real array or a JSON-encoded array string (`"[\"a\"]"`). */
+export function parseJsonArrayField(value) {
+  if (Array.isArray(value)) return { ok: true, value };
+  if (typeof value !== "string") return { ok: false, error: "must be an array" };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: false, error: "must be an array" };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) return { ok: false, error: "must be an array" };
+    return { ok: true, value: parsed };
+  } catch {
+    return { ok: false, error: "must be an array" };
+  }
 }
 
-function exactKeys(value, keys) {
-  if (!isPlainObject(value)) return false;
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => actual[index] === expected[index]);
+export function defaultCaptionPointers(evidence) {
+  const views = evidence?.views;
+  if (!isPlainObject(views)) return [];
+  return Object.keys(views).map((key) => `/views/${key}`);
+}
+
+/**
+ * Coerce stringified arrays and fill omitted/empty pointers from evidence.views.
+ * Does not write files.
+ */
+export function normalizeCaptionToolInput(input, evidence) {
+  if (!isPlainObject(input)) {
+    return { ok: false, error: "submit_card_caption accepts only paragraphs and optional pointers" };
+  }
+  const keys = Object.keys(input);
+  if (!keys.includes("paragraphs") || keys.some((key) => key !== "paragraphs" && key !== "pointers")) {
+    return { ok: false, error: "submit_card_caption accepts only paragraphs and optional pointers" };
+  }
+  const paragraphs = parseJsonArrayField(input.paragraphs);
+  if (!paragraphs.ok) return { ok: false, error: "paragraphs must be an array" };
+  let pointers = [];
+  if (input.pointers !== undefined) {
+    const parsed = parseJsonArrayField(input.pointers);
+    if (!parsed.ok) return { ok: false, error: "pointers must be an array" };
+    pointers = parsed.value;
+  }
+  if (pointers.length === 0) pointers = defaultCaptionPointers(evidence);
+  return { ok: true, input: { paragraphs: paragraphs.value, pointers } };
+}
+
+/** Stub captions that only have dates / 半截句子 extract no data numbers. */
+export function captionCitesDataNumber(paragraphs, evidence) {
+  const columnLabels = isPlainObject(evidence?.columnLabels) ? evidence.columnLabels : {};
+  const properNames = Object.values(columnLabels).filter(Boolean);
+  const text = (Array.isArray(paragraphs) ? paragraphs : []).join("\n");
+  return extractCaptionTokens(text, properNames).numbers.length > 0;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function decodePointerSegment(segment) {
@@ -401,19 +447,18 @@ function buildViolation(rule, ruleName, description, trigger, paragraphIndex, pa
  * - 指针/日期/数字校验 → 收集 violations，不 throw
  */
 export function validateCaptionSubmissionDetailed(input, evidence) {
-  if (!exactKeys(input, ["paragraphs", "pointers"])) {
-    throw new Error("submit_card_caption accepts only paragraphs and pointers");
-  }
+  const normalized = normalizeCaptionToolInput(input, evidence);
+  if (!normalized.ok) throw new Error(normalized.error);
   if (!isPlainObject(evidence) || evidence.producer !== "prepare-card-caption-evidence.mjs") {
     throw new Error("caption evidence is missing or has the wrong producer");
   }
   if (!isPlainObject(evidence.views)) throw new Error("caption evidence views must be an object");
-  const paragraphs = normalizeParagraphs(input.paragraphs);
+  const paragraphs = normalizeParagraphs(normalized.input.paragraphs);
   const violations = [];
 
   // ── 指针校验（收集 violations，不 throw）──
   const maxPointers = captionPointerBudget(evidence);
-  const rawPointers = Array.isArray(input.pointers) ? input.pointers : [];
+  const rawPointers = Array.isArray(normalized.input.pointers) ? normalized.input.pointers : [];
   if (rawPointers.length > maxPointers && maxPointers > 0) {
     violations.push(buildViolation(
       "POINTER_BUDGET_EXCEEDED", "引用数量超限",
