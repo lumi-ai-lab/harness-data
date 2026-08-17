@@ -852,6 +852,7 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
     toolName: "bash",
     input: {
       command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${valid.session}' --format text`,
+      timeout: 120,
     },
   };
   assert.equal(await toolCall(statusCall, valid.ctx), undefined);
@@ -936,6 +937,74 @@ test("B2 runtime requires successful status, blocks concurrent siblings, and rej
   assert.equal(await toolCall(contractCall({
     chain: [{ agent: "report-writer", task: recoveredTask }],
   }, "b2-invalid-recovered-writer"), invalid.ctx), undefined);
+  assert.deepEqual(handlers.activeTools(), initialTools);
+
+  const hostKeys = await seed("host-keys");
+  await beforeAgentStart({ prompt: "继续", systemPrompt: "base" }, hostKeys.ctx);
+  const hostStatus = {
+    toolCallId: "b2-host-keys-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${hostKeys.session}' --format text`,
+      timeout: 120,
+      workdir: repoRoot,
+      description: "B2 startup status",
+    },
+  };
+  assert.equal(await toolCall(hostStatus, hostKeys.ctx), undefined);
+  const hostStatusResult = await toolResult({
+    ...hostStatus,
+    isError: false,
+    content: [{ type: "text", text: "阶段：B2 Writer\n状态：running" }],
+  }, hostKeys.ctx);
+  assert.equal(hostStatusResult.isError, false);
+  assert.match(hostStatusResult.content.at(-1).text, /startup status 已验证/);
+  const hostTask = [
+    "按 report-writer 处理 cardId=card-1",
+    `SESSION=${hostKeys.session}`,
+    `result.json=${join(hostKeys.session, "result.json")}`,
+  ].join("\n");
+  assert.equal(await toolCall(contractCall({
+    chain: [{ agent: "report-writer", task: hostTask }],
+  }, "b2-host-keys-writer"), hostKeys.ctx), undefined);
+  assert.deepEqual(handlers.activeTools(), initialTools);
+
+  const foreignKey = await seed("foreign-key");
+  await beforeAgentStart({ prompt: "继续", systemPrompt: "base" }, foreignKey.ctx);
+  const foreignStatus = {
+    toolCallId: "b2-foreign-key-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${foreignKey.session}' --format text`,
+      foo: 1,
+    },
+  };
+  const foreignDecision = await toolCall(foreignStatus, foreignKey.ctx);
+  assert.equal(foreignDecision.block, true);
+  assert.match(foreignDecision.reason, /该工具未执行.*Gate attempt 保持有效/);
+  assert.equal(readGateState(repoRoot, foreignKey.sid).status, "running");
+  const recoveredForeign = {
+    toolCallId: "b2-foreign-key-recovered-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${foreignKey.session}' --format text`,
+    },
+  };
+  assert.equal(await toolCall(recoveredForeign, foreignKey.ctx), undefined);
+  const recoveredForeignResult = await toolResult({
+    ...recoveredForeign,
+    isError: false,
+    content: [{ type: "text", text: "阶段：B2 Writer\n状态：running" }],
+  }, foreignKey.ctx);
+  assert.equal(recoveredForeignResult.isError, false);
+  const foreignTask = [
+    "按 report-writer 处理 cardId=card-1",
+    `SESSION=${foreignKey.session}`,
+    `result.json=${join(foreignKey.session, "result.json")}`,
+  ].join("\n");
+  assert.equal(await toolCall(contractCall({
+    chain: [{ agent: "report-writer", task: foreignTask }],
+  }, "b2-foreign-key-writer"), foreignKey.ctx), undefined);
   assert.deepEqual(handlers.activeTools(), initialTools);
 
   const executionError = await seed("execution-error");
@@ -2594,6 +2663,30 @@ test("runtime allows one Writer dispatch per Gate attempt and treats valid failu
   const terminal = await toolCall(contractCall(makeInput(), "writer-terminal-retry"), ctx);
   assert.equal(terminal.block, true);
   assert.match(terminal.reason, /失败|failed/);
+
+  state.stages.B2_WRITER.attempts.push({
+    number: 4,
+    status: "running",
+    startedAt: "2026-07-28T01:15:00.000Z",
+  });
+  await writeFile(statePath, JSON.stringify(persistedGateState(state, sid)));
+  const captionFailCall = contractCall(makeInput(), "writer-caption-rejected");
+  assert.equal(await toolCall(captionFailCall, ctx), undefined);
+  const captionRejected = await toolResult(contractResult(captionFailCall, {
+    isError: false,
+    details: {
+      results: [writerAckChildResult({
+        cardId: "card-1",
+        fetchStatus: "failed",
+        dataPath: null,
+        metaPath: null,
+        error: "caption rejected: paragraphs[0] exceeds 500 characters",
+      })],
+    },
+  }), ctx);
+  assert.equal(captionRejected.isError, true);
+  assert.match(captionRejected.content[0].text, /B2 Writer cardId=card-1 交稿失败/);
+  assert.doesNotMatch(captionRejected.content[0].text, /取数失败/);
 });
 
 test("Writer dispatch reservation survives an extension restart within the same Gate attempt", async (t) => {
@@ -3846,7 +3939,9 @@ test("parent accepts Report Writer only through checked structured output and pe
   assert.equal(accepted.isError, false);
   assert.match(accepted.content[0].text, /B2 Report Writer 已通过 ack_cli_data 回执验收/);
   assert.match(accepted.content[0].text, /"cardId":"card-1"/);
-  assert.match(accepted.content[0].text, /尚待串行派发的 cardId：card-2/);
+  assert.match(accepted.content[0].text, /NEXT_TOOL_ONLY[\s\S]*subagent\(\{"chain":\[\{"agent":"report-writer"/);
+  assert.match(accepted.content[0].text, /cardId=card-2/);
+  assert.match(accepted.content[0].text, /还剩 1 张：card-2/);
   assert.doesNotMatch(accepted.content[0].text, /phase-writer layout：passed/);
 
   const task2 = `按 report-writer 处理 cardId=card-2\nSESSION=${session}\nresult.json=${session}/result.json`;
@@ -3956,6 +4051,25 @@ test("parent accepts Report Writer only through checked structured output and pe
   assert.match(missing.content[0].text, /ack_cli_data 返回回执/);
   assertWriterGateFailed("missing ack receipt");
 
+  const missingStructuredCall = await nextWriterCall("writer-missing-structured-output");
+  const missingStructured = await toolResult(contractResult(missingStructuredCall, {
+    isError: true,
+    content: [{
+      type: "text",
+      text: "Error: Missing structured_output call; this step has outputSchema and must finish by calling structured_output.",
+    }],
+    details: {
+      results: [{
+        exitCode: 1,
+        error: "Missing structured_output call; this step has outputSchema and must finish by calling structured_output.",
+      }],
+    },
+  }), ctx);
+  assert.equal(missingStructured.isError, true);
+  assert.match(missingStructured.content[0].text, /未提交 outputSchema 回执/);
+  assert.doesNotMatch(missingStructured.content[0].text, /Missing structured_output call/);
+  assertWriterGateFailed("missing structured_output");
+
   await writeFile(valid.dataPath, JSON.stringify(writerRows));
   await writeFile(valid.metaPath, JSON.stringify({
     rowCount: writerRows.length,
@@ -3988,6 +4102,183 @@ test("parent accepts Report Writer only through checked structured output and pe
   }), ctx);
   assert.equal(emptyAccepted.isError, false);
   assert.match(emptyAccepted.content[0].text, /ack_cli_data 回执验收/);
+});
+
+test("B2 Writer remaining cards lock the exact next call and status repeats it", async (t) => {
+  const initialTools = ["read", "bash", "subagent", "write"];
+  const handlers = registerHarnessExtension({ initialTools });
+  const toolCall = handlers.get("tool_call")[0];
+  const toolResult = handlers.get("tool_result")[0];
+  const sid = `writer-queue-${process.pid}-${Date.now()}`;
+  const session = htmlReportSessionDir(repoRoot, sid);
+  const ctx = { sessionManager: { getSessionId: () => sid } };
+  t.after(async () => rm(session, { recursive: true, force: true }));
+
+  const writerState = runningGateState("B2_WRITER");
+  await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
+  await writeFile(
+    pipelineStatePath(session),
+    JSON.stringify(persistedGateState(writerState, sid))
+  );
+  writeHtmlReportRuntimeContract(repoRoot, sid);
+  await writeFile(join(session, "result.json"), JSON.stringify({
+    status: "confirmed",
+    cards: [{ id: "card-1" }, { id: "card-2" }],
+  }));
+
+  const writerRows = [{ 日期: "2026-07-01", 毛利额: 100 }];
+  const valid = {
+    cardId: "card-1",
+    fetchStatus: "success",
+    dataPath: `${session}/data/cards/card-1/entry.json`,
+    metaPath: `${session}/data/cards/card-1/entry.meta.json`,
+    rowCount: 1,
+    rowsSha256: rowsSha256(writerRows),
+  };
+  await mkdir(dirname(valid.dataPath), { recursive: true });
+  await writeFile(valid.dataPath, JSON.stringify(writerRows));
+  await writeFile(valid.metaPath, JSON.stringify({
+    rowCount: writerRows.length,
+    rowsSha256: rowsSha256(writerRows),
+  }));
+  await writeWriterCaptionArtifacts(dirname(valid.dataPath), "card-1");
+
+  const task1 = [
+    "按 report-writer 处理 cardId=card-1",
+    `SESSION=${session}`,
+    `result.json=${session}/result.json`,
+  ].join("\n");
+  const writerCall1 = contractCall({ chain: [{ agent: "report-writer", task: task1 }] }, "writer-queue-card-1");
+  assert.equal(await toolCall(writerCall1, ctx), undefined);
+  const accepted1 = await toolResult(contractResult(writerCall1, {
+    isError: false,
+    details: { results: [writerAckChildResult(valid)] },
+  }), ctx);
+  assert.equal(accepted1.isError, false);
+  assert.match(accepted1.content[0].text, /NEXT_TOOL_ONLY[\s\S]*cardId=card-2/);
+  assert.doesNotMatch(accepted1.content[0].text, /cardId=card-1.{0,40}NEXT_TOOL_ONLY|尚待串行派发/);
+  assert.deepEqual(handlers.activeTools(), ["subagent"]);
+
+  const driftedStatus = await toolCall({
+    toolCallId: "writer-queue-drift-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${session}' --format text`,
+    },
+  }, ctx);
+  assert.equal(driftedStatus.block, true);
+  assert.match(driftedStatus.reason, /唯一允许调用/);
+  assert.match(driftedStatus.reason, /cardId=card-2/);
+  assert.equal(readGateState(repoRoot, sid).status, "running");
+  assert.deepEqual(handlers.activeTools(), ["subagent"]);
+
+  const driftedLs = await toolCall({
+    toolCallId: "writer-queue-drift-ls",
+    toolName: "bash",
+    input: { command: `ls '${session}'` },
+  }, ctx);
+  assert.equal(driftedLs.block, true);
+  assert.match(driftedLs.reason, /唯一允许调用/);
+
+  const driftedTask = await toolCall(contractCall({
+    chain: [{ agent: "report-writer", task: "自行重构的错误任务" }],
+  }, "writer-queue-drift-task"), ctx);
+  assert.equal(driftedTask.block, true);
+  assert.match(driftedTask.reason, /唯一允许调用/);
+
+  const task2 = [
+    "按 report-writer 处理 cardId=card-2",
+    `SESSION=${session}`,
+    `result.json=${session}/result.json`,
+  ].join("\n");
+  const writerCall2 = contractCall({ chain: [{ agent: "report-writer", task: task2 }] }, "writer-queue-card-2");
+  assert.equal(await toolCall(writerCall2, ctx), undefined);
+  assert.deepEqual(handlers.activeTools(), initialTools);
+
+  const valid2 = {
+    ...valid,
+    cardId: "card-2",
+    dataPath: `${session}/data/cards/card-2/entry.json`,
+    metaPath: `${session}/data/cards/card-2/entry.meta.json`,
+  };
+  await mkdir(dirname(valid2.dataPath), { recursive: true });
+  await writeFile(valid2.dataPath, JSON.stringify(writerRows));
+  await writeFile(valid2.metaPath, JSON.stringify({
+    rowCount: writerRows.length,
+    rowsSha256: rowsSha256(writerRows),
+  }));
+  await writeWriterCaptionArtifacts(dirname(valid2.dataPath), "card-2");
+  const accepted2 = await toolResult(contractResult(writerCall2, {
+    isError: false,
+    details: { results: [writerAckChildResult(valid2)] },
+  }), ctx);
+  assert.equal(accepted2.isError, false);
+  assert.match(accepted2.content[0].text, /phase-writer layout：passed/);
+  assert.deepEqual(handlers.activeTools(), initialTools);
+});
+
+test("running B2 status repeats the next remaining Writer call, not the first card", async (t) => {
+  const initialTools = ["read", "bash", "subagent", "write"];
+  const handlers = registerHarnessExtension({ initialTools });
+  const toolCall = handlers.get("tool_call")[0];
+  const toolResult = handlers.get("tool_result")[0];
+  const sid = `writer-status-remaining-${process.pid}-${Date.now()}`;
+  const session = htmlReportSessionDir(repoRoot, sid);
+  const ctx = { sessionManager: { getSessionId: () => sid } };
+  t.after(async () => rm(session, { recursive: true, force: true }));
+
+  const writerState = runningGateState("B2_WRITER");
+  await mkdir(dirname(pipelineStatePath(session)), { recursive: true });
+  await writeFile(
+    pipelineStatePath(session),
+    JSON.stringify(persistedGateState(writerState, sid))
+  );
+  writeHtmlReportRuntimeContract(repoRoot, sid);
+  await writeFile(join(session, "result.json"), JSON.stringify({
+    status: "confirmed",
+    cards: [{ id: "card-1" }, { id: "card-2" }],
+  }));
+  const writerRows = [{ 日期: "2026-07-01", 毛利额: 100 }];
+  const card1Dir = join(session, "data", "cards", "card-1");
+  await mkdir(card1Dir, { recursive: true });
+  await writeFile(join(card1Dir, "entry.json"), JSON.stringify(writerRows));
+  await writeFile(join(card1Dir, "entry.meta.json"), JSON.stringify({
+    rowCount: writerRows.length,
+    rowsSha256: rowsSha256(writerRows),
+  }));
+  await writeWriterCaptionArtifacts(card1Dir, "card-1");
+
+  const statusCall = {
+    toolCallId: "writer-mid-status",
+    toolName: "bash",
+    input: {
+      command: `node '${stageGateScriptPath(repoRoot)}' status --session-dir '${session}' --format text`,
+    },
+  };
+  assert.equal(await toolCall(statusCall, ctx), undefined);
+  const statusResult = await toolResult({
+    ...statusCall,
+    isError: false,
+    content: [{ type: "text", text: "阶段：B2 Writer\n状态：running\n下一阶段：B2 Main" }],
+  }, ctx);
+  assert.equal(statusResult.isError, false);
+  assert.match(statusResult.content.at(-1).text, /NEXT_TOOL_ONLY[\s\S]*cardId=card-2/);
+  assert.doesNotMatch(statusResult.content.at(-1).text, /cardId=card-1/);
+  assert.deepEqual(handlers.activeTools(), ["subagent"]);
+
+  const driftedFirstCard = await toolCall(contractCall({
+    chain: [{
+      agent: "report-writer",
+      task: [
+        "按 report-writer 处理 cardId=card-1",
+        `SESSION=${session}`,
+        `result.json=${session}/result.json`,
+      ].join("\n"),
+    }],
+  }, "writer-status-replay-card-1"), ctx);
+  assert.equal(driftedFirstCard.block, true);
+  assert.match(driftedFirstCard.reason, /唯一允许调用/);
+  assert.match(driftedFirstCard.reason, /cardId=card-2/);
 });
 
 test("parent accepts Report Researcher only through a checked structured chain and evidence artifacts", async (t) => {

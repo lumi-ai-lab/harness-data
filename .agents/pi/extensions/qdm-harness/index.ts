@@ -31,6 +31,7 @@ import {
   captionPathFor,
   extractWriterReceipt,
   isWriterEmptyOutputError,
+  isWriterMissingStructuredOutputError,
   validateWriterReturn,
   writerReturnPathsForResult,
 } from "../../skills/html-report/scripts/writer-return.mjs";
@@ -855,6 +856,17 @@ function sameCanonicalJson(left: unknown, right: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/** Hosts such as OpenAI fill these optional bash fields; they are not part of the command. */
+const BASH_HOST_OPTIONAL_KEYS = new Set(["timeout", "workdir", "description"]);
+
+function bashCommandIgnoringHostKeys(input: unknown): string | null {
+  if (!isObject(input) || typeof input.command !== "string") return null;
+  for (const key of Object.keys(input)) {
+    if (key !== "command" && !BASH_HOST_OPTIONAL_KEYS.has(key)) return null;
+  }
+  return input.command;
 }
 
 function objectWithout(value: JsonObject, omitted: readonly string[]): JsonObject {
@@ -2044,6 +2056,84 @@ type EditorPlannerToolResultPatch = ToolResultPatch & {
   nextTool?: DeterministicNextTool;
 };
 
+type WriterToolResultPatch = ToolResultPatch & {
+  nextTool?: DeterministicNextTool;
+};
+
+/** Parent-model Writer call shape. Envelope fields are attached later in tool_call. */
+function writerDispatchInput(sessionDir: string, cardId: string): JsonObject {
+  return {
+    chain: [{
+      agent: "report-writer",
+      task: [
+        `按 report-writer 处理 cardId=${cardId}`,
+        `SESSION=${sessionDir}`,
+        `result.json=${join(sessionDir, "result.json")}`,
+      ].join("\n"),
+    }],
+  };
+}
+
+function writerNextTool(sessionDir: string, cardId: string): DeterministicNextTool {
+  const input = writerDispatchInput(sessionDir, cardId);
+  return {
+    toolName: "subagent",
+    input,
+    invocation: `subagent(${JSON.stringify(input)})`,
+  };
+}
+
+function writerQueueHandoffText(nextTool: DeterministicNextTool, remaining: string[]): string {
+  return [
+    "B2 已验收当前 Writer。",
+    `NEXT_TOOL_ONLY：下一条 assistant 消息只原样调用 \`${nextTool.invocation}\`。`,
+    `还剩 ${remaining.length} 张：${remaining.join(", ")}。`,
+    "禁止 wait、重复 status、目录诊断、复述或参数重构。",
+  ].join("\n");
+}
+
+async function remainingWriterCardIds(projectRoot: string, session: string): Promise<string[]> {
+  if (!session || session === "unknown") return [];
+  const sessionDir = htmlReportSessionDir(projectRoot, session);
+  const resultPath = join(sessionDir, "result.json");
+  let result: JsonObject;
+  let resultMtimeMs: number;
+  try {
+    const parsed = JSON.parse(readFileSync(resultPath, "utf8"));
+    if (!isObject(parsed) || parsed.status !== "confirmed" || !Array.isArray(parsed.cards) || !parsed.cards.length) {
+      return [];
+    }
+    result = parsed;
+    resultMtimeMs = (await stat(resultPath)).mtimeMs;
+  } catch {
+    return [];
+  }
+  const remaining: string[] = [];
+  const seenPaths = new Set<string>();
+  try {
+    for (const card of result.cards as unknown[]) {
+      if (!isObject(card) || typeof card.id !== "string" || !card.id.trim()) return [];
+      const expected = writerReturnPathsForResult({ resultPath, cardId: card.id });
+      if (seenPaths.has(expected.dataPath)) return [];
+      seenPaths.add(expected.dataPath);
+      const persisted = await reusableEntry(dirname(expected.dataPath), { notBeforeMs: resultMtimeMs });
+      let hasCaption = false;
+      if (persisted) {
+        try {
+          const captionStat = await lstat(captionPathFor(expected.dataPath));
+          hasCaption = captionStat.isFile() && !captionStat.isSymbolicLink();
+        } catch {
+          hasCaption = false;
+        }
+      }
+      if (!persisted || !hasCaption) remaining.push(card.id);
+    }
+  } catch {
+    return [];
+  }
+  return remaining;
+}
+
 /**
  * A Writer chain already exposes its machine-readable result in `details`,
  * but the default pi-subagents text only points the Editor at a temporary
@@ -2089,7 +2179,7 @@ async function finishWriterStageIfReady(
   projectRoot: string,
   session: string,
   value: JsonObject
-): Promise<{ ok: boolean; text: string }> {
+): Promise<{ ok: boolean; text: string; nextTool?: DeterministicNextTool }> {
   if (value.fetchStatus !== "success") {
     const error = String(value.error || "unknown error");
     const kind = error.startsWith("caption rejected:") ? "交稿失败" : "取数失败";
@@ -2100,20 +2190,17 @@ async function finishWriterStageIfReady(
   const sessionDir = htmlReportSessionDir(projectRoot, session);
   const resultPath = join(sessionDir, "result.json");
   let result: JsonObject;
-  let resultMtimeMs: number;
   try {
     const parsed = JSON.parse(readFileSync(resultPath, "utf8"));
     if (!isObject(parsed) || parsed.status !== "confirmed" || !Array.isArray(parsed.cards) || !parsed.cards.length) {
       throw new Error("result.json must be confirmed and contain a non-empty cards[]");
     }
     result = parsed;
-    resultMtimeMs = (await stat(resultPath)).mtimeMs;
   } catch (error) {
     const reason = `B2 Writer 无法确定义验收 result.json：${error instanceof Error ? error.message : String(error)}`;
     return { ok: false, text: failWriterStage(projectRoot, session, reason) };
   }
 
-  const expectedCards: Array<{ cardId: string; dataPath: string }> = [];
   const seenPaths = new Set<string>();
   try {
     for (const card of result.cards as unknown[]) {
@@ -2125,31 +2212,19 @@ async function finishWriterStageIfReady(
         throw new Error(`result card ids collide after path normalization: ${card.id}`);
       }
       seenPaths.add(expected.dataPath);
-      expectedCards.push({ cardId: card.id, dataPath: expected.dataPath });
     }
   } catch (error) {
     const reason = `B2 Writer 无法建立全部卡片契约：${error instanceof Error ? error.message : String(error)}`;
     return { ok: false, text: failWriterStage(projectRoot, session, reason) };
   }
 
-  const remaining: string[] = [];
-  for (const expected of expectedCards) {
-    const persisted = await reusableEntry(dirname(expected.dataPath), { notBeforeMs: resultMtimeMs });
-    let hasCaption = false;
-    if (persisted) {
-      try {
-        const captionStat = await lstat(captionPathFor(expected.dataPath));
-        hasCaption = captionStat.isFile() && !captionStat.isSymbolicLink();
-      } catch {
-        hasCaption = false;
-      }
-    }
-    if (!persisted || !hasCaption) remaining.push(expected.cardId);
-  }
+  const remaining = await remainingWriterCardIds(projectRoot, session);
   if (remaining.length) {
+    const nextTool = writerNextTool(sessionDir, remaining[0]);
     return {
       ok: true,
-      text: `B2 已验收当前 Writer；尚待串行派发的 cardId：${remaining.join(", ")}。不要运行 layout 或 stage-gate。`,
+      text: writerQueueHandoffText(nextTool, remaining),
+      nextTool,
     };
   }
 
@@ -2246,7 +2321,7 @@ async function finalizeMainDraftIfReady(
 }
 
 async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?: string, session?: string):
-  Promise<ToolResultPatch | undefined> {
+  Promise<WriterToolResultPatch | undefined> {
   if (!isSubagentToolName(event.toolName)) return undefined;
   const invocation = writerInvocationFromSubagentInput(event.input);
   if (invocation.error) {
@@ -2276,11 +2351,21 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     typeof result.error === "string" ? result.error : contentText(event.content)
   );
   if (!receipt) {
+    const childErrorText = typeof result.error === "string" && result.error.trim()
+      ? result.error.trim()
+      : contentText(event.content);
+    if (isWriterMissingStructuredOutputError(childErrorText)) {
+      return failWriterResult(
+        projectRoot,
+        session,
+        "B2 Report Writer 拒绝：子代理未提交 outputSchema 回执（未走到 ack 失败 / submit 终态）。"
+      );
+    }
     if (event.isError || result.exitCode !== 0) {
-      const childError = typeof result.error === "string" && result.error.trim()
-        ? `：${result.error.trim()}`
+      const childError = childErrorText
+        ? `：${childErrorText}`
         : event.isError
-          ? `：${contentText(event.content) || "顶层 tool_result isError=true"}`
+          ? "：顶层 tool_result isError=true"
           : "";
       return failWriterResult(
         projectRoot,
@@ -2357,6 +2442,7 @@ async function reportWriterResultDecision(event: PiToolResultEvent, projectRoot?
     // Preserve the original result for extensions and diagnostics. The Editor
     // consumes the validated JSON above, rather than navigating this detail.
     details: event.details,
+    ...(finalized.ok && finalized.nextTool ? { nextTool: finalized.nextTool } : {}),
   };
 }
 
@@ -4037,6 +4123,8 @@ export default function qdmHarnessExtension(pi: {
   const b25BootstrapCalls = new Map<string, { key: string; kind: "status" | "source_fields" }>();
   const b3HandoffTools = new Map<string, B3HandoffToolRecord>();
   const b3HandoffToolSnapshots = new Map<string, string[]>();
+  const b2WriterQueueTools = new Map<string, B3HandoffToolRecord>();
+  const b2WriterQueueToolSnapshots = new Map<string, string[]>();
   const b3FinalizersInFlight = new Map<string, B3FinalizerInFlight>();
   const settledB3FinalizerToolCalls = new Set<string>();
   let staleRuntimeError: string | null = null;
@@ -4774,9 +4862,9 @@ export default function qdmHarnessExtension(pi: {
   }
 
   function exactB2StartupStatusCall(sid: string, event: PiToolCallEvent): boolean {
-    if (String(event.toolName || "").toLowerCase() !== "bash" || !isObject(event.input)) return false;
-    if (Object.keys(event.input).sort().join(",") !== "command") return false;
-    const command = typeof event.input.command === "string" ? event.input.command : "";
+    if (String(event.toolName || "").toLowerCase() !== "bash") return false;
+    const command = bashCommandIgnoringHostKeys(event.input);
+    if (command === null) return false;
     const parsed = parseStandaloneStageGateCommand(command);
     return Boolean(
       parsed?.operation === "status" &&
@@ -4849,9 +4937,9 @@ export default function qdmHarnessExtension(pi: {
     event: PiToolCallEvent
   ): "status" | "source_fields" | null {
     if (!b25BootstrapIdentity(sid, state)) return null;
-    if (String(event.toolName || "").toLowerCase() !== "bash" || !isObject(event.input)) return null;
-    if (Object.keys(event.input).sort().join(",") !== "command") return null;
-    const command = typeof event.input.command === "string" ? event.input.command : "";
+    if (String(event.toolName || "").toLowerCase() !== "bash") return null;
+    const command = bashCommandIgnoringHostKeys(event.input);
+    if (command === null) return null;
     const expected = b25EditorBootstrapContract(projectRoot, sid);
     if (command === expected.statusCommand) return "status";
     if (command === expected.sourceFieldsCommand) return "source_fields";
@@ -5504,6 +5592,115 @@ export default function qdmHarnessExtension(pi: {
         "B2.5 已生成确定性的 B3 首个工具调用；接棒完成前禁止其他工具或参数漂移。",
         `唯一允许调用：${record.invocation}`,
       ].join(" "),
+    };
+  }
+
+  function b2WriterQueueKey(sid: string, state: unknown): string | null {
+    if (
+      !sid ||
+      sid === "unknown" ||
+      !isObject(state) ||
+      state.status !== "running" ||
+      state.currentStage !== "B2_WRITER"
+    ) return null;
+    const attempt = gateAttemptToken(state);
+    return attempt ? `${sid}|${attempt}|writer-queue` : null;
+  }
+
+  function restoreB2WriterQueueTools(key: string): void {
+    const snapshot = b2WriterQueueToolSnapshots.get(key);
+    b2WriterQueueTools.delete(key);
+    if (!snapshot) return;
+    b2WriterQueueToolSnapshots.delete(key);
+    pi.setActiveTools?.([...snapshot]);
+  }
+
+  function restoreB2WriterQueueToolsForSession(sid: string): void {
+    const prefix = `${sid}|`;
+    for (const key of new Set([
+      ...b2WriterQueueTools.keys(),
+      ...b2WriterQueueToolSnapshots.keys(),
+    ])) {
+      if (key.startsWith(prefix)) restoreB2WriterQueueTools(key);
+    }
+  }
+
+  function restrictB2WriterQueueTools(
+    sid: string,
+    state: unknown,
+    nextTool: DeterministicNextTool
+  ): void {
+    const key = b2WriterQueueKey(sid, state);
+    const attempt = gateAttemptToken(state);
+    if (!key || !attempt) return;
+    restoreB2WriterQueueToolsForSession(sid);
+    b2WriterQueueTools.set(key, {
+      ...nextTool,
+      key,
+      sessionId: sid,
+      attempt,
+    });
+    if (
+      typeof pi.getActiveTools !== "function" ||
+      typeof pi.setActiveTools !== "function"
+    ) return;
+    b2WriterQueueToolSnapshots.set(key, [...pi.getActiveTools()]);
+    pi.setActiveTools([nextTool.toolName]);
+  }
+
+  function b2WriterQueueToolDecision(
+    sid: string,
+    state: unknown,
+    event: PiToolCallEvent
+  ): { block: true; reason: string } | undefined {
+    const currentKey = b2WriterQueueKey(sid, state);
+    for (const record of [...b2WriterQueueTools.values()]) {
+      if (record.sessionId === sid && record.key !== currentKey) {
+        restoreB2WriterQueueTools(record.key);
+      }
+    }
+    if (!currentKey) return undefined;
+    const record = b2WriterQueueTools.get(currentKey);
+    if (!record) return undefined;
+    const actualName = String(event.toolName || "").toLowerCase();
+    const expectedName = record.toolName.toLowerCase();
+    if (actualName === expectedName && sameCanonicalJson(event.input, record.input)) {
+      restoreB2WriterQueueTools(currentKey);
+      return undefined;
+    }
+    return {
+      block: true,
+      reason: [
+        "B2 已验收当前 Writer；下一张接棒完成前禁止其他工具或参数漂移。",
+        `唯一允许调用：${record.invocation}`,
+      ].join(" "),
+    };
+  }
+
+  async function settleB2WriterQueueStatus(
+    sid: string,
+    state: unknown,
+    event: PiToolResultEvent
+  ): Promise<ToolResultPatch | undefined> {
+    if (event.isError === true) return undefined;
+    if (!exactB2StartupStatusCall(sid, event as unknown as PiToolCallEvent)) return undefined;
+    const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
+    if (toolCallId && b2StartupStatusCalls.has(toolCallId)) return undefined;
+    if (
+      !isObject(state) ||
+      state.status !== "running" ||
+      state.currentStage !== "B2_WRITER"
+    ) return undefined;
+    const remaining = await remainingWriterCardIds(projectRoot, sid);
+    if (!remaining.length) return undefined;
+    const nextTool = writerNextTool(htmlReportSessionDir(projectRoot, sid), remaining[0]);
+    restrictB2WriterQueueTools(sid, state, nextTool);
+    return {
+      isError: false,
+      content: [
+        ...(event.content || []),
+        { type: "text", text: writerQueueHandoffText(nextTool, remaining) },
+      ],
     };
   }
 
@@ -6438,6 +6635,8 @@ export default function qdmHarnessExtension(pi: {
     if (b25BootstrapDecision) return b25BootstrapDecision;
     const b2StartupDecision = b2StartupToolDecision(sid, gateState, toolCall);
     if (b2StartupDecision) return b2StartupDecision;
+    const b2WriterQueueDecision = b2WriterQueueToolDecision(sid, gateState, toolCall);
+    if (b2WriterQueueDecision) return b2WriterQueueDecision;
     const b3HandoffDecision = b3HandoffToolDecision(sid, gateState, toolCall);
     if (b3HandoffDecision) return b3HandoffDecision;
     const runtimeListPrerequisite = runtimeAgentListPrerequisiteDecision(
@@ -6797,23 +6996,11 @@ export default function qdmHarnessExtension(pi: {
         // Infrastructure failure (CLI not available, auth not configured):
         // skip pre-fetch, continue to Writers for on-demand fetch.
       }
-      const task = [
-        `按 report-writer 处理 cardId=${writerCardIds[0]}`,
-        `SESSION=${sessionDir}`,
-        `result.json=${join(sessionDir, "result.json")}`,
-      ].join("\n");
-      const firstInput = {
-        chain: [{ agent: "report-writer", task }],
-      };
-      const firstDispatch = `subagent(${JSON.stringify(firstInput)})`;
+      const nextTool = writerNextTool(sessionDir, writerCardIds[0]);
       b2StartupStatuses.set(record.key, {
         ...record,
         phase: "passed",
-        nextTool: {
-          toolName: "subagent",
-          input: firstInput,
-          invocation: firstDispatch,
-        },
+        nextTool,
       });
       restrictB2StartupTools(sid, gateState);
       return {
@@ -6824,13 +7011,15 @@ export default function qdmHarnessExtension(pi: {
             type: "text",
             text: [
               "B2 startup status 已验证。",
-              `NEXT_TOOL_ONLY：下一条 assistant 消息只原样调用 \`${firstDispatch}\`。`,
+              `NEXT_TOOL_ONLY：下一条 assistant 消息只原样调用 \`${nextTool.invocation}\`。`,
               "这是前台 Writer 调用；禁止 wait、重复 status、目录诊断、复述或参数重构。",
             ].join("\n"),
           },
         ],
       };
     }
+    const writerQueueStatus = await settleB2WriterQueueStatus(sid, gateState, toolResultEvent);
+    if (writerQueueStatus) return writerQueueStatus;
     const runtimeListToolCallId = typeof toolResultEvent.toolCallId === "string"
       ? toolResultEvent.toolCallId.trim()
       : "";
@@ -6932,7 +7121,13 @@ export default function qdmHarnessExtension(pi: {
             : `ack_cli_data fetchStatus=${String(output?.fetchStatus || "failed")} 已验收`;
         markContractTerminal(dispatchIdentity, reason);
       }
-      return writerDecision;
+      const { nextTool, ...resultPatch } = writerDecision;
+      if (writerDecision.isError === true || !nextTool) {
+        restoreB2WriterQueueToolsForSession(sid);
+      } else {
+        restrictB2WriterQueueTools(sid, readGateState(projectRoot, sid), nextTool);
+      }
+      return resultPatch;
     }
     const editorPlannerDecision = await reportEditorPlannerResultDecision(
       contractEvent,
@@ -7067,6 +7262,7 @@ export default function qdmHarnessExtension(pi: {
     if (!sid || sid === "unknown") return undefined;
     resetInflightB2StartupStatusForSession(sid);
     restoreB2StartupToolsForSession(sid);
+    restoreB2WriterQueueToolsForSession(sid);
     resetB25BootstrapForSession(sid);
     restoreB3HandoffToolsForSession(sid);
     const state = readGateState(projectRoot, sid);

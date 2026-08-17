@@ -362,23 +362,30 @@ export function extractCaptionTokens(text, properNames = []) {
   return { dates, numbers };
 }
 
-function normalizeParagraphs(value) {
+/** Empty string means paragraphs are within count/length limits. */
+export function captionParagraphLimitError(value) {
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("paragraphs must be a non-empty array");
+    return "paragraphs must be a non-empty array";
   }
   if (value.length > CAPTION_MAX_PARAGRAPHS) {
-    throw new Error(`paragraphs must contain at most ${CAPTION_MAX_PARAGRAPHS} items`);
+    return `paragraphs must contain at most ${CAPTION_MAX_PARAGRAPHS} items`;
   }
-  return value.map((item, index) => {
+  for (let index = 0; index < value.length; index++) {
+    const item = value[index];
     if (typeof item !== "string" || !item.trim()) {
-      throw new Error(`paragraphs[${index}] must be a non-empty string`);
+      return `paragraphs[${index}] must be a non-empty string`;
     }
-    const paragraph = item.trim();
-    if ([...paragraph].length > CAPTION_MAX_PARAGRAPH_CHARS) {
-      throw new Error(`paragraphs[${index}] exceeds ${CAPTION_MAX_PARAGRAPH_CHARS} characters`);
+    if ([...item.trim()].length > CAPTION_MAX_PARAGRAPH_CHARS) {
+      return `paragraphs[${index}] exceeds ${CAPTION_MAX_PARAGRAPH_CHARS} characters`;
     }
-    return paragraph;
-  });
+  }
+  return "";
+}
+
+function normalizeParagraphs(value) {
+  const error = captionParagraphLimitError(value);
+  if (error) throw new Error(error);
+  return value.map((item) => item.trim());
 }
 
 function normalizePointers(value, maxPointers) {

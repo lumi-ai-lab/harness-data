@@ -16,7 +16,9 @@ import {
   prepareCardCaptionEvidence,
 } from "../../skills/html-report/scripts/prepare-card-caption-evidence.mjs";
 import {
+  CAPTION_MAX_PARAGRAPH_CHARS,
   captionCitesDataNumber,
+  captionParagraphLimitError,
   loadCaptionEvidence,
   normalizeCaptionToolInput,
   writeCardCaption,
@@ -47,6 +49,11 @@ const sessionRoot = resolve(projectRoot, ".harness", "state", "html-report");
 function isInside(root, candidate) {
   const rel = relative(root, candidate);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function asCaptionRejected(message) {
+  const text = String(message || "submit_card_caption failed").trim();
+  return text.startsWith("caption rejected:") ? text : `caption rejected: ${text}`;
 }
 
 async function resolveAllowedResult(resultPath) {
@@ -285,7 +292,7 @@ export default function registerReportWriterFetch(pi) {
       "Pass paragraphs only if you want; pointers are optional and filled from evidence.views when omitted.",
       "Cite only /views/... pointers from the evidence packet (not /evidence/views/...). You may cite every view in that packet.",
       "Every number in paragraphs must appear in the evidence packet views (any view, not only pointed-at nodes). Prefer the views digits; 万/亿元 of the same cell is allowed. Do not write 超/约/近 with a number that is not itself in the packet. Copy metric and dimension names from views; do not translate or guess Chinese labels.",
-      "If the first submit is rejected as incomplete or invalid, call submit_card_caption once more with complete paragraphs. Do not read files or call structured_output.",
+      `Each paragraph must be at most ${CAPTION_MAX_PARAGRAPH_CHARS} characters. If the first submit is rejected as incomplete or too long, split or complete paragraphs and call once more. Do not read files or call structured_output.`,
     ],
     parameters: {
       type: "object",
@@ -326,11 +333,15 @@ export default function registerReportWriterFetch(pi) {
         throw new Error(String(error?.message || error || "caption evidence is missing"));
       }
       const normalized = normalizeCaptionToolInput(params, evidence);
+      const limitError = normalized.ok
+        ? captionParagraphLimitError(normalized.input.paragraphs)
+        : "";
       const retryableError = !normalized.ok
         ? normalized.error
-        : captionCitesDataNumber(normalized.input.paragraphs, evidence)
-          ? ""
-          : "段落里没有 evidence 中的数据数字，像是半截交稿";
+        : limitError
+          || (captionCitesDataNumber(normalized.input.paragraphs, evidence)
+            ? ""
+            : "段落里没有 evidence 中的数据数字，像是半截交稿");
       if (retryableError) {
         if (state.captionFailures >= WRITER_CAPTION_RETRY_LIMIT) {
           const failed = {
@@ -338,7 +349,7 @@ export default function registerReportWriterFetch(pi) {
             fetchStatus: "failed",
             dataPath: null,
             metaPath: null,
-            error: retryableError,
+            error: asCaptionRejected(retryableError),
           };
           await captureReceipt(failed);
           pi.setActiveTools?.([]);
@@ -351,7 +362,7 @@ export default function registerReportWriterFetch(pi) {
         return {
           content: [{
             type: "text",
-            text: `submit_card_caption 未受理：${retryableError}。补全 who-is-high/who-is-low 后只再调用一次；pointers 可省略。`,
+            text: `submit_card_caption 未受理：${retryableError}。拆短（每段不超过 ${CAPTION_MAX_PARAGRAPH_CHARS} 字）或补全后只再调用一次；pointers 可省略。`,
           }],
           details: { captionRetry: true, error: retryableError },
           terminate: false,
@@ -371,7 +382,7 @@ export default function registerReportWriterFetch(pi) {
           fetchStatus: "failed",
           dataPath: null,
           metaPath: null,
-          error: String(error?.message || error || "submit_card_caption failed"),
+          error: asCaptionRejected(error?.message || error || "submit_card_caption failed"),
         };
         await captureReceipt(failed);
         pi.setActiveTools?.([]);

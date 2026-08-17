@@ -63,6 +63,21 @@ test("Writer assignment binds one safe cardId and one current-project result.jso
   assert.equal(parseWriterAssignment("missing assignment", { projectRoot }).ok, false);
 });
 
+test("submit_card_caption schema omits paragraph maxLength so host validation cannot skip retry", () => {
+  const tools = [];
+  registerReportWriterFetch({
+    on() {},
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    setActiveTools() {},
+  });
+  const caption = tools.find((tool) => tool.name === WRITER_CAPTION_TOOL);
+  assert.ok(caption);
+  const arraySchema = caption.parameters.properties.paragraphs.anyOf.find((entry) => entry.type === "array");
+  assert.equal(arraySchema.items.maxLength, undefined);
+});
+
 test("Writer allows ack then caption and blocks every other tool", () => {
   const bound = contract();
   let transition = writerToolDecision(bound, initialWriterGuardState(), {
@@ -426,6 +441,235 @@ test("submit_card_caption fills omitted pointers and retries one incomplete stub
   assert.equal(caption.terminate, true);
   assert.equal(caption.details.fetchStatus, "success");
   assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
+});
+
+test("submit_card_caption retries one overlong paragraph then accepts a short rewrite", async (t) => {
+  const stateRoot = join(projectRoot, ".harness", "state", "html-report");
+  await mkdir(stateRoot, { recursive: true });
+  const typedSession = await mkdtemp(join(stateRoot, "typed-writer-caption-overlong-"));
+  const runtimeDir = await mkdtemp(join(projectRoot, ".harness", "typed-writer-caption-overlong-runtime-"));
+  t.after(() => rm(typedSession, { recursive: true, force: true }));
+  t.after(() => rm(runtimeDir, { recursive: true, force: true }));
+
+  const cardId = "card-1";
+  const cardDir = join(typedSession, "data", "cards", cardId);
+  await mkdir(cardDir, { recursive: true });
+  const rows = [{ manageAreaId: "CN01", custNum: 12 }];
+  const resultPath = join(typedSession, "result.json");
+  await writeFile(resultPath, JSON.stringify({
+    status: "confirmed",
+    cards: [{
+      id: cardId,
+      query: {
+        request: {
+          metrics: ["custNum"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+          dimensions: ["manageAreaId"],
+          filters: {},
+          pageNo: 1,
+          pageSize: 500,
+        },
+        comparisons: [],
+      },
+    }],
+  }));
+  await writeFile(join(cardDir, "entry.json"), `${JSON.stringify(rows)}\n`);
+  await writeFile(
+    join(cardDir, "entry.meta.json"),
+    `${JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) })}\n`
+  );
+  await writeFile(
+    join(cardDir, "entry.column-meta.json"),
+    `${JSON.stringify({ custNum: "来客数", manageAreaId: "管理区域" })}\n`
+  );
+
+  const prompt = assignment({ sessionDir: typedSession });
+  const bound = parseWriterAssignment(prompt, { projectRoot });
+  assert.equal(bound.ok, true, bound.errors?.join("; "));
+  const schemaPath = join(runtimeDir, "schema.json");
+  const outputPath = join(runtimeDir, "output.json");
+  await writeFile(schemaPath, JSON.stringify(buildWriterReturnSchema(bound)));
+  const previousSchema = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+  const previousCapture = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+  process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = schemaPath;
+  process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = outputPath;
+  t.after(() => {
+    if (previousSchema === undefined) delete process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+    else process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = previousSchema;
+    if (previousCapture === undefined) delete process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+    else process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = previousCapture;
+  });
+
+  const handlers = new Map();
+  const tools = [];
+  const activeToolSets = [];
+  registerReportWriterFetch({
+    on(event, handler) {
+      const list = handlers.get(event) || [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    setActiveTools(names) {
+      activeToolSets.push(names);
+    },
+  });
+  await handlers.get("before_agent_start")[0]({ prompt });
+  const fetchEvent = {
+    toolCallId: "overlong-writer-fetch",
+    toolName: WRITER_ACK_TOOL,
+    input: { resultPath: bound.resultPath, cardId: bound.cardId },
+  };
+  await handlers.get("tool_call")[0](fetchEvent);
+  const fetchResult = await tools[0].execute(fetchEvent.toolCallId, fetchEvent.input);
+  handlers.get("tool_result")[0]({
+    ...fetchEvent,
+    details: fetchResult.details,
+    isError: false,
+  });
+
+  const overlongEvent = {
+    toolCallId: "overlong-writer-caption-first",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: [`${"销".repeat(501)} 12`] },
+  };
+  assert.equal(await handlers.get("tool_call")[0](overlongEvent), undefined);
+  const overlong = await tools[1].execute(overlongEvent.toolCallId, overlongEvent.input);
+  assert.equal(overlong.terminate, false);
+  assert.equal(overlong.details.captionRetry, true);
+  assert.match(overlong.content[0].text, /paragraphs\[0\] exceeds 500/);
+  assert.match(overlong.content[0].text, /拆短/);
+  handlers.get("tool_result")[0]({
+    ...overlongEvent,
+    details: overlong.details,
+    isError: false,
+  });
+  assert.deepEqual(activeToolSets.at(-1), [WRITER_CAPTION_TOOL]);
+
+  const retryEvent = {
+    toolCallId: "overlong-writer-caption-ok",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: ["来客最高为 12。"] },
+  };
+  assert.equal(await handlers.get("tool_call")[0](retryEvent), undefined);
+  const caption = await tools[1].execute(retryEvent.toolCallId, retryEvent.input);
+  assert.equal(caption.terminate, true);
+  assert.equal(caption.details.fetchStatus, "success");
+  assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
+});
+
+test("second overlong caption is terminal and prefixes caption rejected", async (t) => {
+  const stateRoot = join(projectRoot, ".harness", "state", "html-report");
+  await mkdir(stateRoot, { recursive: true });
+  const typedSession = await mkdtemp(join(stateRoot, "typed-writer-caption-overlong-terminal-"));
+  const runtimeDir = await mkdtemp(join(projectRoot, ".harness", "typed-writer-caption-overlong-terminal-runtime-"));
+  t.after(() => rm(typedSession, { recursive: true, force: true }));
+  t.after(() => rm(runtimeDir, { recursive: true, force: true }));
+
+  const cardId = "card-1";
+  const cardDir = join(typedSession, "data", "cards", cardId);
+  await mkdir(cardDir, { recursive: true });
+  const rows = [{ manageAreaId: "CN01", custNum: 12 }];
+  const resultPath = join(typedSession, "result.json");
+  await writeFile(resultPath, JSON.stringify({
+    status: "confirmed",
+    cards: [{
+      id: cardId,
+      query: {
+        request: {
+          metrics: ["custNum"],
+          statisticPolicy: "SUMMARY",
+          time: { startDate: "2026-07-01", endDate: "2026-07-02" },
+          dimensions: ["manageAreaId"],
+          filters: {},
+          pageNo: 1,
+          pageSize: 500,
+        },
+        comparisons: [],
+      },
+    }],
+  }));
+  await writeFile(join(cardDir, "entry.json"), `${JSON.stringify(rows)}\n`);
+  await writeFile(
+    join(cardDir, "entry.meta.json"),
+    `${JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) })}\n`
+  );
+  await writeFile(
+    join(cardDir, "entry.column-meta.json"),
+    `${JSON.stringify({ custNum: "来客数", manageAreaId: "管理区域" })}\n`
+  );
+
+  const prompt = assignment({ sessionDir: typedSession });
+  const bound = parseWriterAssignment(prompt, { projectRoot });
+  assert.equal(bound.ok, true, bound.errors?.join("; "));
+  const schemaPath = join(runtimeDir, "schema.json");
+  const outputPath = join(runtimeDir, "output.json");
+  await writeFile(schemaPath, JSON.stringify(buildWriterReturnSchema(bound)));
+  const previousSchema = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+  const previousCapture = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+  process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = schemaPath;
+  process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = outputPath;
+  t.after(() => {
+    if (previousSchema === undefined) delete process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+    else process.env[STRUCTURED_OUTPUT_SCHEMA_ENV] = previousSchema;
+    if (previousCapture === undefined) delete process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+    else process.env[STRUCTURED_OUTPUT_CAPTURE_ENV] = previousCapture;
+  });
+
+  const handlers = new Map();
+  const tools = [];
+  registerReportWriterFetch({
+    on(event, handler) {
+      const list = handlers.get(event) || [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    setActiveTools() {},
+  });
+  await handlers.get("before_agent_start")[0]({ prompt });
+  const fetchEvent = {
+    toolCallId: "overlong-terminal-fetch",
+    toolName: WRITER_ACK_TOOL,
+    input: { resultPath: bound.resultPath, cardId: bound.cardId },
+  };
+  await handlers.get("tool_call")[0](fetchEvent);
+  const fetchResult = await tools[0].execute(fetchEvent.toolCallId, fetchEvent.input);
+  handlers.get("tool_result")[0]({
+    ...fetchEvent,
+    details: fetchResult.details,
+    isError: false,
+  });
+
+  const first = {
+    toolCallId: "overlong-terminal-caption-1",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: [`${"销".repeat(501)} 12`] },
+  };
+  assert.equal(await handlers.get("tool_call")[0](first), undefined);
+  const firstResult = await tools[1].execute(first.toolCallId, first.input);
+  assert.equal(firstResult.terminate, false);
+  handlers.get("tool_result")[0]({
+    ...first,
+    details: firstResult.details,
+    isError: false,
+  });
+
+  const second = {
+    toolCallId: "overlong-terminal-caption-2",
+    toolName: WRITER_CAPTION_TOOL,
+    input: { paragraphs: [`${"额".repeat(501)} 12`] },
+  };
+  assert.equal(await handlers.get("tool_call")[0](second), undefined);
+  const secondResult = await tools[1].execute(second.toolCallId, second.input);
+  assert.equal(secondResult.terminate, true);
+  assert.equal(secondResult.details.fetchStatus, "failed");
+  assert.match(secondResult.details.error, /^caption rejected: paragraphs\[0\] exceeds 500/);
 });
 
 test("submit_card_caption with validation violations writes success receipt and violations file", async (t) => {

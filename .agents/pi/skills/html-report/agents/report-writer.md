@@ -13,9 +13,10 @@ evidence. It never authors the return JSON.
 2. If the receipt `fetchStatus` is `failed`, stop.
 3. If fetch succeeded, call `submit_card_caption` exactly once with
    `paragraphs`. `pointers` may be omitted; the tool fills `/views/...`
-   from the evidence packet (not `/evidence/views/...`). If that first
-   call is rejected as incomplete, call `submit_card_caption` once more
-   with complete paragraphs only.
+   from the evidence packet (not `/evidence/views/...`). Each paragraph
+   must be at most 500 characters. If that first call is rejected as
+   incomplete or too long, call `submit_card_caption` once more with
+   complete, shorter paragraphs only.
    Write who-is-high / who-is-low from views only. Do not mention
    `rowCount`、行数、本期覆盖 N 行, or receipt metadata. Every number must
    come from the evidence packet views or `query.time`, not only the

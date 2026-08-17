@@ -320,9 +320,13 @@ The extension owns this latency-critical stage:
    `--single-page`. A valid persisted entry/meta pair is reused automatically
    on a user-approved retry; caption may be rewritten.
 4. After a valid result, follow only the next exact call returned by the
-   extension. It dispatches the next card or, when all cards are done, runs
-   the caption gate check (see B2 Caption Gate below). If no caption
-   violations, it deterministically performs B2 layout, runs
+   extension. Each successful Writer that still has remaining cards returns
+   the same-format `NEXT_TOOL_ONLY` `subagent` for the next cardId — do not
+   reconstruct that call from a cardId list. A mid-stage `stage-gate status`
+   during running `B2_WRITER` repeats that same next-card call. This is not
+   an extension event-bridge auto-dispatch. When all cards are done, the
+   extension runs the caption gate check (see B2 Caption Gate below). If no
+   caption violations, it deterministically performs B2 layout, runs
    `compose-main.mjs`, finishes `B2_MAIN`, and stops at that Gate.
    Return the Gate text; never write/edit `analysis/main.md` or Writer data.
 

@@ -9,7 +9,9 @@ import {
   prepareCardCaptionEvidence,
 } from "../scripts/prepare-card-caption-evidence.mjs";
 import {
+  CAPTION_MAX_PARAGRAPH_CHARS,
   captionCitesDataNumber,
+  captionParagraphLimitError,
   captionPointerBudget,
   collectQueryTimeDateComponents,
   defaultCaptionPointers,
@@ -185,6 +187,15 @@ test("caption input coerces JSON-string arrays and fills omitted pointers from v
   assert.match(accepted.markdown, /1000/);
   assert.equal(captionCitesDataNumber(["统计区间2026-08-01至2026-08-10，按"], evidence), false);
   assert.equal(captionCitesDataNumber(["销售额最高的是 CN01 的 1000。"], evidence), true);
+});
+
+test("caption paragraph limit error is empty within 500 chars and reports the overflowing index", () => {
+  assert.equal(captionParagraphLimitError(["销售额最高的是 CN01 的 1000。"]), "");
+  const overflow = `${"销".repeat(CAPTION_MAX_PARAGRAPH_CHARS + 1)}`;
+  assert.equal(
+    captionParagraphLimitError(["短段 1000。", overflow]),
+    `paragraphs[1] exceeds ${CAPTION_MAX_PARAGRAPH_CHARS} characters`
+  );
 });
 
 test("submit_card_caption rejects numbers that are not in the evidence packet", () => {

@@ -165,6 +165,10 @@ export function isWriterEmptyOutputError(error) {
   return typeof error === "string" && /produced no output/i.test(error);
 }
 
+export function isWriterMissingStructuredOutputError(error) {
+  return typeof error === "string" && /Missing structured_output call/i.test(error);
+}
+
 /** Semantic check for the ack_cli_data receipt the parent lifted from the child. */
 export function validateWriterReturn(value, expected) {
   const errors = [];
