@@ -44,7 +44,7 @@ func looksLikeGatedMetricCommand(command string) bool {
 	return marker.MatchString(command) && subcommand.MatchString(command)
 }
 
-const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|dim\s+values|tag\s+list|auth\s+describe)`
+const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|dim\s+values|auth\s+describe)`
 
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
@@ -420,7 +420,7 @@ func findMetricInvocations(command string) ([]metricInvocation, error) {
 		subcmd string
 	}{
 		{kind: "analysis", subcmd: `analysis\s+(?:validate|preview|execute|total)`},
-		{kind: "data", subcmd: `(?:dim\s+values|tag\s+list)`},
+		{kind: "data", subcmd: `dim\s+values`},
 		{kind: "describe", subcmd: `auth\s+describe`},
 	} {
 		invocationRe := metricInvocationRegexp(candidate.subcmd)

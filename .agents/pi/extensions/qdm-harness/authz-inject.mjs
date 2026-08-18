@@ -2,7 +2,6 @@
  * Force auth flags only for real shell invocations of:
  *   qdm-metric-cli analysis validate|preview|execute|total ...  → --data-auth --auth-blob
  *   qdm-metric-cli dim values ...       → --data-auth --auth-blob
- *   qdm-metric-cli tag list ...         → --data-auth --auth-blob
  *   qdm-metric-cli auth describe ...     → --auth-blob
  *
  * Mentions inside quotes, heredocs, or commit messages must NOT be rewritten.
@@ -16,8 +15,7 @@ const METRIC_BIN_SRC =
 /** Subcommand patterns gated by authz (command-word form only). */
 const SUBCMD_ANALYSIS = String.raw`analysis\s+(?:validate|preview|execute|total)`;
 const SUBCMD_DIM_VALUES = String.raw`dim\s+values`;
-const SUBCMD_TAG_LIST = String.raw`tag\s+list`;
-const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES}|${SUBCMD_TAG_LIST})`;
+const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES})`;
 const SUBCMD_AUTH_DESCRIBE = String.raw`auth\s+describe`;
 const SUBCMD_AUTHZ_GATED = String.raw`(?:${SUBCMD_DATA}|${SUBCMD_AUTH_DESCRIBE})`;
 
@@ -197,10 +195,6 @@ export function isMetricDimValues(command) {
   return matchesMetricInvocation(command, SUBCMD_DIM_VALUES);
 }
 
-export function isMetricTagList(command) {
-  return matchesMetricInvocation(command, SUBCMD_TAG_LIST);
-}
-
 /**
  * True only when the shell command actually *invokes*
  * qdm-metric-cli with subcommand `auth describe`.
@@ -222,7 +216,7 @@ export function isMetricAuthzGatedCommand(command) {
 
 /**
  * Rewrite command-word metric-cli tokens that start a gated invocation
- * (protected analysis/`dim values`/`tag list` or `auth describe`).
+ * (protected analysis/`dim values` or `auth describe`).
  *
  * @param {string} command
  * @param {string} metricCliPath absolute path to qdm-metric-cli
@@ -316,7 +310,7 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
 }
 
 /**
- * Inject --data-auth --auth-blob for protected analysis, dim values, and tag list.
+ * Inject --data-auth --auth-blob for protected analysis and dim values.
  *
  * @param {string} command
  * @param {string} blob encrypted qdm1enc blob

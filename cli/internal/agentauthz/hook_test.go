@@ -71,7 +71,6 @@ func TestHookAuthzOnCoversProtectedCommandSet(t *testing.T) {
 		"analysis execute",
 		"analysis total",
 		"dim values",
-		"tag list",
 		"auth describe",
 	} {
 		t.Run(subcommand, func(t *testing.T) {

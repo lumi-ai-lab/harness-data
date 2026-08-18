@@ -301,7 +301,7 @@ func TestRewriteGatedMetricCommandsRewritesMixedInvocations(t *testing.T) {
 }
 
 func TestRewriteGatedMetricCommandsCoversProtectedDataCommands(t *testing.T) {
-	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list"} {
+	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values"} {
 		command := "qdm-metric-cli " + subcommand + " --data-auth --auth-blob model --auth-json fake --auth-user-id model-user --metric x"
 		got, err := RewriteGatedMetricCommands(command, "qdm1enc.runtime", "/abs/bin/qdm-metric-cli")
 		if err != nil {
@@ -322,7 +322,7 @@ func TestRewriteGatedMetricCommandsCoversProtectedDataCommands(t *testing.T) {
 }
 
 func TestMetricCommandDetectionCoversOnlyProtectedCommands(t *testing.T) {
-	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list", "auth describe"} {
+	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "auth describe"} {
 		if !IsMetricAuthzGatedCommand("qdm-metric-cli " + subcommand) {
 			t.Fatalf("expected protected command match: %s", subcommand)
 		}
@@ -335,6 +335,7 @@ func TestMetricCommandDetectionCoversOnlyProtectedCommands(t *testing.T) {
 		"qdm-metric-cli wikis",
 		"qdm-metric-cli dim search",
 		"qdm-metric-cli tag describe",
+		"qdm-metric-cli tag list",
 		`printf '%s' 'qdm-metric-cli tag list'`,
 	} {
 		if IsMetricAuthzGatedCommand(command) {

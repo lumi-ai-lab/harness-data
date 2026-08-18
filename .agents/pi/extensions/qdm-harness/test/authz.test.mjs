@@ -18,7 +18,6 @@ import {
   isMetricAnalysisTotal,
   isMetricAnalysisValidate,
   isMetricDimValues,
-  isMetricTagList,
   isMetricAuthDescribe,
   isMetricAuthzGatedCommand,
   rewriteMetricCliInvocation,
@@ -224,7 +223,6 @@ test("protected data command matching covers the frozen command set", () => {
     ["qdm-metric-cli analysis execute", isMetricAnalysisExecute],
     ["qdm-metric-cli analysis total", isMetricAnalysisTotal],
     ["qdm-metric-cli dim values", isMetricDimValues],
-    ["qdm-metric-cli tag list", isMetricTagList],
     ["qdm-metric-cli auth describe", isMetricAuthDescribe],
   ]) {
     assert.equal(matcher(command), true, command);
@@ -245,7 +243,6 @@ test("applyAuthzToToolCall gates every protected command", () => {
     "analysis execute",
     "analysis total",
     "dim values",
-    "tag list",
   ]) {
     const event = { toolName: "bash", input: { command: `qdm-metric-cli ${subcommand} --auth-user-id model` } };
     const result = applyAuthzToToolCall(event, { mode: "on", blob: SAMPLE_BLOB });
@@ -260,10 +257,11 @@ test("applyAuthzToToolCall gates every protected command", () => {
   assert.doesNotMatch(describe.input.command, /data-auth/);
   assert.match(describe.input.command, /auth-user-id model/);
 
-  for (const subcommand of ["analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list"]) {
+  for (const subcommand of ["analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values"]) {
     const event = { toolName: "bash", input: { command: `qdm-metric-cli ${subcommand}` } };
     assert.equal(applyAuthzToToolCall(event, { mode: "on", blob: null })?.block, true, subcommand);
   }
+  assert.equal(isMetricAuthzGatedCommand("qdm-metric-cli tag list"), false);
 });
 
 test("isMetricAuthDescribe and injectAuthDescribeBlob", () => {
