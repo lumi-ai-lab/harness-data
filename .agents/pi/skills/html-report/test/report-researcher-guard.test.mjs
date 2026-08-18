@@ -16,7 +16,6 @@ import {
   prepareStructuredOutputCapture,
   STRUCTURED_OUTPUT_CAPTURE_ENV,
   STRUCTURED_OUTPUT_SCHEMA_ENV,
-  writeStructuredOutputCapture,
 } from "../../../extensions/shared/subagent-structured-output-capture.mjs";
 import { buildResearcherReturnSchema } from "../scripts/researcher-return.mjs";
 
@@ -1075,9 +1074,8 @@ test("structured-output capture validates the parent-owned schema pair and never
     [STRUCTURED_OUTPUT_SCHEMA_ENV]: schemaPath,
     [STRUCTURED_OUTPUT_CAPTURE_ENV]: outputPath,
   };
-  const runtime = await prepareStructuredOutputCapture(schema, env);
-  await writeStructuredOutputCapture(runtime, { status: "ok" });
-  assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), { status: "ok" });
+  await prepareStructuredOutputCapture(schema, env);
+  await writeFile(outputPath, JSON.stringify({ status: "ok" }));
   await assert.rejects(() => prepareStructuredOutputCapture(schema, env), /already exists/);
 
   const mismatchDir = await mkdtemp(base);
@@ -1094,7 +1092,7 @@ test("structured-output capture validates the parent-owned schema pair and never
   await assert.rejects(() => prepareStructuredOutputCapture(schema, {}), /unavailable/);
 });
 
-test("typed findings submit captures the exact output and terminates without a copy turn", async (t) => {
+test("typed findings submit writes artifacts and hands off official structured_output", async (t) => {
   const stateRoot = join(projectRoot, ".harness", "state", "html-report");
   await mkdir(stateRoot, { recursive: true });
   const typedSession = await mkdtemp(join(stateRoot, "typed-terminal-test-"));
@@ -1151,6 +1149,7 @@ test("typed findings submit captures the exact output and terminates without a c
 
   const handlers = new Map();
   const registeredTools = [];
+  const activeToolSets = [];
   const pi = {
     on(event, handler) {
       const list = handlers.get(event) || [];
@@ -1160,14 +1159,16 @@ test("typed findings submit captures the exact output and terminates without a c
     registerTool(tool) {
       registeredTools.push(tool);
     },
-    setActiveTools() {},
+    setActiveTools(names) {
+      activeToolSets.push(names);
+    },
   };
   registerReportResearcherGuard(pi);
   const start = await handlers.get("before_agent_start")[0]({
     prompt,
     systemPrompt: "ordinary long Researcher prompt",
   });
-  assert.match(start.systemPrompt, /submit_research_findings[\s\S]*terminates this child/);
+  assert.match(start.systemPrompt, /submit_research_findings[\s\S]*structured_output exactly once/);
   assert.doesNotMatch(start.systemPrompt, /ordinary long Researcher prompt/);
 
   const readEvent = {
@@ -1210,12 +1211,13 @@ test("typed findings submit captures the exact output and terminates without a c
     input: params,
   }), undefined);
   const result = await registeredTools[0].execute("typed-terminal-submit", params);
-  assert.equal(result.terminate, true);
-  assert.match(result.content[0].text, /structured output captured/);
-  const captured = JSON.parse(await readFile(outputPath, "utf8"));
+  assert.equal(result.terminate, false);
+  assert.match(result.content[0].text, /structured_output exactly once/);
+  assert.deepEqual(activeToolSets.at(-1), ["structured_output"]);
+  await assert.rejects(() => readFile(outputPath, "utf8"), /ENOENT/);
   const summary = JSON.parse(await readFile(contract.summaryPath, "utf8"));
-  assert.deepEqual(captured, result.details.researcherReturn);
   assert.deepEqual(summary, result.details.researcherReturn);
+  assert.deepEqual(result.details.value, result.details.researcherReturn);
   assert.match(await readFile(contract.sectionPath, "utf8"), /结论值为 10。/);
 });
 
@@ -1479,7 +1481,7 @@ test("current new_query gets a compact complete acquisition prompt before typed 
   assert.match(result.systemPrompt, /recall-debug[\s\S]*--doc-set specs/);
   assert.match(result.systemPrompt, /fetch-explore\.mjs[\s\S]*--payload-file/);
   assert.match(result.systemPrompt, /prepare-research-evidence\.mjs/);
-  assert.match(result.systemPrompt, /submit_research_findings[\s\S]*terminates/);
+  assert.match(result.systemPrompt, /submit_research_findings[\s\S]*structured_output exactly once/);
   assert.match(result.systemPrompt, /do not retry or repair/);
   assert.doesNotMatch(result.systemPrompt, /The summary JSON file is not a reduced summary record/);
 });

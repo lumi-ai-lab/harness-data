@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 import { submitReviewScorecard } from "../../skills/html-report/scripts/submit-review-scorecard.mjs";
 import { buildReviewerReturnSchema } from "../../skills/html-report/scripts/reviewer-return.mjs";
 import {
+  handoffOfficialStructuredOutput,
   prepareStructuredOutputCapture,
-  writeStructuredOutputCapture,
 } from "../shared/subagent-structured-output-capture.mjs";
 import {
   initialReviewerGuardState,
@@ -129,7 +129,7 @@ export default function registerReportReviewerGuard(pi) {
     promptSnippet: "submit_review_scorecard: submit the typed Reviewer scorecard once; it owns draft JSON, verdict stamping, and quality report rendering.",
     promptGuidelines: [
       "After the fixed review reads and scan.json read, call submit_review_scorecard exactly once.",
-      "On success it captures the attached structured output and terminates the child; do not call structured_output afterward.",
+      "On success, call structured_output exactly once with the returned reviewerReturn.",
     ],
     parameters: {
       type: "object",
@@ -167,16 +167,11 @@ export default function registerReportReviewerGuard(pi) {
       if (submitted) throw new Error("submit_review_scorecard may be called only once per Reviewer assignment");
       submitted = true;
       if (!contract.ok) throw new Error("Reviewer assignment is not valid");
-      const capture = await prepareStructuredOutputCapture(
+      await prepareStructuredOutputCapture(
         buildReviewerReturnSchema(contract)
       );
       const reviewerReturn = await submitReviewScorecard(contract.resultPath, params);
-      const structuredOutputPath = await writeStructuredOutputCapture(capture, reviewerReturn);
-      return {
-        content: [{ type: "text", text: "Reviewer scorecard committed; structured output captured." }],
-        details: { reviewerReturn, structuredOutputPath },
-        terminate: true,
-      };
+      return handoffOfficialStructuredOutput(pi, reviewerReturn, { reviewerReturn });
     },
   });
 }

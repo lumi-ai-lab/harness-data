@@ -201,7 +201,7 @@ function plannerDurableRecord(index = 1) {
   };
 }
 
-function researcherDurableRecord(taskId, index = 1, mechanism = "model-tool") {
+function researcherDurableRecord(taskId, index = 1, mechanism = "extension-event-bridge") {
   return {
     identityKey: `research-${taskId}-${index}`,
     role: "report-researcher",
@@ -212,12 +212,12 @@ function researcherDurableRecord(taskId, index = 1, mechanism = "model-tool") {
   };
 }
 
-function defaultB3RpcRecords(tasks) {
-  const [first, ...remaining] = tasks;
-  return [
-    first ? initialBridgeRpcRecord() : plannerBridgeRpcRecord(),
-    ...remaining.map((task) => researcherRpcRecord(task.id)),
-  ];
+function defaultB3RpcRecords(_tasks) {
+  return [{
+    type: "tool_execution_start",
+    toolName: "html_report_run_stage",
+    input: { reservation: "qdm-stage-v1-b3" },
+  }];
 }
 
 function defaultB3DurableDispatches(tasks) {
@@ -353,21 +353,15 @@ class FakeRpc {
       });
       }
     }
-    if (stageId === "B2_WRITER") {
-      this.records.push({
-        type: "tool_execution_start",
-        toolName: "subagent",
-        input: { agent: "report-writer" },
-      });
-    }
     if (stageId === "B3_RESEARCH") {
       this.records.push(...structuredClone(this.harness.b3RpcRecords));
-    }
-    if (stageId === "B4_REVIEW") {
+    } else if (["B2_WRITER", "B4_REVIEW"].includes(stageId) ||
+        (stageId === "B5_DESIGN" && this.harness.dynamicB5)) {
       this.records.push({
         type: "tool_execution_start",
-        toolName: "subagent",
-        input: { agent: "report-reviewer" },
+        toolName: "html_report_run_stage",
+        toolCallId: `stage-runner-${stageId}`,
+        input: { reservation: `qdm-stage-v1-${stageId.toLowerCase()}` },
       });
     }
     if (stageId === this.harness.rpcErrorStage) {
@@ -484,9 +478,11 @@ async function createHarness(t, {
     runtimeAuditStages,
     runtimeAuditCandidates,
     b3Tasks,
+    dynamicB5: env?.HTML_REPORT_A_CONFIG_MODE === "dynamic",
     b3RpcRecords: b3RpcRecords ?? defaultB3RpcRecords(b3Tasks),
     b3DurableDispatches: b3DurableDispatches ?? defaultB3DurableDispatches(b3Tasks),
     runtimeContractCalls: [],
+    policyCalls: [],
     writerAuditCalls: 0,
   };
   let clock = Date.parse("2026-07-29T00:00:00.000Z");
@@ -528,6 +524,9 @@ async function createHarness(t, {
         : [];
     },
     readPipelineState: async () => pipelineState(harness.currentStage, { failedStage, execution }),
+    applyPipelinePolicy: async (sessionDir, policy) => {
+      harness.policyCalls.push({ sessionDir, policy });
+    },
     readJson: async (path) => {
       if (path.endsWith("recommendations.json") && recommendationsReadError) {
         throw recommendationsReadError;
@@ -556,15 +555,66 @@ async function createHarness(t, {
     readDispatches: async () => {
       const records = [];
       if (EXTERNAL_STAGES.indexOf(harness.currentStage) >= EXTERNAL_STAGES.indexOf("B2_WRITER")) {
-        records.push({ identityKey: "writer-card-1", role: "report-writer", label: "cardId=card-1" });
+        records.push({
+          identityKey: "writer-card-1",
+          role: "report-writer",
+          label: "cardId=card-1",
+          mechanism: "extension-event-bridge",
+        });
       }
       if (EXTERNAL_STAGES.indexOf(harness.currentStage) >= EXTERNAL_STAGES.indexOf("B3_RESEARCH")) {
         records.push(...harness.b3DurableDispatches);
       }
       if (EXTERNAL_STAGES.indexOf(harness.currentStage) >= EXTERNAL_STAGES.indexOf("B4_REVIEW")) {
-        records.push({ identityKey: "reviewer", role: "report-reviewer", label: "B4 Reviewer" });
+        records.push({
+          identityKey: "reviewer",
+          role: "report-reviewer",
+          label: "B4 Reviewer",
+          mechanism: "extension-event-bridge",
+        });
+      }
+      if (harness.currentStage === "B5_DESIGN" && harness.dynamicB5) {
+        records.push({
+          identityKey: "designer",
+          role: "report-designer",
+          label: "B5 Designer",
+          mechanism: "extension-event-bridge",
+        });
       }
       return records;
+    },
+    readRuntimeRecords: async (_sessionDir, bucket) => {
+      if (bucket === "stage-runs") {
+        if (!["B2_WRITER", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(harness.currentStage)) return [];
+        if (harness.currentStage === "B5_DESIGN" && !harness.dynamicB5) return [];
+        return [{
+          version: 1,
+          producer: "qdm-harness-stage-runner",
+          stage: harness.currentStage === "B3_RESEARCH" ? "B25_EDITOR" : harness.currentStage,
+          status: "completed",
+        }];
+      }
+      if (bucket !== "settlements") return [];
+      const stages = [];
+      if (harness.currentStage === "B2_WRITER") stages.push("B2_WRITER");
+      if (harness.currentStage === "B3_RESEARCH") {
+        stages.push("B25_EDITOR");
+        for (const record of harness.b3DurableDispatches.filter((item) => item.role === "report-researcher")) {
+          stages.push("B3_RESEARCH");
+        }
+      }
+      if (harness.currentStage === "B4_REVIEW") stages.push("B4_REVIEW");
+      if (harness.currentStage === "B5_DESIGN" && harness.dynamicB5) stages.push("B5_DESIGN");
+      return stages.map((stage, index) => ({
+        version: 1,
+        producer: "qdm-harness-stage-runner",
+        sessionId: "self-test-session",
+        invocationId: `invocation-${stage}-${index}`,
+        requestId: `request-${stage}-${index}`,
+        stage,
+        state: "TERMINAL",
+        history: [{ state: "EMITTED" }, { state: "STARTED" }, { state: "TERMINAL" }],
+      }));
     },
     checkSessionLayout: async (_sessionDir, { phase }) => {
       harness.layoutCalls.push(phase);
@@ -1059,6 +1109,10 @@ test("--until B3 sends exactly three continues and never adds one for B25", asyn
   );
   assert.equal(harness.rpc.promptCount, 4, "B25_EDITOR must not receive a separate prompt");
   assert.equal(harness.confirmCalls, 1);
+  assert.equal(harness.policyCalls.length, 1);
+  assert.deepEqual(harness.policyCalls[0].policy, {
+    B0_PREFLIGHT: { enabled: true, gate: true },
+  });
   assert.deepEqual(harness.rpc.settings.args, ["--extension", FAKE_SUBAGENT_EXTENSION]);
   assert.equal(run.piSubagents.runtimeVerified, true);
   assert.deepEqual(harness.runtimeContractCalls, ["A_CONFIG", "B0_PREFLIGHT"]);
@@ -1099,39 +1153,36 @@ test("fixed-debug full run completes B5 without Designer dispatch or html layout
   assert.equal(b5.dispatch.observed["report-designer"] || 0, 0);
 });
 
-test("B3 dispatch acceptance counts the bridged Planner and permits one Researcher successor", async (t) => {
+test("B3 durable audit counts one Planner and permits one Researcher successor", async (t) => {
   const b3Tasks = [{ id: "task-1" }];
-  const b3RpcRecords = [
-    initialBridgeRpcRecord(),
-    researcherRpcRecord("task-1"),
-  ];
   const b3DurableDispatches = [
     plannerDurableRecord(),
-    researcherDurableRecord("task-1", 1, "extension-event-bridge"),
+    researcherDurableRecord("task-1", 1),
     researcherDurableRecord("task-1", 2),
   ];
-  assert.deepEqual(countSubagentDispatches(b3RpcRecords), {
-    "report-editor-planner": 1,
-    "report-researcher": 3,
-  });
 
-  const { run, observations } = await createHarness(t, {
+  const { run, observations, harness } = await createHarness(t, {
     b3Tasks,
-    b3RpcRecords,
     b3DurableDispatches,
   });
   assert.equal(run.status, "pass");
   const dispatch = observations.find(({ stageId }) => stageId === "B3_RESEARCH").dispatch;
   assert.equal(dispatch.observed["report-editor-planner"], 1);
-  assert.equal(dispatch.observed["report-researcher"], 3);
+  assert.equal(dispatch.observed["report-researcher"], 2);
+  assert.equal(harness.rpc.records.filter((record) =>
+    record.type === "tool_execution_start" && record.toolName === "html_report_run_stage"
+  ).length >= 1, true);
+  assert.equal(harness.rpc.records.some((record) =>
+    record.type === "tool_execution_start" && record.toolName === "subagent" && record.input?.chain
+  ), false);
 });
 
-test("B3 dispatch acceptance keeps exactly one bridged Planner when tasks is empty", async (t) => {
+test("B3 durable audit keeps exactly one Planner when tasks is empty", async (t) => {
   const { run, observations } = await createHarness(t, { b3Tasks: [] });
   assert.equal(run.status, "pass");
   const dispatch = observations.find(({ stageId }) => stageId === "B3_RESEARCH").dispatch;
   assert.equal(dispatch.observed["report-editor-planner"], 1);
-  assert.equal(dispatch.observed["report-researcher"], 1);
+  assert.equal(dispatch.observed["report-researcher"] || 0, 0);
 });
 
 test("B3 dispatch acceptance rejects a missing durable Planner", async (t) => {

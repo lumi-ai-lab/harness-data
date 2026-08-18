@@ -188,6 +188,15 @@ test("B2.5→B3 reuse_entry full chain delivers report.md with full-table marker
 
   // 1. Advance Gate to B25_EDITOR running
   await advanceGateToB25(sessionDir);
+  // A_CONFIG approval may normalize result.json. Writer artifacts are produced
+  // later in the real flow, so refresh this fixture after the Gate transition.
+  const rows = mockRows();
+  const cardDir = join(sessionDir, "data", "cards", CARD_ID);
+  await writeFile(join(cardDir, "entry.json"), JSON.stringify(rows));
+  await writeFile(
+    join(cardDir, "entry.meta.json"),
+    JSON.stringify({ rowCount: rows.length, rowsSha256: rowsSha256(rows) })
+  );
 
   // 2. Write B2.5 Planner artifacts
   await writeFile(join(analysisDir, "tasks.json"), JSON.stringify(tasksDocument(), null, 2));

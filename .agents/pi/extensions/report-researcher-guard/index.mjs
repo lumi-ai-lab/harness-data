@@ -19,8 +19,8 @@ import {
   isEditorPlannerAssignment,
 } from "../../skills/html-report/scripts/editor-plan-contract.mjs";
 import {
+  handoffOfficialStructuredOutput,
   prepareStructuredOutputCapture,
-  writeStructuredOutputCapture,
 } from "../shared/subagent-structured-output-capture.mjs";
 
 const projectRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
@@ -34,7 +34,7 @@ export const TYPED_RESEARCHER_SYSTEM_PROMPT = [
   "For a jointQuantileBins requirement, inspect evaluation.status, support, stability, and bestSupportedCandidates, then use only returned cells. Always state each cited cell rowCount and the minimum support rule. If the observed winner has low support or evaluation.status is not ok, explicitly label that boundary, never call the sparse cell a best balance interval or robust result, and use a support-qualified candidate only when bestSupportedCandidates.status=available while labeling it as an alternative rather than the raw winner. Do not enumerate the grid or call any result a global optimum.",
   "Answer-minimum: for ranking, cite only the requested record facts and never enumerate full TopN unless the user explicitly requests a list/count. For joint_tradeoff, use one compact answer-first claim: lead with support-qualified operating candidate(s) when available, then explain the raw observed winner and its support boundary; if mean/median candidates differ, say there is no single stable point. Omit bin counts, grid shape/cell totals, and method/protocol metadata. Write plain user-facing business prose; never echo JSON keys, enum values, methods, policy strings, or field=value diagnostics. Set suggestedDeeper=[] unless a concrete unresolved gap requires a different metric, dimension, scope, comparison, or query.",
   "Without explicit proof metadata, do not use significance language even negatively, or attribution words such as 显著、影响、拉动、拉升、驱动、导致、推高. Do not invent universal thresholds, global optima, or high/low reliability labels.",
-  "For an ok analysisContractVersion=1 result, call submit_research_findings as the only tool in its assistant message. It validates artifacts, captures the attached structured output, and terminates this child; do not call write or structured_output afterward.",
+  "For an ok analysisContractVersion=1 result, call submit_research_findings as the only tool in its assistant message. It validates artifacts and writes them; next call structured_output exactly once with the returned researcherReturn. Do not call write afterward.",
   "For needs_evidence_plan, needs_new_query or failed, write no completion artifact and call structured_output exactly once with the attached branch. Any submit_research_findings error consumes the only attempt: never correct or resubmit; the next and only call is structured_output status=failed.",
 ].join("\n");
 
@@ -48,7 +48,7 @@ export const TYPED_RESEARCHER_NEW_QUERY_SYSTEM_PROMPT = [
   "6) Make one silent pass requirement -> allowed exact /views pointer -> concise claim. Copy each complete numeric literal verbatim with all decimals; never round, calculate, borrow scope numbers, combine marginal winners into a joint optimum, narrate checks, or upgrade sample association to causality/significance/global optimum.",
   "For jointQuantileBins, inspect evaluation.status/support/stability/bestSupportedCandidates and use only returned cells. Disclose each cited cell rowCount and the minimum support rule; when the raw winner is low-support, do not call it a best balance interval or robust result, and present a support-qualified candidate only as a labeled alternative when available. Do not enumerate the grid.",
   "Answer-minimum: never enumerate full TopN unless the user explicitly requests a list/count. For joint_tradeoff, lead with support-qualified operating candidate(s), then explain the raw winner/support boundary; if mean/median candidates differ, say there is no single stable point. Use plain business prose and never echo JSON keys, enum values, methods, policy strings, or field=value diagnostics. Set suggestedDeeper=[] unless a concrete unresolved gap requires a materially different query.",
-  "7) For status=ok call submit_research_findings as the only tool in its assistant message with one finding per assigned requirement plus suggestedDeeper. It validates/writes/captures and terminates; do not call write or structured_output afterward.",
+  "7) For status=ok call submit_research_findings as the only tool in its assistant message with one finding per assigned requirement plus suggestedDeeper. It validates and writes artifacts; next call structured_output exactly once with the returned researcherReturn. Do not call write afterward.",
   "On any read/recall/write/fetch/prepare/submit failure, do not retry or repair. A submit failure consumes the only attempt. For needs_evidence_plan, needs_new_query or failed, write no completion artifact and call structured_output exactly once with the attached branch.",
 ].join("\n");
 
@@ -188,7 +188,7 @@ export default function registerReportResearcherGuard(pi) {
     promptSnippet: "submit_research_findings: submit only requirement-bound findings; the tool owns citations, section rendering, summary construction, validation, and artifact writes.",
     promptGuidelines: [
       "After the single evidence read, call submit_research_findings exactly once instead of write.",
-      "Call it as the only tool in that assistant message. On success it captures the structured return and terminates the child; do not call structured_output afterward.",
+      "Call it as the only tool in that assistant message. On success, call structured_output exactly once with the returned researcherReturn.",
       "Every complete numeric literal must be copied unchanged with all decimal places from the finding's allowed /views node. Never round or calculate a new value.",
       "Satisfy the persisted capability fact roles: both sides for comparison, two units for structural breakdown, coefficient plus eligible rows for association, and observed-cell facts plus rowCount and minimum support for joint trade-off.",
       "Any submit error consumes the only attempt. Never correct or submit again; call structured_output once with status=failed.",
@@ -249,19 +249,13 @@ export default function registerReportResearcherGuard(pi) {
         analysisRequirements: contract.task.analysisRequirements,
       };
       try {
-        const capture = await prepareStructuredOutputCapture(
+        await prepareStructuredOutputCapture(
           buildResearcherReturnSchema(expected)
         );
         const result = await submitResearchFindings(expected, state.evidence, params);
-        const structuredOutputPath = await writeStructuredOutputCapture(
-          capture,
-          result.researcherReturn
-        );
-        return {
-          content: [{ type: "text", text: "Researcher findings committed; structured output captured." }],
-          details: { researcherReturn: result.researcherReturn, structuredOutputPath },
-          terminate: true,
-        };
+        return handoffOfficialStructuredOutput(pi, result.researcherReturn, {
+          researcherReturn: result.researcherReturn,
+        });
       } catch (error) {
         throw new Error(
           `${error?.message || error}；该失败已消费唯一提交机会；禁止修正或再次提交；下一步且仅允许 structured_output status=failed`

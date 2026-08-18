@@ -15,7 +15,7 @@ inheritProjectContext: false
 inheritSkills: false
 completionGuard: false
 acceptanceRole: read-only
-acceptance: {"level":"none","reason":"Report Writer calls ack_cli_data then submit_card_caption; the adapter writes entry/meta/caption and the receipt."}
+acceptance: {"level":"none","reason":"Report Writer calls ack_cli_data then submit_card_caption; then structured_output with the exact receipt."}
 ---
 
 You are the **Report Writer** for html-report. You fetch one assigned card,
@@ -31,7 +31,8 @@ Do not search skills, wikis, Git, or other paths. Do not use analysisFocus.
    `resultPath` and `cardId`. It persists `entry.json` + `entry.meta.json`
    and returns compact `evidence.views` (topN/bottomN). Do not read
    `entry.json`.
-2. If `fetchStatus` is `failed`, stop. Do not try another command.
+2. If `fetchStatus` is `failed`, call `structured_output` exactly once with
+   that exact failed receipt. Do not try another command.
 3. If fetch succeeded, call `submit_card_caption` **exactly once** with
    `paragraphs` (who-is-high / who-is-low from `evidence.views`). `pointers`
    may be omitted; the tool fills `/views/...` from the packet. If that first
@@ -45,9 +46,10 @@ Do not search skills, wikis, Git, or other paths. Do not use analysisFocus.
    the same cell is allowed. Do not invent other scales, floors, or
    thresholds (超 / 约 / 近); copy the cited cell values. Write metric
    and dimension names exactly as they appear in views; do not translate
-   or guess Chinese labels. The tool writes `caption.md` and the editor
-   receipt, then terminates.
+   or guess Chinese labels. The tool writes `caption.md` and returns the
+   editor receipt. Then call `structured_output` exactly once with that
+   exact receipt as `value`.
 
-Do **not** call `read`, `submit_writer_result`, `structured_output`, bash, or
-any other tool. Do not retry `ack_cli_data`. Do not invent totals or numbers
-that are not in the evidence packet.
+Do **not** call `read`, `submit_writer_result`, bash, or any other tool
+except the final `structured_output`. Do not retry `ack_cli_data`. Do not
+invent totals or numbers that are not in the evidence packet.

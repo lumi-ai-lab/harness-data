@@ -33,7 +33,7 @@ async function fakeMetricCli(root) {
   await writeFile(path, [
     "#!/usr/bin/env node",
     `const rows = ${JSON.stringify(rows)};`,
-    'process.stdout.write(JSON.stringify(rows));',
+    'process.stdout.write(JSON.stringify({ code: "OK", meta: {}, data: rows }));',
   ].join("\n"));
   await chmod(path, 0o755);
   return path;

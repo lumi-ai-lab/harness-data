@@ -250,16 +250,18 @@ test("sessions keep independent state files", async (t) => {
   assert.notEqual(pipelineStatePath(first), pipelineStatePath(second));
 });
 
-test("default policy finishes B2_WRITER without waiting and stops at B2_MAIN", async (t) => {
+test("default policy auto-advances B0 and B2_WRITER, then stops at B2_MAIN", async (t) => {
   const session = await makeSession(t, "b2-main");
   await confirmResult(session);
   await initPipeline(session, { mode: "step", now: at(0) });
   await startPipelineStage(session, "A_CONFIG", { now: at(1) });
   await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
   await approvePipelineStage(session, { now: at(3) });
-  await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(4) });
-  await approvePipelineStage(session, { now: at(5) });
-  assert.equal((await pipelineStatus(session, { now: at(5) })).state.currentStage, "B2_WRITER");
+  const finishedB0 = await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(4) });
+  assert.equal(finishedB0.state.stages.B0_PREFLIGHT.status, "completed");
+  assert.equal(finishedB0.state.currentStage, "B2_WRITER");
+  assert.equal(finishedB0.state.status, "running");
+  assert.equal(finishedB0.state.approvals.length, 1, "B0 must not require a second user approval");
 
   const finishedWriter = await finishPipelineStage(session, "B2_WRITER", { now: at(6) });
   assert.equal(finishedWriter.state.stages.B2_WRITER.status, "completed");

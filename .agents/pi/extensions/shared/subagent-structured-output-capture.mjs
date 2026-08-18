@@ -1,13 +1,13 @@
 /**
- * Fail-closed bridge for a validated domain tool to complete pi-subagents'
- * structured-output contract without asking the model to copy the same object
- * in a second turn.
+ * Fail-closed preflight for pi-subagents' structured-output runtime, plus the
+ * official-tool handoff. 0.36+ requires a real structured_output tool event;
+ * writing output.json from a domain tool is not enough.
  *
- * The runtime paths are parent-owned environment values. They are never
- * accepted from model tool arguments.
+ * Runtime paths are parent-owned environment values. They are never accepted
+ * from model tool arguments.
  */
 import { lstatSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 
@@ -60,15 +60,21 @@ export async function prepareStructuredOutputCapture(expectedSchema, env = proce
   return { schemaPath, outputPath };
 }
 
-/** Exclusively capture the already validated value; pi-subagents revalidates it on exit. */
-export async function writeStructuredOutputCapture(runtime, value) {
-  if (!runtime || !canonicalAbsolute(runtime.outputPath)) {
-    throw new Error("structured output capture runtime is invalid");
+/** Arm the official structured_output tool with one already-validated value. */
+export function handoffOfficialStructuredOutput(pi, value, details = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("structured output handoff value must be one object");
   }
-  await writeFile(runtime.outputPath, JSON.stringify(value), {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-  return runtime.outputPath;
+  pi.setActiveTools?.(["structured_output"]);
+  return {
+    content: [{
+      type: "text",
+      text: [
+        "Call structured_output exactly once now. value must be this exact object; do not change any field.",
+        JSON.stringify(value),
+      ].join("\n"),
+    }],
+    details: { ...details, value },
+    terminate: false,
+  };
 }

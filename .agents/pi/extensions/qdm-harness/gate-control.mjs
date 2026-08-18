@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
   STAGE_DEFINITIONS,
@@ -10,6 +12,16 @@ import { EDITOR_PLANNER_MARKER } from "../../skills/html-report/scripts/editor-p
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const MODEL_GATE_OPERATIONS = new Set(["status", "finish", "fail"]);
+const packageResourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+export const HTML_REPORT_STAGE_TOOL = "html_report_run_stage";
+export const HTML_REPORT_RUNNER_STAGES = new Set([
+  "B2_WRITER",
+  "B25_EDITOR",
+  "B3_RESEARCH",
+  "B4_REVIEW",
+  "B5_DESIGN",
+]);
 
 export function sanitizeSessionId(raw) {
   return String(raw || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -19,16 +31,36 @@ export function htmlReportSessionDir(projectRoot, sessionId) {
   return join(resolve(projectRoot), ".harness", "state", "html-report", sanitizeSessionId(sessionId));
 }
 
-export function stageGateScriptPath(projectRoot) {
-  return join(
-    resolve(projectRoot),
-    ".agents",
-    "pi",
-    "skills",
-    "html-report",
-    "scripts",
-    "stage-gate.mjs"
-  );
+export function stageGateScriptPath(_projectRoot) {
+  return join(packageResourceRoot, "skills", "html-report", "scripts", "stage-gate.mjs");
+}
+
+export function gateAttemptToken(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return null;
+  const stageId = state.currentStage;
+  const stage = state.stages && typeof state.stages === "object" && !Array.isArray(state.stages)
+    ? state.stages[stageId]
+    : null;
+  const attempts = stage && typeof stage === "object" && Array.isArray(stage.attempts) ? stage.attempts : [];
+  const latest = attempts.length ? attempts.at(-1) : null;
+  if (!latest || typeof latest !== "object" || Array.isArray(latest)) return null;
+  if (!Number.isSafeInteger(latest.number) || typeof latest.startedAt !== "string" || !latest.startedAt) return null;
+  return `${stageId}:${latest.number}:${latest.startedAt}`;
+}
+
+export function b2WriterMainWorkAccepted(state) {
+  const writer = state?.stages?.B2_WRITER?.status;
+  const main = state?.stages?.B2_MAIN?.status;
+  return writer === "completed" && (main === "completed" || main === "awaiting_approval");
+}
+
+export function htmlReportStageReservation(projectRoot, sessionId, state) {
+  if (!state || state.status !== "running" || !HTML_REPORT_RUNNER_STAGES.has(state.currentStage)) return null;
+  const attempt = gateAttemptToken(state);
+  if (!attempt) return null;
+  return `qdm-stage-v1-${createHash("sha256")
+    .update(JSON.stringify([resolve(projectRoot), sanitizeSessionId(sessionId), state.currentStage, attempt]), "utf8")
+    .digest("hex")}`;
 }
 
 /**
@@ -323,7 +355,7 @@ export function b25EditorToolDecision(state, event) {
 }
 
 /** Return null to allow, or a Pi ToolCallEventResult-compatible block. */
-export function gateToolDecision(state, event, { finishInFlight = false } = {}) {
+export function gateToolDecision(state, event, { finishInFlight = false, stageReservation = null } = {}) {
   if (!state) return null;
   const toolName = String(event?.toolName || "").toLowerCase();
   const command = toolName === "bash" ? String(event?.input?.command || "") : "";
@@ -331,6 +363,16 @@ export function gateToolDecision(state, event, { finishInFlight = false } = {}) 
 
   if (finishInFlight) {
     return { block: true, reason: blockedReason(state) };
+  }
+
+  if (state.status === "running" && HTML_REPORT_RUNNER_STAGES.has(state.currentStage)) {
+    if (toolName !== HTML_REPORT_STAGE_TOOL) {
+      return {
+        block: true,
+        reason: `当前 ${state.currentStage} 只允许调用 ${HTML_REPORT_STAGE_TOOL}；子代理队列和阶段脚本由 qdm-harness 内部执行。`,
+      };
+    }
+    return null;
   }
 
   const editorDecision = b25EditorToolDecision(state, event);
@@ -481,9 +523,7 @@ export function b25EditorBootstrapContract(projectRoot, sessionId) {
   const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
   const statusCommand = `node ${shellArg(stageGateScriptPath(projectRoot))} status --session-dir ${shellArg(sessionDir)} --format text`;
   const sourceFieldsScript = join(
-    resolve(projectRoot),
-    ".agents",
-    "pi",
+    packageResourceRoot,
     "skills",
     "html-report",
     "scripts",
@@ -518,14 +558,11 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
   const writerCardIds = Array.isArray(options.writerCardIds)
     ? options.writerCardIds.filter((value) => typeof value === "string" && value)
     : [];
-  if (
-    state.mode === "step" &&
-    state.status === "running" &&
-    stageId === "B2_WRITER" &&
-    writerCardIds.length
-  ) {
-    const statusDispatch = `bash(${JSON.stringify({ command: statusCommand })})`;
-    return `NEXT_TOOL_ONLY：${statusDispatch}`;
+  if (state.status === "running" && HTML_REPORT_RUNNER_STAGES.has(stageId)) {
+    if (!htmlReportStageReservation(projectRoot, sessionId, state)) {
+      return `# html-report Gate 错误\n- 当前 ${stageId} 缺少有效 attempt reservation；停止工具调用并回复“重试当前阶段”。`;
+    }
+    return `NEXT_TOOL_ONLY：${HTML_REPORT_STAGE_TOOL}()`;
   }
   const lines = [
     "# html-report 单步调试 Gate（强制）",
@@ -552,8 +589,8 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         "- 扩展已打开 qdm-metric-cli ui；本轮不写 recommendations.json，也不启动旧 HTML。",
         "- runtime agent list 由扩展通过真实 pi-subagents 事件桥自动执行和验收。",
         "- 模型不得自行调用 subagent list 或 stage-gate；自动检查成功后扩展会完成 A_CONFIG。",
-        "- 用户点「保存」只写出 result.json；必须再回复「继续」才会批准进入 B0。",
-        "- 自动检查失败、超时或缺少 Agent 时，扩展会 fail 当前 Gate；不要重试或继续其他工作。"
+        "- 用户点「保存」只写出 result.json；回复一次「继续」批准 A_CONFIG 后会自动执行 B0。",
+        "- B0 通过后直接进入 B2 Writer；自动检查失败、超时或缺少 Agent 时才会停在 Gate。"
       );
     } else if (!["B0_PREFLIGHT", "B2_WRITER", "B2_MAIN", "B3_RESEARCH"].includes(stageId)) {
       lines.push(
@@ -638,8 +675,8 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         `\n${message}`,
         "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动验收，并写入当前 attempt 的审计文件。",
         "- 立即原样返回上面的 Gate 文本并停止；不要调用 subagent、status 或其他工具。",
-        "- 用户需先在 qdm-metric-cli ui 点「保存」写出 result.json，再回复「继续」。",
-        "- A_CONFIG 只有在四个 report-* Agent 全部存在时才会到达此状态。"
+        "- 用户需先在 qdm-metric-cli ui 点「保存」写出 result.json，再回复一次「继续」。",
+        "- A_CONFIG 只有在四个 report-* Agent 全部存在时才会到达此状态；随后 B0 通过会自动进入 B2。"
       );
     } else if (stageId === "B0_PREFLIGHT") {
       const message = formatGateMessage(state)
@@ -648,9 +685,10 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
         .join("\n");
       lines.push(
         `\n${message}`,
-        "- CURRENT INPUT IS CONSUMED：本轮开始前，扩展已把当前用户的“继续”只用于进入并完成 B0；同一输入不能再次批准 B0，也不能启动 B2。",
+        "- 当前 Session 的显式兼容策略把 B0 配置成了人工 Gate；默认策略下 B0 成功会自动进入 B2。",
+        "- CURRENT INPUT IS CONSUMED：本轮开始前，扩展已把当前用户的“继续”只用于进入并完成这个兼容 B0 Gate；同一输入不能再次批准 B0。",
         "- 下一条 assistant 响应必须只原样返回上面的 B0 Gate 文本，不得回顾上一阶段、比较旧状态、调用工具或继续推理。返回后立即停止。",
-        "- 只有用户随后新发的一条“继续”才会批准 B0 并启动 B2 Writer。"
+        "- 用户随后新发一条“继续”后才会批准该兼容 Gate 并启动 B2 Writer。"
       );
     } else if (stageId === "B2_MAIN") {
       const message = formatGateMessage(state)

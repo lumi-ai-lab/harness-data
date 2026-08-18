@@ -641,7 +641,7 @@ test("child-only extension captures assignment from context and enforces the gua
   assert.match(forbidden.reason, /未授权工具：ls/);
 });
 
-test("typed Reviewer submit captures outputSchema and terminates without a second model turn", async (t) => {
+test("typed Reviewer submit writes artifacts and hands off official structured_output", async (t) => {
   const sessionRoot = join(projectRoot, ".harness", "state", "html-report");
   await mkdir(sessionRoot, { recursive: true });
   const assignedSession = await mkdtemp(join(sessionRoot, "reviewer-capture-test-"));
@@ -678,12 +678,16 @@ test("typed Reviewer submit captures outputSchema and terminates without a secon
 
   const handlers = new Map();
   let registeredTool;
+  const activeToolSets = [];
   registerReportReviewerGuard({
     on(event, handler) {
       handlers.set(event, handler);
     },
     registerTool(tool) {
       registeredTool = tool;
+    },
+    setActiveTools(names) {
+      activeToolSets.push(names);
     },
   });
   handlers.get("before_agent_start")({ systemPrompt: "Reviewer child system prompt" });
@@ -717,12 +721,11 @@ test("typed Reviewer submit captures outputSchema and terminates without a secon
   assert.equal(transition, undefined);
 
   const committed = await registeredTool.execute("capture-submit", typedScorecard());
-  assert.equal(committed.terminate, true);
-  assert.equal(committed.details.structuredOutputPath, outputPath);
-  assert.deepEqual(
-    JSON.parse(await readFile(outputPath, "utf8")),
-    committed.details.reviewerReturn
-  );
+  assert.equal(committed.terminate, false);
+  assert.match(committed.content[0].text, /structured_output exactly once/);
+  assert.deepEqual(activeToolSets.at(-1), ["structured_output"]);
+  assert.deepEqual(committed.details.value, committed.details.reviewerReturn);
+  await assert.rejects(() => readFile(outputPath, "utf8"), /ENOENT/);
 });
 
 test("report-reviewer registration loads only the child guard", async () => {

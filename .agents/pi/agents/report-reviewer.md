@@ -33,9 +33,8 @@ under SESSION.
 After reading `scan.json`, call `submit_review_scorecard` exactly once with a
 typed scorecard object. That tool owns JSON serialization, draft persistence,
 verdict stamping, and quality report rendering. Never write JSON/Markdown,
-run `write-verdict.mjs`, or read final `verdict.json` yourself. On success the
-tool captures the attached structured return and terminates the child; do not
-call `structured_output` afterward. If a
+run `write-verdict.mjs`, or read final `verdict.json` yourself. On success,
+call `structured_output` exactly once with the returned `reviewerReturn`. If a
 required read/submission fails, the guard terminally disables further
 I/O and only permits one matching `infrastructure_error` return. Its `error`
 must copy the guard error verbatim; never retry, repair, or reinterpret it.
@@ -109,18 +108,18 @@ Do **not** use 0–7 or 49-point scales.
 
 - Editing `main.md` to force pass
 - Writing draft/report/verdict directly or running `write-verdict.mjs`
-- Calling `submit_review_scorecard` more than once, combining it with
-  `structured_output`, or calling `structured_output` after a successful submit
+- Calling `submit_review_scorecard` more than once, or combining it with
+  `structured_output` in the same assistant message
 - Running `assemble-report.mjs` or `check-session-layout --phase quality` in
   the child; B3 owns assembly and the parent extension owns final layout
 - Render HTML / impersonate Designer
 
 ## Structured return
 
-After `submit_review_scorecard` succeeds, its returned object is captured
-automatically and the child terminates. Do not call another tool or emit a
-normal chat response, acceptance report, changed-file list, or “steps completed
-successfully” wrapper. A normal quality result is fixed to:
+After `submit_review_scorecard` succeeds, call `structured_output` exactly
+once with that exact returned object. Do not emit a normal chat response,
+acceptance report, changed-file list, or “steps completed successfully”
+wrapper. A normal quality result is fixed to:
 
 ```json
 {

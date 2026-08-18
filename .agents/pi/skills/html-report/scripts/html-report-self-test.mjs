@@ -25,6 +25,7 @@ import { PiRpcClient } from "./pi-rpc-client.mjs";
 import { headlessConfirm } from "./headless-confirm.mjs";
 import { browserConfirm } from "./browser-confirm.mjs";
 import { checkSessionLayout } from "./check-session-layout.mjs";
+import { applyPipelinePolicy } from "./stage-gate.mjs";
 import {
   DEFAULT_PERFORMANCE_CONFIG_PATH,
   analyzeHtmlReportRunWithTranscripts,
@@ -1499,6 +1500,32 @@ async function defaultReadJson(path) {
   return parseJsonDocument(await readFile(path, "utf8"), path);
 }
 
+async function readContractRuntimeRecords(sessionDir, bucket) {
+  const directory = join(sessionDir, "debug", "contract-runtime", bucket);
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const records = [];
+  for (const entry of entries.filter((item) => item.isFile() && item.name.endsWith(".json")).sort((a, b) => a.name.localeCompare(b.name))) {
+    records.push(parseJsonDocument(await readFile(join(directory, entry.name), "utf8"), entry.name));
+  }
+  return records;
+}
+
+function settlementStageMatches(stageId, settlement) {
+  if (stageId === "B3_RESEARCH") return ["B25_EDITOR", "B3_RESEARCH"].includes(settlement?.stage);
+  return settlement?.stage === stageId;
+}
+
+function stageRunStageMatches(stageId, record) {
+  if (stageId === "B3_RESEARCH") return ["B25_EDITOR", "B3_RESEARCH"].includes(record?.stage);
+  return record?.stage === stageId;
+}
+
 async function validateDispatchPolicy({
   stageId,
   stageRecords,
@@ -1506,8 +1533,33 @@ async function validateDispatchPolicy({
   debugB5Skipped = false,
   readJson = defaultReadJson,
   readDispatches = readDispatchRecords,
+  readRuntimeRecords = readContractRuntimeRecords,
 }) {
-  const observed = countSubagentDispatches(stageRecords);
+  const runnerOwned = ["B2_WRITER", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"].includes(stageId);
+  const modelSubagentStarts = stageRecords.filter((record) =>
+    record?.type === "tool_execution_start" && String(record.toolName || "").toLowerCase() === "subagent"
+  );
+  const stageToolStarts = stageRecords.filter((record) =>
+    record?.type === "tool_execution_start" && String(record.toolName || "").toLowerCase() === "html_report_run_stage"
+  );
+  if (runnerOwned && modelSubagentStarts.length) {
+    throw new SelfTestFailure({
+      code: "MODEL_FACING_SUBAGENT_FORBIDDEN",
+      stageId,
+      reason: `${stageId} 不得出现父模型 subagent 派发；实际=${modelSubagentStarts.length}`,
+      evidence: "rpc.jsonl",
+    });
+  }
+  const expectedStageToolCount = stageId === "B5_DESIGN" && debugB5Skipped ? 0 : runnerOwned ? 1 : 0;
+  if (stageToolStarts.length !== expectedStageToolCount) {
+    throw new SelfTestFailure({
+      code: "STAGE_RUNNER_CALL_COUNT_MISMATCH",
+      stageId,
+      reason: `${stageId} html_report_run_stage 调用应为 ${expectedStageToolCount} 次，实际=${stageToolStarts.length}`,
+      evidence: "rpc.jsonl",
+    });
+  }
+
   const durable = await readDispatches(sessionDir);
   const duplicateKeys = durable.map((record) => record.identityKey).filter((key, index, all) => key && all.indexOf(key) !== index);
   if (duplicateKeys.length) {
@@ -1517,17 +1569,30 @@ async function validateDispatchPolicy({
       reason: `${stageId} contract-runtime 存在重复 identityKey`,
     });
   }
+  const invalidMechanisms = durable.filter((record) => record?.mechanism !== "extension-event-bridge");
+  if (runnerOwned && invalidMechanisms.length) {
+    throw new SelfTestFailure({
+      code: "MODEL_FACING_DURABLE_DISPATCH_FORBIDDEN",
+      stageId,
+      reason: `${stageId} durable dispatch 必须全部由 extension-event-bridge 创建；invalid=${invalidMechanisms.length}`,
+    });
+  }
+
+  const observed = {};
+  for (const record of durable) observed[record.role] = (observed[record.role] || 0) + 1;
+  let expectedPhysicalMinimum = 0;
   if (stageId === "B2_WRITER") {
     const result = await readJson(join(sessionDir, "result.json"));
     const expected = Array.isArray(result.cards) ? result.cards.length : 0;
-    const durableCount = durable.filter((record) => record.role === "report-writer").length;
-    if (expected < 1 || observed["report-writer"] !== expected || durableCount !== expected) {
+    const durableCount = observed["report-writer"] || 0;
+    if (expected < 1 || durableCount !== expected) {
       throw new SelfTestFailure({
         code: "WRITER_DISPATCH_COUNT_MISMATCH",
         stageId,
-        reason: `Writer 应按 ${expected} 张卡各派发一次；RPC=${observed["report-writer"] || 0} durable=${durableCount}`,
+        reason: `Writer 应按 ${expected} 张卡各持久派发一次；durable=${durableCount}`,
       });
     }
+    expectedPhysicalMinimum = durableCount;
   }
   if (stageId === "B3_RESEARCH") {
     const tasks = await readJson(join(sessionDir, "analysis", "tasks.json"));
@@ -1535,38 +1600,16 @@ async function validateDispatchPolicy({
     const taskIdSet = new Set(taskIds);
     const planners = durable.filter((record) => record.role === "report-editor-planner");
     const researcher = durable.filter((record) => record.role === "report-researcher");
-    const plannerMarkers = stageRecords.map(plannerBridgeMarker).filter(Boolean);
-    const researcherMarkers = stageRecords.map(researcherBridgeMarker).filter(Boolean);
-    const plannerMarkerCount = observed["report-editor-planner"] || 0;
-    const observedCount = observed["report-researcher"] || 0;
-
-    if (
-      planners.length !== 1 ||
-      !DURABLE_DISPATCH_MECHANISMS.has(planners[0]?.mechanism)
-    ) {
+    if (planners.length !== 1) {
       throw new SelfTestFailure({
         code: "EDITOR_PLANNER_DISPATCH_COUNT_MISMATCH",
         stageId,
-        reason: `B2.5 Editor Planner 必须有且仅有一个合法 durable 派发；durable=${planners.length}`,
+        reason: `B2.5 Editor Planner 必须有且仅有一个 durable 派发；durable=${planners.length}`,
       });
     }
-
-    const expectedPlannerMarkerCount = planners[0].mechanism === "extension-event-bridge" ? 1 : 0;
-    const markerBindingMismatch = expectedPlannerMarkerCount === 1 && (
-      plannerMarkers[0]?.sessionId !== planners[0]?.sessionId ||
-      plannerMarkers[0]?.attempt !== planners[0]?.attempt
-    );
-    if (plannerMarkerCount !== expectedPlannerMarkerCount || markerBindingMismatch) {
-      throw new SelfTestFailure({
-        code: "EDITOR_PLANNER_RPC_MARKER_MISMATCH",
-        stageId,
-        reason: `B2.5 Editor Planner RPC marker 与 durable mechanism/session/attempt 不匹配；mechanism=${planners[0].mechanism} marker=${plannerMarkerCount}`,
-      });
-    }
-
     const invalidResearchers = researcher.filter((record) => {
       const taskId = durableResearcherTaskId(record);
-      return !DURABLE_DISPATCH_MECHANISMS.has(record?.mechanism) || !taskId || !taskIdSet.has(taskId);
+      return !taskId || !taskIdSet.has(taskId);
     });
     const countsByTask = new Map(taskIds.map((taskId) => [taskId, 0]));
     for (const record of researcher) {
@@ -1579,60 +1622,68 @@ async function validateDispatchPolicy({
       throw new SelfTestFailure({
         code: taskIds.length === 0 ? "UNEXPECTED_RESEARCHER_DISPATCH" : "RESEARCHER_DISPATCH_COUNT_MISMATCH",
         stageId,
-        reason: `每个 task 必须有 1 次 Researcher 派发，最多允许 1 次 successor 修复；counts=${counts} invalid=${invalidResearchers.length}`,
+        reason: `每个 task 必须有 1 次 Researcher 派发，最多允许 1 次 successor；counts=${counts} invalid=${invalidResearchers.length}`,
       });
     }
-
-    const bridgedResearchers = researcher.filter((record) => record.mechanism === "extension-event-bridge");
-    const researcherMarkerBindingMismatch = researcherMarkers.some((marker) =>
-      !bridgedResearchers.some((record) =>
-        marker.sessionId === record.sessionId && marker.attempt === record.attempt
-      ));
-    if (
-      researcherMarkers.length !== bridgedResearchers.length ||
-      researcherMarkerBindingMismatch
-    ) {
-      throw new SelfTestFailure({
-        code: "RESEARCHER_RPC_MARKER_MISMATCH",
-        stageId,
-        reason: `B3 initial Researcher RPC marker 与 durable mechanism/session/attempt 不匹配；marker=${researcherMarkers.length} durableBridge=${bridgedResearchers.length}`,
-      });
-    }
-
-    const expectedRpcResearcherCount = planners.length + researcher.length;
-    if (observedCount !== expectedRpcResearcherCount) {
-      throw new SelfTestFailure({
-        code: "RESEARCHER_DISPATCH_COUNT_MISMATCH",
-        stageId,
-        reason: `RPC report-researcher 总数必须等于 durable Planner+Researcher；RPC=${observedCount} durable=${expectedRpcResearcherCount}`,
-      });
-    }
+    expectedPhysicalMinimum = planners.length + researcher.length;
   }
   if (stageId === "B4_REVIEW") {
-    const durableCount = durable.filter((record) => record.role === "report-reviewer").length;
-    if (observed["report-reviewer"] !== 1 || durableCount !== 1) {
+    const durableCount = observed["report-reviewer"] || 0;
+    if (durableCount !== 1) {
       throw new SelfTestFailure({
         code: "REVIEWER_DISPATCH_COUNT_MISMATCH",
         stageId,
-        reason: `Reviewer 必须恰好派发一次；RPC=${observed["report-reviewer"] || 0} durable=${durableCount}`,
+        reason: `Reviewer 必须恰好持久派发一次；durable=${durableCount}`,
       });
     }
+    expectedPhysicalMinimum = durableCount;
   }
   if (stageId === "B5_DESIGN") {
-    const designerRpcCount = observed["report-designer"] || 0;
-    const designerDurableCount = durable.filter((record) => record.role === "report-designer").length;
-    if (debugB5Skipped && (designerRpcCount !== 0 || designerDurableCount !== 0)) {
+    const designerDurableCount = observed["report-designer"] || 0;
+    if (debugB5Skipped && designerDurableCount !== 0) {
       throw new SelfTestFailure({
         code: "DEBUG_B5_DESIGNER_DISPATCH_FORBIDDEN",
         stageId,
-        reason: `固定推荐调试模式必须跳过 Designer；RPC=${designerRpcCount} durable=${designerDurableCount}`,
+        reason: `固定推荐调试模式必须跳过 Designer；durable=${designerDurableCount}`,
       });
     }
-    if (!debugB5Skipped && designerRpcCount !== 1) {
+    if (!debugB5Skipped && designerDurableCount !== 1) {
       throw new SelfTestFailure({
         code: "DESIGNER_DISPATCH_COUNT_MISMATCH",
         stageId,
-        reason: `Designer 必须恰好派发一次；RPC=${designerRpcCount}`,
+        reason: `Designer 必须恰好持久派发一次；durable=${designerDurableCount}`,
+      });
+    }
+    expectedPhysicalMinimum = designerDurableCount;
+  }
+
+  if (runnerOwned && !(stageId === "B5_DESIGN" && debugB5Skipped)) {
+    const settlements = (await readRuntimeRecords(sessionDir, "settlements")).filter((record) =>
+      settlementStageMatches(stageId, record)
+    );
+    const invalidSettlements = settlements.filter((record) =>
+      record?.version !== 1 || record?.producer !== "qdm-harness-stage-runner" ||
+      record?.state !== "TERMINAL" || !Array.isArray(record?.history) ||
+      record.history[0]?.state !== "EMITTED" || record.history.at(-1)?.state !== "TERMINAL"
+    );
+    if (settlements.length < expectedPhysicalMinimum || invalidSettlements.length) {
+      throw new SelfTestFailure({
+        code: "TRANSPORT_SETTLEMENT_AUDIT_INVALID",
+        stageId,
+        reason: `${stageId} settlement audit 不完整；terminal=${settlements.length} expected>=${expectedPhysicalMinimum} invalid=${invalidSettlements.length}`,
+      });
+    }
+    const stageRuns = (await readRuntimeRecords(sessionDir, "stage-runs")).filter((record) =>
+      stageRunStageMatches(stageId, record)
+    );
+    const completedRuns = stageRuns.filter((record) =>
+      record?.version === 1 && record?.producer === "qdm-harness-stage-runner" && record?.status === "completed"
+    );
+    if (completedRuns.length !== 1) {
+      throw new SelfTestFailure({
+        code: "STAGE_RUN_AUDIT_INVALID",
+        stageId,
+        reason: `${stageId} 必须有一个 completed stage-run audit；actual=${completedRuns.length}`,
       });
     }
   }
@@ -1904,12 +1955,14 @@ export async function runHtmlReportSelfTest(options = {}, dependencies = {}) {
   const gitMetadata = dependencies.gitMetadata || defaultGitMetadata;
   const readJson = dependencies.readJson || defaultReadJson;
   const readPipelineState = dependencies.readPipelineState || ((sessionDir) => readJson(join(sessionDir, "debug", "pipeline-state.json")));
+  const applySelfTestPipelinePolicy = dependencies.applyPipelinePolicy || applyPipelinePolicy;
   const readRuntimeAgentListAudits = dependencies.readRuntimeAgentListAudits || readRuntimeAgentListAuditCandidates;
   const checkLayoutImpl = dependencies.checkSessionLayout || checkSessionLayout;
   const preflightAgents = dependencies.preflightAgents || defaultPreflightAgents;
   const confirmHttp = dependencies.headlessConfirm || headlessConfirm;
   const confirmBrowser = dependencies.browserConfirm || browserConfirm;
   const readDispatches = dependencies.readDispatches || readDispatchRecords;
+  const readRuntimeRecords = dependencies.readRuntimeRecords || readContractRuntimeRecords;
   const createRpcClient = dependencies.createRpcClient || ((settings) => new PiRpcClient(settings));
   const discoverExtensions = dependencies.discoverPiSubagentExtensions || discoverPiSubagentExtensions;
   const validateRuntimeContractImpl = dependencies.validateRuntimeContract || validateRuntimeContract;
@@ -2216,6 +2269,7 @@ export async function runHtmlReportSelfTest(options = {}, dependencies = {}) {
       debugB5Skipped: stageId === "B5_DESIGN" && runtimeEnv.HTML_REPORT_A_CONFIG_MODE === "fixed",
       readJson,
       readDispatches,
+      readRuntimeRecords,
     });
     const sourceAfter = await assertWorkspaceUnchanged(stageId, sourceBefore);
     const combinedWallClockDurationMs = elapsedMs(stageStartedAt, stageEndedAt);
@@ -2461,7 +2515,14 @@ export async function runHtmlReportSelfTest(options = {}, dependencies = {}) {
     const sequence = stageSequence(targetStage);
     for (const [index, stageId] of sequence.entries()) {
       await executeStage(stageId, index === 0 ? effectivePrompt : "继续");
-      if (stageId === "A_CONFIG") await confirmAConfig();
+      if (stageId === "A_CONFIG") {
+        await confirmAConfig();
+        // The diagnostic driver measures B0 as a separate boundary. Product
+        // sessions keep the default B0 auto-advance policy.
+        await applySelfTestPipelinePolicy(sessionDir, {
+          B0_PREFLIGHT: { enabled: true, gate: true },
+        });
+      }
     }
     run.status = "pass";
     run.stoppedStage = targetStage;

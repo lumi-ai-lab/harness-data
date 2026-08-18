@@ -18,8 +18,8 @@ Report Editor在 narrative 定稿后调用你做 **唯一一次全量** R1–R7 
 
 ## 回报 Report Editor
 
-读取 scan 后调用一次 `submit_review_scorecard`；成功时该工具会自动捕获结构化返回并
-终止子代理，不要再调用 `structured_output`。禁止返回旧 `paths` 包装、`hardBlockers`、
+读取 scan 后调用一次 `submit_review_scorecard`；成功后必须再调用一次
+`structured_output`，`value` 必须是工具返回的 `reviewerReturn`。禁止返回旧 `paths` 包装、`hardBlockers`、
 `lowRubric`、`suggestedDrill` 或普通说明文字。正常审核结果为：
 
 ```json
@@ -98,9 +98,8 @@ rubric 的实际读取路径以任务注入的 `Exact rubric read path` 绝对�
 合并 scan hard issues，复用 `write-verdict.mjs` 逻辑盖章并脚本化生成
 `quality/report.md`。工具先重算基础公式（无 scan/draft hard、`total >= 10`、
 `R1 >= 1`、`R2 >= 1`），再叠加已完成 Researcher tasks 声明的动态最低分门禁。
-成功时，工具会把返回对象（包括 `requiredRubrics` / `gateFailures`）原样捕获为
-attached outputSchema 的结果并立即终止子代理；不要再手工复制或调用
-`structured_output`。
+成功时，工具返回对象（包括 `requiredRubrics` / `gateFailures`）；下一步必须
+调用一次 `structured_output`，`value` 必须是该对象。
 `quality-scan` 已负责数字追溯；禁止逐行重算均值、中位数、区间或总计，也不要在
 reasoning/prose 中叙述逐数核对。`scores` 必须在 `R7` 后立即闭合；`summary`、
 `hardBlockers`、`issues`、`repairHints` 是顶层同级字段。提交消息只能包含该工具调用。
@@ -236,8 +235,7 @@ verdict producer/fingerprint 和 Gate 前置状态。你不要在子代理内重
 - 写入仓库根目录
 - 省略 `scores` / `total`（终审必须有评分表）
 - 手写 draft/report/verdict，或直接运行 `write-verdict.mjs`
-- 重复调用 `submit_review_scorecard`，与 structured_output 同批调用，或在成功提交后
-  再调用 structured_output
+- 重复调用 `submit_review_scorecard`，或与 structured_output 同批调用
 - 重新运行 `assemble-report.mjs` 或在子代理内重复跑 quality layout
 - 使用 0–7 或满分 49 的旧量表（每项只能 0–2）
 - 在 B2/B3 过程中被当作「每关全量打分」（你只在 B4 出场）
@@ -245,9 +243,8 @@ verdict producer/fingerprint 和 Gate 前置状态。你不要在子代理内重
 ## 状态
 
 **P4 已启用。** 父扩展必须先运行 `quality-scan.mjs` 并验收 hard=0，Reviewer 再以 typed tool 提交带 **R1–R7 scores** 的评分。
-成功路径由 typed tool 自动捕获 outputSchema 并终止，不再手工调用
-`structured_output`；最终 verdict `pass:false` 时工具返回
-`status:"failed"`。child 未完成 read/typed-submit 时才必须调用一次
-`structured_output` 返回上文严格的
+成功路径在 typed tool 返回后，必须再调用一次 `structured_output` 提交该对象；
+最终 verdict `pass:false` 时工具返回 `status:"failed"`。child 未完成
+read/typed-submit 时必须调用一次 `structured_output` 返回上文严格的
 `status:"infrastructure_error"`。禁止再包一层普通“执行成功”或 acceptance
 report。

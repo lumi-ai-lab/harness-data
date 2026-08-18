@@ -1,6 +1,6 @@
 # html-report 全流程方案（落档）
 
-更新时间：2026-07-24（Asia/Shanghai）
+更新时间：2026-08-18（Asia/Shanghai）
 
 > 本文档固化 **配置闭环 + 报告生成** 的完整设计，避免上下文压缩后方案丢失。
 > **已实现：P0–P5（含 P3 Report Researcher）+ 默认单步调试 Gate**。
@@ -12,14 +12,18 @@
 ### 阶段 A — 配置确认（qdm-metric-cli ui）
 
 ```text
-用户问题
+用户调用 [skill] html-report
+  -> Pi 先显示 [skill] html-report
   -> [A_CONFIG 计时]
   -> 扩展打开 qdm-metric-cli ui --session-local-dir $SESSION
+  -> Pi 随后通过 [html-report-ui] 显示本地地址、端口与操作指引
   -> 用户在页面改卡并点击「保存」
   -> $SESSION/result.json 落盘
   -> [A_CONFIG Gate 等待「继续」]
-  -> 用户在 Pi 回复「继续」
-  -> 批准进入 B0
+  -> 用户在 Pi 回复一次「继续」
+  -> B0 自动预检
+     -> pass：直接进入 B2 Writer
+     -> fail：停在 Gate，等待修复与重试
 ```
 
 当前默认不做推荐生成，不写 `recommendations.json`，也不打开
@@ -34,7 +38,7 @@ launcher 只回 JSON，长生命周期 worker 持有 CLI，并 watch `PI_AGENT_P
 
 ```text
 用户回 Pi：「生成报告」
-  -> [B0_PREFLIGHT Gate] result/session + 四个 report-* agent（扩展确定性执行，不启动父模型）
+  -> [B0_PREFLIGHT 自动预检] result/session + 四个 report-* agent（扩展确定性执行，不启动父模型）
   -> 读 result.json
   -> [逐卡串行单步骤 chain] Report Writer 调用 fetch-entry：qdm-metric-cli **全量分页**取数 → data/cards/<id>/
   -> Report Writer：返回仅含单行事实的简短分析与定性建议（不写报告章节、不做统计/排序/跨行推导）
@@ -56,21 +60,22 @@ launcher 只回 JSON，长生命周期 worker 持有 CLI，并 watch `PI_AGENT_P
 $SESSION/debug/pipeline-state.json
 ```
 
-人工 Gate 顺序为 `A_CONFIG → B0_PREFLIGHT → B2_WRITER →
-B3_RESEARCH → B4_REVIEW → B5_DESIGN`。`B25_EDITOR` 独立计时但不额外等待
-用户，在 B3 Gate 同时展示 Editor 与 Researcher 耗时。
+默认人工 Gate 顺序为 `A_CONFIG → B2_MAIN`；后续启用完整流水线时还包括
+`B3_RESEARCH → B4_REVIEW`。`B0_PREFLIGHT`、`B2_WRITER` 与 `B25_EDITOR`
+成功时自动推进，失败时才停住。`B25_EDITOR` 独立计时但不额外等待用户，
+在 B3 Gate 同时展示 Editor 与 Researcher 耗时。
 
 每个阶段严格执行 `start（扩展启动）→ 工作 → layout → finish/fail →
-stop`。成功后仅用户精确回复「继续」才批准并启动下一阶段；失败仅接受
-「重试当前阶段」。Gate 等待和 pause 时间单独记录，不计入阶段与累计执行
-耗时。`stage-gate finish/fail` 必须是该阶段最后一个、独立且不并发的工具
-调用。
+stop/advance`。配置为人工 Gate 的阶段成功后，仅用户精确回复「继续」才批准
+并启动下一阶段；自动阶段成功后直接推进。失败仅接受「重试当前阶段」。Gate
+等待和 pause 时间单独记录，不计入阶段与累计执行耗时。`stage-gate
+finish/fail` 必须是该阶段最后一个、独立且不并发的工具调用。
 
 A_CONFIG 获批进入 B0 时是一个确定性例外：输入钩子直接执行真实 runtime
-list、phase-a layout 与 B0 finish/fail，再通过 `html-report-gate` custom message
-显示 Gate 文本并返回 `handled`，不启动父模型。该输入只完成 B0，用户必须另发
-一条「继续」才能批准 B0 并启动 B2。自测以 custom `message_end` 的结构化
-Session/阶段/attempt 绑定作为完成信号，不等待不存在的 `agent_settled`。
+list、phase-a layout 与 B0 finish/fail。B0 成功时直接启动 B2 并让当前 turn
+继续，不写停止型 `html-report-gate`；B0 失败时才写入该 custom message 并返回
+`handled`。失败消息仍以结构化 Session/阶段/attempt 绑定作为完成信号，不等待
+不存在的 `agent_settled`。
 
 等待批准时，qdm-harness 扩展只放行 `read/grep/find/ls` 和
 `stage-gate status`；`bash/write/edit/subagent` 等推进工具会被硬阻断。子代理
@@ -302,7 +307,7 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 
 ### 7.2 P2 最小路径（每卡 Worker + 汇总）
 
-0. **B0：** 扩展通过真实 pi-subagents 事件桥自动执行一次 runtime list，并验收四个 `report-*` Agent；step 模式由 input hook 确定性回显 Gate，不启动父模型。缺失时自动 fail，**禁止** `agent: "worker"` 顶替。
+0. **B0：** 扩展通过真实 pi-subagents 事件桥自动执行一次 runtime list，并验收四个 `report-*` Agent；通过时 input hook 直接进入 B2，失败时才确定性回显 Gate。缺失时自动 fail，**禁止** `agent: "worker"` 顶替。
 1. B2 启动时只暴露 `bash` 并执行当前 Session 的精确 `stage-gate status`。若模型在同一消息多生成 sibling 工具，扩展阻止 sibling 且不执行、不终止已在途的合法 status；status 成功后只暴露机器生成的精确首个 Writer `subagent(...)`，参数漂移继续被阻止，直到接棒完成。
 2. Report Editor 对每张卡逐个串行 spawn **`report-writer` 单步骤 chain**（1 卡也 spawn 1 个）；每次只含一张卡，禁止 `tasks[]`、`chain[].parallel` 或把多个 Writer 混入同一 chain。按 `agents/report-writer.md`：
    - `fetch-entry.mjs --result … --card-id <id>` → entry/meta（CLI rows + 适配层 count/hash 契约）
@@ -403,7 +408,52 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 
 ---
 
-## 9. 相关路径
+## 9. Stage Runner TUI 可观察性
+
+父模型只调用无参 `html_report_run_stage()`。Writer / Researcher / Reviewer / Designer
+仍由 qdm-harness 通过 pi-subagents 派发，显示身份却只有这一个父工具块。
+
+```text
+Gate / 父模型
+  一个 html_report_run_stage
+        │
+        ▼
+Stage Runner 进度投影（只读）
+  完整 items / 6/14 / current / failed
+        │
+        └─ renderCall / renderResult  -> 聊天区工具块
+             expanded=false  活动项滑动窗（4–7 行）
+             expanded=true   Ctrl+O 全量列表
+```
+
+```text
+HTML Report · B2 Writer             6/14 · 43% · 0 failed
+✓ card-05  客单价                         19s
+✓ card-06  毛利率                         16s
+▶ card-07  库存周转 · ack_cli_data ·       8s
+○ card-08  缺货率
+○ card-09  损耗率                    +5 queued
+```
+
+默认窗口围绕当前项滑动，失败项会抢占默认视图。完整 14 张卡片仍在
+`details.progress` 里，按 Ctrl+O 逐项核对。终态压缩为 2–3 行。
+
+符号：`○` pending、`◌` dispatching、`▶` running、`✓` completed、
+`!` failed、`–` skipped。
+
+约束：
+
+- 进度层失败只能降级为普通文本，不得让业务阶段失败。
+- B2 分母只统计 Writer 卡片；prefetch / caption-gate / compose-main 用 phase。
+- B3 successor 更新同一 task 的 `2/2`，不增加总数。
+- B2_MAIN=`awaiting_approval` 显示为阶段 completed。
+- 主工具块是唯一必要进度面；不再发布编辑框 Widget 或 footer status。
+
+子代理、Skill 镜像和 transport-neutral contract 不因此改协议。
+
+---
+
+## 10. 相关路径
 
 - Skill：`.agents/pi/skills/html-report/SKILL.md`
 - FETCH：`.agents/pi/skills/html-report/scripts/fetch-entry.mjs`

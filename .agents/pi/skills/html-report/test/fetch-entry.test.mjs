@@ -466,31 +466,23 @@ test("Report Writer child extension blocks supervisor detach channels", () => {
   assert.equal(writerCoordinationDecision({ toolName: "structured_output" }), undefined);
 });
 
-test("skill and pipeline docs require full pagination for fetch-entry", async () => {
+test("pipeline keeps full-pagination fetch while the parent uses the stable stage runner", async () => {
   const skill = await readFile(join(root, ".agents/pi/skills/html-report/SKILL.md"), "utf8");
   const pipeline = await readFile(join(root, "docs/html-report-pipeline.md"), "utf8");
-  assert.match(skill, /fetch-entry\.mjs/);
-  assert.match(skill, /Never.*--single-page|禁止.*single-page|all-pages|全量分页|card-id/i);
-  assert.match(skill, /report-writer|Report Writer|summary-only/i);
-  assert.match(pipeline, /必须拉全部分页|all-pages|Never.*single-page|report-writer|Report Writer/i);
+  assert.match(skill, /html_report_run_stage\(\)/);
+  assert.match(skill, /B2_WRITER[\s\S]*entry\.meta\.json/);
+  assert.match(skill, /Report Writer|report-writer/i);
+  assert.match(pipeline, /必须拉全部分页|all-pages|Never.*single-page|全量分页/i);
   assert.match(pipeline, /P3|Report Researcher|Report Reviewer|HTML|Researcher|Reviewer/i);
 });
 
 test("B2.5 uses one typed Planner and extension-owned deterministic materialization", async () => {
   const skill = await readFile(join(root, ".agents/pi/skills/html-report/SKILL.md"), "utf8");
   const pipeline = await readFile(join(root, "docs/html-report-pipeline.md"), "utf8");
-  const b25 = skill.slice(skill.indexOf("### B2.5"), skill.indexOf("### B3.5"));
-  assert.match(b25, /IMMEDIATE B25 TOOL MESSAGE[\s\S]*stage-gate status[\s\S]*--source-fields/i);
-  assert.match(b25, /两个 Bash 都成功后[\s\S]*事件桥派发[\s\S]*context: "fresh"[\s\S]*report-researcher/);
-  assert.match(b25, /不得再[\s\S]*Writer 文件[\s\S]*临时子代理目录/);
-  assert.match(b25, /同一 `fromCardId`[\s\S]*合并为[\s\S]*一张 task/);
-  assert.match(b25, /operations 必须最小且不重叠[\s\S]*每 task 最多六个/);
-  assert.match(b25, /reuse_entry[\s\S]*new_query/);
-  assert.match(b25, /main\.md[\s\S]*禁止复制明细行或样例表[\s\S]*Markdown\/HTML 表格/);
-  assert.match(b25, /researchTasks\[\][\s\S]*完整[\s\S]*task[\s\S]*evidencePath/);
-  assert.match(b25, /禁止手工 `write\/edit`[\s\S]*禁止手工[\s\S]*stage-gate finish/);
-  assert.match(b25, /失败后扩展自动 fail[\s\S]*不得重派/);
-  assert.match(skill, /valid persisted entry\/meta pair is reused automatically/i);
+  assert.match(skill, /B25_EDITOR[\s\S]*Planner[\s\S]*materialize[\s\S]*B3/i);
+  assert.match(skill, /Stage Runner 内部负责[\s\S]*结构化返回[\s\S]*产物[\s\S]*验收/i);
+  assert.match(skill, /不得直接调用 `subagent`/);
+  assert.match(skill, /analysis\/tasks\.json/);
   assert.match(pipeline, /不得重新列举或读取 Writer 的 entry\/meta 目录/);
   assert.match(pipeline, /--source-fields/);
   assert.match(pipeline, /同源需求必须合并/);
@@ -501,17 +493,14 @@ test("B2.5 uses one typed Planner and extension-owned deterministic materializat
   assert.match(pipeline, /typed plan[\s\S]*researchTasks\[\]/i);
 });
 
-test("B2 dispatch keeps status but does not duplicate confirmed card content", async () => {
+test("B2 dispatch is stage-runner owned and does not expose confirmed card content", async () => {
   const skill = await readFile(join(root, ".agents/pi/skills/html-report/SKILL.md"), "utf8");
-  const b2 = skill.slice(skill.indexOf("### B1 + B2"), skill.indexOf("### B2.5"));
-  assert.match(b2, /initial `NEXT_TOOL_ONLY`[\s\S]*stage-start status call/i);
-  assert.match(b2, /successful result reveals one exact Writer call/i);
-  assert.match(b2, /never merge calls[\s\S]*read `result\.json`/i);
-  assert.match(b2, /exact mandatory[\s\S]*stage-start status call[\s\S]*read `result\.json`/i);
-  assert.doesNotMatch(b2, /listed order fixes only the\s+message shape[\s\S]*do not wait/i);
-  assert.doesNotMatch(b2, /本卡配置:\s*<JSON>/);
-  assert.doesNotMatch(b2, /用户问题:\s*<…>/);
-  assert.match(b2, /ack_cli_data/i);
+  assert.match(skill, /NEXT_TOOL_ONLY：html_report_run_stage\(\)/);
+  assert.match(skill, /B2_WRITER：逐卡 Writer/);
+  assert.match(skill, /父模型[\s\S]*不得读取[\s\S]*Session[\s\S]*推导参数/i);
+  assert.doesNotMatch(skill, /本卡配置:\s*<JSON>/);
+  assert.doesNotMatch(skill, /用户问题:\s*<…>/);
+  assert.doesNotMatch(skill, /NEXT_TOOL_ONLY[^\n]*subagent/i);
 });
 
 test("report-writer persists only the CLI contract and submits the fetch receipt", async () => {
@@ -526,7 +515,8 @@ test("report-writer persists only the CLI contract and submits the fetch receipt
   assert.match(worker, /entry\.meta\.json/);
   assert.doesNotMatch(worker, /entry\.profile\.json/);
   assert.doesNotMatch(worker, /entry\.facts\.json/);
-  assert.match(worker, /Do not call `submit_writer_result` or `structured_output`/);
+  assert.match(worker, /Do not call `submit_writer_result`/);
+  assert.match(worker, /structured_output` exactly once with that exact receipt/);
   assert.match(worker, /report-writer/);
   assert.match(worker, /禁止.*worker|Unknown agent: report-writer/i);
 });
@@ -748,8 +738,8 @@ test("report-researcher branches between reused evidence and material new querie
   assert.match(agent, /report-researcher/);
   assert.match(runtime, /^tools:\s*read, bash, write, submit_research_findings$/m);
   assert.match(runtime, /`submit_research_findings` exactly once/);
-  assert.match(runtime, /captures the same object[\s\S]*`researcherReturn`[\s\S]*terminates the child/);
-  assert.match(runtime, /On success, do not call[\s\S]*`structured_output`/);
+  assert.match(runtime, /returns the same[\s\S]*`researcherReturn`/);
+  assert.match(runtime, /On success, call `structured_output` exactly/);
   assert.match(runtime, /^inheritProjectContext:\s*false$/m);
   assert.match(runtime, /reuse_entry[\s\S]*Do \*\*not\*\* read full/m);
   assert.match(runtime, /Do \*\*not\*\*[\s\S]*fetch-explore\.mjs/m);
@@ -816,7 +806,7 @@ test("report-designer isolates context and injects only the report design skill"
   assert.match(agent, /do not produce an acceptance report/i);
 });
 
-test("skill uses Report Editor and four agent ids", async () => {
+test("skill uses Report Editor and four agent ids without exposing transport payloads", async () => {
   const skill = await readFile(join(root, ".agents/pi/skills/html-report/SKILL.md"), "utf8");
   assert.match(skill, /Report Editor/);
   assert.match(skill, /report-writer/);
@@ -825,11 +815,8 @@ test("skill uses Report Editor and four agent ids", async () => {
   assert.match(skill, /report-designer/);
   assert.match(skill, /html-report-quality-rubric/);
   assert.doesNotMatch(skill, /card-worker|explore-analyst/);
-  assert.match(skill, /agent: "report-reviewer"/);
-  assert.match(skill, /agent: "report-designer"/);
-  const reviewerTask = skill.match(/task: `B4 scorecard[\s\S]*?force pass`/)?.[0] || "";
-  assert.ok(reviewerTask, "B4 Reviewer task must be present");
-  assert.doesNotMatch(reviewerTask, /^\d+\).*assemble-report\.mjs/m);
-  assert.doesNotMatch(reviewerTask, /check-session-layout\s+--phase\s+quality/);
-  assert.match(reviewerTask, /parent extension performs[\s\S]*authoritative/i);
+  assert.match(skill, /html_report_run_stage\(\)/);
+  assert.doesNotMatch(skill, /agent: "report-reviewer"/);
+  assert.doesNotMatch(skill, /agent: "report-designer"/);
+  assert.doesNotMatch(skill, /subagent\s*\(\s*\{[\s\S]*?chain\s*:/i);
 });

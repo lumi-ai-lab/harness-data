@@ -107,8 +107,8 @@ console.log(`\n  PI_SESSION_ID=${sessionId} HTML_REPORT_TEST_B0=1 pi --skill htm
 console.log("📌 在 Pi 中回复「继续」即可触发 B0 确定性预检。");
 console.log("📌 B0 会通过 pi-subagents 事件桥验收 4 个 report-* agent，");
 console.log("   然后执行 check-session-layout --phase a，最后 finish/fail B0。");
-console.log("📌 B0 完成后，Gate 会显示 awaiting_approval 状态，");
-console.log("   再次回复「继续」才会进入 B2_WRITER（但 B2 尚未实现）。");
+console.log("📌 B0 通过后会直接进入 B2_WRITER，不再等待第二次「继续」；");
+console.log("   B0 失败时才会停在 Gate，等待修复后回复「重试当前阶段」。");
 console.log("\n📌 如需重新测试，删除 session 目录后重跑此脚本：");
 console.log(`  rm -rf ${sessionDir}`);
 console.log(`  node ${join(projectRoot, ".agents", "pi", "skills", "html-report", "scripts", "setup-b0-test.mjs")}`);

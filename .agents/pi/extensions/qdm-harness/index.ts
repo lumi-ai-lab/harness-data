@@ -11,9 +11,14 @@ import {
   applyGateInput,
   b25EditorBootstrapContract,
   classifyGateInput,
+  gateAttemptToken as gateAttemptTokenFromState,
   gateContextBanner,
   gateToolDecision,
   htmlReportSessionDir,
+  b2WriterMainWorkAccepted,
+  htmlReportStageReservation,
+  HTML_REPORT_RUNNER_STAGES,
+  HTML_REPORT_STAGE_TOOL,
   initializeGateForHtmlReport,
   inspectGateState,
   normalizeStandaloneStageGateCommand,
@@ -64,10 +69,28 @@ import {
   editorPlannerExpectedFromAssignment,
   isEditorPlannerAssignment,
   normalizeEditorPlan,
+  requiredColumnsForOperations,
   persistEditorWriterReturn,
   validateEditorPlan,
 } from "../../skills/html-report/scripts/editor-plan-contract.mjs";
 import { materializeEditorPlan } from "../../skills/html-report/scripts/editor-plan.mjs";
+import type { ReportAgentInvocation, ReportAgentOutcome, ReportAgentProgress, ReportAgentStage } from "./orchestration/contracts.ts";
+import { SubagentTransportManager } from "./orchestration/subagent-transport.ts";
+import {
+  HtmlReportStageRunner,
+  persistReportAgentLifecycle,
+  type HtmlReportStageRunResult,
+} from "./orchestration/stage-runner.ts";
+import {
+  HtmlReportStageProgressSession,
+  STAGE_PROGRESS_PHASE,
+  extractStageProgress,
+  renderStageProgressCall,
+  renderStageProgressResult,
+  researcherProgressSeed,
+  writerProgressSeed,
+  type HtmlReportProgressItemSeed,
+} from "./orchestration/stage-progress.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -80,6 +103,8 @@ interface PiExtensionContext {
   };
   ui?: {
     notify?: (message: string, type?: "info" | "warning" | "error") => void;
+    setStatus?: (key: string, text: string | undefined) => void;
+    setWidget?: (key: string, content: string[] | undefined) => void;
   };
 }
 
@@ -295,6 +320,7 @@ interface FixedRecommendationSeed {
 }
 
 const extensionDir = dirname(fileURLToPath(import.meta.url));
+const packageResourceRoot = resolve(extensionDir, "../..");
 const extractContextScript = join(extensionDir, "extract-additional-context.mjs");
 let contextFormat: ContextFormat | null = null;
 let posttoolFormat: "agent-hook" | "claude-hook" = "agent-hook";
@@ -309,6 +335,9 @@ let posttoolFormat: "agent-hook" | "claude-hook" = "agent-hook";
 export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/extensions/qdm-harness/index.ts",
   ".agents/pi/extensions/qdm-harness/gate-control.mjs",
+  ".agents/pi/extensions/qdm-harness/orchestration/contracts.ts",
+  ".agents/pi/extensions/qdm-harness/orchestration/subagent-transport.ts",
+  ".agents/pi/extensions/qdm-harness/orchestration/stage-runner.ts",
   ".agents/pi/extensions/qdm-harness/extract-additional-context.mjs",
   ".agents/pi/extensions/report-writer-fetch/index.mjs",
   ".agents/pi/extensions/report-writer-fetch/lifecycle.mjs",
@@ -372,6 +401,7 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
  * localized display text.
  */
 export const HTML_REPORT_GATE_CUSTOM_TYPE = "html-report-gate";
+export const HTML_REPORT_UI_CUSTOM_TYPE = "html-report-ui";
 
 export type RuntimeSourceSnapshot = Map<string, string>;
 
@@ -388,11 +418,18 @@ function runtimeSourceDigest(path: string): string {
   }
 }
 
+function runtimeSourcePath(projectRoot: string, relativePath: string): string {
+  const packagePrefix = ".agents/pi/";
+  return relativePath.startsWith(packagePrefix)
+    ? join(packageResourceRoot, relativePath.slice(packagePrefix.length))
+    : join(projectRoot, relativePath);
+}
+
 function captureRuntimeSources(projectRoot: string): RuntimeSourceSnapshot {
   return new Map(
     HTML_REPORT_RUNTIME_SOURCE_FILES.map((relativePath) => [
       relativePath,
-      runtimeSourceDigest(join(projectRoot, relativePath)),
+      runtimeSourceDigest(runtimeSourcePath(projectRoot, relativePath)),
     ])
   );
 }
@@ -402,7 +439,7 @@ function changedRuntimeSources(
   snapshot: RuntimeSourceSnapshot
 ): string[] {
   return HTML_REPORT_RUNTIME_SOURCE_FILES.filter(
-    (relativePath) => runtimeSourceDigest(join(projectRoot, relativePath)) !== snapshot.get(relativePath)
+    (relativePath) => runtimeSourceDigest(runtimeSourcePath(projectRoot, relativePath)) !== snapshot.get(relativePath)
   );
 }
 
@@ -556,8 +593,8 @@ function researchFinalizerContract(
   sid: string
 ): { command: string; input: JsonObject; resultPath: string; scriptPath: string } {
   const scriptPath = join(
-    projectRoot,
-    ".agents/pi/skills/html-report/scripts/finalize-research-stage.mjs"
+    packageResourceRoot,
+    "skills/html-report/scripts/finalize-research-stage.mjs"
   );
   const resultPath = join(htmlReportSessionDir(projectRoot, sid), "result.json");
   const command = `node '${scriptPath}' --result '${resultPath}'`;
@@ -2030,15 +2067,16 @@ function attachWriterRunEnvelope(
   if (envelope.error) return envelope;
   writer.outputSchema = buildWriterReturnSchema(expected);
   // Writer is deliberately foreground-only. If it cannot return after
-  // ack_cli_data + submit_card_caption (one incomplete caption retry),
-  // pi-subagents must terminate it.
+  // ack_cli_data + submit_card_caption (one incomplete caption retry) +
+  // official structured_output, pi-subagents must terminate it.
   input.turnBudget = { maxTurns: 4, graceTurns: 1 };
   delete input.toolBudget;
   delete input.timeoutMs;
   // The adapter caps CAS + retry sleeps + CLI attempts at 540s. Success
-  // uses two tools; one rejected caption plus a second submit needs three.
+  // uses two domain tools; one rejected caption plus a second submit needs
+  // three. structured_output stays unblocked after the hard cap.
   input.maxRuntimeMs = 720_000;
-  writer.toolBudget = { hard: 3, block: "*" };
+  writer.toolBudget = { hard: 3, block: ["ack_cli_data", "submit_card_caption"] };
   delete writer.async;
   delete writer.turnBudget;
   delete writer.timeoutMs;
@@ -2232,7 +2270,7 @@ async function finishWriterStageIfReady(
   // If violations exist, B2_WRITER stays running; the parent model presents
   // them to the user for per-card waive/fix decisions via caption-gate.mjs.
   const captionGateScript = join(
-    resolve(projectRoot), ".agents", "pi", "skills", "html-report", "scripts", "caption-gate.mjs",
+    packageResourceRoot, "skills", "html-report", "scripts", "caption-gate.mjs",
   );
   const captionGate = spawnSync(
     process.execPath,
@@ -2818,7 +2856,7 @@ export function ensureResearcherCitationCommitRule(
     "- Call submit_research_findings exactly once, alone, with only {findings, suggestedDeeper}: one compact finding per requirement, using only its bound pointers. Copy numeric values exactly; never calculate, round, derive, or borrow numbers from the question/source metadata.",
     "- Meet the bound capability minimally: ranking=two ranked facts; comparison=both sides; structural_breakdown=two units; association=coefficient plus eligible population; joint_tradeoff=the exact recommendedClaim, which already contains its required decision facts and business implication.",
     "- Write answer-first business prose, not JSON/protocol language. Do not claim causality, significance, a global optimum, or a robust low-support winner. Keep suggestedDeeper=[] unless a concrete unresolved gap requires a different metric, dimension, scope, comparison, or query.",
-    "- The submit tool validates, renders, writes both artifacts, captures structured output, and terminates. Do not call write afterward. Any submit error consumes the attempt; then call structured_output once with status=failed.",
+    "- The submit tool validates, renders, and writes both artifacts. Next call structured_output exactly once with the returned researcherReturn. Do not call write afterward. Any submit error consumes the attempt; then call structured_output once with status=failed.",
   ].join("\n");
 }
 
@@ -3091,7 +3129,7 @@ function runReviewerScanPreflight(
     }
   }
 
-  const scanScript = join(projectRoot, ".agents", "pi", "skills", "html-report", "scripts", "quality-scan.mjs");
+  const scanScript = join(packageResourceRoot, "skills", "html-report", "scripts", "quality-scan.mjs");
   const resultPath = join(sessionDir, "result.json");
   const execution = spawnSync(process.execPath, [scanScript, "--result", resultPath], {
     cwd: projectRoot,
@@ -3209,7 +3247,7 @@ function reviewerFirstBatchRule(
     `- Exact rubric read path: ${rubricPath}`,
     "- The rubric is a project-level frozen input outside SESSION. Use that exact absolute path; never prefix SESSION or resolve it as SESSION/docs/html-report-quality-rubric.md.",
     "- No submit_review_scorecard or structured_output may share the read batch. Never retry a rejected or failed call.",
-    "- After all five reads succeed, call submit_review_scorecard once with only typed scores/notes/summary/issues/repairHints. On success it captures the attached structured output and terminates the child; do not call structured_output afterward.",
+    "- After all five reads succeed, call submit_review_scorecard once with only typed scores/notes/summary/issues/repairHints. On success, call structured_output exactly once with the returned reviewerReturn.",
     "- quality-scan is authoritative for numeric traceability. Do not recalculate table rows, means, medians, ranges, or totals, and do not narrate a number-by-number verification.",
     "- Submission shape is exactly {scores:{R1:{score,note},...,R7:{score,note}},summary,hardBlockers,issues,repairHints}. Close scores immediately after R7; the last four fields are top-level siblings. Emit only that tool call.",
     "- Never hand-write verdict.draft.json, verdict.json, or quality/report.md; never run write-verdict.mjs or read stamped verdict.json in the child. The typed tool owns serialization, stamping, and report rendering.",
@@ -3432,8 +3470,8 @@ function designerExecutionRule(
   projectRoot: string,
   expected: Exclude<ReturnType<typeof designerExpectedFromAssignment>, { error: string }>
 ): string {
-  const scripts = join(projectRoot, ".agents/pi/skills/html-report/scripts");
-  const designSkill = join(projectRoot, ".agents/pi/skills/html-report-design");
+  const scripts = join(packageResourceRoot, "skills/html-report/scripts");
+  const designSkill = join(packageResourceRoot, "skills/html-report-design");
   return [
     "DESIGNER FIXED EXECUTION RULE (machine contract):",
     "- The html-report-design Skill is already injected. Do not read SKILL.md, list/scan directories, search for files, or read any script source.",
@@ -3839,19 +3877,26 @@ function seedFixedAConfig(
   }
 }
 
-function fixedAConfigBanner(seed: FixedRecommendationSeed): string {
+export function fixedAConfigBanner(seed: FixedRecommendationSeed): string {
   return [
     "# html-report 阶段 A：qdm-metric-cli ui",
-    "- 本轮不做推荐生成，也不打开 public/local-report-builder.html。",
     "- 扩展已启动 `qdm-metric-cli ui --session-local-dir $SESSION`。",
     seed.serverUrl ? `- 本地编辑器：${seed.serverUrl}` : "- 本地编辑器已按当前设置启动；测试环境可能跳过真正拉起进程。",
     "- 请在该页面改卡后点击「保存」，写出 `$SESSION/result.json`。",
-    "- 保存成功后不要以为阶段 B 已开始；回到 Pi 回复「继续」，A_CONFIG Gate 才会批准进入 B0。",
-    "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动执行；模型无需也不得调用 subagent。",
-    "- 自动验收与 A_CONFIG 完成后，原样返回 Gate 文本并停止；不要写 recommendations.json，不要启动 server.mjs。",
+    "- 保存后回到 Pi 回复一次「继续」。",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function fixedAConfigSystemBanner(seed: FixedRecommendationSeed): string {
+  return [
+    fixedAConfigBanner(seed),
+    "- 本轮不做推荐生成，也不打开 public/local-report-builder.html。",
+    "- A_CONFIG 获批后自动执行 B0；B0 通过直接进入 B2 Writer，失败时才停在 Gate。",
+    "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动执行；模型无需也不得调用 subagent。",
+    "- 不要写 recommendations.json，不要启动 server.mjs。",
+  ].join("\n");
 }
 
 function fixedAConfigFailureBanner(reason: string): string {
@@ -3861,6 +3906,20 @@ function fixedAConfigFailureBanner(reason: string): string {
     `- 原因：${reason || "unknown metric-cli ui startup failure"}`,
     "- 请确认 config/harness-config.yaml 的 cli.qdm_metric_cli 指向已包含 --session-local-dir 的二进制后重试。",
   ].join("\n");
+}
+
+function fixedAConfigMessage(sid: string, seed: FixedRecommendationSeed) {
+  return {
+    customType: HTML_REPORT_UI_CUSTOM_TYPE,
+    content: fixedAConfigBanner(seed),
+    display: true,
+    details: {
+      version: 1,
+      producer: "qdm-harness",
+      sessionId: sid,
+      serverUrl: seed.serverUrl || null,
+    },
+  };
 }
 
 function buildContextFromCliJson(payload: CliContextPayload): string {
@@ -4103,6 +4162,26 @@ export default function qdmHarnessExtension(pi: {
   cwd?: string;
   getActiveTools?: () => string[];
   setActiveTools?: (toolNames: string[]) => void;
+  registerTool?: (definition: {
+    name: string;
+    label: string;
+    description: string;
+    parameters: JsonObject;
+    execute: (
+      toolCallId: string,
+      params: JsonObject,
+      signal?: AbortSignal,
+      onUpdate?: (update: unknown) => void,
+      ctx?: PiExtensionContext
+    ) => Promise<{ content: Array<{ type: "text"; text: string }>; details?: unknown; isError?: boolean }>;
+    renderCall?: (args: JsonObject, theme?: unknown, context?: unknown) => { render: (width: number) => string[] };
+    renderResult?: (
+      result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean },
+      options?: { expanded?: boolean; isPartial?: boolean },
+      theme?: unknown,
+      context?: unknown
+    ) => { render: (width: number) => string[] };
+  }) => void;
   sendMessage?: (
     message: {
       customType: string;
@@ -4149,6 +4228,17 @@ export default function qdmHarnessExtension(pi: {
   const runtimeAgentLists = new Map<string, RuntimeAgentListRecord>();
   const runtimeAgentListCalls = new Map<string, string>();
   const runtimeAgentListPromises = new Map<string, Promise<void>>();
+  const stageRunnerToolSnapshots = new Map<string, string[]>();
+  const stageRunnerInFlightSessions = new Set<string>();
+  const stageProgressSessions = new Map<string, HtmlReportStageProgressSession>();
+  const stageRunner = new HtmlReportStageRunner();
+  const transportManager = pi.events
+    ? new SubagentTransportManager(pi.events, {
+        onLifecycle(event) {
+          persistReportAgentLifecycle(htmlReportSessionDir(projectRoot, event.sessionId), event);
+        },
+      })
+    : null;
 
   /**
    * The fixed A_CONFIG preset is the current end-to-end debug path.  It is
@@ -4701,15 +4791,7 @@ export default function qdmHarnessExtension(pi: {
   }
 
   function gateAttemptToken(state: unknown): string | null {
-    if (!isObject(state) || state.status !== "running" || typeof state.currentStage !== "string") return null;
-    const stages = isObject(state.stages) ? state.stages : null;
-    const stage = stages && isObject(stages[state.currentStage]) ? stages[state.currentStage] : null;
-    const attempts = stage && Array.isArray(stage.attempts) ? stage.attempts : [];
-    const attempt = attempts.length && isObject(attempts.at(-1)) ? attempts.at(-1) : null;
-    const number = attempt?.number;
-    const startedAt = attempt?.startedAt;
-    if (!Number.isSafeInteger(number) || typeof startedAt !== "string" || !startedAt) return null;
-    return `${state.currentStage}:${number}:${startedAt}`;
+    return gateAttemptTokenFromState(state);
   }
 
   function stageAttemptDetails(state: unknown, stageId: string): JsonObject | null {
@@ -4727,10 +4809,9 @@ export default function qdmHarnessExtension(pi: {
   }
 
   /**
-   * Consume the A_CONFIG approval turn in step mode and finish B0 without a
-   * parent-model round trip. The real runtime discovery, phase-a layout and
-   * Gate transition remain unchanged; only the generated prose echo is
-   * replaced by a persisted custom message.
+   * Run B0 deterministically from the A_CONFIG approval turn. A successful
+   * preflight advances directly into B2 and keeps the same turn alive. Only a
+   * failed or explicitly gated compatibility policy emits a persisted Gate.
    */
   async function handleDeterministicB0Approval(
     sid: string,
@@ -4739,7 +4820,6 @@ export default function qdmHarnessExtension(pi: {
     ctx?: PiExtensionContext
   ): Promise<boolean> {
     if (
-      typeof pi.sendMessage !== "function" ||
       !isObject(before) ||
       before.mode !== "step" ||
       before.status !== "awaiting_approval" ||
@@ -4780,15 +4860,27 @@ export default function qdmHarnessExtension(pi: {
     const stage = isObject(terminal?.stages?.B0_PREFLIGHT)
       ? terminal.stages.B0_PREFLIGHT
       : null;
+    const advanced = Boolean(
+      terminal &&
+      terminal.currentStage !== "B0_PREFLIGHT" &&
+      stage?.status === "completed" &&
+      ["running", "completed"].includes(String(terminal.status))
+    );
+    if (advanced) {
+      ctx?.ui?.notify?.("B0 预检通过，已自动进入 B2 Writer。", "info");
+      return false;
+    }
+
     const accepted = terminal?.status === "awaiting_approval" && stage?.status === "awaiting_approval";
     const rejected = terminal?.status === "failed" && stage?.status === "failed";
     if (!terminal || terminal.currentStage !== "B0_PREFLIGHT" || (!accepted && !rejected)) {
       ctx?.ui?.notify?.(
-        "B0 确定性验收没有得到可显示的 completed/failed Gate；保留父模型回显作为兼容回退。",
+        "B0 确定性验收没有得到可继续或可显示的终态；保留父模型回显作为兼容回退。",
         "error"
       );
       return false;
     }
+    if (typeof pi.sendMessage !== "function") return false;
 
     const gateText = formatGateMessage(terminal, { stageId: "B0_PREFLIGHT" });
     try {
@@ -6150,6 +6242,992 @@ export default function qdmHarnessExtension(pi: {
     contractDispatches.set(identity.key, record);
   }
 
+  type StageChildResult = {
+    ok: boolean;
+    text: string;
+    transport?: ReportAgentOutcome["transport"];
+    value?: unknown;
+    identity?: ContractDispatchIdentity;
+  };
+
+  function stageProgressFor(sid: string): HtmlReportStageProgressSession | undefined {
+    return sid && sid !== "unknown" ? stageProgressSessions.get(sid) : undefined;
+  }
+
+  function progressItemIdForIdentity(identity: ContractDispatchIdentity): string | undefined {
+    if (identity.role === "report-writer") {
+      const parts = identity.key.split("|");
+      return parts[parts.length - 1] || undefined;
+    }
+    if (identity.role === "report-researcher") return identity.taskId;
+    if (identity.role === "report-editor-planner") return "planner";
+    if (identity.role === "report-reviewer") return "reviewer";
+    if (identity.role === "report-designer") return "designer";
+    return undefined;
+  }
+
+  function publishStageProgress(sid: string): void {
+    try { stageProgressFor(sid)?.publish(); } catch { /* display only */ }
+  }
+
+  function writerProgressItems(sid: string): HtmlReportProgressItemSeed[] {
+    try {
+      const result = JSON.parse(readFileSync(join(htmlReportSessionDir(projectRoot, sid), "result.json"), "utf8"));
+      if (!isObject(result) || !Array.isArray(result.cards)) return [];
+      return result.cards
+        .filter((card): card is JsonObject => isObject(card) && typeof card.id === "string" && Boolean(card.id.trim()))
+        .map((card) => writerProgressSeed({ id: String(card.id), title: card.title }));
+    } catch {
+      return [];
+    }
+  }
+
+  async function markCompletedWriterItems(sid: string): Promise<void> {
+    const session = stageProgressFor(sid);
+    if (!session) return;
+    const remaining = new Set(await remainingWriterCardIds(projectRoot, sid));
+    for (const seed of writerProgressItems(sid)) {
+      if (!remaining.has(seed.id)) session.tracker.markCompleted(seed.id);
+    }
+  }
+
+  function researcherProgressItems(sid: string, tasks?: JsonObject[]): HtmlReportProgressItemSeed[] {
+    const source = tasks?.length
+      ? tasks
+      : (() => {
+        try {
+          const document = JSON.parse(readFileSync(join(htmlReportSessionDir(projectRoot, sid), "analysis", "tasks.json"), "utf8"));
+          return isObject(document) && Array.isArray(document.tasks)
+            ? document.tasks.filter((task): task is JsonObject => isObject(task))
+            : [];
+        } catch {
+          return [];
+        }
+      })();
+    return source
+      .filter((task) => typeof task.id === "string" && task.id.trim())
+      .map((task) => {
+        const seed = researcherProgressSeed(task);
+        const status = String(task.status || "pending");
+        if (status === "done" || status === "ok" || status === "completed") seed.status = "completed";
+        else if (status === "failed") seed.status = "failed";
+        return seed;
+      });
+  }
+
+  function settleProgressItem(sid: string, itemId: string | undefined, ok: boolean, error?: string): void {
+    if (!itemId) return;
+    try {
+      const session = stageProgressFor(sid);
+      if (!session) return;
+      if (ok) session.tracker.markCompleted(itemId);
+      else session.tracker.markFailed(itemId, error || "failed");
+      session.publish();
+    } catch { /* display only */ }
+  }
+
+  async function beginStageProgress(
+    sid: string,
+    identity: { stage: ReportAgentStage; attempt: string },
+    ctx?: PiExtensionContext,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageProgressSession> {
+    const existing = stageProgressSessions.get(sid);
+    if (existing) {
+      existing.bind({ onUpdate });
+      return existing;
+    }
+    const items: HtmlReportProgressItemSeed[] = [];
+    let phase = STAGE_PROGRESS_PHASE.writerAgents;
+    if (identity.stage === "B2_WRITER") {
+      items.push(...writerProgressItems(sid));
+      phase = STAGE_PROGRESS_PHASE.prefetch;
+    } else if (identity.stage === "B25_EDITOR") {
+      items.push({ id: "planner", role: "planner", label: "Editor Planner", agent: "report-researcher" });
+      phase = STAGE_PROGRESS_PHASE.sourceInventory;
+    } else if (identity.stage === "B3_RESEARCH") {
+      items.push(...researcherProgressItems(sid));
+      phase = STAGE_PROGRESS_PHASE.researchers;
+    } else if (identity.stage === "B4_REVIEW") {
+      items.push({ id: "reviewer", role: "reviewer", label: "Report Reviewer", agent: "report-reviewer" });
+      phase = STAGE_PROGRESS_PHASE.qualityPreflight;
+    } else {
+      items.push({ id: "designer", role: "designer", label: "Report Designer", agent: "report-designer" });
+      phase = STAGE_PROGRESS_PHASE.designer;
+    }
+    const session = new HtmlReportStageProgressSession(
+      {
+        sessionId: sid,
+        attempt: identity.attempt,
+        entryStage: identity.stage,
+        currentStage: identity.stage,
+        phase,
+        items,
+      },
+      { onUpdate },
+    );
+    stageProgressSessions.set(sid, session);
+    if (identity.stage === "B2_WRITER") await markCompletedWriterItems(sid);
+    session.publish();
+    return session;
+  }
+
+  function attachStageProgressDetails(sid: string, result: HtmlReportStageRunResult): HtmlReportStageRunResult {
+    const session = stageProgressFor(sid);
+    if (!session) return result;
+    const snapshot = session.finish(result.status, result.status === "failed" ? result.text : undefined);
+    return {
+      ...result,
+      details: {
+        ...(result.details || {}),
+        progress: snapshot,
+      },
+    };
+  }
+
+  function endStageProgress(sid: string, _ctx?: PiExtensionContext): void {
+    if (sid) stageProgressSessions.delete(sid);
+  }
+
+  function preparedReportInvocation(
+    input: JsonObject,
+    sid: string,
+    state: unknown
+  ): { invocation?: ReportAgentInvocation; identity?: ContractDispatchIdentity; error?: string } {
+    if (!isObject(state) || state.status !== "running" || typeof state.currentStage !== "string") {
+      return { error: "Report agent 只能在 running html-report Gate 内派发。" };
+    }
+    const identity = contractDispatchIdentity(input, sid, state);
+    if (!identity) return { error: "无法建立 Report agent 的 attempt-bound 派发身份。" };
+    const step = Array.isArray(input.chain) && input.chain.length === 1 && isObject(input.chain[0])
+      ? input.chain[0]
+      : null;
+    if (!step || typeof step.agent !== "string" || typeof step.task !== "string" || !isObject(step.outputSchema)) {
+      return { error: `${identity.label} 缺少固定 agent/task/outputSchema。` };
+    }
+    const timeoutMs = Number(input.maxRuntimeMs);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+      return { error: `${identity.label} 缺少有效 maxRuntimeMs。` };
+    }
+    const fingerprint = contractInputSnapshot(input).fingerprint;
+    const invocationId = createHash("sha256")
+      .update(`${identity.key}|${fingerprint}`, "utf8")
+      .digest("hex");
+    const stage = state.currentStage as ReportAgentStage;
+    return {
+      identity,
+      invocation: {
+        invocationId,
+        ownerRunId: `qdm-${createHash("sha256").update(`${sid}|${identity.attempt}`, "utf8").digest("hex")}`,
+        nodeId: `${identity.role}-${createHash("sha256").update(identity.key, "utf8").digest("hex")}`,
+        sessionId: sid,
+        stage,
+        attempt: identity.attempt,
+        agent: step.agent,
+        task: step.task,
+        cwd: projectRoot,
+        context: "fresh",
+        resultSchema: step.outputSchema,
+        timeoutMs,
+        ...(isObject(input.turnBudget) ? { turnBudget: input.turnBudget as ReportAgentInvocation["turnBudget"] } : {}),
+        ...(isObject(step.toolBudget) ? { toolBudget: step.toolBudget as ReportAgentInvocation["toolBudget"] } : {}),
+        ...(typeof step.model === "string" && step.model ? { model: step.model } : {}),
+        ...(typeof step.skill === "string" || typeof step.skill === "boolean" || Array.isArray(step.skill)
+          ? { skill: step.skill as ReportAgentInvocation["skill"] }
+          : {}),
+        artifacts: false,
+      },
+    };
+  }
+
+  async function invokePreparedReportAgent(
+    input: JsonObject,
+    sid: string,
+    state: unknown,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<StageChildResult> {
+    if (!transportManager) {
+      return { ok: false, text: "pi-subagents event bridge is unavailable; install and enable npm:pi-subagents, then restart Pi." };
+    }
+    const stageDecision = runningGateSubagentDecision(state, { toolName: "subagent", input });
+    if (stageDecision) return { ok: false, text: stageDecision.reason };
+    const prepared = preparedReportInvocation(input, sid, state);
+    if (!prepared.invocation || !prepared.identity) {
+      return { ok: false, text: prepared.error || "Report agent invocation preparation failed." };
+    }
+    const dispatchError = registerContractDispatch(prepared.identity, "extension-event-bridge");
+    if (dispatchError) return { ok: false, text: dispatchError, identity: prepared.identity };
+    const itemId = progressItemIdForIdentity(prepared.identity);
+    const progressSession = stageProgressFor(sid);
+    if (itemId && progressSession) {
+      try {
+        progressSession.tracker.markDispatching(itemId, {
+          invocationId: prepared.invocation.invocationId,
+          agent: prepared.invocation.agent,
+          ...(prepared.identity.role === "report-writer" ? { cardId: itemId, taskId: itemId } : {}),
+          ...(prepared.identity.taskId ? { taskId: prepared.identity.taskId } : {}),
+        });
+        progressSession.publish();
+      } catch { /* display only */ }
+    }
+    const outcome = await transportManager.invoke(
+      prepared.invocation,
+      signal,
+      (progress: ReportAgentProgress) => {
+        if (itemId && progressSession) {
+          try {
+            progressSession.tracker.applyChildProgress(itemId, progress);
+            progressSession.publish();
+          } catch { /* display only */ }
+          return;
+        }
+        onUpdate?.({ content: [{ type: "text", text: JSON.stringify(progress) }], details: progress });
+      },
+    );
+    if (outcome.status === "failed") {
+      const reason = `${prepared.identity.label} ${outcome.transport} ${outcome.code}: ${outcome.message}`;
+      markContractTerminal(prepared.identity, reason);
+      settleProgressItem(sid, itemId, false, reason);
+      return { ok: false, text: reason, transport: outcome.transport, identity: prepared.identity };
+    }
+    return {
+      ok: true,
+      text: `${prepared.identity.label} completed`,
+      transport: outcome.transport,
+      value: outcome.value,
+      identity: prepared.identity,
+    };
+  }
+
+  function failStageRun(sid: string, stageId: string, reason: string): HtmlReportStageRunResult {
+    const concise = String(reason || "html-report stage failed").slice(0, 500);
+    const state = readGateState(projectRoot, sid);
+    if (state?.status === "running" && state.currentStage === stageId) {
+      const failed = runStageGate(projectRoot, sid, "fail", ["--stage", stageId, "--reason", concise]);
+      if (!failed.ok) {
+        return { status: "failed", text: `${concise}\n扩展无法自动 fail ${stageId}：${failed.error || "unknown stage-gate error"}` };
+      }
+    }
+    return { status: "failed", text: concise };
+  }
+
+  async function runWriterChild(
+    sid: string,
+    cardId: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<StageChildResult> {
+    const state = readGateState(projectRoot, sid);
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    const input = writerDispatchInput(sessionDir, cardId);
+    const attached = attachWriterRunEnvelope(input, { projectRoot, session: sid });
+    if (attached.error) return { ok: false, text: attached.error };
+    const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
+    const task = typeof step?.task === "string" ? step.task : "";
+    const expected = writerExpectedFromTask(task, { projectRoot, session: sid });
+    if ("error" in expected) return { ok: false, text: expected.error };
+    const child = await invokePreparedReportAgent(input, sid, state, signal, onUpdate);
+    if (!child.ok) {
+      settleProgressItem(sid, cardId, false, child.text);
+      return child;
+    }
+    const checked = validateWriterReturn(child.value, expected);
+    if (!checked.ok || !isObject(child.value)) {
+      markContractTerminal(child.identity || null, `Writer 返回契约不合法：${checked.errors.join("；")}`);
+      settleProgressItem(sid, cardId, false, checked.errors.join("；"));
+      return { ...child, ok: false, text: `B2 Report Writer 拒绝：返回契约不合法：${checked.errors.join("；")}` };
+    }
+    const receipt = child.value;
+    if (receipt.fetchStatus === "success") {
+      let persisted = null;
+      try {
+        const resultMtimeMs = (await stat(expected.resultPath)).mtimeMs;
+        persisted = await reusableEntry(dirname(expected.dataPath), { notBeforeMs: resultMtimeMs });
+      } catch {
+        persisted = null;
+      }
+      if (!persisted) {
+        markContractTerminal(child.identity || null, "Writer success 对应的 entry/meta 不存在或已过期");
+        settleProgressItem(sid, cardId, false, "success 返回对应的 entry.json / entry.meta.json 不存在、过期，或校验失败");
+        return { ...child, ok: false, text: "B2 Report Writer 拒绝：success 返回对应的 entry.json / entry.meta.json 不存在、过期，或校验失败。" };
+      }
+      persistEditorWriterReturn(expected.resultPath, receipt);
+    }
+    try {
+      const remainingNow = await remainingWriterCardIds(projectRoot, sid);
+      if (!remainingNow.length) {
+        stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.captionGate);
+        publishStageProgress(sid);
+      }
+    } catch { /* display only */ }
+    const finalized = await finishWriterStageIfReady(projectRoot, sid, receipt);
+    markContractTerminal(
+      child.identity || null,
+      finalized.ok ? `fetchStatus=${String(receipt.fetchStatus)} 已验收` : finalized.text,
+    );
+    settleProgressItem(sid, cardId, finalized.ok, finalized.text);
+    return {
+      ...child,
+      ok: finalized.ok,
+      text: `${writerSuccessText(receipt)}\n${finalized.text}`,
+      value: receipt,
+    };
+  }
+
+  async function runB2WriterStage(
+    sid: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const initial = readGateState(projectRoot, sid);
+    if (initial?.status !== "running" || initial.currentStage !== "B2_WRITER") {
+      return { status: "failed", text: "html_report_run_stage is not bound to a running B2_WRITER attempt" };
+    }
+    const resultPath = join(htmlReportSessionDir(projectRoot, sid), "result.json");
+    const progress = stageProgressFor(sid);
+    try {
+      progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.prefetch);
+      progress?.publish();
+    } catch { /* display only */ }
+    try {
+      const preFetch = await fetchAllEntries(resultPath, { parallel: true, concurrency: 6 });
+      const cards = Array.isArray(preFetch?.cards) ? preFetch.cards : [];
+      const failed = cards.filter((card) => isObject(card) && card.fetchStatus === "failed");
+      if (failed.length && failed.length < cards.length) {
+        return failStageRun(sid, "B2_WRITER", `B2 Writer 预取部分失败：${failed.map((card) => String(card.cardId || "unknown")).join(", ")}`);
+      }
+    } catch {
+      // Writers retain their bounded on-demand fetch path.
+    }
+    try {
+      progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.writerAgents);
+      progress?.publish();
+    } catch { /* display only */ }
+    let lastTransport: ReportAgentOutcome["transport"] | undefined;
+    while (true) {
+      const state = readGateState(projectRoot, sid);
+      if (state?.status !== "running" || state.currentStage !== "B2_WRITER") break;
+      const remaining = await remainingWriterCardIds(projectRoot, sid);
+      if (!remaining.length) {
+        try {
+          progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.captionGate);
+          progress?.publish();
+        } catch { /* display only */ }
+        const finalized = await finishWriterStageIfReady(projectRoot, sid, {
+          fetchStatus: "success",
+          cardId: "stage-runner-recovery",
+        });
+        const afterFinalize = readGateState(projectRoot, sid);
+        if (!finalized.ok) {
+          return failStageRun(sid, "B2_WRITER", finalized.text);
+        }
+        if (afterFinalize?.currentStage !== "B2_WRITER" || afterFinalize.status !== "running") break;
+        return failStageRun(
+          sid,
+          "B2_WRITER",
+          `B2 caption gate requires correction before this attempt can continue: ${finalized.text}`,
+        );
+      }
+      const child = await runWriterChild(sid, remaining[0], signal, onUpdate);
+      if (!child.ok) return { ...failStageRun(sid, "B2_WRITER", child.text), ...(child.transport ? { transport: child.transport } : {}) };
+      lastTransport = child.transport || lastTransport;
+    }
+    const terminal = readGateState(projectRoot, sid);
+    if (b2WriterMainWorkAccepted(terminal)) {
+      try {
+        progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.awaitingApproval);
+        progress?.publish();
+      } catch { /* display only */ }
+      return {
+          status: "completed",
+          text: formatGateMessage(terminal, { stageId: "B2_MAIN" }),
+          ...(lastTransport ? { transport: lastTransport } : {}),
+        };
+    }
+    return { status: "failed", text: "B2 stage runner ended without completed Writer/Main stages", ...(lastTransport ? { transport: lastTransport } : {}) };
+  }
+
+  function validateSourceInventory(value: unknown): string | null {
+    return !isObject(value) || value.ok !== true || value.version !== 1 ||
+      value.producer !== "prepare-research-evidence.mjs" || value.mode !== "source_fields" || !Array.isArray(value.sources)
+      ? "source_fields 必须返回 ok=true、version=1、producer=prepare-research-evidence.mjs、mode=source_fields 与 sources[]"
+      : null;
+  }
+
+  function prepareB25SourceInventory(sid: string): string | null {
+    const resultPath = join(htmlReportSessionDir(projectRoot, sid), "result.json");
+    const script = join(packageResourceRoot, "skills", "html-report", "scripts", "prepare-research-evidence.mjs");
+    const execution = spawnSync(process.execPath, [script, "--result", resultPath, "--source-fields"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (execution.status !== 0) return String(execution.stderr || execution.stdout || "source_fields failed").trim();
+    try {
+      return validateSourceInventory(JSON.parse(execution.stdout));
+    } catch {
+      return "source_fields 没有返回合法 JSON";
+    }
+  }
+
+  function researcherInputForTask(
+    sessionDir: string,
+    resultPath: string,
+    task: JsonObject,
+    userQuestion: string
+  ): JsonObject {
+    const taskId = String(task.id || "").trim();
+    const evidencePath = join(sessionDir, "analysis", "evidence", `${taskId}.json`);
+    return {
+      chain: [{
+        agent: "report-researcher",
+        task: [
+          `按 report-researcher 处理 taskId=${taskId}`,
+          `SESSION=${sessionDir}`,
+          `result.json=${resultPath}`,
+          `完整 task 对象: ${JSON.stringify(task)}`,
+          `用户问题: ${userQuestion.replace(/\s+/g, " ").trim()}`,
+          `evidencePath=${evidencePath}`,
+          "机器契约：由 qdm-harness 根据当前 task、mode、requirements 和 outputSchema 注入；父代理不得在这里展开、转述或追加规则。",
+        ].join("\n"),
+      }],
+    };
+  }
+
+  function writeResearcherSuccessorTask(sessionDir: string, task: JsonObject): void {
+    const tasksPath = join(sessionDir, "analysis", "tasks.json");
+    const document = JSON.parse(readFileSync(tasksPath, "utf8"));
+    if (!isObject(document) || !Array.isArray(document.tasks)) throw new Error("analysis/tasks.json must contain tasks[]");
+    const index = document.tasks.findIndex((item) => isObject(item) && item.id === task.id);
+    if (index < 0) throw new Error(`analysis/tasks.json is missing taskId=${String(task.id)}`);
+    document.tasks[index] = task;
+    const temp = `${tasksPath}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    renameSync(temp, tasksPath);
+  }
+
+  function deterministicResearcherSuccessor(task: JsonObject, value: JsonObject): { task?: JsonObject; error?: string } {
+    const gap = isObject(value.evidenceGap) ? value.evidenceGap : null;
+    if (!gap || !isObject(task.evidencePlan)) return { error: "Researcher needs_* 缺少 evidenceGap/evidencePlan" };
+    if (value.status === "needs_new_query") {
+      const requiredIndicators = Array.isArray(gap.requiredIndicators) ? gap.requiredIndicators : [];
+      const requiredDims = Array.isArray(gap.requiredDims) ? gap.requiredDims : [];
+      const unique = (values: unknown[]) => values.filter((item, index) => values.findIndex((candidate) => sameCanonicalJson(candidate, item)) === index);
+      return {
+        task: {
+          ...task,
+          evidencePlan: { ...task.evidencePlan, mode: "new_query" },
+          evidenceGap: gap,
+          candidateIndicators: unique([...(Array.isArray(task.candidateIndicators) ? task.candidateIndicators : []), ...requiredIndicators]),
+          candidateDims: unique([...(Array.isArray(task.candidateDims) ? task.candidateDims : []), ...requiredDims]),
+        },
+      };
+    }
+    if (value.status === "needs_evidence_plan" && gap.type === "missing_operation") {
+      const required = Array.isArray(gap.requiredOperations) ? gap.requiredOperations : [];
+      if (!required.length) return { error: "missing_operation 没有 requiredOperations" };
+      const operations = [...(Array.isArray(task.evidencePlan.operations) ? task.evidencePlan.operations : [])];
+      for (const operation of required) {
+        if (!arrayContainsCanonical(operations, operation)) operations.push(operation);
+      }
+      const requiredColumns = [...(Array.isArray(task.evidencePlan.requiredColumns) ? task.evidencePlan.requiredColumns : [])];
+      for (const column of requiredColumnsForOperations(required)) {
+        if (!requiredColumns.includes(column)) requiredColumns.push(column);
+      }
+      return { task: { ...task, evidencePlan: { ...task.evidencePlan, operations, requiredColumns } } };
+    }
+    return { error: `Researcher ${String(value.status)} ${String(gap.type || "unknown")} 无法唯一确定 successor，已 fail closed` };
+  }
+
+  async function runResearcherTask(
+    sid: string,
+    initialTask: JsonObject,
+    userQuestion: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<StageChildResult> {
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    const resultPath = join(sessionDir, "result.json");
+    let task = initialTask;
+    let lastTransport: ReportAgentOutcome["transport"] | undefined;
+    const taskId = String(initialTask.id || "").trim();
+    for (let dispatch = 0; dispatch < 2; dispatch += 1) {
+      if (dispatch === 1 && taskId) {
+        try {
+          stageProgressFor(sid)?.tracker.noteAttempt(taskId, 2, 2);
+          publishStageProgress(sid);
+        } catch { /* display only */ }
+      }
+      const state = readGateState(projectRoot, sid);
+      const input = researcherInputForTask(sessionDir, resultPath, task, userQuestion);
+      const attached = attachResearcherOutputSchema(input, { projectRoot, session: sid });
+      if (attached.error) return { ok: false, text: attached.error, ...(lastTransport ? { transport: lastTransport } : {}) };
+      const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
+      const expected = researcherExpected(String(step?.task || ""), projectRoot, sid);
+      if ("error" in expected) return { ok: false, text: expected.error, ...(lastTransport ? { transport: lastTransport } : {}) };
+      const child = await invokePreparedReportAgent(input, sid, state, signal, onUpdate);
+      if (!child.ok) {
+        settleProgressItem(sid, taskId, false, child.text);
+        return child;
+      }
+      lastTransport = child.transport || lastTransport;
+      const checked = validateResearcherArtifacts(child.value, expected);
+      if (!checked.ok || !isObject(child.value)) {
+        markContractTerminal(child.identity || null, `Researcher 返回或产物契约不合法：${checked.errors.join("；")}`);
+        settleProgressItem(sid, taskId, false, checked.errors.join("；"));
+        return { ...child, ok: false, text: `B3 Report Researcher 拒绝：${checked.errors.join("；")}` };
+      }
+      const value = child.value;
+      const status = String(value.status || "");
+      markContractTerminal(child.identity || null, `结构化 status=${status} 已验收`);
+      if (status === "ok") {
+        settleProgressItem(sid, taskId, true);
+        return { ...child, value, text: researcherSuccessText(value, projectRoot, sid) };
+      }
+      if (status === "failed") {
+        settleProgressItem(sid, taskId, false, String(value.error || "Researcher returned status=failed"));
+        return { ...child, ok: false, value, text: String(value.error || "Researcher returned status=failed") };
+      }
+      if (!child.identity) {
+        settleProgressItem(sid, taskId, false, "Researcher needs_* 缺少 dispatch identity");
+        return { ...child, ok: false, text: "Researcher needs_* 缺少 dispatch identity" };
+      }
+      authorizeResearcherTaskSuccessor(projectRoot, child.identity, status, value.evidenceGap);
+      if (dispatch === 1) {
+        settleProgressItem(sid, taskId, false, `Researcher successor 再次返回 status=${status}；禁止第三次派发。`);
+        return { ...child, ok: false, text: `Researcher successor 再次返回 status=${status}；禁止第三次派发。` };
+      }
+      const successor = deterministicResearcherSuccessor(task, value);
+      if (!successor.task) return { ...child, ok: false, text: successor.error || "Researcher successor 无法确定" };
+      writeResearcherSuccessorTask(sessionDir, successor.task);
+      task = successor.task;
+      if (isObject(task.evidencePlan) && task.evidencePlan.mode === "reuse_entry") {
+        const script = join(packageResourceRoot, "skills", "html-report", "scripts", "prepare-research-evidence.mjs");
+        const prepared = spawnSync(process.execPath, [script, "--result", resultPath, "--task-id", String(task.id)], {
+          cwd: projectRoot,
+          encoding: "utf8",
+          maxBuffer: 2 * 1024 * 1024,
+        });
+        if (prepared.status !== 0) return { ...child, ok: false, text: String(prepared.stderr || prepared.stdout || "successor evidence preparation failed").trim() };
+      }
+    }
+    return { ok: false, text: "Researcher successor loop exhausted", ...(lastTransport ? { transport: lastTransport } : {}) };
+  }
+
+  function runReservedB3Finalizer(sid: string, attempt: string, stageToolCallId: string): HtmlReportStageRunResult {
+    const reserved = reserveB3Finalizer(projectRoot, sid, attempt, `${stageToolCallId}:b3-finalizer`);
+    if (!reserved.reservation) return failStageRun(sid, "B3_RESEARCH", reserved.error || "B3 finalizer reservation failed");
+    const contract = researchFinalizerContract(projectRoot, sid);
+    const execution = spawnSync(process.execPath, [contract.scriptPath, "--result", contract.resultPath], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (execution.status !== 0) {
+      const reason = String(execution.stderr || execution.stdout || "B3 finalizer failed").trim();
+      persistB3FinalizerSettlement(projectRoot, reserved.reservation, "failed", reason);
+      return failStageRun(sid, "B3_RESEARCH", reason);
+    }
+    const finished = runStageGate(projectRoot, sid, "finish", ["--stage", "B3_RESEARCH"]);
+    if (!finished.ok) {
+      const reason = `B3 finalizer passed but stage finish failed: ${finished.error || "unknown error"}`;
+      persistB3FinalizerSettlement(projectRoot, reserved.reservation, "failed", reason);
+      return failStageRun(sid, "B3_RESEARCH", reason);
+    }
+    const settlementError = persistB3FinalizerSettlement(projectRoot, reserved.reservation, "passed", "finalizer and explore layout passed");
+    if (settlementError) return { status: "failed", text: settlementError };
+    const terminal = readGateState(projectRoot, sid);
+    return { status: "completed", text: terminal ? formatGateMessage(terminal, { stageId: "B3_RESEARCH" }) : "B3_RESEARCH completed" };
+  }
+
+  async function runB3ResearchStage(
+    sid: string,
+    stageToolCallId: string,
+    researchTasks?: Array<{ task: JsonObject; evidencePath?: string }>,
+    userQuestion?: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const state = readGateState(projectRoot, sid);
+    const attempt = gateAttemptToken(state);
+    if (!attempt || state?.status !== "running" || state.currentStage !== "B3_RESEARCH") {
+      return { status: "failed", text: "html_report_run_stage is not bound to a running B3_RESEARCH attempt" };
+    }
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    let tasks = researchTasks?.map((item) => item.task).filter(isObject) || [];
+    let question = String(userQuestion || "").trim();
+    if (!tasks.length || !question) {
+      try {
+        const document = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+        if (!isObject(document) || !Array.isArray(document.tasks)) throw new Error("tasks[] missing");
+        if (!tasks.length) tasks = document.tasks.filter((task): task is JsonObject => isObject(task) && ["pending", "running"].includes(String(task.status)));
+        if (!question && isObject(document.editorial)) question = String(document.editorial.userQuestion || "").trim();
+      } catch (error) {
+        return failStageRun(sid, "B3_RESEARCH", `cannot load B3 tasks: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (!question) {
+      try { question = String(JSON.parse(readFileSync(join(sessionDir, "result.json"), "utf8")).userQuestion || "").trim(); } catch { question = ""; }
+    }
+    try {
+      const progress = stageProgressFor(sid);
+      progress?.tracker.setCurrentStage("B3_RESEARCH");
+      progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.researchers);
+      if (!progress?.tracker.snapshot().items.some((item) => item.role === "researcher")) {
+        progress?.tracker.addItems(researcherProgressItems(sid, tasks));
+      }
+      progress?.publish();
+    } catch { /* display only */ }
+    let lastTransport: ReportAgentOutcome["transport"] | undefined;
+    for (const task of tasks) {
+      const child = await runResearcherTask(sid, task, question, signal, onUpdate);
+      if (!child.ok) {
+        const currentAttempt = gateAttemptToken(readGateState(projectRoot, sid)) || attempt;
+        const terminal = persistResearcherParentTerminal(projectRoot, sid, currentAttempt, child.transport ? "invalid_return_or_artifacts" : "missing_structured_output");
+        researcherParentTerminals.set(sid, terminal);
+        return { ...failStageRun(sid, "B3_RESEARCH", child.text), ...(child.transport ? { transport: child.transport } : {}) };
+      }
+      lastTransport = child.transport || lastTransport;
+    }
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.finalizer);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const finalized = runReservedB3Finalizer(sid, attempt, stageToolCallId);
+    return { ...finalized, ...(lastTransport ? { transport: lastTransport } : {}) };
+  }
+
+  async function runB25AndB3Stage(
+    sid: string,
+    stageToolCallId: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const state = readGateState(projectRoot, sid);
+    if (state?.status !== "running" || state.currentStage !== "B25_EDITOR") {
+      return { status: "failed", text: "html_report_run_stage is not bound to a running B25_EDITOR attempt" };
+    }
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.sourceInventory);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const inventoryError = prepareB25SourceInventory(sid);
+    if (inventoryError) return failStageRun(sid, "B25_EDITOR", inventoryError);
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.planner);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const input = JSON.parse(JSON.stringify(b25EditorBootstrapContract(projectRoot, sid).plannerInput)) as JsonObject;
+    const attached = attachEditorPlannerOutputSchema(input, { projectRoot, session: sid });
+    if (attached.error) return failStageRun(sid, "B25_EDITOR", attached.error);
+    const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
+    const expected = editorPlannerExpected(String(step?.task || ""), projectRoot, sid);
+    if ("error" in expected) return failStageRun(sid, "B25_EDITOR", expected.error);
+    const child = await invokePreparedReportAgent(input, sid, state, signal, onUpdate);
+    if (!child.ok) {
+      settleProgressItem(sid, "planner", false, child.text);
+      return { ...failStageRun(sid, "B25_EDITOR", child.text), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const canonicalPlan = normalizeEditorPlan(child.value);
+    const checked = validateEditorPlan(canonicalPlan, expected.input);
+    if (!checked.ok) {
+      markContractTerminal(child.identity || null, `Planner return invalid: ${checked.errors.join("; ")}`);
+      settleProgressItem(sid, "planner", false, checked.errors.join("; "));
+      return { ...failStageRun(sid, "B25_EDITOR", `Editor Planner return is invalid: ${checked.errors.join("; ")}`), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    let materialized;
+    try {
+      materialized = await materializeEditorPlan(expected.resultPath, canonicalPlan, { input: expected.input });
+    } catch (error) {
+      markContractTerminal(child.identity || null, `Planner materialization failed: ${error instanceof Error ? error.message : String(error)}`);
+      settleProgressItem(sid, "planner", false, error instanceof Error ? error.message : String(error));
+      return { ...failStageRun(sid, "B25_EDITOR", `Editor Planner materialization failed: ${error instanceof Error ? error.message : String(error)}`), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const finished = runStageGate(projectRoot, sid, "finish", ["--stage", "B25_EDITOR"]);
+    if (!finished.ok) {
+      settleProgressItem(sid, "planner", false, finished.error || "B25 finish failed");
+      return { ...failStageRun(sid, "B25_EDITOR", `B25 finish failed: ${finished.error}`), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    markContractTerminal(child.identity || null, "typed semantic plan 已验收并自动完成 B25");
+    settleProgressItem(sid, "planner", true);
+    try {
+      const progress = stageProgressFor(sid);
+      progress?.tracker.setCurrentStage("B3_RESEARCH");
+      progress?.tracker.addItems(researcherProgressItems(sid, materialized.researchTasks.map((item) => item.task)));
+      progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.researchers);
+      progress?.publish();
+    } catch { /* display only */ }
+    const b3 = await runB3ResearchStage(
+      sid,
+      stageToolCallId,
+      materialized.researchTasks,
+      String(expected.input.userQuestion || ""),
+      signal,
+      onUpdate,
+    );
+    return { ...b3, ...(b3.transport || !child.transport ? {} : { transport: child.transport }) };
+  }
+
+  async function runB4ReviewStage(
+    sid: string,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const state = readGateState(projectRoot, sid);
+    const attempt = gateAttemptToken(state);
+    if (!attempt || state?.status !== "running" || state.currentStage !== "B4_REVIEW") {
+      return { status: "failed", text: "html_report_run_stage is not bound to a running B4_REVIEW attempt" };
+    }
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.qualityPreflight);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const scan = runReviewerScanPreflight(projectRoot, sid, attempt);
+    if (!scan.ok) {
+      settleProgressItem(sid, "reviewer", false, scan.reason);
+      return failStageRun(sid, "B4_REVIEW", scan.reason);
+    }
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.reviewer);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    const input: JsonObject = { chain: [{ agent: "report-reviewer", task: `B4 scorecard\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
+    const attached = attachReviewerOutputSchema(input, { projectRoot, session: sid });
+    if (attached.error) return failStageRun(sid, "B4_REVIEW", attached.error);
+    const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
+    const expected = reviewerExpected(String(step?.task || ""), projectRoot, sid);
+    if ("error" in expected) return failStageRun(sid, "B4_REVIEW", expected.error);
+    const child = await invokePreparedReportAgent(input, sid, state, signal, onUpdate);
+    if (!child.ok || !isObject(child.value)) {
+      const terminal = persistReviewerParentTerminal(projectRoot, sid, attempt, "contract_error");
+      reviewerParentTerminals.set(sid, terminal);
+      settleProgressItem(sid, "reviewer", false, child.text);
+      return { ...failStageRun(sid, "B4_REVIEW", child.text), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const checked = validateReviewerArtifacts(child.value, expected);
+    if (!checked.ok) {
+      markContractTerminal(child.identity || null, `Reviewer artifacts invalid: ${checked.errors.join("；")}`);
+      const terminal = persistReviewerParentTerminal(projectRoot, sid, attempt, "contract_error");
+      reviewerParentTerminals.set(sid, terminal);
+      settleProgressItem(sid, "reviewer", false, checked.errors.join("；"));
+      return { ...failStageRun(sid, "B4_REVIEW", `Reviewer 返回或 verdict 契约不合法：${checked.errors.join("；")}`), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const status = ["passed", "failed", "infrastructure_error"].includes(String(child.value.status))
+      ? child.value.status as ReviewerParentTerminal["status"]
+      : "contract_error";
+    if (status === "passed") {
+      try {
+        stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.layoutCheck);
+        publishStageProgress(sid);
+      } catch { /* display only */ }
+      const layout = await checkSessionLayout(expected.sessionDir, { phase: "quality" });
+      if (!layout.ok) {
+        settleProgressItem(sid, "reviewer", false, layout.errors.join("；"));
+        return { ...failStageRun(sid, "B4_REVIEW", `quality layout failed: ${layout.errors.join("；")}`), ...(child.transport ? { transport: child.transport } : {}) };
+      }
+    }
+    markContractTerminal(child.identity || null, `结构化 status=${status} 已验收`);
+    settleProgressItem(sid, "reviewer", status === "passed", `Reviewer status=${status}`);
+    reviewerParentTerminals.set(sid, persistReviewerParentTerminal(projectRoot, sid, attempt, status));
+    const operation = status === "passed" ? "finish" : "fail";
+    const args = operation === "finish"
+      ? ["--stage", "B4_REVIEW"]
+      : ["--stage", "B4_REVIEW", "--reason", `Reviewer status=${status}`];
+    const transitioned = runStageGate(projectRoot, sid, operation, args);
+    if (!transitioned.ok) return { status: "failed", text: `B4 ${operation} failed: ${transitioned.error}`, ...(child.transport ? { transport: child.transport } : {}) };
+    const terminal = readGateState(projectRoot, sid);
+    return {
+      status: status === "passed" ? "completed" : "failed",
+      text: terminal ? formatGateMessage(terminal, { stageId: "B4_REVIEW" }) : `B4_REVIEW ${status}`,
+      ...(child.transport ? { transport: child.transport } : {}),
+    };
+  }
+
+  async function runB5DesignStage(
+    sid: string,
+    ctx?: PiExtensionContext,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const skipped = autoSkipB5DesignForFixedDebugSession(sid, ctx);
+    if (skipped?.handled) {
+      try {
+        const progress = stageProgressFor(sid);
+        progress?.tracker.setPhase(STAGE_PROGRESS_PHASE.skipped);
+        if (skipped.ok) progress?.tracker.markSkipped("designer", "fixed debug skip");
+        else progress?.tracker.markFailed("designer", skipped.text);
+        progress?.publish();
+      } catch { /* display only */ }
+      return { status: skipped.ok ? "completed" : "failed", text: skipped.text };
+    }
+    try {
+      stageProgressFor(sid)?.tracker.setPhase(STAGE_PROGRESS_PHASE.designer);
+      publishStageProgress(sid);
+    } catch { /* display only */ }
+    const state = readGateState(projectRoot, sid);
+    if (state?.status !== "running" || state.currentStage !== "B5_DESIGN") {
+      return { status: "failed", text: "html_report_run_stage is not bound to a running B5_DESIGN attempt" };
+    }
+    const sessionDir = htmlReportSessionDir(projectRoot, sid);
+    const input: JsonObject = { chain: [{ agent: "report-designer", task: `B5 autonomous design\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
+    const attached = attachDesignerOutputSchema(input, { projectRoot, session: sid });
+    if (attached.error) return failStageRun(sid, "B5_DESIGN", attached.error);
+    const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
+    const expected = designerExpected(String(step?.task || ""), projectRoot, sid);
+    if ("error" in expected) return failStageRun(sid, "B5_DESIGN", expected.error);
+    const child = await invokePreparedReportAgent(input, sid, state, signal, onUpdate);
+    if (!child.ok) {
+      settleProgressItem(sid, "designer", false, child.text);
+      return { ...failStageRun(sid, "B5_DESIGN", child.text), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const checked = await validateDesignerArtifacts(child.value, expected);
+    if (!checked.ok || !isObject(child.value)) {
+      markContractTerminal(child.identity || null, `Designer artifacts invalid: ${checked.errors.join("；")}`);
+      settleProgressItem(sid, "designer", false, checked.errors.join("；"));
+      return { ...failStageRun(sid, "B5_DESIGN", `Designer 返回或 HTML 产物契约不合法：${checked.errors.join("；")}`), ...(child.transport ? { transport: child.transport } : {}) };
+    }
+    const failed = child.value.status === "failed";
+    markContractTerminal(child.identity || null, `结构化 status=${String(child.value.status)} 已验收`);
+    settleProgressItem(sid, "designer", !failed, String(child.value.error || child.value.status));
+    const transitioned = runStageGate(
+      projectRoot,
+      sid,
+      failed ? "fail" : "finish",
+      failed
+        ? ["--stage", "B5_DESIGN", "--reason", String(child.value.error || "Designer status=failed")]
+        : ["--stage", "B5_DESIGN"],
+    );
+    if (!transitioned.ok) return { status: "failed", text: `B5 Gate transition failed: ${transitioned.error}`, ...(child.transport ? { transport: child.transport } : {}) };
+    const terminal = readGateState(projectRoot, sid);
+    return {
+      status: failed ? "failed" : "completed",
+      text: terminal ? formatGateMessage(terminal, { stageId: "B5_DESIGN" }) : `B5_DESIGN ${failed ? "failed" : "completed"}`,
+      ...(child.transport ? { transport: child.transport } : {}),
+    };
+  }
+
+  async function executeCurrentReportStage(
+    toolCallId: string,
+    ctx?: PiExtensionContext,
+    signal?: AbortSignal,
+    onUpdate?: (update: unknown) => void
+  ): Promise<HtmlReportStageRunResult> {
+    const sid = sessionId(ctx);
+    const state = sid && sid !== "unknown" ? readGateState(projectRoot, sid) : null;
+    const attempt = gateAttemptToken(state);
+    const reservation = state ? htmlReportStageReservation(projectRoot, sid, state) : null;
+    if (
+      !state || state.status !== "running" || !HTML_REPORT_RUNNER_STAGES.has(String(state.currentStage)) ||
+      !attempt || !reservation
+    ) {
+      return {
+        status: "failed",
+        text: "html_report_run_stage 未绑定到当前 running Gate attempt。若阶段已暂停，回复“继续”；若已失败，回复“重试当前阶段”。",
+      };
+    }
+    const identity = {
+      sessionId: sid,
+      sessionDir: htmlReportSessionDir(projectRoot, sid),
+      stage: state.currentStage as ReportAgentStage,
+      attempt,
+      reservation,
+    };
+    return stageRunner.run(identity, async () => {
+      await beginStageProgress(sid, { stage: identity.stage, attempt }, ctx, onUpdate);
+      try {
+        const result = state.currentStage === "B2_WRITER"
+          ? await runB2WriterStage(sid, signal, onUpdate)
+          : state.currentStage === "B25_EDITOR"
+            ? await runB25AndB3Stage(sid, toolCallId, signal, onUpdate)
+            : state.currentStage === "B3_RESEARCH"
+              ? await runB3ResearchStage(sid, toolCallId, undefined, undefined, signal, onUpdate)
+              : state.currentStage === "B4_REVIEW"
+                ? await runB4ReviewStage(sid, signal, onUpdate)
+                : await runB5DesignStage(sid, ctx, signal, onUpdate);
+        return attachStageProgressDetails(sid, result);
+      } catch (error) {
+        try {
+          stageProgressFor(sid)?.finish("failed", error instanceof Error ? error.message : String(error));
+        } catch { /* display only */ }
+        throw error;
+      }
+    });
+  }
+
+  function syncStageRunnerTools(sid: string, state: unknown): boolean {
+    if (typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function" || !sid || sid === "unknown") return false;
+    const running = isObject(state) && state.status === "running" && HTML_REPORT_RUNNER_STAGES.has(String(state.currentStage));
+    if (running) {
+      if (!stageRunnerToolSnapshots.has(sid)) stageRunnerToolSnapshots.set(sid, [...pi.getActiveTools()]);
+      pi.setActiveTools([HTML_REPORT_STAGE_TOOL]);
+      return true;
+    }
+    const snapshot = stageRunnerToolSnapshots.get(sid);
+    if (snapshot) {
+      stageRunnerToolSnapshots.delete(sid);
+      pi.setActiveTools([...snapshot]);
+    }
+    return false;
+  }
+
+  function restoreStageRunnerToolsForSession(sid: string): void {
+    const snapshot = stageRunnerToolSnapshots.get(sid);
+    if (!snapshot) return;
+    stageRunnerToolSnapshots.delete(sid);
+    pi.setActiveTools?.([...snapshot]);
+  }
+
+  pi.registerTool?.({
+    name: HTML_REPORT_STAGE_TOOL,
+    label: "Run html-report stage",
+    description: "Run the current html-report Gate stage inside qdm-harness. Do not pass reservation, agent, task, or stage; the running Gate attempt is the only input.",
+    parameters: {
+      type: "object",
+      additionalProperties: true,
+      properties: {},
+    },
+    renderCall(args, theme) {
+      try {
+        return renderStageProgressCall(args, theme as { fg?: (token: string, text: string) => string; bold?: (text: string) => string });
+      } catch {
+        return { render: () => ["html-report"] };
+      }
+    },
+    renderResult(result, options, theme) {
+      try {
+        return renderStageProgressResult(result, options, theme as { fg?: (token: string, text: string) => string; bold?: (text: string) => string; dim?: (text: string) => string });
+      } catch {
+        return { render: () => ["html-report"] };
+      }
+    },
+    async execute(toolCallId, _params, signal, onUpdate, ctx) {
+      const sid = sessionId(ctx);
+      if (sid && sid !== "unknown") stageRunnerInFlightSessions.add(sid);
+      try {
+        const result = await executeCurrentReportStage(toolCallId, ctx, signal, onUpdate);
+        const progress = extractStageProgress(result.details);
+        return {
+          isError: result.status === "failed",
+          content: [{ type: "text", text: result.text }],
+          details: {
+            status: result.status,
+            ...(result.transport ? { transport: result.transport } : {}),
+            ...(progress ? { progress } : {}),
+            ...(result.details ? { stage: result.details } : {}),
+          },
+        };
+      } finally {
+        if (sid && sid !== "unknown") {
+          stageRunnerInFlightSessions.delete(sid);
+          endStageProgress(sid, ctx);
+          syncStageRunnerTools(sid, readGateState(projectRoot, sid));
+        }
+      }
+    },
+  });
+
   function contractResultError(reason: string): ToolResultPatch {
     return {
       isError: true,
@@ -6283,7 +7361,7 @@ export default function qdmHarnessExtension(pi: {
   }
 
   function researcherParentFailureText(terminal: ResearcherParentTerminal): string {
-    const script = join(projectRoot, ".agents/pi/skills/html-report/scripts/stage-gate.mjs");
+    const script = join(packageResourceRoot, "skills/html-report/scripts/stage-gate.mjs");
     return [
       `B3 当前 Gate attempt 已持久终止：${terminal.failureCode}。`,
       "禁止读取或修改 tasks/main/section，禁止 assemble/layout/finish，也禁止重新派发 Researcher。",
@@ -6387,7 +7465,7 @@ export default function qdmHarnessExtension(pi: {
         sendGateMessage: true,
       });
       if (debugB5Skip?.handled) return { action: "handled" };
-      restrictB2StartupTools(sid, afterGateInput);
+      if (!syncStageRunnerTools(sid, afterGateInput)) restrictB2StartupTools(sid, afterGateInput);
       const idleInput = !isObject(event) || event.streamingBehavior === undefined;
       if (
         idleInput &&
@@ -6395,7 +7473,8 @@ export default function qdmHarnessExtension(pi: {
         result.result?.ok === true &&
         await handleDeterministicB0Approval(sid, gateState, afterGateInput, ctx)
       ) {
-        restrictB2StartupTools(sid, readGateState(projectRoot, sid));
+        const nextState = readGateState(projectRoot, sid);
+        if (!syncStageRunnerTools(sid, nextState)) restrictB2StartupTools(sid, nextState);
         return { action: "handled" };
       }
     }
@@ -6483,6 +7562,7 @@ export default function qdmHarnessExtension(pi: {
 
     const prompt = harnessQuestion(rawPrompt);
     let fixedSeed: FixedRecommendationSeed | null = null;
+    let fixedUiMessage: ReturnType<typeof fixedAConfigMessage> | undefined;
     let fixedSeedError = "";
     if (
       sid &&
@@ -6499,9 +7579,11 @@ export default function qdmHarnessExtension(pi: {
       } else {
         fixedAConfigSessions.add(sid);
         fixedSeed = seeded.seed;
+        // Pi appends before_agent_start messages after the expanded skill message.
+        fixedUiMessage = fixedAConfigMessage(sid, fixedSeed);
         gateState = readGateState(projectRoot, sid);
         ctx?.ui?.notify?.(
-          `html-report 已打开 qdm-metric-cli ui${fixedSeed.serverUrl ? `：${fixedSeed.serverUrl}` : ""}。保存 result.json 后回复「继续」。`,
+          `html-report 已打开 qdm-metric-cli ui${fixedSeed.serverUrl ? `：${fixedSeed.serverUrl}` : ""}。保存 result.json 后回复一次「继续」；B0 通过后会自动开始 B2。`,
           "info"
         );
       }
@@ -6524,7 +7606,7 @@ export default function qdmHarnessExtension(pi: {
         if (!nextKey || nextKey === key) break;
       }
     }
-    restrictB2StartupTools(sid, gateState);
+    if (!syncStageRunnerTools(sid, gateState)) restrictB2StartupTools(sid, gateState);
     const gateContext = gateState
       ? gateContextBanner(projectRoot, sid, gateState, {
           fixedAConfig: fixedAConfigSessions.has(sid),
@@ -6536,15 +7618,16 @@ export default function qdmHarnessExtension(pi: {
         ? ""
         : fixedHtmlReportSkill && gateState?.currentStage === "A_CONFIG"
           ? fixedSeed
-            ? fixedAConfigBanner(fixedSeed)
+            ? fixedAConfigSystemBanner(fixedSeed)
             : fixedAConfigFailureBanner(fixedSeedError)
           : runHarnessContext(projectRoot, rawPrompt || prompt, ctx);
     const additional = [context, gateContext].filter(Boolean).join("\n\n");
-    if (!additional) return undefined;
-    injectedPromptThisTurn = prompt || rawPrompt;
+    if (!additional && !fixedUiMessage) return undefined;
+    if (additional) injectedPromptThisTurn = prompt || rawPrompt;
     const current = (event as PiBeforeAgentStartEvent).systemPrompt ?? "";
     return {
-      systemPrompt: [current, additional].filter(Boolean).join("\n\n"),
+      message: fixedUiMessage,
+      systemPrompt: additional ? [current, additional].filter(Boolean).join("\n\n") : undefined,
     };
   });
 
@@ -6631,6 +7714,12 @@ export default function qdmHarnessExtension(pi: {
         return { block: true, reason: runtimeError.reason };
       }
     }
+    if (String(toolCall.toolName || "").toLowerCase() === HTML_REPORT_STAGE_TOOL) {
+      return gateToolDecision(gateState, toolCall, {
+        finishInFlight: finishingSessions.has(sid),
+        stageReservation: gateState ? htmlReportStageReservation(projectRoot, sid, gateState) : null,
+      }) || undefined;
+    }
     const b25BootstrapDecision = b25BootstrapToolDecision(sid, gateState, toolCall);
     if (b25BootstrapDecision) return b25BootstrapDecision;
     const b2StartupDecision = b2StartupToolDecision(sid, gateState, toolCall);
@@ -6713,6 +7802,7 @@ export default function qdmHarnessExtension(pi: {
     if (!waitingAConfigList) {
       const decision = gateToolDecision(gateState, toolCall, {
         finishInFlight: finishingSessions.has(sid),
+        stageReservation: gateState ? htmlReportStageReservation(projectRoot, sid, gateState) : null,
       });
       if (decision) return decision;
     }
@@ -7266,15 +8356,28 @@ export default function qdmHarnessExtension(pi: {
     resetB25BootstrapForSession(sid);
     restoreB3HandoffToolsForSession(sid);
     const state = readGateState(projectRoot, sid);
-    if (state?.status === "running") {
+    if (state?.status === "running" && !stageRunnerInFlightSessions.has(sid)) {
       runStageGate(projectRoot, sid, "pause", ["--reason", "Pi agent settled"]);
     }
+    restoreStageRunnerToolsForSession(sid);
+    if (sid && sid !== "unknown" && !stageRunnerInFlightSessions.has(sid)) endStageProgress(sid, ctx);
     return undefined;
   };
+  pi.on?.("session_start", (_event: unknown, ctx?: PiExtensionContext) => {
+    transportManager?.reset();
+    const sid = sessionId(ctx);
+    if (sid && sid !== "unknown") {
+      stageProgressSessions.delete(sid);
+      syncStageRunnerTools(sid, readGateState(projectRoot, sid));
+    }
+    return undefined;
+  });
   pi.on?.("agent_settled", pauseRunningGate);
   pi.on?.("session_shutdown", (event: unknown, ctx?: PiExtensionContext) => {
     pauseRunningGate(event, ctx);
+    transportManager?.reset();
     const sid = sessionId(ctx);
+    endStageProgress(sid && sid !== "unknown" ? sid : "", ctx);
     if (sid && sid !== "unknown") stopHtmlReportSidecars(projectRoot, sid);
     return undefined;
   });

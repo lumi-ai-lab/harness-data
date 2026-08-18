@@ -121,10 +121,10 @@ metric, dimension, scope, comparison, or query.
 Do not call `write` for section or summary and do not construct the completion
 envelope yourself. Call `submit_research_findings` as the only tool in that
 assistant message. The tool validates the claims, renders adjacent citations,
-builds summary/selfCheck/paths, writes both artifacts, captures the same object
-as `researcherReturn` for the attached outputSchema, and terminates the child.
-On success, do not call
-`structured_output`, add prose, or make another tool call.
+builds summary/selfCheck/paths, writes both artifacts, and returns the same
+object as `researcherReturn`. On success, call `structured_output` exactly
+once with that exact `researcherReturn`. Do not add prose or make another
+tool call.
 
 ### Legacy manual commit sequence (only without analysisContractVersion 1)
 
@@ -352,9 +352,10 @@ global optimum require explicit proof metadata in the cited nodes. Describe a
 correlation only as sample-scoped, and never upgrade correlation to causality.
 
 For a current `analysisContractVersion === 1` `status:"ok"` result,
-`submit_research_findings` captures the return and terminates the child; do not
-call `structured_output`. For a legacy `status:"ok"` result, finish by calling
-`structured_output` exactly once with the full object above. For `needs_*` or
-`failed` in either contract, call `structured_output` exactly once with only
-task/mode plus the structured `evidenceGap` or error—no completion paths. Never
-emit a chat response, acceptance report, or prose before or after the terminal.
+`submit_research_findings` writes the artifacts and returns `researcherReturn`;
+then call `structured_output` exactly once with that exact object. For a legacy
+`status:"ok"` result, finish by calling `structured_output` exactly once with
+the full object above. For `needs_*` or `failed` in either contract, call
+`structured_output` exactly once with only task/mode plus the structured
+`evidenceGap` or error—no completion paths. Never emit a chat response,
+acceptance report, or prose before or after the terminal.

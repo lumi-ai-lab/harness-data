@@ -121,6 +121,22 @@ test("Writer allows ack then caption and blocks every other tool", () => {
     isError: false,
   });
   assert.equal(afterCaption.captionSubmitted, true);
+  assert.deepEqual(afterCaption.finalizedReceipt, successDetails(bound));
+
+  const structured = writerToolDecision(bound, afterCaption, {
+    toolCallId: "structured-1",
+    toolName: "structured_output",
+    input: { value: successDetails(bound) },
+  });
+  assert.equal(structured.decision, undefined);
+
+  const mutated = writerToolDecision(bound, afterCaption, {
+    toolCallId: "structured-bad",
+    toolName: "structured_output",
+    input: { value: { ...successDetails(bound), rowCount: 99 } },
+  });
+  assert.equal(mutated.decision.block, true);
+  assert.match(mutated.decision.reason, /原样复制/);
 
   const secondCaption = writerToolDecision(bound, afterCaption, {
     toolCallId: "caption-2",
@@ -310,7 +326,7 @@ test("ack_cli_data returns evidence then submit_card_caption writes the receipt"
   };
   assert.equal(await handlers.get("tool_call")[0](captionEvent), undefined);
   const caption = await tools[1].execute(captionEvent.toolCallId, captionEvent.input);
-  assert.equal(caption.terminate, true);
+  assert.equal(caption.terminate, false);
   const receipt = {
     cardId,
     fetchStatus: "success",
@@ -320,8 +336,11 @@ test("ack_cli_data returns evidence then submit_card_caption writes the receipt"
     rowsSha256: rowsSha256(rows),
   };
   assert.deepEqual(validateWriterReturn(receipt, bound), { ok: true, errors: [] });
-  assert.deepEqual(caption.details, receipt);
-  assert.deepEqual(JSON.parse(await readFile(outputPath, "utf8")), receipt);
+  assert.deepEqual(caption.details.receipt, receipt);
+  assert.deepEqual(caption.details.value, receipt);
+  assert.match(caption.content[0].text, /structured_output exactly once/);
+  assert.deepEqual(activeToolSets.at(-1), ["structured_output"]);
+  await assert.rejects(() => readFile(outputPath, "utf8"), /ENOENT/);
   assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
 });
 
@@ -438,8 +457,9 @@ test("submit_card_caption fills omitted pointers and retries one incomplete stub
   };
   assert.equal(await handlers.get("tool_call")[0](retryEvent), undefined);
   const caption = await tools[1].execute(retryEvent.toolCallId, retryEvent.input);
-  assert.equal(caption.terminate, true);
-  assert.equal(caption.details.fetchStatus, "success");
+  assert.equal(caption.terminate, false);
+  assert.equal(caption.details.receipt.fetchStatus, "success");
+  assert.deepEqual(activeToolSets.at(-1), ["structured_output"]);
   assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
 });
 
@@ -556,8 +576,9 @@ test("submit_card_caption retries one overlong paragraph then accepts a short re
   };
   assert.equal(await handlers.get("tool_call")[0](retryEvent), undefined);
   const caption = await tools[1].execute(retryEvent.toolCallId, retryEvent.input);
-  assert.equal(caption.terminate, true);
-  assert.equal(caption.details.fetchStatus, "success");
+  assert.equal(caption.terminate, false);
+  assert.equal(caption.details.receipt.fetchStatus, "success");
+  assert.deepEqual(activeToolSets.at(-1), ["structured_output"]);
   assert.match(await readFile(join(cardDir, "caption.md"), "utf8"), /来客最高为 12/);
 });
 
@@ -667,9 +688,9 @@ test("second overlong caption is terminal and prefixes caption rejected", async 
   };
   assert.equal(await handlers.get("tool_call")[0](second), undefined);
   const secondResult = await tools[1].execute(second.toolCallId, second.input);
-  assert.equal(secondResult.terminate, true);
-  assert.equal(secondResult.details.fetchStatus, "failed");
-  assert.match(secondResult.details.error, /^caption rejected: paragraphs\[0\] exceeds 500/);
+  assert.equal(secondResult.terminate, false);
+  assert.equal(secondResult.details.receipt.fetchStatus, "failed");
+  assert.match(secondResult.details.receipt.error, /^caption rejected: paragraphs\[0\] exceeds 500/);
 });
 
 test("submit_card_caption with validation violations writes success receipt and violations file", async (t) => {
@@ -759,8 +780,8 @@ test("submit_card_caption with validation violations writes success receipt and 
     paragraphs: ["来客最高为 999。"],
     pointers: ["/views/topN-custNum-manageAreaId/rows/0"],
   });
-  assert.equal(caption.terminate, true);
-  assert.equal(caption.details.fetchStatus, "success");
+  assert.equal(caption.terminate, false);
+  assert.equal(caption.details.receipt.fetchStatus, "success");
   // caption.md should exist (always written now)
   const captionMd = await readFile(join(cardDir, "caption.md"), "utf8");
   assert.match(captionMd, /999/);

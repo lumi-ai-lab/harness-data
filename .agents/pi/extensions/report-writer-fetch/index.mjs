@@ -31,8 +31,8 @@ import {
   WRITER_CAPTION_TOOL,
 } from "../../skills/html-report/scripts/writer-return.mjs";
 import {
+  handoffOfficialStructuredOutput,
   prepareStructuredOutputCapture,
-  writeStructuredOutputCapture,
 } from "../shared/subagent-structured-output-capture.mjs";
 import {
   initialWriterGuardState,
@@ -142,9 +142,9 @@ export default function registerReportWriterFetch(pi) {
     acceptedReceipt = null;
   }
 
-  async function captureReceipt(receipt) {
-    const capture = await prepareStructuredOutputCapture(buildWriterReturnSchema(contract));
-    await writeStructuredOutputCapture(capture, receipt);
+  async function finishWithReceipt(receipt) {
+    await prepareStructuredOutputCapture(buildWriterReturnSchema(contract));
+    return handoffOfficialStructuredOutput(pi, receipt, { receipt });
   }
 
   pi.on?.("before_agent_start", (event) => {
@@ -177,7 +177,8 @@ export default function registerReportWriterFetch(pi) {
 
   pi.on?.("tool_execution_end", (event) => {
     state = writerUnvalidatedSubmitFailureState(contract, state, event);
-    if (state.terminalFailure) pi.setActiveTools?.([]);
+    if (state.finalizedReceipt) pi.setActiveTools?.(["structured_output"]);
+    else if (state.terminalFailure) pi.setActiveTools?.([]);
     return undefined;
   });
 
@@ -190,7 +191,7 @@ export default function registerReportWriterFetch(pi) {
     promptGuidelines: [
       "Call ack_cli_data exactly once with the assigned resultPath and cardId.",
       "On success, write the short caption from evidence.views only, then call submit_card_caption. Do not mention rowCount or 行数.",
-      "Do not read files, do not retry, and do not call submit_writer_result or structured_output.",
+      "Do not read files, do not retry, and do not call submit_writer_result. After a failed receipt, call structured_output once with that exact object.",
     ],
     parameters: {
       type: "object",
@@ -241,13 +242,7 @@ export default function registerReportWriterFetch(pi) {
         throw new Error(`Writer receipt is invalid: ${checked.errors.join("; ")}`);
       }
       if (receipt.fetchStatus !== "success") {
-        await captureReceipt(receipt);
-        pi.setActiveTools?.([]);
-        return {
-          content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
-          details: receipt,
-          terminate: true,
-        };
+        return finishWithReceipt(receipt);
       }
 
       let evidence;
@@ -292,7 +287,7 @@ export default function registerReportWriterFetch(pi) {
       "Pass paragraphs only if you want; pointers are optional and filled from evidence.views when omitted.",
       "Cite only /views/... pointers from the evidence packet (not /evidence/views/...). You may cite every view in that packet.",
       "Every number in paragraphs must appear in the evidence packet views (any view, not only pointed-at nodes). Prefer the views digits; 万/亿元 of the same cell is allowed. Do not write 超/约/近 with a number that is not itself in the packet. Copy metric and dimension names from views; do not translate or guess Chinese labels.",
-      `Each paragraph must be at most ${CAPTION_MAX_PARAGRAPH_CHARS} characters. If the first submit is rejected as incomplete or too long, split or complete paragraphs and call once more. Do not read files or call structured_output.`,
+      `Each paragraph must be at most ${CAPTION_MAX_PARAGRAPH_CHARS} characters. If the first submit is rejected as incomplete or too long, split or complete paragraphs and call once more. Do not read files. After a successful or failed receipt, call structured_output once with that exact object.`,
     ],
     parameters: {
       type: "object",
@@ -351,13 +346,7 @@ export default function registerReportWriterFetch(pi) {
             metaPath: null,
             error: asCaptionRejected(retryableError),
           };
-          await captureReceipt(failed);
-          pi.setActiveTools?.([]);
-          return {
-            content: [{ type: "text", text: JSON.stringify(failed, null, 2) }],
-            details: failed,
-            terminate: true,
-          };
+          return finishWithReceipt(failed);
         }
         return {
           content: [{
@@ -384,32 +373,21 @@ export default function registerReportWriterFetch(pi) {
           metaPath: null,
           error: asCaptionRejected(error?.message || error || "submit_card_caption failed"),
         };
-        await captureReceipt(failed);
-        pi.setActiveTools?.([]);
-        return {
-          content: [{ type: "text", text: JSON.stringify(failed, null, 2) }],
-          details: failed,
-          terminate: true,
-        };
+        return finishWithReceipt(failed);
       }
       const checked = validateWriterReturn(acceptedReceipt, contract);
       if (!checked.ok) {
         throw new Error(`Writer receipt is invalid: ${checked.errors.join("; ")}`);
       }
-      await captureReceipt(acceptedReceipt);
-      pi.setActiveTools?.([]);
+      const handed = await finishWithReceipt(acceptedReceipt);
       const violationCount = captionResult?.violations?.length || 0;
-      const textParts = [JSON.stringify(acceptedReceipt, null, 2)];
       if (violationCount > 0) {
-        textParts.unshift(
+        handed.content[0].text = [
           `caption 已写入，但校验发现 ${violationCount} 条违规（已持久化到 violations.json，不阻断 Writer）。`,
-        );
+          handed.content[0].text,
+        ].join("\n");
       }
-      return {
-        content: [{ type: "text", text: textParts.join("\n") }],
-        details: acceptedReceipt,
-        terminate: true,
-      };
+      return handed;
     },
   });
 }

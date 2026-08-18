@@ -237,9 +237,9 @@ baseline/recall/fetch/prepare 顺序。参数只含：每个 requirement 恰好�
 `{requirementId, claim, evidencePointers}` 的 findings，以及通常为空的
 `suggestedDeeper`。禁止自行 write section/summary，也不要手工构造完整 envelope。
 工具负责校验 claim、生成相邻引用、构造 summary/selfCheck/paths 并写入两份产物。
-`submit_research_findings` 必须是该 assistant 消息中的唯一工具；成功后工具会把
-同一个 `researcherReturn` 捕获到 attached outputSchema 并终止子代理。成功后不得
-再调用 `structured_output`、添加 prose 或调用其他工具。
+`submit_research_findings` 必须是该 assistant 消息中的唯一工具；成功后工具会
+写入两份产物并返回同一个 `researcherReturn`。下一步必须恰好调用一次
+`structured_output`，`value` 必须是该对象。禁止添加 prose 或再调用其他工具。
 
 采用满足 capability 的最小答案，并原样使用任务注入的固定 evidence pointer。
 `ranking` 不得枚举完整 TopN；只有用户明确要求
@@ -481,10 +481,11 @@ task 必须省略，确保向后兼容。
   最优必须有相应证明元数据。相关性只能写成样本内相关，不能升级为因果。
 
 当前 `analysisContractVersion === 1` 的 `status:"ok"` 由
-`submit_research_findings` 捕获返回并终止子代理，禁止再调用 `structured_output`。
-旧契约 `status:"ok"` 才调用一次 `structured_output` 提交上面的完整对象；任一契约
-的 `needs_*` / `failed` 都只调用一次 `structured_output` 返回 gap/error，不带完成
-路径。所有终态都不得输出普通聊天回复、验收报告、改动清单、测试说明或前后 prose。
+`submit_research_findings` 写入产物并返回 `researcherReturn`，下一步必须调用一次
+`structured_output` 提交该对象。旧契约 `status:"ok"` 才直接调用一次
+`structured_output` 提交上面的完整对象；任一契约的 `needs_*` / `failed` 都只调用
+一次 `structured_output` 返回 gap/error，不带完成路径。所有终态都不得输出普通
+聊天回复、验收报告、改动清单、测试说明或前后 prose。
 
 ## 共同禁止
 

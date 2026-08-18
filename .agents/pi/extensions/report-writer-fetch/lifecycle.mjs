@@ -111,9 +111,41 @@ export function initialWriterGuardState() {
     pending: {},
     fetchResult: null,
     captionSubmitted: false,
+    finalizedReceipt: null,
     terminalFailure: null,
     structuredAttempts: 0,
+    structuredOutputAttempts: 0,
   };
+}
+
+const STRUCTURED_OUTPUT_TOOLS = new Set(["structured_output", "structured-output"]);
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function receiptFromDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  if (
+    details.value &&
+    typeof details.value === "object" &&
+    !Array.isArray(details.value) &&
+    (details.value.fetchStatus === "success" || details.value.fetchStatus === "failed")
+  ) {
+    return details.value;
+  }
+  if (details.receipt && typeof details.receipt === "object" && !Array.isArray(details.receipt)) {
+    return details.receipt;
+  }
+  if (details.fetchStatus === "success" || details.fetchStatus === "failed") {
+    const { value: _value, evidence: _evidence, captionRetry: _retry, ...receipt } = details;
+    return receipt.fetchStatus ? receipt : null;
+  }
+  return null;
 }
 
 export const WRITER_CAPTION_RETRY_LIMIT = 1;
@@ -153,6 +185,30 @@ export function writerToolDecision(contract, state, event) {
   if (!contract?.ok) {
     return block(`任务契约解析失败，已 fail closed：${contract?.errors?.join("；") || "unknown error"}`, current);
   }
+  if (STRUCTURED_OUTPUT_TOOLS.has(toolName)) {
+    if (current.structuredOutputAttempts > 0) {
+      return block("structured_output 最多调用一次", current);
+    }
+    if (!current.finalizedReceipt) {
+      return block("structured_output 过早：尚未提交最终 Writer receipt", current);
+    }
+    const value = event?.input && typeof event.input === "object" && !Array.isArray(event.input)
+      ? event.input.value
+      : undefined;
+    if (canonicalJson(value) !== canonicalJson(current.finalizedReceipt)) {
+      return block("structured_output 必须原样复制已验收的 Writer receipt", current);
+    }
+    return allow({
+      ...current,
+      structuredOutputAttempts: current.structuredOutputAttempts + 1,
+    });
+  }
+  if (current.structuredOutputAttempts > 0) {
+    return block("structured_output 已调用；禁止其后的任何工具", current);
+  }
+  if (current.finalizedReceipt) {
+    return block("最终 receipt 已就绪，只允许一次 structured_output", current);
+  }
   if (
     current.terminalFailure ||
     current.captionSubmitted ||
@@ -161,7 +217,7 @@ export function writerToolDecision(contract, state, event) {
     return block("submit_card_caption 最多调用一次；禁止其它工具或重试", current);
   }
   if (current.fetchResult?.fetchStatus === "failed") {
-    return block("ack_cli_data 已失败，禁止其它工具", current);
+    return block("ack_cli_data 已失败，只允许一次 structured_output", current);
   }
 
   if (!current.fetchResult) {
@@ -263,9 +319,20 @@ export function writerToolResultState(contract, state, event) {
     };
   }
   if (toolName === WRITER_CAPTION_TOOL) {
-    return { ...next, captionSubmitted: true };
+    return {
+      ...next,
+      captionSubmitted: true,
+      finalizedReceipt: receiptFromDetails(event?.details) || next.finalizedReceipt,
+    };
   }
-  return { ...next, fetchResult: fetchReceiptFromEvent(event) };
+  const fetchResult = fetchReceiptFromEvent(event);
+  return {
+    ...next,
+    fetchResult,
+    ...(fetchResult?.fetchStatus === "failed"
+      ? { finalizedReceipt: receiptFromDetails(event?.details) || fetchResult }
+      : {}),
+  };
 }
 
 /** Schema-invalid fetch is terminal. First schema-invalid caption is retryable. */
@@ -306,6 +373,6 @@ export function writerCoordinationDecision(event) {
   }
   return {
     block: true,
-    reason: "Report Writer 不允许进入 supervisor/intercom 等待；只调用 ack_cli_data 与 submit_card_caption。",
+    reason: "Report Writer 不允许进入 supervisor/intercom 等待；只调用 ack_cli_data、submit_card_caption 与 structured_output。",
   };
 }

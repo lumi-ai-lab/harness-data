@@ -63,10 +63,10 @@ export const STAGE_DEFINITIONS = Object.freeze({
     label: "B0 Preflight",
     gateLabel: "B0 Preflight",
     nextLabel: "B2 Writer",
-    approvalRequired: true,
+    approvalRequired: false,
     humanGate: "B0_PREFLIGHT",
     enabled: true,
-    gate: true,
+    gate: false,
   },
   B2_WRITER: {
     id: "B2_WRITER",
@@ -133,6 +133,7 @@ export const STAGE_DEFINITIONS = Object.freeze({
 
 /** Old A→B5 path for tests that still cover Planner / Researcher / Reviewer. */
 export const LEGACY_STAGE_POLICY = Object.freeze({
+  B0_PREFLIGHT: { enabled: true, gate: true },
   B2_WRITER: { enabled: true, gate: true },
   B2_MAIN: { enabled: false },
   B25_EDITOR: { enabled: true, gate: false },
