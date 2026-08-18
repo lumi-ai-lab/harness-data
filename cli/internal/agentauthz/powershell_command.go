@@ -26,7 +26,7 @@ func PowerShellMetricInvocationCount(command string) int {
 
 func PowerShellCommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskPowerShellRegions(command)
-	return regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth|auth-blob|auth-json|auth-user-id)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
 }
 
 func powerShellInvocationRegexp(subcommand string) *regexp.Regexp {

@@ -165,13 +165,13 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
       "# QDM Data Auth",
       "",
       "Authz mode is on but no encrypted auth blob is bound for this turn.",
-      "Do not run protected `qdm-metric-cli analysis validate|preview|execute|total`, `dim values`, or `auth describe` until auth is available.",
+      "Do not run protected `qdm-metric-cli analysis validate|preview|execute|total`, `dim values`, `tag list`, or `auth describe` until auth is available.",
     ].join("\n");
   }
   return [
     "# QDM Data Auth",
     "",
-    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for protected analysis and `dim values` commands,",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for protected analysis, `dim values`, and `tag list` commands,",
     "and `--auth-blob` for `qdm-metric-cli auth describe`.",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
     "",
@@ -274,7 +274,7 @@ function injectPosttool(projectRoot: string, event: unknown, ctx?: PiExtensionCo
 }
 
 /**
- * Bind auth for this turn: an existing session > Host event _auth > Lumi envelope > local env/file when allowed.
+ * Bind auth for this turn: Host event _auth > Lumi envelope > local env/file when allowed.
  */
 function bindAuthzForTurn(
   projectRoot: string,
@@ -285,11 +285,6 @@ function bindAuthzForTurn(
   const config = loadAuthzConfig(projectRoot);
   if (config.mode !== "on") {
     return { mode: "off", bound: false };
-  }
-
-  if (!event?._auth) {
-    const current = store.getCurrentTurn(sessionId(ctx));
-    if (current?.blob) return { mode: "on", bound: true, source: current.source };
   }
 
   const resolved = resolveAuthBlob({
@@ -408,7 +403,7 @@ export default function qdmHarnessExtension(pi: {
         ? undefined
         : config.allowLocalBlob === false
           ? "authz: host blob not bound; cannot run gated metric-cli under allow_local_blob=false (refusing any model-supplied --auth-blob)"
-          : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run protected qdm-metric-cli data commands",
+          : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute or auth describe",
     });
     if (authzResult?.block) {
       return authzResult;

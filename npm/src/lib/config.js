@@ -37,24 +37,15 @@ export const removedDataCliBinaries = [
   "cas-cli",
 ];
 
-/** Working copy path for the user-provided encrypted auth blob. */
-export const authBlobRel = "config/dev-auth.blob";
+/** Hardcoded password for --no-auth install (临时硬编码). */
+export const AUTH_OFF_PASSWORD = "qdmzt@2026";
 
-export function assertRealDirectory(directory) {
-  try {
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("config must be a real directory");
-    return true;
-  } catch (error) {
-    if (error.code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-export function ensureRealDirectory(directory) {
-  if (!assertRealDirectory(directory)) fs.mkdirSync(directory, { recursive: true });
-  assertRealDirectory(directory);
-}
+/** Relative path of the committed local-test encrypted auth blob fixture. */
+export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
+/** Working copy path written by install --data-auth (gitignored). */
+export const localTestAuthBlobRel = "config/dev-auth.blob";
+/** Slot user id for the local-test fixture; must match blob userId. */
+export const localTestAuthUserId = "local-test-user";
 
 export function assertCodexAuthPlatform(_agent, authEnabled, platform = process.platform) {
   // Codex authz is cross-platform. Windows uses the Node hook shim while
@@ -121,27 +112,59 @@ export function readAuthzFromHarnessConfig(harnessPath) {
 
 /**
  * Resolve authz block for writeLocalConfig.
- * A new install enables auth with the supplied blob; updates preserve the
- * existing authz block when no new install credential is selected.
+ * Priority: explicit noAuth/dataAuth/authBlob → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
-  // 用户提供了 blob（安装器唯一授权输入）。旧配置的 dev_user_id 只原样保留。
+  // --no-auth: 关闭权限（密码由 install.js 验证）
+  if (options.noAuth === true) {
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
+  }
+  // --data-auth: 用内置 fixture（向后兼容，开发/测试用）
+  if (options.dataAuth === true) {
+    return {
+      mode: "on",
+      blobFile: localTestAuthBlobRel,
+      devUserId: localTestAuthUserId,
+      allowLocalBlob: true,
+    };
+  }
+  if (options.dataAuth === false) {
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
+  }
+  // 用户提供了 blob（默认 install 路径）
   if (options.authBlob === true) {
     return {
       mode: "on",
-      blobFile: authBlobRel,
-      devUserId: options.devUserId || existing?.devUserId || "",
+      blobFile: localTestAuthBlobRel,
+      devUserId: options.devUserId || "",
       allowLocalBlob: true,
     };
   }
   // 无显式 flag 时：有 existing 则沿用，否则默认 off
   if (existing) {
     const mode = existing.mode === "on" ? "on" : "off";
+    let allowLocalBlob = existing.allowLocalBlob !== false;
+    // MVP convergence: Host/Lumi auth fallback has been removed, so
+    // allow_local_blob=false with mode=on is a dead-end config that can
+    // never authorize any gated command. Migrate it to true on update.
+    if (mode === "on" && !allowLocalBlob) {
+      allowLocalBlob = true;
+    }
     return {
       mode,
       blobFile: existing.blobFile || "",
       devUserId: existing.devUserId || "",
-      allowLocalBlob: existing.allowLocalBlob !== false,
+      allowLocalBlob,
     };
   }
   return {
@@ -166,7 +189,7 @@ function formatAuthzYaml(authz) {
 
 export function writeLocalConfig(workspace, options = {}) {
   const configDir = path.join(workspace, "config");
-  ensureRealDirectory(configDir);
+  fs.mkdirSync(configDir, { recursive: true });
   const harness = path.join(configDir, "harness-config.yaml");
   const env = path.join(configDir, "qdm-cli-paths.env");
   if ((fs.existsSync(harness) || fs.existsSync(env)) && !options.overwrite) {
@@ -190,38 +213,40 @@ export function writeLocalConfig(workspace, options = {}) {
 }
 
 /**
+ * Copy committed local-test fixture to config/dev-auth.blob when missing.
+ * @returns {{ copied: boolean, path: string }}
+ */
+export function ensureLocalAuthBlob(workspace, options = {}) {
+  const target = path.join(workspace, localTestAuthBlobRel);
+  const fixture = path.join(workspace, localTestAuthFixtureRel);
+  if (fs.existsSync(target) && !options.force) {
+    fs.chmodSync(target, 0o600);
+    return { copied: false, path: target };
+  }
+  if (!fs.existsSync(fixture)) {
+    throw new Error(
+      `data-auth fixture missing: ${localTestAuthFixtureRel} (expected under runtime). ` +
+        "Ensure the runtime bundle includes config/fixtures/local-test-auth.blob.",
+    );
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(fixture, target);
+  fs.chmodSync(target, 0o600);
+  return { copied: true, path: target };
+}
+
+/**
  * Write user-provided auth blob string to config/dev-auth.blob.
  * @param {string} workspace - runtime dir
  * @param {string} blobContent - the encrypted blob string (qdm1enc...)
  * @returns {{ path: string }}
  */
 export function writeAuthBlob(workspace, blobContent) {
-  const configDir = path.join(workspace, "config");
-  ensureRealDirectory(configDir);
-
-  const target = path.join(workspace, authBlobRel);
-  try {
-    const targetStat = fs.lstatSync(target);
-    if (targetStat.isSymbolicLink() || !targetStat.isFile()) throw new Error("config/dev-auth.blob must be a regular file");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-
-  const tempDir = fs.mkdtempSync(path.join(configDir, ".dev-auth.blob-"));
-  const temp = path.join(tempDir, "blob");
-  try {
-    const fd = fs.openSync(temp, "wx", 0o600);
-    try {
-      fs.writeFileSync(fd, `${blobContent}\n`, { encoding: "utf8" });
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temp, target);
-    return { path: target };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  const target = path.join(workspace, localTestAuthBlobRel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${blobContent}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(target, 0o600);
+  return { path: target };
 }
 
 export function removeLegacyDataCLIs(runtimeDir) {
@@ -239,22 +264,13 @@ export function linkAgents(workspace, agent) {
   const pairs = agentLinks[agent];
   if (!pairs) throw new Error(`agent must be ${agentChoiceText}`);
   for (const [sourceRel, targetRel] of pairs) {
-    linkAgent(workspace, sourceRel, targetRel);
+    const source = path.join(workspace, sourceRel);
+    const target = path.join(workspace, targetRel);
+    if (!fs.existsSync(source)) throw new Error(`agent template missing: ${sourceRel}`);
+    if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+    fs.symlinkSync(source, target, "junction");
   }
   return pairs;
-}
-
-export function linkAgent(workspace, sourceRel, targetRel) {
-  const source = path.join(workspace, sourceRel);
-  const target = path.join(workspace, targetRel);
-  if (!fs.existsSync(source)) throw new Error(`agent template missing: ${sourceRel}`);
-  try {
-    fs.lstatSync(target);
-    fs.rmSync(target, { recursive: true, force: true });
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  fs.symlinkSync(source, target, "junction");
 }
 
 /**

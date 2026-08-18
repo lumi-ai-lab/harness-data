@@ -24,10 +24,10 @@ type Config struct {
 type AuthzConfig struct {
 	// Mode is "off" or "on". Empty means off.
 	Mode string
-	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob.
+	// BlobFile is a repo-relative or absolute path to an encrypted qdm1enc blob (dev/test only).
 	BlobFile string
-	// DevUserID is retained as legacy host/session metadata; it is never passed
-	// to qdm or used for authorization.
+	// DevUserID is the principal for local blob/env resolution.
+	// Required when using authz.blob_file; can also be set via HARNESS_AUTH_USER_ID.
 	DevUserID string
 	// AllowLocalBlob permits env/file blob sources. Default true for this MVP.
 	AllowLocalBlob *bool

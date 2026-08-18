@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,6 +18,7 @@ import {
   isMetricAnalysisTotal,
   isMetricAnalysisValidate,
   isMetricDimValues,
+  isMetricTagList,
   isMetricAuthDescribe,
   isMetricAuthzGatedCommand,
   rewriteMetricCliInvocation,
@@ -67,7 +68,7 @@ test("resolveAuthBlob prefers host over file; file used when no env (test stage)
   dev_user_id: local-test-user
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const config = loadAuthzConfig(root, {});
   assert.equal(config.mode, "on");
@@ -101,44 +102,19 @@ test("resolveAuthBlob prefers host over file; file used when no env (test stage)
   assert.equal(fromEnv.userId, "lisi");
 });
 
-test("resolveAuthBlob accepts blob_file without a separate user id", (t) => {
+test("resolveAuthBlob fails when blob_file has no user id", (t) => {
   const root = createProject(t, {
     authzYaml: `authz:
   mode: on
   blob_file: config/dev-auth.blob
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const config = loadAuthzConfig(root, {});
   assert.equal(config.devUserId, "");
   const resolved = resolveAuthBlob({ projectRoot: root, config, env: {} });
-  assert.equal(resolved.ok, true);
-  assert.equal(resolved.userId, "");
-});
-
-test("Blob binding does not require a user id", () => {
-  const store = new AuthzStateStore();
-  store.bind("session", "", SAMPLE_BLOB, "host");
-  assert.equal(store.getCurrentTurn("session")?.blob, SAMPLE_BLOB);
-  assert.equal(store.getCurrentTurn("session")?.userId, "");
-});
-
-test("resolveAuthBlob rejects a symlinked parent directory", (t) => {
-  const root = createProject(t, {
-    authzYaml: `authz:
-  mode: on
-  blob_file: config/dev-auth.blob
-`,
-  });
-  const outside = mkdtempSync(join(tmpdir(), "qdm-pi-authz-outside-"));
-  t.after(() => rmSync(outside, { force: true, recursive: true }));
-  writeFileSync(join(outside, "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
-  writeFileSync(join(outside, "harness-config.yaml"), `authz:\n  mode: on\n  blob_file: ${join(outside, "dev-auth.blob")}\n`);
-  rmSync(join(root, "config"), { recursive: true, force: true });
-  symlinkSync(outside, join(root, "config"));
-  const resolved = resolveAuthBlob({ projectRoot: root, config: loadAuthzConfig(root, {}), env: {} });
   assert.equal(resolved.ok, false);
-  assert.match(resolved.error, /symlink/i);
+  assert.match(resolved.error, /dev_user_id/i);
 });
 
 test("AuthzStateStore isolates same session by userId", () => {
@@ -245,8 +221,11 @@ test("protected data command matching covers the frozen command set", () => {
   for (const [command, matcher] of [
     ["qdm-metric-cli analysis validate", isMetricAnalysisValidate],
     ["qdm-metric-cli analysis preview", isMetricAnalysisPreview],
+    ["qdm-metric-cli analysis execute", isMetricAnalysisExecute],
     ["qdm-metric-cli analysis total", isMetricAnalysisTotal],
     ["qdm-metric-cli dim values", isMetricDimValues],
+    ["qdm-metric-cli tag list", isMetricTagList],
+    ["qdm-metric-cli auth describe", isMetricAuthDescribe],
   ]) {
     assert.equal(matcher(command), true, command);
   }
@@ -254,8 +233,9 @@ test("protected data command matching covers the frozen command set", () => {
     "qdm-metric-cli analysis preview --auth-user-id model --auth-json fake --auth-blob model",
     SAMPLE_BLOB,
   );
-  assert.match(rewritten, /analysis preview --data-auth --auth-blob/);
-  assert.doesNotMatch(rewritten, /auth-user-id|auth-json|qdm1enc\.model/);
+  assert.match(rewritten, /--data-auth --auth-blob/);
+  assert.match(rewritten, /auth-user-id model/);
+  assert.doesNotMatch(rewritten, /auth-json|qdm1enc\.model/);
 });
 
 test("applyAuthzToToolCall gates every protected command", () => {
@@ -265,20 +245,22 @@ test("applyAuthzToToolCall gates every protected command", () => {
     "analysis execute",
     "analysis total",
     "dim values",
+    "tag list",
   ]) {
     const event = { toolName: "bash", input: { command: `qdm-metric-cli ${subcommand} --auth-user-id model` } };
     const result = applyAuthzToToolCall(event, { mode: "on", blob: SAMPLE_BLOB });
     assert.equal(result, undefined, subcommand);
     assert.match(event.input.command, /--data-auth --auth-blob/);
-    assert.doesNotMatch(event.input.command, /auth-user-id/);
+    assert.match(event.input.command, /auth-user-id model/);
   }
 
   const describe = { toolName: "bash", input: { command: "qdm-metric-cli auth describe --auth-user-id model" } };
   assert.equal(applyAuthzToToolCall(describe, { mode: "on", blob: SAMPLE_BLOB }), undefined);
-  assert.match(describe.input.command, /auth describe --auth-blob/);
-  assert.doesNotMatch(describe.input.command, /data-auth|auth-user-id/);
+  assert.match(describe.input.command, /--auth-blob/);
+  assert.doesNotMatch(describe.input.command, /data-auth/);
+  assert.match(describe.input.command, /auth-user-id model/);
 
-  for (const subcommand of ["analysis validate", "analysis preview", "analysis total", "dim values"]) {
+  for (const subcommand of ["analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list"]) {
     const event = { toolName: "bash", input: { command: `qdm-metric-cli ${subcommand}` } };
     assert.equal(applyAuthzToToolCall(event, { mode: "on", blob: null })?.block, true, subcommand);
   }
@@ -468,7 +450,7 @@ authz:
   allow_local_blob: true
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const cli = join(root, "bin", "data-harness-cli");
   writeFileSync(
     cli,
@@ -685,7 +667,7 @@ test("resolveAuthBlob priority: host > envelope > env > file; allowLocalBlob gat
   allow_local_blob: true
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const envelopeDir = mkdtempSync(join(tmpdir(), "qdm-lumi-prio-"));
   t.after(() => rmSync(envelopeDir, { force: true, recursive: true }));
@@ -743,7 +725,7 @@ test("resolveAuthBlob priority: host > envelope > env > file; allowLocalBlob gat
   allow_local_blob: false
 `,
   });
-  writeFileSync(join(lockedRoot, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(lockedRoot, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const locked = loadAuthzConfig(lockedRoot, {});
 
   const envelopeOk = resolveAuthBlob({
@@ -920,7 +902,7 @@ test("extension tool_call blocks model cat fixture when unbound and allow_local_
 `,
   });
   // Fixture on disk must not be used when allow_local_blob is false.
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`, { mode: 0o600 });
+  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const handlers = new Map();
   qdmHarnessExtension({

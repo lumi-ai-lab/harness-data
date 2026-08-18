@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { assertCodexAuthPlatform, assertRealDirectory, ensureRealDirectory, localPathToolNames, writeLocalConfig, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { assertCodexAuthPlatform, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { collectInstallAuth } from "../lib/install-auth.js";
 import { createInstallSession } from "../lib/install-session.js";
@@ -19,6 +19,27 @@ import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPl
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
+
+export function validateInstallAuthOptions(options = {}) {
+  const noAuth = options.noAuth === true;
+  const dataAuth = options.dataAuth === true;
+  const hasBlob = typeof options.authBlob === "string" && options.authBlob.trim() !== "";
+  const hasUserID = typeof options.authUserId === "string" && options.authUserId.trim() !== "";
+  const hasOffPassword = typeof options.authOffPassword === "string" && options.authOffPassword !== "";
+
+  if (noAuth && (dataAuth || hasBlob || hasUserID)) {
+    throw new Error("--no-auth cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
+  }
+  if (dataAuth && (hasBlob || hasUserID)) {
+    throw new Error("--data-auth cannot be combined with --auth-blob or --auth-user-id");
+  }
+  if (hasOffPassword && !noAuth) {
+    throw new Error("--auth-off-password requires --no-auth");
+  }
+  if (hasBlob !== hasUserID) {
+    throw new Error("--auth-blob and --auth-user-id must be provided together");
+  }
+}
 
 async function requireCommands(commands) {
   for (const command of commands) {
@@ -69,7 +90,7 @@ function cleanupRuntimeBackups(backups) {
 
 function mergeRuntimeConfig(runtimeDir, sourceDir) {
   const targetDir = path.join(runtimeDir, "config");
-  ensureRealDirectory(targetDir);
+  fs.mkdirSync(targetDir, { recursive: true });
   for (const file of fs.readdirSync(sourceDir)) {
     const source = path.join(sourceDir, file);
     const target = path.join(targetDir, file);
@@ -83,7 +104,6 @@ function mergeRuntimeConfig(runtimeDir, sourceDir) {
 }
 
 export async function installRuntimeBundle(runtimeDir, options = {}) {
-  assertRealDirectory(path.join(runtimeDir, "config"));
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
       fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json")) &&
@@ -129,7 +149,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
 
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
-    // Preserve the example configuration files; credentials are never bundled.
+    // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
     fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
 
     if (options.requireWorkBuddy) {
@@ -218,11 +238,28 @@ async function installWikis(runtimeDir, options = {}) {
 }
 
 function applyInstallAuth(runtimeDir, auth, selectedAgent) {
+  if (auth.mode === "no-auth") {
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    ok("authz.mode: off (密码已验证)");
+    return;
+  }
+  if (auth.mode === "data-auth") {
+    writeLocalConfig(runtimeDir, { overwrite: true, dataAuth: true });
+    ok("config/harness-config.yaml");
+    ok("config/qdm-cli-paths.env");
+    const blob = ensureLocalAuthBlob(runtimeDir, { force: true });
+    ok(blob.copied ? "authz.mode: on + local test blob (copied)" : "authz.mode: on + local test blob (kept existing)");
+    if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled (--data-auth)");
+    return;
+  }
   writeAuthBlob(runtimeDir, auth.blobContent);
-  writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true });
+  writeLocalConfig(runtimeDir, { overwrite: true, authBlob: true, devUserId: auth.devUserId });
   ok("config/harness-config.yaml");
   ok("config/qdm-cli-paths.env");
   ok("authz.mode: on + user-provided blob");
+  ok(`dev_user_id: ${auth.devUserId}`);
   if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled");
 }
 
@@ -271,6 +308,7 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
+  validateInstallAuthOptions(options);
   const key = platformKey();
   const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [
@@ -279,8 +317,8 @@ export async function installCommand(options = {}) {
   ]);
 
   const selectedAgent = await chooseAgent(options);
-  assertCodexAuthPlatform(selectedAgent, true, options.platform || process.platform);
-  assertWorkBuddyAuthPlatform(selectedAgent, true, options.platform || process.platform);
+  assertCodexAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
+  assertWorkBuddyAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
 
   step(1, 7, "授权与访问预检");
   await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);

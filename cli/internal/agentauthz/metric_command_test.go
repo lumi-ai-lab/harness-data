@@ -301,13 +301,13 @@ func TestRewriteGatedMetricCommandsRewritesMixedInvocations(t *testing.T) {
 }
 
 func TestRewriteGatedMetricCommandsCoversProtectedDataCommands(t *testing.T) {
-	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values"} {
+	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list"} {
 		command := "qdm-metric-cli " + subcommand + " --data-auth --auth-blob model --auth-json fake --auth-user-id model-user --metric x"
 		got, err := RewriteGatedMetricCommands(command, "qdm1enc.runtime", "/abs/bin/qdm-metric-cli")
 		if err != nil {
 			t.Fatalf("%s: %v", subcommand, err)
 		}
-		if strings.Count(got, "--data-auth") != 1 || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 || strings.Contains(got, "model") || strings.Contains(got, "--auth-json") || strings.Contains(got, "--auth-user-id") {
+		if strings.Count(got, "--data-auth") != 1 || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 || strings.Contains(got, "--auth-blob model") || strings.Contains(got, "--auth-json") || !strings.Contains(got, "--auth-user-id model-user") {
 			t.Fatalf("unexpected rewrite for %s: %s", subcommand, got)
 		}
 	}
@@ -316,7 +316,29 @@ func TestRewriteGatedMetricCommandsCoversProtectedDataCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(got, "--data-auth") || strings.Contains(got, "--auth-user-id") || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 {
+	if strings.Contains(got, "--data-auth") || strings.Contains(got, "--auth-blob model") || !strings.Contains(got, "--auth-user-id model-user") || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 {
 		t.Fatalf("unexpected auth describe rewrite: %s", got)
+	}
+}
+
+func TestMetricCommandDetectionCoversOnlyProtectedCommands(t *testing.T) {
+	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values", "tag list", "auth describe"} {
+		if !IsMetricAuthzGatedCommand("qdm-metric-cli " + subcommand) {
+			t.Fatalf("expected protected command match: %s", subcommand)
+		}
+	}
+	for _, command := range []string{
+		"qdm-metric-cli version",
+		"qdm-metric-cli help",
+		"qdm-metric-cli health",
+		"qdm-metric-cli metric search saleAmt",
+		"qdm-metric-cli wikis",
+		"qdm-metric-cli dim search",
+		"qdm-metric-cli tag describe",
+		`printf '%s' 'qdm-metric-cli tag list'`,
+	} {
+		if IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("unexpected protected command match: %s", command)
+		}
 	}
 }

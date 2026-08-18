@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "users": [
+    {
+      "userId": "local-test-user",
+      "displayName": "Harness Local Test User",
+      "enabled": true,
+      "authorization": {
+        "capabilities": [
+          "qdm.metric.query"
+        ],
+        "claims": {
+          "qdm.scope": {
+            "schemaVersion": 1,
+            "manageAreaIds": [
+              "CN01"
+            ],
+            "dcManageAreaIds": [
+              "CN01"
+            ],
+            "categoryLevel1Ids": [
+              "10",
+              "11"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

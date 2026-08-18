@@ -26,22 +26,6 @@ func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
 }
 
-func IsMetricAnalysisValidate(command string) bool {
-	return matchesMetricInvocation(command, `analysis\s+validate`)
-}
-
-func IsMetricAnalysisPreview(command string) bool {
-	return matchesMetricInvocation(command, `analysis\s+preview`)
-}
-
-func IsMetricAnalysisTotal(command string) bool {
-	return matchesMetricInvocation(command, `analysis\s+total`)
-}
-
-func IsMetricDimValues(command string) bool {
-	return matchesMetricInvocation(command, `dim\s+values`)
-}
-
 func IsMetricAuthDescribe(command string) bool {
 	return matchesMetricInvocation(command, `auth\s+describe`)
 }
@@ -60,11 +44,11 @@ func looksLikeGatedMetricCommand(command string) bool {
 	return marker.MatchString(command) && subcommand.MatchString(command)
 }
 
-const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|dim\s+values|auth\s+describe)`
+const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|dim\s+values|tag\s+list|auth\s+describe)`
 
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
-	return regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json|auth-user-id)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
 }
 
 func matchesMetricInvocation(command, subcmd string) bool {
@@ -293,7 +277,7 @@ func StripAuthFlags(command string) string {
 func stripAuthFlagsWithSkeleton(command, skeleton string) string {
 	// Bash treats an unquoted \--flag token as --flag. Strip both spellings so
 	// model-supplied authorization cannot survive the runtime rewrite.
-	re := regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth\b|(?:auth-blob|auth-json|auth-user-id)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
+	re := regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth\b|(?:auth-blob|auth-json)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
 	matches := re.FindAllStringIndex(skeleton, -1)
 	if len(matches) == 0 {
 		return strings.TrimSpace(command)
@@ -310,38 +294,18 @@ func stripAuthFlagsWithSkeleton(command, skeleton string) string {
 
 func InjectDataAuth(command, blob, metricCliPath string) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
-		return injectGatedWithoutCLI(command, blob)
+		cleaned := StripAuthFlags(command)
+		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute"), nil
 	}
 	return RewriteGatedMetricCommands(command, blob, metricCliPath)
 }
 
 func InjectAuthDescribeBlob(command, blob, metricCliPath string) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
-		return injectGatedWithoutCLI(command, blob)
+		cleaned := StripAuthFlags(command)
+		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe"), nil
 	}
 	return RewriteGatedMetricCommands(command, blob, metricCliPath)
-}
-
-func injectGatedWithoutCLI(command, blob string) (string, error) {
-	invocations, err := findMetricInvocations(command)
-	if err != nil || len(invocations) == 0 {
-		if err != nil {
-			return "", err
-		}
-		return "", fmt.Errorf("no gated invocation found")
-	}
-	rewritten := command
-	for index := len(invocations) - 1; index >= 0; index-- {
-		invocation := invocations[index]
-		segment := StripAuthFlags(command[invocation.start:invocation.end])
-		flags := " --auth-blob " + ShellQuote(blob)
-		if invocation.kind != "describe" {
-			flags = " --data-auth" + flags
-		}
-		replacement := strings.TrimRight(segment, " \t") + flags
-		rewritten = rewritten[:invocation.start] + replacement + rewritten[invocation.end:]
-	}
-	return rewritten, nil
 }
 
 type metricInvocation struct {
@@ -387,7 +351,7 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string, dialect ...
 			segment = "& " + strings.TrimSpace(segment)
 		}
 		flags := " --auth-blob " + quotedBlob
-		if invocation.kind != "describe" {
+		if invocation.kind == "analysis" || invocation.kind == "data" {
 			flags = " --data-auth" + flags
 		}
 		replacement := strings.TrimRight(segment, " \t") + flags
@@ -419,11 +383,11 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string, dialect ...
 		if !trustedCLIStart {
 			return "", fmt.Errorf("gated invocation did not bind the trusted CLI path")
 		}
-		if strings.Count(replacement, "--auth-blob") != 1 || !strings.Contains(replacement, "--auth-blob "+quotedBlob) || strings.Contains(replacement, "--auth-json") || strings.Contains(replacement, "--auth-user-id") {
+		if strings.Count(replacement, "--auth-blob") != 1 || !strings.Contains(replacement, "--auth-blob "+quotedBlob) || strings.Contains(replacement, "--auth-json") {
 			return "", fmt.Errorf("gated invocation did not bind exactly one runtime blob")
 		}
 		dataAuthCount := strings.Count(replacement, "--data-auth")
-		if (invocation.kind != "describe" && dataAuthCount != 1) || (invocation.kind == "describe" && dataAuthCount != 0) {
+		if ((invocation.kind == "analysis" || invocation.kind == "data") && dataAuthCount != 1) || (invocation.kind == "describe" && dataAuthCount != 0) {
 			return "", fmt.Errorf("gated invocation has invalid data-auth flags")
 		}
 		rewritten = rewritten[:invocation.start] + replacement + rewritten[invocation.end:]
@@ -456,7 +420,7 @@ func findMetricInvocations(command string) ([]metricInvocation, error) {
 		subcmd string
 	}{
 		{kind: "analysis", subcmd: `analysis\s+(?:validate|preview|execute|total)`},
-		{kind: "data", subcmd: `dim\s+values`},
+		{kind: "data", subcmd: `(?:dim\s+values|tag\s+list)`},
 		{kind: "describe", subcmd: `auth\s+describe`},
 	} {
 		invocationRe := metricInvocationRegexp(candidate.subcmd)
@@ -504,10 +468,8 @@ func InsertFlagsBeforeShellTail(command, flags, anchorWord string) string {
 	inv := metricRegexp(`(?:'|")?` + runtimeMetricBinPattern() + `(?:'|")?\s+` + subcmd + `\b`).FindStringIndex(skeleton)
 	fromAnchor := -1
 	if inv != nil {
-		lower := strings.ToLower(skeleton[inv[0]:inv[1]])
-		rel := strings.LastIndex(lower, strings.ToLower(anchorWord))
-		if rel >= 0 {
-			fromAnchor = inv[0] + rel
+		if match := regexp.MustCompile(`(?i)` + subcmd).FindStringIndex(skeleton[inv[0]:inv[1]]); match != nil {
+			fromAnchor = inv[0] + match[1]
 		}
 	}
 	if fromAnchor < 0 {

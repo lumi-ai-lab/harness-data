@@ -2,7 +2,6 @@ package agentauthz
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +16,6 @@ const (
 	EnvAuthUserID          = "HARNESS_AUTH_USER_ID"
 	EnvRequesterContextDir = "LUMI_REQUESTER_CONTEXT_DIR"
 	EncryptedBlobPrefix    = "qdm1enc."
-	MaxCredentialBytes     = 1 << 20
 )
 
 type BlobSource string
@@ -29,9 +27,7 @@ const (
 )
 
 type ResolvedBlob struct {
-	Blob string
-	// UserID is retained for compatibility with callers that inspect the
-	// resolved source. It is never passed to qdm or used for authorization.
+	Blob   string
 	UserID string
 	Source BlobSource
 }
@@ -56,7 +52,11 @@ func ResolveAuthBlob(opts ResolveOptions) (ResolvedBlob, error) {
 		if !IsEncryptedBlob(blob) {
 			return ResolvedBlob{}, fmt.Errorf("HARNESS_AUTH_BLOB must be an encrypted qdm1enc blob")
 		}
-		return ResolvedBlob{Blob: blob, UserID: localUserID(env, opts.Config), Source: BlobSourceEnv}, nil
+		userID := localUserID(env, opts.Config)
+		if userID == "" {
+			return ResolvedBlob{}, fmt.Errorf("authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id")
+		}
+		return ResolvedBlob{Blob: blob, UserID: userID, Source: BlobSourceEnv}, nil
 	}
 
 	if path := strings.TrimSpace(env[EnvAuthBlobFile]); path != "" {
@@ -64,7 +64,11 @@ func ResolveAuthBlob(opts ResolveOptions) (ResolvedBlob, error) {
 		if err != nil {
 			return ResolvedBlob{}, err
 		}
-		return ResolvedBlob{Blob: blob, UserID: localUserID(env, opts.Config), Source: BlobSourceEnvFile}, nil
+		userID := localUserID(env, opts.Config)
+		if userID == "" {
+			return ResolvedBlob{}, fmt.Errorf("authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id")
+		}
+		return ResolvedBlob{Blob: blob, UserID: userID, Source: BlobSourceEnvFile}, nil
 	}
 
 	if path := strings.TrimSpace(opts.Config.BlobFile); path != "" {
@@ -73,6 +77,9 @@ func ResolveAuthBlob(opts ResolveOptions) (ResolvedBlob, error) {
 			return ResolvedBlob{}, err
 		}
 		userID := strings.TrimSpace(opts.Config.DevUserID)
+		if userID == "" {
+			return ResolvedBlob{}, fmt.Errorf("authz.blob_file requires authz.dev_user_id (no default principal)")
+		}
 		return ResolvedBlob{Blob: blob, UserID: userID, Source: BlobSourceFile}, nil
 	}
 
@@ -99,31 +106,19 @@ func readBlobFile(projectRoot, pathValue string) (string, error) {
 	if !filepath.IsAbs(absolute) {
 		absolute = filepath.Join(projectRoot, filepath.FromSlash(pathValue))
 	}
-	file, err := openCredentialFile(absolute)
+	info, err := os.Lstat(absolute)
 	if err != nil {
-		return "", fmt.Errorf("auth blob file unavailable: %s", absolute)
+		return "", fmt.Errorf("auth blob file not found: %s", absolute)
 	}
-	defer file.Close()
-	before, err := file.Stat()
-	if err != nil || !before.Mode().IsRegular() {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("auth blob file must be a regular file: %s", absolute)
 	}
-	if runtime.GOOS != "windows" && before.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		return "", fmt.Errorf("auth blob file permissions must be 0600: %s", absolute)
 	}
-	if before.Size() > MaxCredentialBytes {
-		return "", fmt.Errorf("auth blob file exceeds maximum size: %s", absolute)
-	}
-	data, err := io.ReadAll(io.LimitReader(file, MaxCredentialBytes+1))
+	data, err := os.ReadFile(absolute)
 	if err != nil {
-		return "", fmt.Errorf("auth blob file unavailable: %s", absolute)
-	}
-	if len(data) > MaxCredentialBytes {
-		return "", fmt.Errorf("auth blob file exceeds maximum size: %s", absolute)
-	}
-	after, err := file.Stat()
-	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
-		return "", fmt.Errorf("auth blob file changed while reading: %s", absolute)
+		return "", fmt.Errorf("auth blob file not found: %s", absolute)
 	}
 	blob := strings.TrimSpace(string(data))
 	if blob == "" {

@@ -4,11 +4,7 @@ export function run(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: (() => {
-        const env = { ...process.env, GH_NO_UPDATE_NOTIFIER: "1", ...(options.env || {}) };
-        for (const name of options.unsetEnv || []) delete env[name];
-        return env;
-      })(),
+      env: { ...process.env, GH_NO_UPDATE_NOTIFIER: "1", ...(options.env || {}) },
       shell: options.shell || false,
       stdio: options.stdio || "pipe"
     });

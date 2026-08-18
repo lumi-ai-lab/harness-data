@@ -162,6 +162,10 @@ jobs:
           chmod +x runtime/agents/workbuddy/bin/run-node runtime/agents/workbuddy/scripts/harness-hook.mjs
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
+          mkdir -p runtime/config/fixtures
+          cp config/fixtures/local-test-auth.blob runtime/config/fixtures/local-test-auth.blob
+          cp config/fixtures/local-test-auth.json runtime/config/fixtures/local-test-auth.json
+          cp config/fixtures/README.md runtime/config/fixtures/README.md
           cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
           tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
           (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")

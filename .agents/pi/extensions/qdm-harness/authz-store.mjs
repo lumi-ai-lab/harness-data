@@ -1,6 +1,7 @@
 /**
- * Session → encrypted Blob is the execution binding. The optional userId slot
- * remains only as compatibility metadata for hosts that provide one.
+ * In-process auth slot: key = sessionId::userId → encrypted blob.
+ * Also tracks the current turn binding per sessionId so tool_call uses the
+ * user that initiated this turn (safe when multiple users share a session).
  */
 export class AuthzStateStore {
   constructor() {
@@ -28,8 +29,9 @@ export class AuthzStateStore {
     const sid = String(sessionId || "unknown");
     const uid = String(userId || "").trim();
     const value = String(blob || "").trim();
+    if (!uid) throw new Error("authz bind requires userId");
     if (!value) throw new Error("authz bind requires encrypted blob");
-    if (uid) this.blobs.set(AuthzStateStore.slotKey(sid, uid), value);
+    this.blobs.set(AuthzStateStore.slotKey(sid, uid), value);
     this.currentTurn.set(sid, { userId: uid, blob: value, source });
   }
 

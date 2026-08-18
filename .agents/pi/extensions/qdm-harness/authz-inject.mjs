@@ -2,6 +2,7 @@
  * Force auth flags only for real shell invocations of:
  *   qdm-metric-cli analysis validate|preview|execute|total ...  → --data-auth --auth-blob
  *   qdm-metric-cli dim values ...       → --data-auth --auth-blob
+ *   qdm-metric-cli tag list ...         → --data-auth --auth-blob
  *   qdm-metric-cli auth describe ...     → --auth-blob
  *
  * Mentions inside quotes, heredocs, or commit messages must NOT be rewritten.
@@ -15,7 +16,8 @@ const METRIC_BIN_SRC =
 /** Subcommand patterns gated by authz (command-word form only). */
 const SUBCMD_ANALYSIS = String.raw`analysis\s+(?:validate|preview|execute|total)`;
 const SUBCMD_DIM_VALUES = String.raw`dim\s+values`;
-const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES})`;
+const SUBCMD_TAG_LIST = String.raw`tag\s+list`;
+const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES}|${SUBCMD_TAG_LIST})`;
 const SUBCMD_AUTH_DESCRIBE = String.raw`auth\s+describe`;
 const SUBCMD_AUTHZ_GATED = String.raw`(?:${SUBCMD_DATA}|${SUBCMD_AUTH_DESCRIBE})`;
 
@@ -169,15 +171,9 @@ function matchesMetricInvocation(command, subcmdPattern) {
   return metricInvocationRegex(subcmdPattern).test(skeleton);
 }
 
-function metricInvocationCount(command) {
-  const skeleton = maskQuotedAndHeredocRegions(command);
-  const source = metricInvocationRegex(SUBCMD_AUTHZ_GATED).source;
-  return skeleton.match(new RegExp(source, "g"))?.length ?? 0;
-}
-
 /**
  * True only when the shell command actually *invokes*
- * qdm-metric-cli (or $QDM_METRIC_CLI) with a protected analysis or `dim values` subcommand.
+ * qdm-metric-cli (or $QDM_METRIC_CLI) with a protected data subcommand.
  *
  * @param {string} command
  */
@@ -201,6 +197,10 @@ export function isMetricDimValues(command) {
   return matchesMetricInvocation(command, SUBCMD_DIM_VALUES);
 }
 
+export function isMetricTagList(command) {
+  return matchesMetricInvocation(command, SUBCMD_TAG_LIST);
+}
+
 /**
  * True only when the shell command actually *invokes*
  * qdm-metric-cli with subcommand `auth describe`.
@@ -222,7 +222,7 @@ export function isMetricAuthzGatedCommand(command) {
 
 /**
  * Rewrite command-word metric-cli tokens that start a gated invocation
- * (protected analysis/`dim values` or `auth describe`).
+ * (protected analysis/`dim values`/`tag list` or `auth describe`).
  *
  * @param {string} command
  * @param {string} metricCliPath absolute path to qdm-metric-cli
@@ -261,13 +261,13 @@ export function rewriteMetricCliInvocation(command, metricCliPath) {
  */
 export function stripAuthFlags(command) {
   let out = command;
-  out = out.replace(/(^|\s)\\?--data-auth\b/g, " ");
+  out = out.replace(/(^|\s)--data-auth\b/g, " ");
   out = out.replace(
-    /(^|\s)\\?--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
+    /(^|\s)--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
     " ",
   );
   out = out.replace(
-    /(^|\s)\\?--(?:auth-json|auth-user-id)(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
+    /(^|\s)--auth-json(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
     " ",
   );
   return out.replace(/[ \t]{2,}/g, " ").trim();
@@ -316,7 +316,7 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
 }
 
 /**
- * Inject --data-auth --auth-blob for protected analysis and dim values.
+ * Inject --data-auth --auth-blob for protected analysis, dim values, and tag list.
  *
  * @param {string} command
  * @param {string} blob encrypted qdm1enc blob
@@ -358,7 +358,7 @@ export function commandHasModelAuthFlags(command) {
   if (typeof command !== "string" || !command) return false;
   // Match on skeleton so quoted prose is ignored; flags in real argv still show.
   const skeleton = maskQuotedAndHeredocRegions(command);
-  return /(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json|auth-user-id)\b/.test(skeleton);
+  return /(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b/.test(skeleton);
 }
 
 /**
@@ -389,13 +389,6 @@ export function applyAuthzToToolCall(event, options) {
   // Gate: only real metric-cli gated invocations (not prose / commit messages).
   if (typeof command !== "string" || !isMetricAuthzGatedCommand(command)) {
     return undefined;
-  }
-
-  if (metricInvocationCount(command) !== 1) {
-    return {
-      block: true,
-      reason: "authz: split multiple or ambiguous protected qdm-metric-cli invocations into separate tool calls",
-    };
   }
 
   const isDescribe = isMetricAuthDescribe(command);

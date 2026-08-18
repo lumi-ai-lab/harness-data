@@ -64,12 +64,14 @@ authz:
 func TestHookAuthzOnCoversProtectedCommandSet(t *testing.T) {
 	root := writeHarnessConfig(t, "authz:\n  mode: on\n  allow_local_blob: true\n")
 	t.Setenv(EnvAuthBlob, testBlob)
+	t.Setenv(EnvAuthUserID, "model")
 	for _, subcommand := range []string{
 		"analysis validate",
 		"analysis preview",
 		"analysis execute",
 		"analysis total",
 		"dim values",
+		"tag list",
 		"auth describe",
 	} {
 		t.Run(subcommand, func(t *testing.T) {
@@ -81,7 +83,7 @@ func TestHookAuthzOnCoversProtectedCommandSet(t *testing.T) {
 				t.Fatalf("expected allow for %s: %+v", subcommand, output.HookSpecificOutput)
 			}
 			command := output.HookSpecificOutput.UpdatedInput["command"].(string)
-			if strings.Contains(command, "--auth-user-id") || !strings.Contains(command, "--auth-blob '"+testBlob+"'") {
+			if !strings.Contains(command, "--auth-user-id model") || !strings.Contains(command, "--auth-blob '"+testBlob+"'") {
 				t.Fatalf("unexpected rewrite for %s: %s", subcommand, command)
 			}
 			if (subcommand == "auth describe") == strings.Contains(command, "--data-auth") {

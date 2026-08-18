@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地权限模式切换（无上游 Host 时用用户提供的 Blob 做 PI 手动测试）。
+# 本地权限模式切换（无上游 Host 时用 fixture blob 做 PI 手动测试）。
 #
 # 用法（任意 cwd 均可）:
 #   bash config/authz-manual-test/switch.sh <cmd>
@@ -15,7 +15,7 @@
 # 行为要点:
 #   - 首次 on|off|deny 前会备份当前 config 到 harness-config.baseline.yaml
 #   - 切换时保留已有 cli.* 路径（不写 /absolute/path 占位符）
-#   - on 时只使用已有的 config/dev-auth.blob，不生成或复制固定凭据
+#   - on 时从 config/fixtures/local-test-auth.blob 复制工作副本 dev-auth.blob
 #   - config/harness-config.yaml 与 config/dev-auth.blob 均 gitignore
 set -euo pipefail
 
@@ -25,6 +25,8 @@ ENV_FILE="$ROOT/config/qdm-cli-paths.env"
 DIR="$ROOT/config/authz-manual-test"
 BASELINE="$DIR/harness-config.baseline.yaml"
 BLOB_WORK="$ROOT/config/dev-auth.blob"
+BLOB_FIXTURE="$ROOT/config/fixtures/local-test-auth.blob"
+DEV_USER_ID="local-test-user"
 
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -72,11 +74,18 @@ ensure_baseline() {
 }
 
 ensure_local_blob() {
-  if [[ ! -f "$BLOB_WORK" || -L "$BLOB_WORK" ]]; then
-    echo "error: provide a regular config/dev-auth.blob first (0600, qdm1enc...)" >&2
+  if [[ ! -f "$BLOB_FIXTURE" ]]; then
+    echo "error: fixture missing: ${BLOB_FIXTURE#$ROOT/}" >&2
+    echo "  expected committed config/fixtures/local-test-auth.blob" >&2
     exit 1
   fi
-  echo "blob: use existing ${BLOB_WORK#$ROOT/}"
+  if [[ -f "$BLOB_WORK" ]]; then
+    # 已有工作副本则保留（可能是用户自生成的）
+    echo "blob: keep existing ${BLOB_WORK#$ROOT/}"
+    return
+  fi
+  cp "$BLOB_FIXTURE" "$BLOB_WORK"
+  echo "blob: copied fixtures/local-test-auth.blob → config/dev-auth.blob"
 }
 
 write_harness_config() {
@@ -101,6 +110,8 @@ cli:
 authz:
   mode: ${mode}
   blob_file: ${blob_file}
+  # Explicit local principal for file-mode only (not a product default identity).
+  dev_user_id: ${DEV_USER_ID}
   allow_local_blob: true
 EOF
   echo "wrote ${CFG#$ROOT/}"
@@ -268,7 +279,7 @@ case "$profile" in
     write_harness_config "on" "config/dev-auth.blob"
     ensure_cli_env
     warn_missing_bins
-    echo "OK: authz ON（config/dev-auth.blob）"
+    echo "OK: authz ON（local-test-user + config/dev-auth.blob）"
     ;;
   off)
     ensure_baseline

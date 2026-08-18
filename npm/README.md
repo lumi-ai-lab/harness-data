@@ -7,7 +7,8 @@
 - **tar** (on PATH; bundled with Git for Windows on Windows)
 - **Windows only** — additional requirements:
   - **unzip** — not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.
-  - **Codex by default** — Windows defaults to Codex; explicitly selecting `--agent workbuddy` is also supported. Other agents (Claude, Pi, OpenClaw, Hermes) are not available on Windows.
+  - **Codex Agent only** — Windows supports Codex exclusively; other agents (Claude, Pi, OpenClaw, Hermes, WorkBuddy) are not available on Windows.
+  - **No-auth mode** — Windows Codex authorization adaptation is tracked separately. Until it lands, install with `--no-auth`; the installer rejects an auth-enabled Windows install instead of creating a runtime whose authorization hook cannot execute safely.
   - **Windows x64 + ARM64** are both supported.
 
 Install a Harness Data runtime in the current directory:
@@ -34,22 +35,39 @@ or:
 GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
 ```
 
-Metric authorization is enabled by default. Interactive install securely prompts for the encrypted Blob:
+Metric **data-auth** is enabled by default. Interactive install prompts for the encrypted Blob and `dev_user_id`:
 
 ```bash
 npx @lumi-ai-lab/harness-data install
 ```
 
-For non-interactive installs, pass `--auth-blob` explicitly:
+For non-interactive installs, pass flags or environment variables:
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
-  --auth-blob 'qdm1enc...' --yes
+  --auth-blob 'qdm1enc...' --auth-user-id 'your-user-id' --yes
+
+HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
+npx @lumi-ai-lab/harness-data install --yes
 ```
 
-Non-interactive installs must pass `--auth-blob` explicitly. The user-provided Blob is atomically stored at `config/dev-auth.blob` with mode `0600`; no credential fixture is shipped.
+Install without auth only after password validation:
 
-For the Codex App or terminal scenario, admins can distribute a real encrypted Blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE`; keep `authz.allow_local_blob: true` for this mode. The legacy `HARNESS_AUTH_USER_ID` is host metadata only and is not a qdm authorization input. Codex uses `PreToolUse` hook to inject auth; the hook reads the local Blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten to unset auth source env before execution.
+```bash
+npx @lumi-ai-lab/harness-data install --no-auth
+npx @lumi-ai-lab/harness-data install --no-auth \
+  --auth-off-password 'qdmzt@2026' --yes
+```
+
+Use the built-in fixture for development and testing:
+
+```bash
+npx @lumi-ai-lab/harness-data install --data-auth
+```
+
+The same auth parameters support `--agent workbuddy` on macOS. WorkBuddy auth is rejected on other platforms; use `--no-auth` there because M1/M2 command rewriting uses POSIX Shell syntax. User-provided Blobs and the fixture working copy are stored at `config/dev-auth.blob` with mode `0600`.
+
+The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
 
 Without a GitHub token, the installer interactively asks for a local absolute path to `qdm-metric-cli` and `harness-data-wikis`. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli` are no longer installed).
 
@@ -71,4 +89,4 @@ The runtime is assembled from the `harness-data` runtime bundle, platform-specif
 
 WorkBuddy auth requires Desktop **5.3.11+** with embedded CodeBuddy CLI **2.115.0+**. The installer prepares a local Marketplace at `agents/.codebuddy-plugin/marketplace.json` whose `qdm-harness` plugin source is `agents/workbuddy`; it does not edit WorkBuddy settings or Marketplace registration. In WorkBuddy's plugin manager, choose **Add Marketplace**, select the runtime's `agents` directory, install and enable `qdm-harness@lumi-harness-data`, reload plugins, and start a new conversation in the Harness runtime workspace. Marketplace/package presence, plugin enablement, runtime versions, and auth source are reported separately by `doctor`.
 
-On macOS and Windows, `authz.mode=on` is enforced by a fail-closed `PreToolUse` hook. For managed macOS credentials, set `HARNESS_AUTH_BLOB_FILE` with `launchctl`, keep the Blob outside the workspace with mode `0600`, restart WorkBuddy, and run `doctor`. A legacy `HARNESS_AUTH_USER_ID` may remain as host metadata but is not used for qdm authorization. Windows QDM data commands must use Bash; gated PowerShell commands are denied before credentials are read. Direct injection places the encrypted Blob in `updatedInput.command`, so this mode is limited to local validation or controlled pilots until a credential-isolated integration is available.
+On macOS and Windows, `authz.mode=on` is enforced by a fail-closed `PreToolUse` hook. For managed macOS credentials, set `HARNESS_AUTH_BLOB_FILE` and `HARNESS_AUTH_USER_ID` with `launchctl`, keep the Blob outside the workspace with mode `0600`, restart WorkBuddy, and run `doctor`. Windows QDM data commands must use Bash; gated PowerShell commands are denied before credentials are read. Direct injection places the encrypted Blob in `updatedInput.command`, so this mode is limited to local validation or controlled pilots until a credential-isolated integration is available.

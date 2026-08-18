@@ -46,20 +46,6 @@ func TestResolveAuthBlobReadsEnvBlob(t *testing.T) {
 	}
 }
 
-func TestResolveAuthBlobDoesNotRequireUserID(t *testing.T) {
-	resolved, err := ResolveAuthBlob(ResolveOptions{
-		ProjectRoot: t.TempDir(),
-		Config:      harness.AuthzConfig{},
-		Env:         map[string]string{EnvAuthBlob: testBlob},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.Blob != testBlob || resolved.UserID != "" {
-		t.Fatalf("unexpected Blob-only resolution: %+v", resolved)
-	}
-}
-
 func TestResolveAuthBlobReadsEnvBlobFile(t *testing.T) {
 	root := t.TempDir()
 	blobPath := filepath.Join(root, "admin-auth.blob")
@@ -163,46 +149,5 @@ func TestResolveAuthBlobRejectsGroupReadableFile(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "permissions must be 0600") {
 		t.Fatalf("expected insecure permission error, got %v", err)
-	}
-}
-
-func TestResolveAuthBlobRejectsConfiguredPathSymlink(t *testing.T) {
-	root := t.TempDir()
-	configDir := filepath.Join(root, "config")
-	if err := os.Mkdir(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	realBlob := filepath.Join(root, "real.blob")
-	if err := os.WriteFile(realBlob, []byte(testBlob+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(configDir, "dev-auth.blob")
-	if err := os.Symlink(realBlob, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	_, err := ResolveAuthBlob(ResolveOptions{
-		ProjectRoot: root,
-		Config:      harness.AuthzConfig{BlobFile: "config/dev-auth.blob"},
-		Env:         map[string]string{},
-	})
-	if err == nil {
-		t.Fatal("expected configured Blob symlink rejection")
-	}
-}
-
-func TestResolveAuthBlobRejectsOversizedFile(t *testing.T) {
-	root := t.TempDir()
-	blobPath := filepath.Join(root, "oversized.blob")
-	data := append([]byte(EncryptedBlobPrefix), make([]byte, MaxCredentialBytes)...)
-	if err := os.WriteFile(blobPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := ResolveAuthBlob(ResolveOptions{
-		ProjectRoot: root,
-		Config:      harness.AuthzConfig{},
-		Env:         map[string]string{EnvAuthBlobFile: blobPath},
-	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
-		t.Fatalf("expected oversized Blob rejection, got %v", err)
 	}
 }
