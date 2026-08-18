@@ -1,7 +1,6 @@
 /**
  * Force auth flags only for real shell invocations of:
  *   qdm-metric-cli analysis validate|preview|execute|total ...  → --data-auth --auth-blob
- *   qdm-metric-cli dim values ...       → --data-auth --auth-blob
  *   qdm-metric-cli auth describe ...     → --auth-blob
  *
  * Mentions inside quotes, heredocs, or commit messages must NOT be rewritten.
@@ -14,10 +13,8 @@ const METRIC_BIN_SRC =
 
 /** Subcommand patterns gated by authz (command-word form only). */
 const SUBCMD_ANALYSIS = String.raw`analysis\s+(?:validate|preview|execute|total)`;
-const SUBCMD_DIM_VALUES = String.raw`dim\s+values`;
-const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES})`;
 const SUBCMD_AUTH_DESCRIBE = String.raw`auth\s+describe`;
-const SUBCMD_AUTHZ_GATED = String.raw`(?:${SUBCMD_DATA}|${SUBCMD_AUTH_DESCRIBE})`;
+const SUBCMD_AUTHZ_GATED = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_AUTH_DESCRIBE})`;
 
 /**
  * Replace contents of quotes and heredoc bodies with spaces (newlines kept).
@@ -191,10 +188,6 @@ export function isMetricAnalysisTotal(command) {
   return matchesMetricInvocation(command, String.raw`analysis\s+total`);
 }
 
-export function isMetricDimValues(command) {
-  return matchesMetricInvocation(command, SUBCMD_DIM_VALUES);
-}
-
 /**
  * True only when the shell command actually *invokes*
  * qdm-metric-cli with subcommand `auth describe`.
@@ -216,7 +209,7 @@ export function isMetricAuthzGatedCommand(command) {
 
 /**
  * Rewrite command-word metric-cli tokens that start a gated invocation
- * (protected analysis/`dim values` or `auth describe`).
+ * (protected analysis or `auth describe`).
  *
  * @param {string} command
  * @param {string} metricCliPath absolute path to qdm-metric-cli
@@ -284,7 +277,7 @@ export function shellQuote(value) {
  */
 export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute") {
   const skeleton = maskQuotedAndHeredocRegions(command);
-  const subcmd = anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_DATA;
+  const subcmd = anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_ANALYSIS;
   const inv = new RegExp(
     String.raw`(?:'|")?` + METRIC_BIN_SRC + String.raw`(?:'|")?\s+` + subcmd + String.raw`\b`,
     "i",
@@ -295,7 +288,7 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
     const subcommand = new RegExp(subcmd, "i").exec(skeleton.slice(inv.index));
     if (subcommand) fromAnchor = inv.index + subcommand.index;
   } else {
-    const m = command.match(new RegExp(anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_DATA, "i"));
+    const m = command.match(new RegExp(anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_ANALYSIS, "i"));
     if (!m || m.index == null) return `${command}${flags}`;
     fromAnchor = m.index;
   }
@@ -310,7 +303,7 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
 }
 
 /**
- * Inject --data-auth --auth-blob for protected analysis and dim values.
+ * Inject --data-auth --auth-blob for protected analysis.
  *
  * @param {string} command
  * @param {string} blob encrypted qdm1enc blob

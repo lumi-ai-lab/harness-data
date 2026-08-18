@@ -165,13 +165,13 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
       "# QDM Data Auth",
       "",
       "Authz mode is on but no encrypted auth blob is bound for this turn.",
-      "Do not run protected `qdm-metric-cli analysis validate|preview|execute|total`, `dim values`, or `auth describe` until auth is available.",
+      "Do not run protected `qdm-metric-cli analysis validate|preview|execute|total` or `auth describe` until auth is available.",
     ].join("\n");
   }
   return [
     "# QDM Data Auth",
     "",
-    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for protected analysis and `dim values` commands,",
+    "Authz mode is on. Runtime injects `--data-auth --auth-blob` for protected analysis commands,",
     "and `--auth-blob` for `qdm-metric-cli auth describe`.",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
     "",

@@ -70,7 +70,6 @@ func TestHookAuthzOnCoversProtectedCommandSet(t *testing.T) {
 		"analysis preview",
 		"analysis execute",
 		"analysis total",
-		"dim values",
 		"auth describe",
 	} {
 		t.Run(subcommand, func(t *testing.T) {

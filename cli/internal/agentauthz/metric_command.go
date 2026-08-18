@@ -44,7 +44,7 @@ func looksLikeGatedMetricCommand(command string) bool {
 	return marker.MatchString(command) && subcommand.MatchString(command)
 }
 
-const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|dim\s+values|auth\s+describe)`
+const metricAuthzSubcommandPattern = `(?:analysis\s+(?:validate|preview|execute|total)|auth\s+describe)`
 
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
@@ -351,7 +351,7 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string, dialect ...
 			segment = "& " + strings.TrimSpace(segment)
 		}
 		flags := " --auth-blob " + quotedBlob
-		if invocation.kind == "analysis" || invocation.kind == "data" {
+		if invocation.kind == "analysis" {
 			flags = " --data-auth" + flags
 		}
 		replacement := strings.TrimRight(segment, " \t") + flags
@@ -387,7 +387,7 @@ func RewriteGatedMetricCommands(command, blob, metricCliPath string, dialect ...
 			return "", fmt.Errorf("gated invocation did not bind exactly one runtime blob")
 		}
 		dataAuthCount := strings.Count(replacement, "--data-auth")
-		if ((invocation.kind == "analysis" || invocation.kind == "data") && dataAuthCount != 1) || (invocation.kind == "describe" && dataAuthCount != 0) {
+		if (invocation.kind == "analysis" && dataAuthCount != 1) || (invocation.kind == "describe" && dataAuthCount != 0) {
 			return "", fmt.Errorf("gated invocation has invalid data-auth flags")
 		}
 		rewritten = rewritten[:invocation.start] + replacement + rewritten[invocation.end:]
@@ -420,7 +420,6 @@ func findMetricInvocations(command string) ([]metricInvocation, error) {
 		subcmd string
 	}{
 		{kind: "analysis", subcmd: `analysis\s+(?:validate|preview|execute|total)`},
-		{kind: "data", subcmd: `dim\s+values`},
 		{kind: "describe", subcmd: `auth\s+describe`},
 	} {
 		invocationRe := metricInvocationRegexp(candidate.subcmd)
