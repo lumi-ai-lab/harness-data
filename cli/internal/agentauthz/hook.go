@@ -334,9 +334,9 @@ func missingAuthReason(dialect ShellDialect, command string, cfg harness.AuthzCo
 		isDescribe = IsPowerShellMetricAuthDescribe(command)
 	}
 	if isDescribe {
-		return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli auth describe"
+		return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound; cannot run qdm-metric-cli auth describe"
 	}
-	return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound with an explicit user ID; cannot run qdm-metric-cli analysis execute"
+	return "QDM_AUTHZ_SOURCE_MISSING: authz mode is on but no encrypted auth blob is bound; cannot run qdm-metric-cli data command"
 }
 
 func injectAuthForCommand(dialect ShellDialect, command, blob, metricCliPath string) (string, error) {

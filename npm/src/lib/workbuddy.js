@@ -10,6 +10,7 @@ export const codeBuddyMinimumVersion = "2.115.0";
 export const workBuddyMarketplaceName = "lumi-harness-data";
 export const workBuddyMarketplaceRel = "agents";
 export const workBuddyPluginRel = "agents/workbuddy";
+const maxAuthBlobBytes = 1 << 20;
 
 export function agentIncludesWorkBuddy(agent) {
   // WorkBuddy remains explicit until the project-owned desktop E2E matrix has
@@ -19,7 +20,7 @@ export function agentIncludesWorkBuddy(agent) {
 
 export function assertWorkBuddyAuthPlatform(agent, authEnabled, platform = process.platform) {
   if (authEnabled && agentIncludesWorkBuddy(agent) && !["darwin", "win32"].includes(platform)) {
-    throw new Error("WorkBuddy auth currently supports macOS and Windows only; use --no-auth on this platform");
+    throw new Error("WorkBuddy auth currently supports macOS and Windows only");
   }
 }
 
@@ -301,11 +302,12 @@ function authEnvironmentValue(name, options) {
 
 function validateAuthBlobFile(workspace, file, options = {}) {
   const absolute = path.isAbsolute(file) ? path.normalize(file) : path.resolve(workspace, file);
+  let fd;
   try {
     const stat = fs.lstatSync(absolute);
     if (stat.isSymbolicLink() || !stat.isFile()) return { ok: false, detail: `${absolute} must be a regular file` };
-    if ((options.platform || process.platform) !== "win32" && (stat.mode & 0o777) !== 0o600) {
-      return { ok: false, detail: `${absolute} must use mode 0600` };
+    if ((options.platform || process.platform) !== "win32" && (stat.mode & 0o077) !== 0) {
+      return { ok: false, detail: `${absolute} must not be readable or writable by group/other users` };
     }
     if (options.requireOutsideWorkspace) {
       const relative = path.relative(path.resolve(workspace), absolute);
@@ -313,36 +315,56 @@ function validateAuthBlobFile(workspace, file, options = {}) {
         return { ok: false, detail: `${absolute} must be outside the Harness workspace` };
       }
     }
-    const blob = fs.readFileSync(absolute, "utf8").trim();
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    fd = fs.openSync(absolute, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(fd);
+    if ((options.platform || process.platform) === "win32" &&
+        fs.realpathSync.native(absolute).toLowerCase() !== path.resolve(absolute).toLowerCase()) {
+      return { ok: false, detail: `${absolute} is a reparse point` };
+    }
+    if (!opened.isFile() || opened.size === 0 || opened.size > maxAuthBlobBytes ||
+        ((options.platform || process.platform) !== "win32" && (opened.mode & 0o077) !== 0)) {
+      return { ok: false, detail: `${absolute} changed or is not a safe regular file` };
+    }
+    const buffer = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = fs.readSync(fd, buffer, offset, buffer.length - offset, null);
+      if (!count) break;
+      offset += count;
+    }
+    const reread = fs.fstatSync(fd);
+    if (offset !== buffer.length || reread.dev !== opened.dev || reread.ino !== opened.ino ||
+        reread.size !== opened.size || reread.mtimeMs !== opened.mtimeMs || reread.ctimeMs !== opened.ctimeMs) {
+      return { ok: false, detail: `${absolute} changed while being read` };
+    }
+    const blob = buffer.toString("utf8").trim();
     if (!blob.startsWith("qdm1enc.")) return { ok: false, detail: `${absolute} must contain an encrypted qdm1enc blob` };
     return { ok: true, detail: absolute };
   } catch {
     return { ok: false, detail: `${absolute} is missing or unreadable` };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
 export function inspectWorkBuddyAuth(workspace, authz, options = {}) {
   if (!authz || authz.mode !== "on") return { ok: true, detail: "authz.mode=off", source: "off" };
-  if (!authz.allowLocalBlob) return { ok: false, detail: "authz.mode=on requires allow_local_blob=true", source: "" };
 
   const blob = authEnvironmentValue("HARNESS_AUTH_BLOB", options);
   const blobFile = authEnvironmentValue("HARNESS_AUTH_BLOB_FILE", options);
-  const userID = authEnvironmentValue("HARNESS_AUTH_USER_ID", options);
-  const resolvedUserID = userID.value || String(authz.devUserId || "").trim();
   if (blob.value) {
     if (!blob.value.startsWith("qdm1enc.")) return { ok: false, detail: "HARNESS_AUTH_BLOB must be an encrypted qdm1enc blob", source: blob.source };
-    if (!resolvedUserID) return { ok: false, detail: "HARNESS_AUTH_USER_ID or authz.dev_user_id is required", source: blob.source };
-    return { ok: true, detail: `${blob.source} encrypted blob; user id configured`, source: blob.source };
+    return { ok: true, detail: `${blob.source} encrypted Blob`, source: blob.source };
   }
   if (blobFile.value) {
-    if (!resolvedUserID) return { ok: false, detail: "HARNESS_AUTH_USER_ID or authz.dev_user_id is required", source: blobFile.source };
     const checked = validateAuthBlobFile(workspace, blobFile.value, { ...options, requireOutsideWorkspace: true });
-    return { ...checked, detail: checked.ok ? `${blobFile.source} file ${checked.detail}; user id configured` : checked.detail, source: blobFile.source };
+    return { ...checked, detail: checked.ok ? `${blobFile.source} file ${checked.detail}` : checked.detail, source: blobFile.source };
   }
   if (authz.blobFile) {
-    if (!String(authz.devUserId || "").trim()) return { ok: false, detail: "authz.blob_file requires authz.dev_user_id", source: "config" };
+    if (!authz.allowLocalBlob) return { ok: false, detail: "local Blob fallback is disabled; bind a host Blob", source: "config" };
     const checked = validateAuthBlobFile(workspace, authz.blobFile, options);
-    return { ...checked, detail: checked.ok ? `config file ${checked.detail}; dev user id configured` : checked.detail, source: "config" };
+    return { ...checked, detail: checked.ok ? `config file ${checked.detail}` : checked.detail, source: "config" };
   }
   return { ok: false, detail: "no HARNESS_AUTH_BLOB, HARNESS_AUTH_BLOB_FILE, or authz.blob_file is configured", source: "" };
 }

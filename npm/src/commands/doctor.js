@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { run } from "../lib/exec.js";
 import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
 import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
@@ -80,6 +81,163 @@ function selectedAgent(workspace, options = {}) {
   return String(state.agent || "").toLowerCase();
 }
 
+const qdmMinimumSafeVersion = "0.1.10";
+const maxAuthBlobBytes = 1 << 20;
+const authEnvironmentNames = [
+  "HARNESS_AUTH_BLOB",
+  "HARNESS_AUTH_BLOB_FILE",
+  "HARNESS_AUTH_USER_ID",
+  "LUMI_REQUESTER_CONTEXT_DIR",
+  "HARNESS_AUTHZ_BINDING_V1",
+];
+
+function selectedAgents(agent) {
+  switch (String(agent || "").toLowerCase()) {
+    case "both": return ["claude", "codex"];
+    case "all": return ["claude", "codex", "pi", "openclaw", "hermes"];
+    case "workbuddy": return ["workbuddy"];
+    default: return agent ? [String(agent).toLowerCase()] : [];
+  }
+}
+
+function cleanAuthEnvironment(options = {}) {
+  const env = { ...(options.env === undefined ? process.env : options.env) };
+  for (const name of authEnvironmentNames) delete env[name];
+  return env;
+}
+
+function safeBlobPath(file, workspace) {
+  if (!file) return { ok: false, detail: "authz.blob_file is not configured" };
+  const configDir = path.join(workspace, "config");
+  try {
+    const configStat = fs.lstatSync(configDir);
+    if (!configStat.isDirectory() || configStat.isSymbolicLink()) {
+      return { ok: false, detail: "config directory contains a symbolic link or reparse point" };
+    }
+    const workspaceRoot = path.resolve(workspace);
+    const absoluteFile = path.resolve(file);
+    const relative = path.relative(workspaceRoot, absoluteFile);
+    if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+      const absoluteConfig = path.resolve(configDir);
+      const configRelative = path.relative(absoluteConfig, absoluteFile);
+      const boundary = configRelative.startsWith("..") || path.isAbsolute(configRelative) ? workspaceRoot : absoluteConfig;
+      let current = path.dirname(absoluteFile);
+      while (current !== boundary && current !== path.parse(current).root) {
+        if (fs.lstatSync(current).isSymbolicLink()) return { ok: false, detail: "Blob parent contains a symbolic link or reparse point" };
+        current = path.dirname(current);
+      }
+    }
+    return { ok: true, detail: "Blob parent paths are local" };
+  } catch {
+    return { ok: false, detail: "Blob parent path is missing or unsafe" };
+  }
+}
+
+function authBlobFile(workspace, authz, options = {}) {
+  const env = options.env === undefined ? process.env : options.env;
+  const configured = authz?.blobFile || env.HARNESS_AUTH_BLOB_FILE || "";
+  return configured ? (path.isAbsolute(configured) ? path.normalize(configured) : path.resolve(workspace, configured)) : "";
+}
+
+function readAuthBlobSecure(file, workspace, platform = process.platform) {
+  if (!file) return { regular: false, permissions: false, readable: false, detail: "authz.blob_file is not configured", blob: "" };
+  const parents = safeBlobPath(file, workspace);
+  if (!parents.ok) return { regular: false, permissions: false, readable: false, detail: parents.detail, blob: "" };
+  let lstat;
+  try {
+    lstat = fs.lstatSync(file);
+  } catch {
+    return { regular: false, permissions: false, readable: false, detail: "Blob is missing or unreadable", blob: "" };
+  }
+  const regular = lstat.isFile() && !lstat.isSymbolicLink();
+  const permissions = platform === "win32" || (lstat.mode & 0o077) === 0;
+  if (!regular || !permissions || lstat.size > maxAuthBlobBytes || lstat.size === 0) {
+    return {
+      regular,
+      permissions,
+      readable: false,
+      detail: !regular ? "Blob must be a regular non-link file" : (!permissions ? "Blob POSIX mode must be <= 0600" : "Blob is empty or too large"),
+      blob: "",
+    };
+  }
+
+  let fd;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(fd);
+    if (platform === "win32" && fs.realpathSync.native(file).toLowerCase() !== path.resolve(file).toLowerCase()) {
+      return { regular, permissions, readable: false, detail: "Blob is a reparse point", blob: "" };
+    }
+    if (!opened.isFile() || opened.size > maxAuthBlobBytes || opened.size === 0 ||
+        (platform !== "win32" && (opened.mode & 0o077) !== 0)) {
+      return { regular, permissions, readable: false, detail: "Blob changed or is not a safe regular file", blob: "" };
+    }
+    const buffer = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = fs.readSync(fd, buffer, offset, buffer.length - offset, null);
+      if (!count) break;
+      offset += count;
+    }
+    const reread = fs.fstatSync(fd);
+    if (offset !== buffer.length || reread.dev !== opened.dev || reread.ino !== opened.ino ||
+        reread.size !== opened.size || reread.mtimeMs !== opened.mtimeMs || reread.ctimeMs !== opened.ctimeMs) {
+      return { regular, permissions, readable: false, detail: "Blob changed while being read", blob: "" };
+    }
+    const blob = buffer.toString("utf8").trim();
+    return {
+      regular,
+      permissions,
+      readable: Boolean(blob),
+      detail: blob ? "safe Blob read" : "Blob is empty",
+      blob,
+    };
+  } catch {
+    return { regular, permissions, readable: false, detail: "Blob is missing or unreadable", blob: "" };
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function parseQdmVersion(output) {
+  return [...String(output || "").matchAll(/(?:^|[^\d])v?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?\b/g)].at(-1)?.[1] || "";
+}
+
+async function qdmProbe(cli, args, options = {}) {
+  try {
+    return await run(cli, args, {
+      cwd: options.cwd,
+      env: cleanAuthEnvironment(options),
+      unsetEnv: authEnvironmentNames,
+      allowFailure: true,
+      sensitiveArgs: options.sensitiveArgs || [],
+    });
+  } catch {
+    return { code: null, stdout: "", stderr: "" };
+  }
+}
+
+function piAuthBindingStatus(workspace) {
+  const files = [
+    "agents/pi/extensions/qdm-harness/index.ts",
+    "agents/pi/extensions/qdm-harness/authz-inject.mjs",
+    "agents/pi/extensions/qdm-harness/authz-store.mjs",
+  ];
+  if (!files.every((file) => fs.existsSync(path.join(workspace, file)))) {
+    return { ok: false, detail: "Pi authz extension is incomplete" };
+  }
+  try {
+    const source = files.map((file) => fs.readFileSync(path.join(workspace, file), "utf8")).join("\n");
+    if (!source.includes("applyAuthzToToolCall") || !source.includes("AuthzStateStore") || !source.includes("auth-blob")) {
+      return { ok: false, detail: "Pi authz extension does not bind a session Blob" };
+    }
+  } catch {
+    return { ok: false, detail: "Pi authz extension is unreadable" };
+  }
+  return { ok: true, detail: "Pi session binding and authz injection" };
+}
+
 export async function collectDoctor(workspace, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
@@ -96,10 +254,44 @@ export async function collectDoctor(workspace, options = {}) {
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
   const authz = readAuthzFromHarnessConfig(path.join(workspace, "config", "harness-config.yaml"));
   if (authz && authz.mode === "on" && !authz.allowLocalBlob) {
-    add("authz allow_local_blob", false, "mode:on requires allow_local_blob:true (Host/Lumi fallback removed)");
+    add("authz allow_local_blob", true, "local Blob fallback disabled; session/host Blob required");
   } else {
     add("authz allow_local_blob", true);
   }
+
+  const metricCli = path.join(workspace, "bin", binaryName("qdm-metric-cli"));
+  const qdmVersionResult = isExecutable(metricCli)
+    ? await qdmProbe(metricCli, ["version"], { ...options, cwd: workspace })
+    : { code: null, stdout: "", stderr: "" };
+  const qdmVersion = qdmVersionResult.code === 0 ? parseQdmVersion(`${qdmVersionResult.stdout}\n${qdmVersionResult.stderr}`) : "";
+  add(
+    `qdm version >= ${qdmMinimumSafeVersion}`,
+    Boolean(qdmVersion && versionAtLeast(qdmVersion, qdmMinimumSafeVersion)),
+    qdmVersion || "version unavailable",
+  );
+  const noCredential = isExecutable(metricCli)
+    ? await qdmProbe(metricCli, ["auth", "describe"], { ...options, cwd: workspace })
+    : { code: null };
+  add(
+    "qdm auth describe without credentials",
+    noCredential.code === 77,
+    `exit ${noCredential.code ?? "unavailable"}`,
+  );
+
+  const blobFile = authBlobFile(workspace, authz, options);
+  const blob = readAuthBlobSecure(blobFile, workspace, options.platform || process.platform);
+  add("auth Blob regular non-link", blob.regular, blob.detail);
+  add("auth Blob POSIX mode <=0600", blob.permissions, blob.detail);
+  add("auth Blob safe read", blob.readable, blob.detail);
+  const withCredential = blob.readable && isExecutable(metricCli)
+    ? await qdmProbe(metricCli, ["auth", "describe", "--auth-blob", blob.blob], { ...options, cwd: workspace, sensitiveArgs: [3] })
+    : { code: null };
+  add(
+    "qdm auth describe with Blob",
+    withCredential.code === 0,
+    `exit ${withCredential.code ?? "unavailable"}`,
+  );
+
   add("config/qdm-cli-paths.env", fs.existsSync(path.join(workspace, "config", "qdm-cli-paths.env")));
   add("config CLI paths", configPathsValid(workspace));
   add("legacy qdm-cmr-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("qdm-cmr-cli"))));
@@ -108,6 +300,17 @@ export async function collectDoctor(workspace, options = {}) {
   add("legacy cas-cli absent", !isExecutable(path.join(workspace, "bin", binaryName("cas-cli"))));
 
   const configuredAgent = selectedAgent(workspace, options);
+  for (const agent of selectedAgents(configuredAgent)) {
+    if (agent === "workbuddy") continue;
+    const installed = agentOk(workspace, agent);
+    add(`Agent install .${agent}`, installed, `agents/${agent}`);
+    if (["claude", "openclaw", "hermes"].includes(agent)) {
+      add(`Agent authz .${agent}`, true, "authz unavailable: no confirmed pre-tool authorization API", "warning");
+    } else if (agent === "pi") {
+      const binding = piAuthBindingStatus(workspace);
+      add("Pi authz binding", binding.ok, binding.detail);
+    }
+  }
   const workBuddySelected = configuredAgent === "workbuddy";
   if (workBuddySelected && authz?.mode === "on") {
     const platform = options.platform || process.platform;
@@ -177,6 +380,12 @@ export async function collectDoctor(workspace, options = {}) {
   const codexSelected = configuredAgent === "codex" || configuredAgent === "both" || configuredAgent === "all" || fs.existsSync(path.join(workspace, ".codex"));
   const codexStatus = codexSelected ? codexHooksStatus(workspace) : null;
   if (codexSelected) add("Codex hooks", codexStatus.ok, codexStatus.detail);
+  if (configuredAgent === "codex" || configuredAgent === "both" || configuredAgent === "all") {
+    add("Codex authz binding", codexStatus.ok, codexStatus.detail);
+  }
+  if (workBuddySelected) {
+    add("WorkBuddy authz binding", Boolean(workBuddy?.prepared), workBuddy?.prepared ? "shared authz-hook transport" : "Marketplace/plugin unavailable");
+  }
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)) || (workBuddySelected && Boolean(workBuddy?.prepared)));
   for (const name of ["openclaw", "hermes"]) {
     if (fs.existsSync(path.join(workspace, `.${name}`))) {

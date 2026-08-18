@@ -299,3 +299,24 @@ func TestRewriteGatedMetricCommandsRewritesMixedInvocations(t *testing.T) {
 		t.Fatalf("auth flags must precede shell tails: %s", got)
 	}
 }
+
+func TestRewriteGatedMetricCommandsCoversProtectedDataCommands(t *testing.T) {
+	for _, subcommand := range []string{"analysis validate", "analysis preview", "analysis execute", "analysis total", "dim values"} {
+		command := "qdm-metric-cli " + subcommand + " --data-auth --auth-blob model --auth-json fake --auth-user-id model-user --metric x"
+		got, err := RewriteGatedMetricCommands(command, "qdm1enc.runtime", "/abs/bin/qdm-metric-cli")
+		if err != nil {
+			t.Fatalf("%s: %v", subcommand, err)
+		}
+		if strings.Count(got, "--data-auth") != 1 || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 || strings.Contains(got, "model") || strings.Contains(got, "--auth-json") || strings.Contains(got, "--auth-user-id") {
+			t.Fatalf("unexpected rewrite for %s: %s", subcommand, got)
+		}
+	}
+
+	got, err := RewriteGatedMetricCommands("qdm-metric-cli auth describe --data-auth --auth-blob model --auth-user-id model-user", "qdm1enc.runtime", "/abs/bin/qdm-metric-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "--data-auth") || strings.Contains(got, "--auth-user-id") || strings.Count(got, "--auth-blob 'qdm1enc.runtime'") != 1 {
+		t.Fatalf("unexpected auth describe rewrite: %s", got)
+	}
+}

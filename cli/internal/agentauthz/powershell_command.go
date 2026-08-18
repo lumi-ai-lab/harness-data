@@ -16,17 +16,17 @@ func IsPowerShellMetricAuthDescribe(command string) bool {
 }
 
 func IsPowerShellMetricAuthzGatedCommand(command string) bool {
-	return IsPowerShellMetricAnalysisExecute(command) || IsPowerShellMetricAuthDescribe(command)
+	return powerShellInvocationRegexp(metricAuthzSubcommandPattern).MatchString(MaskPowerShellRegions(command))
 }
 
 func PowerShellMetricInvocationCount(command string) int {
-	re := powerShellInvocationRegexp(`(?:analysis\s+execute|auth\s+describe)`)
+	re := powerShellInvocationRegexp(metricAuthzSubcommandPattern)
 	return len(re.FindAllStringIndex(MaskPowerShellRegions(command), -1))
 }
 
 func PowerShellCommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskPowerShellRegions(command)
-	return regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?i)(?:^|\s)--(?:data-auth|auth-blob|auth-json|auth-user-id)\b`).MatchString(skeleton)
 }
 
 func powerShellInvocationRegexp(subcommand string) *regexp.Regexp {
@@ -42,7 +42,7 @@ func RewritePowerShellMetricCLIInvocation(command, metricCLIPath string) string 
 
 func rewritePowerShellMetricCLIExecutable(command, replacement string) string {
 	skeleton := MaskPowerShellRegions(command)
-	re := regexp.MustCompile(`(?im)(?:^|[\r\n;|]|&&)(\s*)(?:\$[A-Za-z_][\w]*\s*=\s*)?(&\s*)?(` + powerShellMetricExecutablePattern + `)(\s+)(?:analysis\s+execute|auth\s+describe)\b`)
+	re := regexp.MustCompile(`(?im)(?:^|[\r\n;|]|&&)(\s*)(?:\$[A-Za-z_][\w]*\s*=\s*)?(&\s*)?(` + powerShellMetricExecutablePattern + `)(\s+)(` + metricAuthzSubcommandPattern + `)\b`)
 	matches := re.FindAllStringSubmatchIndex(skeleton, -1)
 	if len(matches) == 0 {
 		return command
@@ -81,7 +81,7 @@ func InjectPowerShellAuthDescribeBlob(command, blob, metricCLIPath string) strin
 
 func insertPowerShellFlags(command, flags, anchorWord string) string {
 	skeleton := MaskPowerShellRegions(command)
-	subcommand := `analysis\s+execute`
+	subcommand := metricAuthzSubcommandPattern
 	if anchorWord == "describe" {
 		subcommand = `auth\s+describe`
 	}
@@ -89,12 +89,11 @@ func insertPowerShellFlags(command, flags, anchorWord string) string {
 	if invocation == nil {
 		return command
 	}
-	segment := strings.ToLower(skeleton[invocation[0]:invocation[1]])
-	relativeAnchor := strings.LastIndex(segment, strings.ToLower(anchorWord))
-	if relativeAnchor < 0 {
+	subcommandMatch := regexp.MustCompile(`(?i)` + subcommand).FindStringIndex(skeleton[invocation[0]:invocation[1]])
+	if subcommandMatch == nil {
 		return command
 	}
-	anchorEnd := invocation[0] + relativeAnchor + len(anchorWord)
+	anchorEnd := invocation[0] + subcommandMatch[1]
 	tail := skeleton[anchorEnd:]
 	op := regexp.MustCompile(`\s(?:\||&&|;|2?>|1?>|&>)`).FindStringIndex(tail)
 	if op == nil {

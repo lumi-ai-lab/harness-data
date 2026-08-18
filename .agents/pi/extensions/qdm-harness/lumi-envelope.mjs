@@ -23,7 +23,7 @@ export function lumiEnvelopePath(dir, rawSessionId) {
  * Load Host auth from Lumi requester-context envelope.
  *
  * Soft failure (ok:false, soft:true): missing env/file/expired/version/session mismatch → continue fallback.
- * Hard failure (ok:false, soft:false): envelope structure valid but _auth/_auth_user_id invalid → do not degrade to local.
+ * Hard failure (ok:false, soft:false): envelope structure valid but _auth invalid → do not degrade to local.
  *
  * @param {{
  *   env?: NodeJS.ProcessEnv,
@@ -88,11 +88,11 @@ export function loadLumiHostAuth(options = {}) {
   const userId = typeof body._auth_user_id === "string" ? body._auth_user_id.trim() : "";
 
   // Structure valid (v1 + session + not expired) but Host material bad → hard fail.
-  if (!auth.startsWith("qdm1enc.") || !userId) {
+  if (!auth.startsWith("qdm1enc.")) {
     return {
       ok: false,
       soft: false,
-      error: "lumi envelope missing valid _auth/_auth_user_id",
+      error: "lumi envelope missing valid _auth",
     };
   }
 

@@ -50,14 +50,13 @@ The npm installer deliberately does not edit WorkBuddy settings or Marketplace r
 
 ## macOS auth
 
-`authz.mode=on` gates only `qdm-metric-cli analysis execute` and `qdm-metric-cli auth describe`. The hook removes model-provided auth flags, binds the runtime encrypted Blob, fixes the CLI path, and scrubs auth source environment variables before execution.
+`authz.mode=on` gates only `qdm-metric-cli analysis validate|preview|execute|total`, `dim values`, and `auth describe`. The hook removes model-provided auth flags, binds the runtime encrypted Blob, fixes the CLI path, and scrubs auth source environment variables before execution.
 
-For managed distribution, keep the Blob outside the workspace with mode `0600`, inject its path and user id into the GUI session, then restart WorkBuddy:
+For managed distribution, keep the Blob outside the workspace with mode `0600`, inject its path into the GUI session, then restart WorkBuddy. Any legacy user id is host metadata only and is not passed to qdm:
 
 ```bash
 install -m 600 qdm-auth.blob "$HOME/.qdm/auth/qdm-auth.blob"
 launchctl setenv HARNESS_AUTH_BLOB_FILE "$HOME/.qdm/auth/qdm-auth.blob"
-launchctl setenv HARNESS_AUTH_USER_ID "<user-id>"
 ```
 
 PowerShell auth rewriting is not supported in this milestone. Direct injection exposes the encrypted Blob in `updatedInput.command` and may persist it in WorkBuddy session history; use only for local validation or controlled pilots until a credential-isolated integration removes it from command text.

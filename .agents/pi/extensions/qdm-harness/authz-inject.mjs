@@ -1,6 +1,7 @@
 /**
  * Force auth flags only for real shell invocations of:
- *   qdm-metric-cli analysis execute ...  → --data-auth --auth-blob
+ *   qdm-metric-cli analysis validate|preview|execute|total ...  → --data-auth --auth-blob
+ *   qdm-metric-cli dim values ...       → --data-auth --auth-blob
  *   qdm-metric-cli auth describe ...     → --auth-blob
  *
  * Mentions inside quotes, heredocs, or commit messages must NOT be rewritten.
@@ -12,9 +13,11 @@ const METRIC_BIN_SRC =
   String.raw`(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./)?(?:bin/)?qdm-metric-cli|/(?:[^\s;|&'"]+/)*qdm-metric-cli)`;
 
 /** Subcommand patterns gated by authz (command-word form only). */
-const SUBCMD_ANALYSIS_EXECUTE = String.raw`analysis\s+execute`;
+const SUBCMD_ANALYSIS = String.raw`analysis\s+(?:validate|preview|execute|total)`;
+const SUBCMD_DIM_VALUES = String.raw`dim\s+values`;
+const SUBCMD_DATA = String.raw`(?:${SUBCMD_ANALYSIS}|${SUBCMD_DIM_VALUES})`;
 const SUBCMD_AUTH_DESCRIBE = String.raw`auth\s+describe`;
-const SUBCMD_AUTHZ_GATED = String.raw`(?:analysis\s+execute|auth\s+describe)`;
+const SUBCMD_AUTHZ_GATED = String.raw`(?:${SUBCMD_DATA}|${SUBCMD_AUTH_DESCRIBE})`;
 
 /**
  * Replace contents of quotes and heredoc bodies with spaces (newlines kept).
@@ -166,14 +169,36 @@ function matchesMetricInvocation(command, subcmdPattern) {
   return metricInvocationRegex(subcmdPattern).test(skeleton);
 }
 
+function metricInvocationCount(command) {
+  const skeleton = maskQuotedAndHeredocRegions(command);
+  const source = metricInvocationRegex(SUBCMD_AUTHZ_GATED).source;
+  return skeleton.match(new RegExp(source, "g"))?.length ?? 0;
+}
+
 /**
  * True only when the shell command actually *invokes*
- * qdm-metric-cli (or $QDM_METRIC_CLI) with subcommand `analysis execute`.
+ * qdm-metric-cli (or $QDM_METRIC_CLI) with a protected analysis or `dim values` subcommand.
  *
  * @param {string} command
  */
 export function isMetricAnalysisExecute(command) {
-  return matchesMetricInvocation(command, SUBCMD_ANALYSIS_EXECUTE);
+  return matchesMetricInvocation(command, String.raw`analysis\s+execute`);
+}
+
+export function isMetricAnalysisValidate(command) {
+  return matchesMetricInvocation(command, String.raw`analysis\s+validate`);
+}
+
+export function isMetricAnalysisPreview(command) {
+  return matchesMetricInvocation(command, String.raw`analysis\s+preview`);
+}
+
+export function isMetricAnalysisTotal(command) {
+  return matchesMetricInvocation(command, String.raw`analysis\s+total`);
+}
+
+export function isMetricDimValues(command) {
+  return matchesMetricInvocation(command, SUBCMD_DIM_VALUES);
 }
 
 /**
@@ -192,12 +217,12 @@ export function isMetricAuthDescribe(command) {
  * @param {string} command
  */
 export function isMetricAuthzGatedCommand(command) {
-  return isMetricAnalysisExecute(command) || isMetricAuthDescribe(command);
+  return matchesMetricInvocation(command, SUBCMD_AUTHZ_GATED);
 }
 
 /**
  * Rewrite command-word metric-cli tokens that start a gated invocation
- * (`analysis execute` or `auth describe`).
+ * (protected analysis/`dim values` or `auth describe`).
  *
  * @param {string} command
  * @param {string} metricCliPath absolute path to qdm-metric-cli
@@ -236,13 +261,13 @@ export function rewriteMetricCliInvocation(command, metricCliPath) {
  */
 export function stripAuthFlags(command) {
   let out = command;
-  out = out.replace(/(^|\s)--data-auth\b/g, " ");
+  out = out.replace(/(^|\s)\\?--data-auth\b/g, " ");
   out = out.replace(
-    /(^|\s)--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
+    /(^|\s)\\?--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
     " ",
   );
   out = out.replace(
-    /(^|\s)--auth-json(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
+    /(^|\s)\\?--(?:auth-json|auth-user-id)(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g,
     " ",
   );
   return out.replace(/[ \t]{2,}/g, " ").trim();
@@ -265,8 +290,7 @@ export function shellQuote(value) {
  */
 export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute") {
   const skeleton = maskQuotedAndHeredocRegions(command);
-  const subcmd =
-    anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_ANALYSIS_EXECUTE;
+  const subcmd = anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_DATA;
   const inv = new RegExp(
     String.raw`(?:'|")?` + METRIC_BIN_SRC + String.raw`(?:'|")?\s+` + subcmd + String.raw`\b`,
     "i",
@@ -274,11 +298,10 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
 
   let fromAnchor;
   if (inv) {
-    const lower = inv[0].toLowerCase();
-    const rel = lower.lastIndexOf(anchorWord);
-    fromAnchor = inv.index + (rel >= 0 ? rel : inv[0].length - anchorWord.length);
+    const subcommand = new RegExp(subcmd, "i").exec(skeleton.slice(inv.index));
+    if (subcommand) fromAnchor = inv.index + subcommand.index;
   } else {
-    const m = command.match(new RegExp(String.raw`\b${anchorWord}\b`, "i"));
+    const m = command.match(new RegExp(anchorWord === "describe" ? SUBCMD_AUTH_DESCRIBE : SUBCMD_DATA, "i"));
     if (!m || m.index == null) return `${command}${flags}`;
     fromAnchor = m.index;
   }
@@ -293,7 +316,7 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord = "execute
 }
 
 /**
- * Inject --data-auth --auth-blob for analysis execute.
+ * Inject --data-auth --auth-blob for protected analysis and dim values.
  *
  * @param {string} command
  * @param {string} blob encrypted qdm1enc blob
@@ -305,7 +328,7 @@ export function injectDataAuth(command, blob, metricCliPath = "") {
     cleaned = rewriteMetricCliInvocation(cleaned, metricCliPath);
   }
   const flags = ` --data-auth --auth-blob ${shellQuote(blob)}`;
-  return insertFlagsBeforeShellTail(cleaned, flags, "execute");
+  return insertFlagsBeforeShellTail(cleaned, flags, "data");
 }
 
 /**
@@ -335,7 +358,7 @@ export function commandHasModelAuthFlags(command) {
   if (typeof command !== "string" || !command) return false;
   // Match on skeleton so quoted prose is ignored; flags in real argv still show.
   const skeleton = maskQuotedAndHeredocRegions(command);
-  return /(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b/.test(skeleton);
+  return /(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json|auth-user-id)\b/.test(skeleton);
 }
 
 /**
@@ -368,6 +391,13 @@ export function applyAuthzToToolCall(event, options) {
     return undefined;
   }
 
+  if (metricInvocationCount(command) !== 1) {
+    return {
+      block: true,
+      reason: "authz: split multiple or ambiguous protected qdm-metric-cli invocations into separate tool calls",
+    };
+  }
+
   const isDescribe = isMetricAuthDescribe(command);
 
   if (options.mode !== "on") {
@@ -384,7 +414,7 @@ export function applyAuthzToToolCall(event, options) {
       ? "authz: host blob not bound; refusing model-supplied --auth-blob under allow_local_blob=false"
       : isDescribe
         ? "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli auth describe"
-        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run qdm-metric-cli analysis execute";
+        : "authz mode is on but no encrypted auth blob is bound for this turn; cannot run protected qdm-metric-cli data commands";
     return {
       block: true,
       reason: options.missingReason || defaultReason,

@@ -11,7 +11,7 @@ import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
-import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
+import { agentLinks, assertCodexAuthPlatform, linkAgent, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 
@@ -109,21 +109,35 @@ export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
     ok(`WorkBuddy Marketplace 已准备：${plugin.marketplaceRoot}；安装/启用状态需在 WorkBuddy 中确认`);
     return null;
   }
-  if (hasAnyAgentHook(runtimeDir)) {
-    // A runtime bundle update restores hooks.json to the original bash form.
-    // Patch the freshly installed file even when the agent junction exists.
-    patchCodexHooksForWindows(runtimeDir);
-    ok("Agent Hook 已配置");
-    return null;
+  let agent = String(options.agent || "").trim().toLowerCase();
+  if (!agentLinks[agent]) {
+    if (options.agent) return null;
+    agent = await chooseAgent(options);
   }
-  action("未检测到 Agent Hook，重新配置");
-  const agent = await chooseAgent(options);
-  const linkedAgents = linkAgents(runtimeDir, agent);
-  for (const [source, target] of linkedAgents) {
-    if (fs.existsSync(path.join(runtimeDir, target))) ok(`${target} -> ${source}`);
+  const linkedAgents = [];
+  for (const [sourceRel, targetRel] of agentLinks[agent]) {
+    const source = path.join(runtimeDir, sourceRel);
+    const target = path.join(runtimeDir, targetRel);
+    let ready = false;
+    try {
+      ready = fs.lstatSync(target).isSymbolicLink() && fs.realpathSync(target) === fs.realpathSync(source);
+    } catch {
+      ready = false;
+    }
+    if (ready) {
+      ok(`${targetRel} -> ${sourceRel}`);
+      continue;
+    }
+    if (fs.existsSync(target) || (() => { try { fs.lstatSync(target); return true; } catch { return false; } })()) {
+      const stat = fs.lstatSync(target);
+      if (!stat.isSymbolicLink()) throw new Error(`${targetRel} exists but is not a managed Agent link`);
+    }
+    action(`修复 Agent Link：${targetRel} -> ${sourceRel}`);
+    linkAgent(runtimeDir, sourceRel, targetRel);
+    linkedAgents.push([sourceRel, targetRel]);
   }
   patchCodexHooksForWindows(runtimeDir);
-  return { agent, linkedAgents };
+  return linkedAgents.length ? { agent, linkedAgents } : null;
 }
 
 export async function checkUpdates(workspace, options = {}) {
@@ -230,7 +244,7 @@ export async function updateCommand(options = {}) {
 
   step(7, 7, "安装校验");
   if (changed) {
-    writeLocalConfig(runtimeDir, { overwrite: true });
+    writeLocalConfig(runtimeDir, { overwrite: true, preserveAuthz: true });
     ok("本地配置已刷新");
     const doctor = await collectDoctor(runtimeDir, { ...trackingOptions, agent: configuredAgent });
     printDoctorSummary(doctor, { nonBlocking: isNonBlockingUpdateDoctorCheck });

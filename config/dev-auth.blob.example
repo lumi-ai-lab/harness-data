@@ -1,21 +1,9 @@
 # Working copy for local authz (gitignored). Prefer the installer:
 #
-#   npx @lumi-ai-lab/harness-data install --data-auth
+#   npx @lumi-ai-lab/harness-data install --auth-blob 'qdm1enc...'
 #
-# That copies config/fixtures/local-test-auth.blob → config/dev-auth.blob and sets:
+# The installer writes the supplied encrypted blob atomically with mode 0600.
 #
-#   authz:
-#     mode: on
-#     blob_file: config/dev-auth.blob
-#     dev_user_id: local-test-user
-#     allow_local_blob: true
-#
-# Manual regenerate:
-#
-#   cd /path/to/qdm-metric-cli
-#   go run ./scripts/auth_blob_encrypt.go \
-#     -in /path/to/harness-data/config/fixtures/local-test-auth.json \
-#     > /path/to/harness-data/config/dev-auth.blob
-#
-# Production should distribute an encrypted blob via HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID (keep allow_local_blob: true).
+# Production should distribute an encrypted Blob via HARNESS_AUTH_BLOB_FILE (keep allow_local_blob: true).
+# A legacy HARNESS_AUTH_USER_ID, if present, is host metadata only and is not a qdm authorization input.
 # Do not commit config/dev-auth.blob (gitignored).

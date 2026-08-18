@@ -1,4 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { loadLumiHostAuth } from "./lumi-envelope.mjs";
@@ -136,9 +145,8 @@ export function parseCliMetricPath(raw) {
  *   2. Lumi file envelope (production Host bypass; ignores allowLocalBlob)
  *   3–5. local env/file only when allowLocalBlob
  *
- * userId must come from host _auth_user_id, envelope _auth_user_id,
- * HARNESS_AUTH_USER_ID, or explicit authz.dev_user_id.
- * There is no default principal.
+ * userId is retained only as Host/session metadata. The encrypted Blob is the
+ * sole qdm authorization input.
  *
  * @param {{
  *   projectRoot: string,
@@ -160,14 +168,7 @@ export function resolveAuthBlob(options) {
     if (!isEncryptedBlob(hostAuth)) {
       return { ok: false, error: "host _auth must be an encrypted qdm1enc blob" };
     }
-    const userId = hostUserId || trim(config.devUserId);
-    if (!userId) {
-      return {
-        ok: false,
-        error: "authz requires _auth_user_id (or authz.dev_user_id for local fallback only)",
-      };
-    }
-    return { ok: true, blob: hostAuth, userId, source: "host" };
+    return { ok: true, blob: hostAuth, userId: hostUserId || trim(config.devUserId), source: "host" };
   }
 
   // Host path #2: Lumi requester-context envelope (not gated by allowLocalBlob).
@@ -201,41 +202,20 @@ export function resolveAuthBlob(options) {
     if (!isEncryptedBlob(envBlob)) {
       return { ok: false, error: "HARNESS_AUTH_BLOB must be an encrypted qdm1enc blob" };
     }
-    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
-    if (!userId) {
-      return {
-        ok: false,
-        error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
-      };
-    }
-    return { ok: true, blob: envBlob, userId, source: "env" };
+    return { ok: true, blob: envBlob, userId: trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId), source: "env" };
   }
 
   const envFile = trim(env.HARNESS_AUTH_BLOB_FILE);
   if (envFile) {
     const loaded = readBlobFile(envFile, options.projectRoot);
     if (!loaded.ok) return loaded;
-    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
-    if (!userId) {
-      return {
-        ok: false,
-        error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
-      };
-    }
-    return { ok: true, blob: loaded.blob, userId, source: "env_file" };
+    return { ok: true, blob: loaded.blob, userId: trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId), source: "env_file" };
   }
 
   if (config.blobFile) {
     const loaded = readBlobFile(config.blobFile, options.projectRoot);
     if (!loaded.ok) return loaded;
-    const userId = trim(config.devUserId);
-    if (!userId) {
-      return {
-        ok: false,
-        error: "authz.blob_file requires authz.dev_user_id (no default principal)",
-      };
-    }
-    return { ok: true, blob: loaded.blob, userId, source: "file" };
+    return { ok: true, blob: loaded.blob, userId: trim(config.devUserId), source: "file" };
   }
 
   return {
@@ -255,18 +235,58 @@ export function isEncryptedBlob(value) {
  */
 function readBlobFile(pathValue, projectRoot) {
   const absolute = isAbsolute(pathValue) ? pathValue : resolve(projectRoot, pathValue);
-  if (!existsSync(absolute)) {
+  try {
+    const root = resolve(projectRoot);
+    const insideProject = absolute === root || absolute.startsWith(`${root}${pathSeparator()}`);
+    for (let current = absolute; ; current = resolve(current, "..")) {
+      if (lstatSync(current).isSymbolicLink()) {
+        return { ok: false, error: `auth blob file must not be a symlink: ${absolute}` };
+      }
+      const parent = resolve(current, "..");
+      if (parent === current || (insideProject && current === root)) break;
+    }
+  } catch {
     return { ok: false, error: `auth blob file not found: ${absolute}` };
   }
-  const blob = readFileSync(absolute, "utf8").trim();
-  if (!blob) {
-    return { ok: false, error: `auth blob file is empty: ${absolute}` };
+  let fd;
+  try {
+    fd = openSync(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const before = fstatSync(fd);
+    if (!before.isFile()) return { ok: false, error: `auth blob file must be a regular file: ${absolute}` };
+    if (process.platform !== "win32" && (before.mode & 0o077) !== 0) {
+      return { ok: false, error: `auth blob file permissions must be 0600: ${absolute}` };
+    }
+    if (before.size > MAX_BLOB_BYTES) return { ok: false, error: `auth blob file exceeds maximum size: ${absolute}` };
+    const chunks = [];
+    let total = 0;
+    while (total <= MAX_BLOB_BYTES) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, MAX_BLOB_BYTES + 1 - total));
+      const count = readSync(fd, chunk, 0, chunk.length, total);
+      if (!count) break;
+      chunks.push(chunk.subarray(0, count));
+      total += count;
+    }
+    const after = fstatSync(fd);
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mode !== after.mode || before.mtimeMs !== after.mtimeMs) {
+      return { ok: false, error: `auth blob file changed while reading: ${absolute}` };
+    }
+    if (total > MAX_BLOB_BYTES) return { ok: false, error: `auth blob file exceeds maximum size: ${absolute}` };
+    const blob = Buffer.concat(chunks).toString("utf8").trim();
+    if (!blob) return { ok: false, error: `auth blob file is empty: ${absolute}` };
+    if (!isEncryptedBlob(blob)) return { ok: false, error: `auth blob file must contain a qdm1enc blob: ${absolute}` };
+    return { ok: true, blob };
+  } catch {
+    return { ok: false, error: `auth blob file unavailable: ${absolute}` };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
-  if (!isEncryptedBlob(blob)) {
-    return { ok: false, error: `auth blob file must contain a qdm1enc blob: ${absolute}` };
-  }
-  return { ok: true, blob };
 }
+
+function pathSeparator() {
+  return process.platform === "win32" ? "\\" : "/";
+}
+
+const MAX_BLOB_BYTES = 1 << 20;
 
 /**
  * @param {AuthzConfig} config
