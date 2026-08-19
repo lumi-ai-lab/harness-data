@@ -1,0 +1,17 @@
+{
+  "name": "lumi-harness-data",
+  "plugins": [
+    {
+      "name": "qdm-html-report",
+      "source": {
+        "source": "local",
+        "path": "./plugins/qdm-html-report"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

@@ -473,3 +473,84 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 - Agents：`.agents/pi/skills/html-report/agents/*.md`；Pi 注册：`.pi/agents/report-writer.md`、`report-researcher.md`
 - 质量母表：`docs/html-report-quality-rubric.md`（R1–R7、分阶段清单、**有问题则下钻**）
 - 交接：`HANDOFF-html-report.md`
+
+---
+
+## 11. Codex CLI / ChatGPT App 切面（首版）
+
+首版只跑到 `analysis/main.md`（A_CONFIG → B0 → B2_WRITER → B2_MAIN）。
+不做 B25/B3/B4/B5，不做浏览器 / HTML / Designer。
+
+### 11.1 架构
+
+```
+              现有 PI 脚本（原地复用，不搬不拆）
+        Session / fetch-entry / evidence / compose-main
+                     │
+              本地 Node MCP（无外部依赖）
+        html_report_start / next / submit_writer / status
+                     │
+          官方 Plugin（唯一对外界面）
+           Skill.md  +  .mcp.json  +  plugin.json
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+     Codex CLI            ChatGPT 桌面 App
+     有 codex             没有 codex 也能跑
+```
+
+运行时最低依赖：Node、`qdm-metric-cli`、仓库、ChatGPT App **或** Codex CLI。
+**不依赖：** `codex` 二进制、PI、hooks、custom agents、浏览器。
+
+### 11.2 Plugin 位置
+
+| 项 | 位置 |
+|---|---|
+| Marketplace | `.agents/plugins/marketplace.json` |
+| Plugin manifest | `.agents/plugins/qdm-html-report/plugin.json` |
+| MCP 声明 | `.agents/plugins/qdm-html-report/.mcp.json` |
+| Skill | `.agents/plugins/qdm-html-report/skills/html-report/SKILL.md` |
+| MCP server | `.agents/plugins/qdm-html-report/mcp/server.mjs` |
+
+安装后 runtime 路径：`agents/plugins/`（CI 打包已包含）。
+
+### 11.3 MCP 工具
+
+| 工具 | 职责 |
+|---|---|
+| `html_report_start` | 建 Session，打开 qdm-metric-cli ui（`--watch-pid` 绑 MCP 进程） |
+| `html_report_next` | B0 预检 → 逐卡 fetch-entry + evidence → compose-main.mjs |
+| `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md` |
+| `html_report_status` | 返回当前 stage / cards 状态 |
+
+### 11.4 B0 差异（App/CLI vs PI）
+
+| 检查项 | PI B0 | App/CLI B0 |
+|---|---|---|
+| `result.json` 存在 + `status=confirmed` | ✓ | ✓ |
+| Metric CLI 可达 | ✓ | ✓ |
+| Session layout `phase=a` | ✓ | ✓ |
+| 四个 `report-*` runtime Agent | ✓（pi-subagents list） | **不做** |
+
+App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。
+首版不派发 report-researcher / report-reviewer / report-designer。
+
+### 11.5 流水线
+
+```
+用户 $html-report / @html-report
+  → MCP start：建 Session，打开 qdm-metric-cli ui
+  → 用户保存 result.json，回「继续」
+  → MCP B0（无 PI Agent 检查）
+  → MCP 逐卡 fetch-entry + prepare-card-caption-evidence
+  → 宿主只返回 caption paragraphs + pointers → submit_writer
+  → 所有卡完成后 compose-main.mjs
+  → 交卷 analysis/main.md，停在 B2_MAIN
+```
+
+父模型不得自己 finish Gate，不得手写 `entry.json` / `main.md`。
+
+### 11.6 对 PI 的影响
+
+本刀是**旁边加宿主**，不改 PI Skill / 扩展 / Agent。
+`open-metric-cli-ui.mjs` 的 `--watch-pid` 已向后兼容（无参仍走 PI 进程探测）。
