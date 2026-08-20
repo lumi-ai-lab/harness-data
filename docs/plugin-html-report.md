@@ -2,13 +2,13 @@
 
 ## 概述
 
-`qdm-html-report` Plugin 为 Codex CLI 和 ChatGPT 桌面 App 提供 html-report 流水线能力。首版只跑到 `analysis/main.md`（A_CONFIG → B0 → B2_WRITER → B2_MAIN），不做 B25/B3/B4/B5、HTML 或 Designer。
+`qdm-html-report` Plugin 为 Codex CLI 和 ChatGPT 桌面 App 提供 html-report 流水线能力。首版跑到 `analysis/main.md`（A_CONFIG → B0 → B2_WRITER → B2_MAIN），不做 B25/B3/B4/B5 或 P5 Designer。B2_MAIN 之后可按用户明确确认，用 `md2html` 在同级生成 `analysis/main.html`。
 
 Plugin 同时包含两个核心组件：
 
 | 组件 | 来源 | 作用 |
 |------|------|------|
-| **MCP server** | `.mcp.json` → `mcp/server.mjs` | 4 个工具：建会话、推进流水线、提交 caption、查状态 |
+| **MCP server** | `.mcp.json` → `mcp/server.mjs` | 5 个工具：建会话、推进流水线、提交 caption、可选 HTML 导出、查状态 |
 | **Skill** | `skills/html-report/SKILL.md` | 流程指令，模型按需加载，知道怎么调 MCP 工具 |
 
 安装 Plugin 后，MCP server 自动注册，Skill 自动发现，用户不需要手动写任何配置。
@@ -20,7 +20,7 @@ Plugin 同时包含两个核心组件：
         Session / fetch-entry / evidence / compose-main
                      │
               本地 Node MCP（无外部依赖）
-        html_report_start / next / submit_writer / status
+        html_report_start / next / submit_writer / generate_html / status
                      │
               Codex Plugin（唯一对外界面）
            .mcp.json  +  SKILL.md  +  plugin.json
@@ -31,7 +31,7 @@ Plugin 同时包含两个核心组件：
      有 codex             没有 codex 也能跑
 ```
 
-运行时最低依赖：Node、`qdm-metric-cli`、仓库、ChatGPT App **或** Codex CLI。不依赖 `codex` 二进制、PI、hooks、custom agents、浏览器。
+运行时最低依赖：Node、`qdm-metric-cli`、`md2html`（仅在用户确认导出 HTML 时调用）、仓库、ChatGPT App **或** Codex CLI。不依赖 `codex` 二进制、PI、hooks、custom agents、浏览器。
 
 ## 文件结构
 
@@ -53,7 +53,7 @@ Plugin 同时包含两个核心组件：
 | `.codex-plugin/plugin.json` | Plugin 元数据：名称、版本、`skills` 路径、`mcp` 路径 |
 | `.mcp.json` | 声明 MCP server：`command = "node"`，`args = ["mcp/server.mjs"]` |
 | `skills/html-report/SKILL.md` | 模型流程指令：何时调哪个工具、规则、限制 |
-| `mcp/server.mjs` | stdio JSON-RPC 2.0 server，4 个工具，无外部依赖，原地复用 PI 脚本 |
+| `mcp/server.mjs` | stdio JSON-RPC 2.0 server，5 个工具，无外部依赖，原地复用 PI 脚本 |
 
 ---
 
@@ -218,11 +218,15 @@ html_report_next({ "sessionId": "mcp-a44f72de" })
 {
   "stage": "b2_main",
   "mainPath": ".harness/state/html-report/mcp-a44f72de/analysis/main.md",
-  "message": "analysis/main.md is ready. Pipeline stops here for the first version."
+  "html": "awaiting_confirmation",
+  "message": "analysis/main.md is ready. Ask the user whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation."
 }
 ```
 
-流水线停止。最终产物在 `.harness/state/html-report/mcp-a44f72de/analysis/main.md`。
+流水线停在 B2_MAIN。Skill 必须询问用户是否生成 HTML；只有明确同意后才调用
+`html_report_generate_html({ "sessionId": "mcp-a44f72de" })`。最终 Markdown 在
+`.harness/state/html-report/mcp-a44f72de/analysis/main.md`；若导出成功，同级还有
+`main.html`。
 
 ---
 
@@ -251,7 +255,7 @@ codex plugin add qdm-html-report@lumi-harness-data
 
 ```
 qdm-html-report Plugin
-  ├── .mcp.json          → 自动注册 4 个 MCP 工具（不需要手动 .codex/config.toml）
+  ├── .mcp.json          → 自动注册 5 个 MCP 工具（不需要手动 .codex/config.toml）
   └── skills/html-report/
         └── SKILL.md      → 自动加载流程指令（模型知道怎么走流水线）
 ```
@@ -269,7 +273,7 @@ codex plugin list | grep qdm-html
 ```
 
 在 Codex TUI 中：
-- 输入 `/mcp` 查看 html-report server 是否连上（4 个工具：`html_report_start`、`html_report_next`、`html_report_submit_writer`、`html_report_status`）
+- 输入 `/mcp` 查看 html-report server 是否连上（5 个工具：`html_report_start`、`html_report_next`、`html_report_submit_writer`、`html_report_generate_html`、`html_report_status`）
 - 输入 `/plugins` 查看插件是否已安装
 - 输入 `$html-report` 确认 Skill 可触发
 
@@ -292,7 +296,8 @@ $html-report 生成运营中心管理周例会报告，分析各区域经营表�
 | `html_report_start` | `sessionId?`, `userQuestion` | 创建会话，打开 qdm-metric-cli ui |
 | `html_report_next` | `sessionId` | B0 预检 → 逐卡取数 + evidence → 所有卡完成后 compose-main.mjs |
 | `html_report_submit_writer` | `sessionId`, `cardId`, `paragraphs[]`, `pointers[]` | 提交 caption，验证并写 caption.md |
-| `html_report_status` | `sessionId` | 查询当前 stage / cards 状态 |
+| `html_report_generate_html` | `sessionId` | 用户明确确认后，将 `analysis/main.md` 导出为同级 `main.html` |
+| `html_report_status` | `sessionId` | 查询当前 stage / cards 状态和只读 html 摘要 |
 
 ## Pipeline 流程
 
@@ -306,7 +311,10 @@ B0_PREFLIGHT    验证 result.json + metric CLI（不查 PI Agent）
 B2_WRITER       逐卡：fetch-entry → prepare evidence → 宿主写 caption → submit_writer
      │
      ↓ 所有卡完成
-B2_MAIN         compose-main.mjs → analysis/main.md（停止）
+B2_MAIN         compose-main.mjs → analysis/main.md
+     │
+     ↓ 用户明确同意后才调用 html_report_generate_html
+可选 HTML       export-main-html.mjs → analysis/main.html（同级，非 P5 Designer）
 ```
 
 ### B0 差异：App/CLI vs PI
@@ -323,7 +331,7 @@ App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。首版不
 ## 限制
 
 - 首版停在 `analysis/main.md`，不做 B25 / B3 / B4 / B5
-- 不做浏览器、HTML、Designer、截图
+- 不做浏览器、P5 Designer HTML、截图；B2_MAIN 可选同级 `main.html` 须用户明确确认
 - 不影响现有 PI 适配（PI Skill / 扩展 / 四个 Agent 全部不变）
 - `open-metric-cli-ui.mjs` 的 `--watch-pid` 已向后兼容（无参仍走 PI 进程探测）
 
@@ -365,7 +373,7 @@ Codex html-report 完整依赖图
 │    .codex-plugin/plugin.json          ← plugin manifest                  │
 │    .mcp.json                          ← MCP server 声明                  │
 │    skills/html-report/SKILL.md        ← 流程指令（模型按需加载）          │
-│    mcp/server.mjs  ──────────────────────┐  4 个工具，无外部依赖          │
+│    mcp/server.mjs  ──────────────────────┐  5 个工具，无外部依赖          │
 └──────────────────────────────────────────┼──────────────────────────────┘
                                            │ import()
                                            ▼
@@ -373,17 +381,18 @@ Codex html-report 完整依赖图
 │                  ② PI 脚本层（原地复用，不搬不拆）                         │
 │              .agents/pi/skills/html-report/scripts/                       │
 │                                                                           │
-│  ┌─ server.mjs 直接调用的 6 个脚本 ──────────────────────────────┐       │
+│  ┌─ server.mjs 直接调用的 7 个脚本 ──────────────────────────────┐       │
 │  │                                                                │       │
 │  │  open-metric-cli-ui.mjs   建会话，开 qdm-metric-cli ui       │       │
 │  │  fetch-entry.mjs          逐卡取数，写 entry.json + meta      │       │
 │  │  prepare-card-caption-evidence.mjs  生成 caption evidence    │       │
 │  │  submit-card-caption.mjs  验证 + 写 caption.md               │       │
 │  │  compose-main.mjs         写 analysis/main.md                 │       │
+│  │  export-main-html.mjs     可选同级 analysis/main.html         │       │
 │  │  writer-return.mjs        路径解析 + cardId 清洗               │       │
 │  └────────────────────────────────────────────────────────────────┘       │
 │                                                                           │
-│  ┌─ 上面 6 个脚本传递依赖的脚本 ────────────────────────────────┐       │
+│  ┌─ 上面 7 个脚本传递依赖的脚本 ────────────────────────────────┐       │
 │  │                                                                │       │
 │  │  metric-cli-executor.mjs   调 qdm-metric-cli analysis execute │       │
 │  │  metric-query-contract.mjs  查询参数标准化                     │       │
@@ -409,6 +418,7 @@ Codex html-report 完整依赖图
 │                            │  │                                         │
 │  Node.js ≥ 18              │  │  ❌ index.ts (8000+ 行编排)  不依赖      │
 │  (运行 MCP server + 脚本)   │  │  ❌ gate-control.mjs          不依赖      │
+│  md2html（可选 HTML 导出）  │  │                                         │
 └───────────────────────────┘  └─────────────────────────────────────────┘
         │
         ▼
@@ -446,10 +456,10 @@ PI 运行时（完全不需要）                   PI 脚本中不用的
 │ ① Plugin 层 │ marketplace.json, plugin.json, .mcp.json, SKILL │ 5 个文件  │ 我们新写             │
 │             │ .md, server.mjs                                 │           │                      │
 ├─────────────┼─────────────────────────────────────────────────┼───────────┼──────────────────────┤
-│ ② PI 脚本层 │ 直接调用 6 个 + 传递依赖 9 个                   │ 15 个 .   │ PI 已有，原地复用    │
+│ ② PI 脚本层 │ 直接调用 7 个 + 传递依赖 9 个                   │ 16 个 .   │ PI 已有，原地复用    │
 │             │                                                 │ mjs       │                      │
 ├─────────────┼─────────────────────────────────────────────────┼───────────┼──────────────────────┤
-│ ③           │ qdm-metric-cli, Node.js                         │ 2 个      │ 外部安装             │
+│ ③           │ qdm-metric-cli, Node.js, md2html（可选 HTML）   │ 3 个      │ 外部安装             │
 │ 外部二进制  │                                                 │           │                      │
 ├─────────────┼─────────────────────────────────────────────────┼───────────┼──────────────────────┤
 │ ④ PI 扩展   │ authz-config.mjs, lumi-envelope.mjs             │ 2 个 .mjs │ PI 已有，复用 authz  │
@@ -459,4 +469,4 @@ PI 运行时（完全不需要）                   PI 脚本中不用的
 │             │ blob, wikis/                                    │           │                      │
 └─────────────┴─────────────────────────────────────────────────┴───────────┴──────────────────────┘
 ```
-是的，依赖了 PI 的脚本。 6 个直接调用的脚本 + 9 个传递依赖的脚本，全部来自 .agents/pi/skills/html-report/scripts/。但只用了确定性内核部分（取数、evidence、caption 验证、compose-main），不碰 PI 的编排层（index.ts 8000 行）、Gate 状态机、四个子代理。这就是 handoff 文档里说的「确定性内核大部分可复用，控制面必须换」。
+是的，依赖了 PI 的脚本。 7 个直接调用的脚本 + 9 个传递依赖的脚本，全部来自 .agents/pi/skills/html-report/scripts/。但只用了确定性内核部分（取数、evidence、caption 验证、compose-main、export-main-html），不碰 PI 的编排层（index.ts 8000 行）、Gate 状态机、四个子代理。这就是 handoff 文档里说的「确定性内核大部分可复用，控制面必须换」。B2_MAIN 可选 HTML 与独立的 P5 Designer HTML 不是同一条路径。

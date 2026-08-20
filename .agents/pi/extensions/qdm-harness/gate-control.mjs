@@ -132,6 +132,9 @@ export function classifyGateInput(text) {
   if (normalized === "确认生成报告") return "confirm";
   if (normalized === "重试当前阶段") return "retry";
   if (normalized === "关闭单步调试并继续") return "disable_step";
+  if (normalized === "生成HTML") return "generate_html";
+  if (normalized === "重试HTML生成") return "retry_html";
+  if (normalized === "暂不生成HTML") return "skip_html";
   return null;
 }
 
@@ -453,7 +456,44 @@ export function initializeGateForHtmlReport(projectRoot, sessionId, mode = "step
   return initialized;
 }
 
-export function applyGateInput(projectRoot, sessionId, text) {
+function htmlGateRejected(action, rejected, message) {
+  return { handled: true, action, rejected, exportResult: null, message };
+}
+
+function formatHtmlExportMessage(action, exportResult, state) {
+  const gateText = state ? formatGateMessage(state, { stageId: "B2_MAIN" }) : "";
+  if (action === "skip_html") {
+    return ["已跳过 HTML 导出。", gateText].filter(Boolean).join("\n");
+  }
+  if (!exportResult?.ok) {
+    return [
+      `HTML 生成失败：${exportResult?.error || "unknown error"}`,
+      "analysis/main.md 未改写；B2_MAIN 仍可批准。",
+      "回复“重试 HTML 生成”重试导出，或回复“继续”/“暂不生成 HTML”跳过。",
+      gateText,
+    ].filter(Boolean).join("\n");
+  }
+  if (exportResult.status === "up_to_date") {
+    return [
+      "analysis/main.html 已是最新，未重复导出。",
+      exportResult.htmlPath ? `路径：${exportResult.htmlPath}` : "",
+      gateText,
+    ].filter(Boolean).join("\n");
+  }
+  return [
+    "已生成 analysis/main.html。",
+    exportResult.htmlPath ? `路径：${exportResult.htmlPath}` : "",
+    gateText,
+  ].filter(Boolean).join("\n");
+}
+
+async function exportMainHtmlForSession(sessionDir, exportHtml) {
+  if (typeof exportHtml === "function") return exportHtml(sessionDir);
+  const { exportMainHtml } = await import("../../skills/html-report/scripts/export-main-html.mjs");
+  return exportMainHtml(sessionDir);
+}
+
+export async function applyGateInput(projectRoot, sessionId, text, { exportHtml } = {}) {
   const action = classifyGateInput(text);
   if (!action) return { handled: false, action: null };
   const state = readGateState(projectRoot, sessionId);
@@ -484,6 +524,74 @@ export function applyGateInput(projectRoot, sessionId, text) {
   }
   if (action === "confirm" && state.currentStage !== "A_CONFIG") {
     return { handled: true, action, rejected: "confirm_only_approves_A_CONFIG" };
+  }
+  if (action === "generate_html" || action === "retry_html" || action === "skip_html") {
+    if (state.currentStage !== "B2_MAIN") {
+      return htmlGateRejected(action, "html_only_on_b2_main", "“生成 HTML”仅用于 B2 Main 阶段。");
+    }
+    if (state.status === "failed") {
+      return htmlGateRejected(action, "failed_stage_requires_retry", "当前阶段失败；请回复“重试当前阶段”。");
+    }
+    if (!["awaiting_approval", "completed"].includes(state.status)) {
+      return htmlGateRejected(action, "html_gate_not_ready", "当前 B2_MAIN 尚未完成 main.md，不能导出 HTML。");
+    }
+    if (action === "skip_html") {
+      if (state.status !== "awaiting_approval") {
+        return htmlGateRejected(action, "gate_not_waiting", "当前没有等待批准的 HTML 导出。");
+      }
+      const result = runStageGate(projectRoot, sessionId, "approve", [
+        "--phrase",
+        text,
+        "--actor",
+        "user",
+      ]);
+      const after = result.payload?.state || readGateState(projectRoot, sessionId);
+      return {
+        handled: true,
+        action,
+        result,
+        exportResult: null,
+        message: formatHtmlExportMessage(action, null, after),
+      };
+    }
+    const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+    let exportResult;
+    try {
+      exportResult = await exportMainHtmlForSession(sessionDir, exportHtml);
+    } catch (error) {
+      exportResult = {
+        ok: false,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (!exportResult?.ok) {
+      const current = readGateState(projectRoot, sessionId);
+      return {
+        handled: true,
+        action,
+        result: null,
+        exportResult,
+        message: formatHtmlExportMessage(action, exportResult, current),
+      };
+    }
+    let result = null;
+    if (state.status === "awaiting_approval") {
+      result = runStageGate(projectRoot, sessionId, "approve", [
+        "--phrase",
+        text,
+        "--actor",
+        "user",
+      ]);
+    }
+    const after = result?.payload?.state || readGateState(projectRoot, sessionId);
+    return {
+      handled: true,
+      action,
+      result,
+      exportResult,
+      message: formatHtmlExportMessage(action, exportResult, after),
+    };
   }
   if (state.status === "failed") {
     return { handled: true, action, rejected: "failed_stage_requires_retry" };
@@ -698,8 +806,10 @@ export function gateContextBanner(projectRoot, sessionId, state, options = {}) {
       lines.push(
         `\n${message}`,
         "- 初版 `$SESSION/analysis/main.md` 已由 compose-main 按卡片顺序合并。",
+        "- HTML 是 B2_MAIN 的可选动作，不是新 stage；禁止手写 HTML，禁止直接调用 md2html 或 Bash。",
         "- 立即原样返回上面的 Gate 文本并停止；不要改 MAIN、不要派 Planner/Researcher。",
-        "- 用户回复“继续”后才进入下一启用阶段。"
+        "- 用户回复“生成 HTML”成功后结束 B2_MAIN；回复“继续”或“暂不生成 HTML”跳过 HTML 并结束。",
+        "- “重试 HTML 生成”只重试导出，绝不重跑 Writer 或 compose-main。HTML 失败时 Gate 保持可批准。"
       );
     } else {
       lines.push(

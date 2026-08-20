@@ -900,11 +900,20 @@ export function formatGateMessage(state, { stageId: requestedStageId } = {}) {
   if ((stageId === "B5_DESIGN" || !nextEnabledStage(state, stageId)) && stage.status === "completed") {
     lines.push("下一阶段：已完成");
   } else if (stageId === state.currentStage && state.status === "awaiting_approval") {
-    lines.push(
-      `下一阶段：${nextLabel}`,
-      nextEnabledStage(state, stageId) ? "回复“继续”进入下一阶段" : "回复“继续”结束本阶段",
-      "当前必须立即停止工具调用，并将以上 Gate 文本原样返回用户；不要主动检查目录或文件"
-    );
+    const waitingLines = [`下一阶段：${nextLabel}`];
+    if (stageId === "B2_MAIN") {
+      waitingLines.push(
+        "回复“生成 HTML”生成 analysis/main.html，成功后结束本阶段",
+        "回复“继续”或“暂不生成 HTML”跳过 HTML 并结束本阶段",
+        "回复“重试 HTML 生成”仅重试导出，不会重跑 Writer 或 compose-main",
+      );
+    } else {
+      waitingLines.push(
+        nextEnabledStage(state, stageId) ? "回复“继续”进入下一阶段" : "回复“继续”结束本阶段",
+      );
+    }
+    waitingLines.push("当前必须立即停止工具调用，并将以上 Gate 文本原样返回用户；不要主动检查目录或文件");
+    lines.push(...waitingLines);
   } else if (stageId === state.currentStage && state.status === "paused") {
     lines.push(`暂停原因：${state.pauseReason || "等待恢复"}`, "回复“继续”恢复当前阶段");
   } else if (stage.status === "completed" && state.mode === "auto") {

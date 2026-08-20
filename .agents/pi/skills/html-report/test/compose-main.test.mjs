@@ -4,6 +4,7 @@ import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { composeMain } from "../scripts/compose-main.mjs";
+import { exportMainHtml } from "../scripts/export-main-html.mjs";
 import { rowsSha256 } from "../scripts/fetch-entry.mjs";
 import {
   approvePipelineStage,
@@ -170,6 +171,22 @@ test("compose-main then B2_MAIN finish waits for 继续", async (t) => {
   const approved = await approvePipelineStage(session);
   assert.equal(approved.state.status, "completed");
   assert.equal(approved.state.stages.B25_EDITOR, undefined);
+});
+
+test("optional HTML export failure does not rewrite a successful main.md", async (t) => {
+  const session = await seedSession(t, {
+    cards: [{ id: "south", title: "南方", rows: [{ 区域: "华南", 客数: 12 }] }],
+  });
+  const composed = await composeMain(session);
+  const before = await readFile(composed.mainPath, "utf8");
+  const failed = await exportMainHtml(session, {
+    spawnImpl: () => {
+      throw new Error("md2html missing");
+    },
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(await readFile(composed.mainPath, "utf8"), before);
+  assert.equal(await exists(join(session, "analysis", "main.html")), false);
 });
 
 test("compose-main renders Chinese headers and dimension-first ordering with column-meta + query", async (t) => {

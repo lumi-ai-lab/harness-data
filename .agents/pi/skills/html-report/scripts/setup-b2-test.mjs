@@ -201,6 +201,7 @@ const RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/designer-return.mjs",
   ".agents/pi/skills/html-report/scripts/assemble-report.mjs",
   ".agents/pi/skills/html-report/scripts/compose-main.mjs",
+  ".agents/pi/skills/html-report/scripts/export-main-html.mjs",
   ".agents/pi/skills/html-report/scripts/quality-scan.mjs",
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",

@@ -9,6 +9,7 @@ import {
   b25EditorBootstrapContract,
   b25EditorToolDecision,
   b2WriterMainWorkAccepted,
+  applyGateInput,
   classifyGateInput,
   gateContextBanner,
   gateToolDecision,
@@ -26,8 +27,10 @@ import {
   applyPipelinePolicy,
   finishPipelineStage,
   formatGateMessage,
+  initPipeline,
   pipelineStatePath,
   pipelineStatus,
+  startPipelineStage,
   LEGACY_STAGE_POLICY,
 } from "../scripts/stage-gate.mjs";
 import { researcherReturnPaths } from "../scripts/researcher-return.mjs";
@@ -720,14 +723,117 @@ test("B2 stage runner treats awaiting Main approval as successful work", () => {
   }), false);
 });
 
-test("only explicit gate phrases are classified", () => {
+async function seedB2MainGate(t, name) {
+  const root = await mkdtemp(join(tmpdir(), `html-report-${name}-`));
+  const sid = name;
+  const session = htmlReportSessionDir(root, sid);
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(session, { recursive: true });
+  await writeFile(join(session, "result.json"), JSON.stringify({
+    status: "confirmed",
+    session_id: sid,
+    cards: [],
+  }));
+  await mkdir(join(session, "analysis"), { recursive: true });
+  await writeFile(join(session, "analysis", "main.md"), "# 初版\n");
+  await initPipeline(session, { mode: "step", sessionId: sid });
+  await startPipelineStage(session, "A_CONFIG");
+  await finishPipelineStage(session, "A_CONFIG");
+  await approvePipelineStage(session);
+  await finishPipelineStage(session, "B0_PREFLIGHT");
+  await finishPipelineStage(session, "B2_WRITER");
+  await finishPipelineStage(session, "B2_MAIN");
+  return { root, sid, session };
+}
+
+test("HTML phrases only run on B2_MAIN; export failure keeps the gate approvable", async (t) => {
+  const waitingA = waitingState({
+    currentStage: "A_CONFIG",
+    status: "awaiting_approval",
+    stages: { A_CONFIG: { status: "awaiting_approval", attempts: [{ number: 1, startedAt: "2026-08-20T00:00:00.000Z" }] } },
+  });
+  const aRoot = await mkdtemp(join(tmpdir(), "html-report-a-config-html-"));
+  t.after(async () => rm(aRoot, { recursive: true, force: true }));
+  const aSid = "a-config-html";
+  const aSession = htmlReportSessionDir(aRoot, aSid);
+  await mkdir(dirname(pipelineStatePath(aSession)), { recursive: true });
+  await writeFile(
+    pipelineStatePath(aSession),
+    JSON.stringify(persistedGateState(waitingA, aSid, aRoot)),
+  );
+  const rejected = await applyGateInput(aRoot, aSid, "生成 HTML");
+  assert.equal(rejected.rejected, "html_only_on_b2_main");
+
+  const seeded = await seedB2MainGate(t, "html-fail-continue");
+  const failed = await applyGateInput(seeded.root, seeded.sid, "生成 HTML", {
+    exportHtml: async () => ({ ok: false, status: "failed", error: "md2html boom" }),
+  });
+  assert.equal(failed.handled, true);
+  assert.equal(failed.exportResult.ok, false);
+  assert.equal(readGateState(seeded.root, seeded.sid).status, "awaiting_approval");
+  assert.match(failed.message, /HTML 生成失败/);
+  assert.match(await readFile(join(seeded.session, "analysis", "main.md"), "utf8"), /初版/);
+
+  const skipped = await applyGateInput(seeded.root, seeded.sid, "继续");
+  assert.equal(skipped.result?.ok, true);
+  assert.equal(readGateState(seeded.root, seeded.sid).status, "completed");
+});
+
+test("生成 HTML success approves B2_MAIN; skip and retry stay on the export path", async (t) => {
+  const generated = await seedB2MainGate(t, "html-generate-ok");
+  const ok = await applyGateInput(generated.root, generated.sid, "生成 HTML", {
+    exportHtml: async () => ({
+      ok: true,
+      status: "generated",
+      htmlPath: join(generated.session, "analysis", "main.html"),
+    }),
+  });
+  assert.equal(ok.exportResult.status, "generated");
+  assert.equal(readGateState(generated.root, generated.sid).status, "completed");
+  assert.match(ok.message, /已生成 analysis\/main\.html/);
+
+  const skipSession = await seedB2MainGate(t, "html-skip");
+  const skipped = await applyGateInput(skipSession.root, skipSession.sid, "暂不生成 HTML", {
+    exportHtml: async () => {
+      throw new Error("skip must not export");
+    },
+  });
+  assert.equal(skipped.action, "skip_html");
+  assert.equal(skipped.exportResult, null);
+  assert.equal(readGateState(skipSession.root, skipSession.sid).status, "completed");
+
+  const retrySession = await seedB2MainGate(t, "html-retry");
+  const retryFail = await applyGateInput(retrySession.root, retrySession.sid, "重试 HTML 生成", {
+    exportHtml: async () => ({ ok: false, status: "failed", error: "once" }),
+  });
+  assert.equal(readGateState(retrySession.root, retrySession.sid).status, "awaiting_approval");
+  const retryOk = await applyGateInput(retrySession.root, retrySession.sid, "重试 HTML 生成", {
+    exportHtml: async () => ({ ok: true, status: "generated", htmlPath: "/tmp/main.html" }),
+  });
+  assert.equal(retryFail.action, "retry_html");
+  assert.equal(retryOk.exportResult.status, "generated");
+  assert.equal(readGateState(retrySession.root, retrySession.sid).status, "completed");
+
+  const later = await applyGateInput(generated.root, generated.sid, "生成 HTML", {
+    exportHtml: async () => ({ ok: true, status: "up_to_date", htmlPath: join(generated.session, "analysis", "main.html") }),
+  });
+  assert.equal(later.exportResult.status, "up_to_date");
+  assert.equal(readGateState(generated.root, generated.sid).status, "completed");
+});
+
+test("original four gate phrases still classify after HTML options", () => {
   assert.equal(classifyGateInput("继续"), "continue");
   assert.equal(classifyGateInput("继续。"), "continue");
   assert.equal(classifyGateInput("确认生成报告"), "confirm");
   assert.equal(classifyGateInput("重试当前阶段"), "retry");
   assert.equal(classifyGateInput("关闭单步调试并继续"), "disable_step");
+  assert.equal(classifyGateInput("生成 HTML"), "generate_html");
+  assert.equal(classifyGateInput("生成HTML"), "generate_html");
+  assert.equal(classifyGateInput("重试 HTML 生成"), "retry_html");
+  assert.equal(classifyGateInput("暂不生成 HTML"), "skip_html");
   assert.equal(classifyGateInput("请继续分析"), null);
   assert.equal(classifyGateInput("可以了"), null);
+  assert.equal(classifyGateInput("生成一下 HTML"), null);
 });
 
 test("running report stages reveal only the stable stage runner tool", () => {
@@ -804,6 +910,23 @@ test("running report stages reveal only the stable stage runner tool", () => {
   const editorBanner = gateContextBanner(repoRoot, "editor-next-tool-banner", editorState);
   assert.equal(editorBanner, `NEXT_TOOL_ONLY：${HTML_REPORT_STAGE_TOOL}()`);
   assert.doesNotMatch(editorBanner, /subagent|sibling|stage-gate|HTML_REPORT_EDITOR_PLAN_V1/);
+
+  const mainWaiting = waitingState({
+    currentStage: "B2_MAIN",
+    nextStage: null,
+    stages: {
+      B2_MAIN: {
+        status: "awaiting_approval",
+        attempts: [{ number: 1, status: "completed", startedAt: "2026-08-20T00:00:00.000Z" }],
+      },
+    },
+  });
+  const mainBanner = gateContextBanner(repoRoot, "b2-main-html-banner", mainWaiting);
+  assert.match(mainBanner, /生成 HTML/);
+  assert.match(mainBanner, /暂不生成 HTML/);
+  assert.match(mainBanner, /重试 HTML 生成/);
+  assert.match(mainBanner, /禁止手写 HTML，禁止直接调用 md2html 或 Bash/);
+  assert.match(mainBanner, /HTML 失败时 Gate 保持可批准/);
 });
 
 test("running report stage exposes only the registered stage runner tool", async (t) => {
@@ -1346,6 +1469,7 @@ test("runtime contract fingerprints child guards and authoritative report script
     "report-designer-guard/index.mjs",
     "report-designer-guard/guard.mjs",
     "assemble-report.mjs",
+    "export-main-html.mjs",
     "quality-scan.mjs",
     "researcher-return.mjs",
     "submit-research-findings.mjs",

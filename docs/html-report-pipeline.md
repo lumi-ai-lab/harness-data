@@ -1,6 +1,6 @@
 # html-report 全流程方案（落档）
 
-更新时间：2026-08-18（Asia/Shanghai）
+更新时间：2026-08-20（Asia/Shanghai）
 
 > 本文档固化 **配置闭环 + 报告生成** 的完整设计，避免上下文压缩后方案丢失。
 > **已实现：P0–P5（含 P3 Report Researcher）+ 默认单步调试 Gate**。
@@ -62,7 +62,9 @@ $SESSION/debug/pipeline-state.json
 
 默认人工 Gate 顺序为 `A_CONFIG → B2_MAIN`；后续启用完整流水线时还包括
 `B3_RESEARCH → B4_REVIEW`。`B0_PREFLIGHT`、`B2_WRITER` 与 `B25_EDITOR`
-成功时自动推进，失败时才停住。`B25_EDITOR` 独立计时但不额外等待用户，
+成功时自动推进，失败时才停住。`B2_MAIN` 在写出 `analysis/main.md` 后询问是否
+生成同级 `analysis/main.html`（可选，不新增 stage）；这与独立的 P5 Designer
+HTML（`report/`）不是同一条路径。`B25_EDITOR` 独立计时但不额外等待用户，
 在 B3 Gate 同时展示 Editor 与 Researcher 耗时。
 
 每个阶段严格执行 `start（扩展启动）→ 工作 → layout → finish/fail →
@@ -393,6 +395,10 @@ Report Editor：定位 session（`PI_SESSION_ID` 或 `result.json` 路径）→ 
 
 `render-report.mjs` 不再处于正常路径，只保留显式 fallback。内容正确性由脚本保证，视觉设计由隔离的 Designer SubAgent 决定。
 
+B2_MAIN 可选的 `md2html` 导出（`analysis/main.html`）**不是** P5。它不读
+`quality/verdict.json`，不经过 Designer，也不写入 `report/`。两条 HTML 路径
+保持独立。
+
 ---
 
 ## 8. 实施分期状态
@@ -479,7 +485,8 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 ## 11. Codex CLI / ChatGPT App 切面（首版）
 
 首版只跑到 `analysis/main.md`（A_CONFIG → B0 → B2_WRITER → B2_MAIN）。
-不做 B25/B3/B4/B5，不做浏览器 / HTML / Designer。
+不做 B25/B3/B4/B5，不做浏览器 / P5 Designer HTML。B2_MAIN 之后可按用户明确
+确认，用 PATH 中的 `md2html` 在同级生成 `analysis/main.html`。
 
 ### 11.1 架构
 
@@ -488,7 +495,7 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
         Session / fetch-entry / evidence / compose-main
                      │
               本地 Node MCP（无外部依赖）
-        html_report_start / next / submit_writer / status
+        html_report_start / next / submit_writer / generate_html / status
                      │
           官方 Plugin（唯一对外界面）
            Skill.md  +  .mcp.json  +  plugin.json
@@ -500,7 +507,8 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 ```
 
 运行时最低依赖：Node、`qdm-metric-cli`、仓库、ChatGPT App **或** Codex CLI。
-**不依赖：** `codex` 二进制、PI、hooks、custom agents、浏览器。
+用户确认导出 HTML 时还需要 PATH 中的 `md2html`。
+**不依赖：** `codex` 二进制、PI、hooks、custom agents、浏览器、P5 Designer。
 
 ### 11.2 Plugin 位置
 
@@ -521,7 +529,8 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 | `html_report_start` | 建 Session，打开 qdm-metric-cli ui（`--watch-pid` 绑 MCP 进程） |
 | `html_report_next` | B0 预检 → 逐卡 fetch-entry + evidence → compose-main.mjs |
 | `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md` |
-| `html_report_status` | 返回当前 stage / cards 状态 |
+| `html_report_generate_html` | 用户明确确认后，把 `analysis/main.md` 导出为同级 `main.html` |
+| `html_report_status` | 返回当前 stage / cards 状态和只读 html 摘要 |
 
 ### 11.4 B0 差异（App/CLI vs PI）
 
@@ -546,6 +555,7 @@ App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。
   → 宿主只返回 caption paragraphs + pointers → submit_writer
   → 所有卡完成后 compose-main.mjs
   → 交卷 analysis/main.md，停在 B2_MAIN
+  → Skill 询问是否生成 HTML；仅在用户明确同意后调用 html_report_generate_html
 ```
 
 父模型不得自己 finish Gate，不得手写 `entry.json` / `main.md`。

@@ -1,6 +1,6 @@
 ---
 name: html-report
-description: Open qdm-metric-cli ui for the user to save result.json, then generate analysis/main.md (first version, stops at B2_MAIN).
+description: Open qdm-metric-cli ui for the user to save result.json, then generate analysis/main.md (first version, optional sibling HTML at B2_MAIN).
 ---
 
 # HTML Report (Codex CLI / ChatGPT App)
@@ -9,13 +9,14 @@ This skill drives the html-report pipeline through a local MCP server.
 It works on **both Codex CLI and ChatGPT Desktop App** — no `codex` binary
 required on the production path.
 
-The MCP server exposes four tools. Call them in order:
+The MCP server exposes five tools. Call them in order:
 
 ```
-html_report_start    → create session, open qdm-metric-cli ui
-html_report_next     → advance pipeline (B0 preflight → B2 per-card fetch)
-html_report_submit_writer → submit caption for the current card
-html_report_status   → query current state
+html_report_start          → create session, open qdm-metric-cli ui
+html_report_next           → advance pipeline (B0 preflight → B2 per-card fetch)
+html_report_submit_writer  → submit caption for the current card
+html_report_generate_html  → optional analysis/main.md → sibling main.html
+html_report_status         → query current state
 ```
 
 ## Pipeline (first version)
@@ -27,10 +28,13 @@ B0_PREFLIGHT    validate result.json + metric CLI (no PI Agent check)
   ↓ auto-advance on pass
 B2_WRITER       per card: fetch-entry → prepare evidence → host writes caption
   ↓ submit_writer per card
-B2_MAIN         compose-main.mjs → analysis/main.md (STOP)
+B2_MAIN         compose-main.mjs → analysis/main.md
+  ↓ ask whether to generate HTML; only then html_report_generate_html
+optional HTML   export-main-html.mjs → analysis/main.html (same directory)
 ```
 
-Stops at `B2_MAIN`. No B25/B3/B4/B5, no HTML, no Designer.
+Stops at `B2_MAIN`. No B25/B3/B4/B5, no P5 Designer HTML. Sibling `main.html`
+is optional and only after explicit user confirmation.
 
 ## How to use
 
@@ -86,18 +90,37 @@ Then call `html_report_submit_writer`:
 Call `html_report_next` again to fetch the next card (or finish if all cards
 are done). When all cards have captions, `html_report_next` calls
 `compose-main.mjs` and returns `stage: "b2_main"` with the path to
-`analysis/main.md`. The pipeline stops there.
+`analysis/main.md` and `html: "awaiting_confirmation"`.
+
+### 5. Optional HTML
+
+After `html_report_next` returns `stage: "b2_main"`, ask the user exactly:
+
+> 初版 `analysis/main.md` 已生成。是否生成同级 `analysis/main.html`？
+
+- If the user **explicitly agrees** (e.g. 生成 HTML / 要 / 是), call only:
+
+```json
+html_report_generate_html({ "sessionId": "<id>" })
+```
+
+- If the user declines or says 继续 / 暂不生成 HTML, **do not** call the tool.
+- If export fails, tell the user the error. They may ask to retry; then call
+  `html_report_generate_html` again. Do not retry on your own.
+- This HTML is **not** P5 Designer HTML. Never write HTML yourself, never call
+  `md2html` or a shell, and never pass output paths or md2html options.
 
 ## Rules
 
-- **Never** write `entry.json`, `entry.meta.json`, `caption.md`, or `main.md` yourself.
-- **Never** call `qdm-metric-cli` directly — all data comes through the MCP tools.
+- **Never** write `entry.json`, `entry.meta.json`, `caption.md`, `main.md`, or `main.html` yourself.
+- **Never** call `qdm-metric-cli` or `md2html` directly — all data and HTML export come through the MCP tools.
 - **Never** invent numbers. Every value must trace to an evidence view.
 - **Never** skip the user's **继续** reply after A_CONFIG.
+- **Never** call `html_report_generate_html` unless the user explicitly asked to generate HTML.
 - If `html_report_next` or `html_report_submit_writer` returns an error, tell the
   user the error message and stop. Do not retry without user direction.
-- If the user asks about the full pipeline (B3/B4/B5, HTML), explain that the
-  first version stops at `analysis/main.md`.
+- If the user asks about the full pipeline (B3/B4/B5, Designer HTML), explain that
+  the first version stops at `analysis/main.md`, with optional sibling `main.html`.
 
 ## Reference
 

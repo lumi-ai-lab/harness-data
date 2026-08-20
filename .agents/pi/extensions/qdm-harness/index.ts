@@ -381,6 +381,7 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/skills/html-report/scripts/designer-return.mjs",
   ".agents/pi/skills/html-report/scripts/assemble-report.mjs",
   ".agents/pi/skills/html-report/scripts/compose-main.mjs",
+  ".agents/pi/skills/html-report/scripts/export-main-html.mjs",
   ".agents/pi/skills/html-report/scripts/quality-scan.mjs",
   ".agents/pi/skills/html-report/scripts/submit-review-scorecard.mjs",
   ".agents/pi/skills/html-report/scripts/write-verdict.mjs",
@@ -7447,7 +7448,7 @@ export default function qdmHarnessExtension(pi: {
         );
         return { action: "continue" };
       }
-      const result = applyGateInput(projectRoot, sid, text);
+      const result = await applyGateInput(projectRoot, sid, text);
       if (result.result && !result.result.ok) {
         ctx?.ui?.notify?.(`html-report Gate 未变更：${result.result.error}`, "warning");
       } else if (result.rejected === "failed_stage_requires_retry") {
@@ -7456,6 +7457,8 @@ export default function qdmHarnessExtension(pi: {
         ctx?.ui?.notify?.("当前阶段不是 failed，无需重试。", "info");
       } else if (result.rejected === "confirm_only_approves_A_CONFIG") {
         ctx?.ui?.notify?.("“确认生成报告”仅用于批准 A_CONFIG；后续 Gate 请回复“继续”。", "warning");
+      } else if (result.rejected === "html_only_on_b2_main") {
+        ctx?.ui?.notify?.("“生成 HTML”仅用于 B2 Main 阶段。", "warning");
       }
       // Restrict before Pi constructs the next agent/provider prompt. Doing
       // this only in before_agent_start is too late for providers that already
@@ -7466,6 +7469,42 @@ export default function qdmHarnessExtension(pi: {
       });
       if (debugB5Skip?.handled) return { action: "handled" };
       if (!syncStageRunnerTools(sid, afterGateInput)) restrictB2StartupTools(sid, afterGateInput);
+      const htmlGateAction = gateAction === "generate_html" || gateAction === "retry_html" || gateAction === "skip_html";
+      if (htmlGateAction && result.handled) {
+        const textOut = typeof result.message === "string" && result.message
+          ? result.message
+          : "B2_MAIN HTML 导出请求已处理。";
+        const exportFailed = result.exportResult != null && result.exportResult.ok === false;
+        ctx?.ui?.notify?.(textOut, exportFailed || result.rejected ? "warning" : "info");
+        if (typeof pi.sendMessage === "function") {
+          try {
+            pi.sendMessage({
+              customType: HTML_REPORT_GATE_CUSTOM_TYPE,
+              content: textOut,
+              display: true,
+              details: {
+                version: 1,
+                producer: "qdm-harness",
+                sessionId: sid,
+                stageId: "B2_MAIN",
+                currentStage: afterGateInput?.currentStage || "B2_MAIN",
+                pipelineStatus: afterGateInput?.status || null,
+                stageStatus: isObject(afterGateInput?.stages) && isObject(afterGateInput.stages.B2_MAIN)
+                  ? afterGateInput.stages.B2_MAIN.status
+                  : null,
+                htmlExport: result.exportResult?.status || result.action,
+                attempt: stageAttemptDetails(afterGateInput, "B2_MAIN"),
+              },
+            }, { triggerTurn: false });
+          } catch (error) {
+            ctx?.ui?.notify?.(
+              `HTML 导出门控消息写入失败：${error instanceof Error ? error.message : String(error)}`,
+              "warning"
+            );
+          }
+        }
+        return { action: "handled" };
+      }
       const idleInput = !isObject(event) || event.streamingBehavior === undefined;
       if (
         idleInput &&

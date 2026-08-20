@@ -3,12 +3,13 @@
  * html-report MCP server for Codex CLI / ChatGPT App.
  *
  * Stdio JSON-RPC 2.0 server, no external dependencies.
- * Exposes four tools that drive the pipeline from A_CONFIG to B2_MAIN:
+ * Exposes five tools that drive the pipeline from A_CONFIG to B2_MAIN:
  *
- *   html_report_start         create session, open qdm-metric-cli ui
- *   html_report_next          advance pipeline (B0 → B2 per-card fetch)
- *   html_report_submit_writer accept host caption, write caption.md
- *   html_report_status        query current state
+ *   html_report_start          create session, open qdm-metric-cli ui
+ *   html_report_next           advance pipeline (B0 → B2 per-card fetch)
+ *   html_report_submit_writer  accept host caption, write caption.md
+ *   html_report_generate_html  optional main.md → sibling main.html export
+ *   html_report_status         query current state
  *
  * Reuses PI scripts in place — no code duplication, no PI runtime dependency.
  * B0 does NOT check for four PI agents (unlike PI B0).
@@ -185,7 +186,8 @@ async function htmlReportNext(args) {
       return {
         stage: "b2_main",
         mainPath: state.mainPath,
-        message: "analysis/main.md is ready. Pipeline stops here for the first version.",
+        html: "awaiting_confirmation",
+        message: "analysis/main.md is ready. Ask the user whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation.",
       };
     }
 
@@ -207,10 +209,16 @@ async function htmlReportNext(args) {
 
   // ── B2_MAIN: already done ──
   if (state.stage === "b2_main") {
+    const { htmlExportSummary } = await importScript("export-main-html.mjs");
+    const html = await htmlExportSummary(sessionDir);
     return {
       stage: "b2_main",
       mainPath: state.mainPath || join(sessionDir, "analysis", "main.md"),
-      message: "Pipeline already completed. analysis/main.md is ready.",
+      html: html.status,
+      htmlPath: html.htmlPath,
+      message: html.status === "awaiting_confirmation"
+        ? "Pipeline already completed. analysis/main.md is ready. Ask the user whether to generate analysis/main.html."
+        : "Pipeline already completed. analysis/main.md is ready.",
     };
   }
 
@@ -295,6 +303,31 @@ async function htmlReportSubmitWriter(args) {
   };
 }
 
+function rejectUnexpectedArgs(args, allowed, toolName) {
+  const extra = Object.keys(args || {}).filter((key) => !allowed.has(key));
+  if (extra.length) {
+    throw new Error(`${toolName} only accepts ${[...allowed].join(", ")}; unexpected: ${extra.join(", ")}`);
+  }
+}
+
+/**
+ * html_report_generate_html: optional sibling HTML export after B2_MAIN.
+ * Skill must obtain explicit user confirmation before calling this tool.
+ */
+async function htmlReportGenerateHtml(args) {
+  rejectUnexpectedArgs(args, new Set(["sessionId"]), "html_report_generate_html");
+  const sessionId = String(args.sessionId || "").trim();
+  if (!sessionId) throw new Error("sessionId is required");
+  const sessionDir = sessionDirFor(sessionId);
+  const state = await readState(sessionDir);
+  if (!state) throw new Error(`no active session: ${sessionId}`);
+  if (state.stage !== "b2_main") {
+    throw new Error(`cannot generate HTML in stage ${state.stage}; expected b2_main`);
+  }
+  const { exportMainHtml } = await importScript("export-main-html.mjs");
+  return exportMainHtml(sessionDir);
+}
+
 /**
  * html_report_status: return current session state.
  */
@@ -305,6 +338,11 @@ async function htmlReportStatus(args) {
   const state = await readState(sessionDir);
   if (!state) return { sessionId, stage: "none", message: "No active session. Call html_report_start first." };
 
+  const { htmlExportSummary } = await importScript("export-main-html.mjs");
+  const html = state.stage === "b2_main"
+    ? await htmlExportSummary(sessionDir)
+    : { status: "not_applicable", htmlPath: null, error: null, attempt: null };
+
   return {
     sessionId,
     stage: state.stage,
@@ -312,6 +350,7 @@ async function htmlReportStatus(args) {
     currentIndex: state.currentIndex,
     mainPath: state.mainPath || null,
     startedAt: state.startedAt || null,
+    html,
   };
 }
 
@@ -355,6 +394,17 @@ const TOOLS = [
     },
   },
   {
+    name: "html_report_generate_html",
+    description: "Export analysis/main.md to sibling analysis/main.html via md2html. Call only after the user explicitly confirms HTML generation. Accepts only sessionId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session ID from html_report_start." },
+      },
+      required: ["sessionId"],
+    },
+  },
+  {
     name: "html_report_status",
     description: "Query the current pipeline state for a session.",
     inputSchema: {
@@ -371,6 +421,7 @@ const HANDLERS = {
   html_report_start: htmlReportStart,
   html_report_next: htmlReportNext,
   html_report_submit_writer: htmlReportSubmitWriter,
+  html_report_generate_html: htmlReportGenerateHtml,
   html_report_status: htmlReportStatus,
 };
 
@@ -452,21 +503,28 @@ async function selfTest() {
   };
 
   // tool list
-  eq("tool count", TOOLS.length, 4);
-  eq("tool names", TOOLS.map((t) => t.name), ["html_report_start", "html_report_next", "html_report_submit_writer", "html_report_status"]);
+  eq("tool count", TOOLS.length, 5);
+  eq("tool names", TOOLS.map((t) => t.name), [
+    "html_report_start",
+    "html_report_next",
+    "html_report_submit_writer",
+    "html_report_generate_html",
+    "html_report_status",
+  ]);
 
   // path resolution
   eq("scriptsDir exists", existsSync(scriptsDir), true);
   eq("open-metric-cli-ui exists", existsSync(join(scriptsDir, "open-metric-cli-ui.mjs")), true);
   eq("fetch-entry exists", existsSync(join(scriptsDir, "fetch-entry.mjs")), true);
   eq("compose-main exists", existsSync(join(scriptsDir, "compose-main.mjs")), true);
+  eq("export-main-html exists", existsSync(join(scriptsDir, "export-main-html.mjs")), true);
   eq("submit-card-caption exists", existsSync(join(scriptsDir, "submit-card-caption.mjs")), true);
   eq("prepare-card-caption-evidence exists", existsSync(join(scriptsDir, "prepare-card-caption-evidence.mjs")), true);
 
   const passed = asserts.filter((a) => a.ok).length;
   const failed = asserts.length - passed;
   console.log(`self-test: ${passed}/${asserts.length} passed${failed ? `, ${failed} FAILED` : ""}`);
-  if (failed > 0) process.exitCode = 1;
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 if (process.argv.includes("--self-test")) {

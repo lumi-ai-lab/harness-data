@@ -93,7 +93,7 @@ slice:
 | 1 | `A_CONFIG` | yes | on |
 | 2 | `B0_PREFLIGHT` | no; failure only | on; pass auto-advances |
 | 3 | `B2_WRITER` | no | on; journalists fetch then caption |
-| 4 | `B2_MAIN` | yes | on; `compose-main.mjs` writes `analysis/main.md` |
+| 4 | `B2_MAIN` | yes | on; `compose-main.mjs` writes `analysis/main.md`; optional sibling HTML |
 | 5 | `B25_EDITOR` | no | **off** until later slices |
 | 6 | `B3_RESEARCH` | yes | **off** |
 | 7 | `B4_REVIEW` | yes | **off** |
@@ -108,7 +108,14 @@ Stage Runner performs work + validation + finish/fail → parent returns Gate te
 
 - In `step` mode, after a human Gate return the exact timing text from the tool
   and stop. Only the user's exact reply **“继续”** starts the next stage.
+- `B2_MAIN` is an extra exception: after `analysis/main.md` is written, HTML is
+  optional. Exact replies **“生成 HTML”** / **“重试 HTML 生成”** export
+  `analysis/main.html` via the extension; **“继续”** or **“暂不生成 HTML”** skip
+  HTML and finish B2_MAIN. Never write HTML, never call `md2html` or Bash.
+- Auto mode never auto-exports HTML. The user can still say **“生成 HTML”**
+  after B2_MAIN has completed.
 - A failed Gate only accepts **“重试当前阶段”**. Ordinary “继续” cannot skip it.
+- HTML conversion failure does not fail B2_MAIN; the user may retry or skip.
 - In `auto` mode successful stages advance without approval.
 - **“关闭单步调试并继续”** switches the current session to auto mode.
 - Never call `approve`, `retry`, `resume`, `status`, `finish` or `fail` yourself.
@@ -336,13 +343,14 @@ $SESSION/debug/contract-runtime/
 - 使用 builtin `worker` / `delegate` 顶替任何 `report-*` Agent
 - 手写 Writer entry/meta/caption、Researcher evidence/section、Reviewer verdict 或
   Designer HTML/截图/签章来绕过验收
+- 在 B2_MAIN 手写 `analysis/main.html`，或直接调用 `md2html` / Bash 做 HTML 导出
 - 同一 attempt 重派、timeout 后 fallback，或把旧 attempt 的迟到结果用于新 attempt
 
 ### Stage-owned artifacts
 
 | Stage | Stage Runner 验收的权威产物 |
 | --- | --- |
-| B2 Writer/Main | `data/cards/*/entry.json`、`entry.meta.json`、`caption.md`、`analysis/main.md` |
+| B2 Writer/Main | `data/cards/*/entry.json`、`entry.meta.json`、`caption.md`、`analysis/main.md`；可选同级 `analysis/main.html`（用户明确同意后由 `export-main-html.mjs` 生成，不是 P5 Designer HTML） |
 | B2.5 | `analysis/tasks.json`、materialized `analysis/main.md`、prepared evidence |
 | B3 | Researcher evidence/section/summary、最终 `report/report.md` 与 render manifest |
 | B4 | `quality/scan.json`、stamped `quality/verdict.json`、`quality/report.md` |

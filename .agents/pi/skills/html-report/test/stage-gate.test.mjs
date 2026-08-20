@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { applyGateInput } from "../../../extensions/qdm-harness/gate-control.mjs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   approvePipelineStage,
   failPipelineStage,
@@ -271,12 +272,64 @@ test("default policy auto-advances B0 and B2_WRITER, then stops at B2_MAIN", asy
   const finishedMain = await finishPipelineStage(session, "B2_MAIN", { now: at(7) });
   assert.equal(finishedMain.state.status, "awaiting_approval");
   assert.equal(finishedMain.state.currentStage, "B2_MAIN");
-  assert.match(finishedMain.message, /回复“继续”结束本阶段/);
+  assert.match(finishedMain.message, /回复“生成 HTML”生成 analysis\/main\.html，成功后结束本阶段/);
+  assert.match(finishedMain.message, /回复“继续”或“暂不生成 HTML”跳过 HTML 并结束本阶段/);
+  assert.match(finishedMain.message, /回复“重试 HTML 生成”仅重试导出，不会重跑 Writer 或 compose-main/);
 
   const approved = await approvePipelineStage(session, { now: at(8) });
   assert.equal(approved.state.status, "completed");
   assert.equal(approved.state.currentStage, "B2_MAIN");
   assert.equal(approved.state.stages.B25_EDITOR, undefined);
+});
+
+test("auto mode finishes B2_MAIN without exporting HTML", async (t) => {
+  const session = await makeSession(t, "auto-no-html");
+  await confirmResult(session);
+  await mkdir(join(session, "analysis"), { recursive: true });
+  await writeFile(join(session, "analysis", "main.md"), "# auto\n");
+  await initPipeline(session, { mode: "auto", now: at(0) });
+  await startPipelineStage(session, "A_CONFIG", { now: at(1) });
+  await finishPipelineStage(session, "A_CONFIG", { now: at(2) });
+  await finishPipelineStage(session, "B0_PREFLIGHT", { now: at(3) });
+  await finishPipelineStage(session, "B2_WRITER", { now: at(4) });
+  const finished = await finishPipelineStage(session, "B2_MAIN", { now: at(5) });
+  assert.equal(finished.state.status, "completed");
+  assert.doesNotMatch(finished.message, /生成 HTML/);
+  await assert.rejects(readFile(join(session, "analysis", "main.html")), (error) => error.code === "ENOENT");
+});
+
+test("生成 HTML approves B2_MAIN; 继续 still skips HTML", async (t) => {
+  const generate = await makeSession(t, "html-approve");
+  await confirmResult(generate);
+  await initPipeline(generate, { mode: "step", sessionId: "html-approve", now: at(0) });
+  await startPipelineStage(generate, "A_CONFIG", { now: at(1) });
+  await finishPipelineStage(generate, "A_CONFIG", { now: at(2) });
+  await approvePipelineStage(generate, { now: at(3) });
+  await finishPipelineStage(generate, "B0_PREFLIGHT", { now: at(4) });
+  await finishPipelineStage(generate, "B2_WRITER", { now: at(5) });
+  await finishPipelineStage(generate, "B2_MAIN", { now: at(6) });
+  const generateRoot = resolve(generate, "../../../..");
+  const generated = await applyGateInput(generateRoot, "html-approve", "生成 HTML", {
+    exportHtml: async () => ({ ok: true, status: "generated", htmlPath: join(generate, "analysis", "main.html") }),
+  });
+  assert.equal(generated.exportResult.status, "generated");
+  assert.equal((await pipelineStatus(generate)).state.status, "completed");
+
+  const skipped = await makeSession(t, "html-skip-continue");
+  await confirmResult(skipped);
+  await initPipeline(skipped, { mode: "step", sessionId: "html-skip-continue", now: at(0) });
+  await startPipelineStage(skipped, "A_CONFIG", { now: at(1) });
+  await finishPipelineStage(skipped, "A_CONFIG", { now: at(2) });
+  await approvePipelineStage(skipped, { now: at(3) });
+  await finishPipelineStage(skipped, "B0_PREFLIGHT", { now: at(4) });
+  await finishPipelineStage(skipped, "B2_WRITER", { now: at(5) });
+  await finishPipelineStage(skipped, "B2_MAIN", { now: at(6) });
+  const skipRoot = resolve(skipped, "../../../..");
+  const continued = await applyGateInput(skipRoot, "html-skip-continue", "继续");
+  assert.equal(continued.action, "continue");
+  assert.equal(continued.exportResult, undefined);
+  assert.equal((await pipelineStatus(skipped)).state.status, "completed");
+  await assert.rejects(readFile(join(skipped, "analysis", "main.html")), (error) => error.code === "ENOENT");
 });
 
 test("disabled stages are skipped when advancing", async (t) => {
