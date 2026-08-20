@@ -1,0 +1,53 @@
+name: Mirror to Gitee
+
+on:
+  workflow_call:
+    inputs:
+      version_tag:
+        description: Release tag to mirror, for example v0.0.48
+        required: true
+        type: string
+    secrets:
+      GITEE_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to mirror, for example v0.0.48
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror release assets
+    runs-on: ubuntu-latest
+
+    env:
+      VERSION_TAG: ${{ inputs.version_tag || inputs.tag }}
+      GITEE_OWNER: git_pengmd
+      GITEE_REPO: harness-release
+      GITHUB_REPO: lumi-ai-lab/harness-data
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VERSION_TAG }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Mirror release assets to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || secrets.GITEE_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/mirror-gitee.mjs --tag "${VERSION_TAG}"
