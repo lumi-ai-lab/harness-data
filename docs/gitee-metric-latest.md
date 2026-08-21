@@ -10,7 +10,7 @@
   mirror-gitee:
     name: Mirror qdm-metric-cli to Gitee
     needs: release
-    uses: lumi-ai-lab/harness-data/.github/workflows/mirror-gitee.yml@main
+    uses: lumi-ai-lab/harness-data/.github/workflows/mirror-gitee.yml@master
     with:
       kind: metric-latest
     secrets:

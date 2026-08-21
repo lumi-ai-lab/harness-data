@@ -62,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: lumi-ai-lab/harness-data
-          ref: main
+          ref: master
           path: harness-data-mirror
           fetch-depth: 1
 
