@@ -229,12 +229,9 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     uses: ./.github/workflows/mirror-gitee.yml
     with:
-      kind: composite-harness
       version_tag: ${{ needs.validate.outputs.version_tag }}
     secrets:
       GITEE_TOKEN: ${{ secrets.GITEE_MIRROR_TOKEN }}
-      METRIC_GH_TOKEN: ${{ secrets.METRIC_GH_TOKEN }}
-      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
 
   npm:
     name: Publish npm installer

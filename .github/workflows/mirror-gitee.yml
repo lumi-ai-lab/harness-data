@@ -17,8 +17,6 @@ on:
         required: true
       METRIC_GH_TOKEN:
         required: false
-      RELEASE_GH_TOKEN:
-        required: false
   workflow_dispatch:
     inputs:
       kind:
@@ -29,8 +27,6 @@ on:
         options:
           - harness
           - metric-latest
-          - composite-harness
-          - composite-metric
       tag:
         description: Existing release tag to mirror, for example v0.0.48
         required: false
@@ -50,11 +46,11 @@ jobs:
       GITEE_OWNER: git_pengmd
       GITEE_REPO: harness-release
       GITHUB_REPO: lumi-ai-lab/harness-data
-      GH_TOKEN: ${{ (inputs.kind == 'metric-latest' || inputs.kind == 'composite-metric') && (secrets.RELEASE_GH_TOKEN || secrets.METRIC_GH_TOKEN || github.token) || github.token }}
+      GH_TOKEN: ${{ inputs.kind == 'metric-latest' && secrets.METRIC_GH_TOKEN || github.token }}
 
     steps:
       - name: Checkout Harness release tag
-        if: ${{ env.MIRROR_KIND == 'harness' || env.MIRROR_KIND == 'composite-harness' }}
+        if: ${{ env.MIRROR_KIND == 'harness' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ env.VERSION_TAG }}
@@ -62,7 +58,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout mirror scripts
-        if: ${{ env.MIRROR_KIND == 'metric-latest' || env.MIRROR_KIND == 'composite-metric' }}
+        if: ${{ env.MIRROR_KIND == 'metric-latest' }}
         uses: actions/checkout@v4
         with:
           repository: lumi-ai-lab/harness-data
@@ -78,15 +74,10 @@ jobs:
       - name: Mirror release assets to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || secrets.GITEE_MIRROR_TOKEN }}
-          METRIC_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || secrets.METRIC_GH_TOKEN }}
         run: |
           set -euo pipefail
           if [[ "${MIRROR_KIND}" == "metric-latest" ]]; then
             node harness-data-mirror/scripts/mirror-gitee.mjs --metric-latest
-          elif [[ "${MIRROR_KIND}" == "composite-harness" ]]; then
-            node scripts/mirror-gitee.mjs --composite-harness "${VERSION_TAG}"
-          elif [[ "${MIRROR_KIND}" == "composite-metric" ]]; then
-            node harness-data-mirror/scripts/mirror-gitee.mjs --composite-metric
           else
             node scripts/mirror-gitee.mjs --tag "${VERSION_TAG}"
           fi

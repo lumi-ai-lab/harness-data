@@ -13,7 +13,6 @@ import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksFo
 import { action, blank, header, ok, skip, step, warn } from "../lib/log.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
 import { installEncryptedWikis, wikisReleaseSource } from "../lib/wikis-release.js";
-import { resolveLatestCompositeRelease } from "../lib/gitee-release.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -65,7 +64,7 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   return result;
 }
 
-export async function updateWikis(runtimeDir, options = {}, state = {}, runtimeTag = state.runtimeTag, giteeReleaseTag = "") {
+export async function updateWikis(runtimeDir, options = {}, state = {}, runtimeTag = state.runtimeTag) {
   const wikisDir = path.join(runtimeDir, "wikis");
   if (state.wikis?.source === "local-path" || (!state.wikis && state.installMode === "local-path")) {
     skip("harness-data-wikis 为本地路径模式，请手动检查");
@@ -90,7 +89,7 @@ export async function updateWikis(runtimeDir, options = {}, state = {}, runtimeT
     options.skippedUpdates?.push(`harness-data-wikis ${runtimeTag}`);
     return null;
   }
-  const installed = await installEncryptedWikis(runtimeDir, runtimeTag, { ...options, giteeReleaseTag });
+  const installed = await installEncryptedWikis(runtimeDir, runtimeTag, options);
   ok(`harness-data-wikis 已更新到 ${runtimeTag}（Gitee 加密发布物）`);
   return installed;
 }
@@ -166,13 +165,11 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(2, 7, "检查 runtime bundle");
-  const compositeRelease = await resolveLatestCompositeRelease(options);
-  trackingOptions.compositeRelease = compositeRelease;
-  const runtimeRelease = { tag_name: compositeRelease.harnessTag };
+  const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
   const workBuddyPlugin = inspectWorkBuddyPlugin(runtimeDir);
   const workBuddyRepairNeeded = agentIncludesWorkBuddy(configuredAgent) &&
     (!workBuddyPlugin.prepared || !workBuddyPlugin.versionMatchesPackage);
-  if ((!state.runtimeTag || state.runtimeTag !== runtimeRelease.tag_name) || workBuddyRepairNeeded) {
+  if ((state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) || workBuddyRepairNeeded) {
     if (workBuddyRepairNeeded && state.runtimeTag === runtimeRelease.tag_name) {
       action("发现 WorkBuddy plugin package 缺失或不完整，需要修复 runtime bundle");
     } else {
@@ -208,7 +205,7 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(4, 7, "检查 Wikis 知识库");
-  const wikis = await updateWikis(runtimeDir, trackingOptions, state, runtimeTag, compositeRelease.tag);
+  const wikis = await updateWikis(runtimeDir, trackingOptions, state, runtimeTag);
   if (wikis) {
     changed = true;
     nextWikis = wikis;
@@ -238,7 +235,6 @@ export async function updateCommand(options = {}) {
     writeState(runtimeDir, {
       ...state,
       runtimeTag,
-      giteeReleaseTag: compositeRelease.tag,
       wikis: nextWikis,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
@@ -264,7 +260,7 @@ export async function updateCommand(options = {}) {
     }
   } else if (restoredAgent) {
     ok("Agent Hook 已恢复");
-    writeState(runtimeDir, { ...state, giteeReleaseTag: compositeRelease.tag, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, { ...state, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
     blank();
     console.log(`配置已恢复：${runtimeDir}`);
     console.log("");
@@ -277,7 +273,7 @@ export async function updateCommand(options = {}) {
     }
   } else {
     skip("没有组件更新");
-    writeState(runtimeDir, { ...state, giteeReleaseTag: compositeRelease.tag, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, { ...state, lastCheckAt: new Date().toISOString() });
     blank();
     console.log(skipped.length ? "没有应用任何更新。" : "没有发现需要更新的内容。");
     if (skipped.length) {

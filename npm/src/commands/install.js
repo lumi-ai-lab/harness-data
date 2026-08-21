@@ -6,7 +6,7 @@ import { ask, chooseAgent } from "../lib/prompt.js";
 import { collectInstallAuth } from "../lib/install-auth.js";
 import { createInstallSession } from "../lib/install-session.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
-import { download, installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
+import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
@@ -15,7 +15,6 @@ import { downloadReleaseAsset, findReleaseAsset, hasGithubAuth, latestRelease } 
 import { action, blank, fail, header, ok, skip, step, warn } from "../lib/log.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
 import { installEncryptedWikis, validateWikisDirectory } from "../lib/wikis-release.js";
-import { compositeAssetUrl, resolveLatestCompositeRelease } from "../lib/gitee-release.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 
@@ -114,31 +113,21 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     return { tag: "", skipped: true };
   }
 
-  const composite = options.compositeRelease;
-  const release = composite ? null : await latestRelease(runtimeRepo, options);
-  const tag = composite ? composite.harnessTag : release.tag_name;
+  const release = await latestRelease(runtimeRepo, options);
+  const tag = release.tag_name;
   const assetName = `harness-data-runtime-${tag}.tar.gz`;
-  const asset = composite
-    ? (composite.assets || []).find((item) => item.name === assetName)
-    : findReleaseAsset(release, assetName);
-  const shaAsset = composite
-    ? (composite.assets || []).find((item) => item.name === `${assetName}.sha256`)
-    : findReleaseAsset(release, `${assetName}.sha256`);
+  const asset = findReleaseAsset(release, assetName);
+  const shaAsset = findReleaseAsset(release, `${assetName}.sha256`);
   if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${assetName}`);
 
   const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
   action(`下载 harness-data-runtime ${tag}`);
-  if (composite) {
-    await download(compositeAssetUrl(asset, composite, options), archive, {}, { ...options, progressLabel: assetName });
-  } else {
-    await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
-  }
+  await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
   if (shaAsset) {
     const shaFile = `${archive}.sha256`;
-    if (composite) await download(compositeAssetUrl(shaAsset, composite, options), shaFile, {}, options);
-    else await downloadReleaseAsset(shaAsset, shaFile, options);
+    await downloadReleaseAsset(shaAsset, shaFile, options);
     const expected = fs.readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
     const crypto = await import("node:crypto");
     const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
@@ -323,8 +312,7 @@ export async function installCommand(options = {}) {
     const runtimeDir = targetRuntimeDir;
 
     step(2, 7, "安装 runtime bundle");
-    const compositeRelease = await resolveLatestCompositeRelease(options);
-    const bundle = await installRuntimeBundle(runtimeDir, { ...options, compositeRelease, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
+    const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
     blank();
 
     step(3, 7, "安装 CLI 工具");
@@ -337,7 +325,6 @@ export async function installCommand(options = {}) {
     manifest = readManifest(manifestPath);
     const latestManifest = await resolveLatestManifest(manifest, key, {
       ...options,
-      compositeRelease,
       ...(options.metricCliPath ? { tools: ["data-harness-cli"] } : {})
     });
     manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
@@ -348,7 +335,7 @@ export async function installCommand(options = {}) {
     blank();
 
     step(4, 7, "同步 Wikis 知识库");
-    const wikis = await installWikis(runtimeDir, bundle.tag || priorState.runtimeTag, { ...options, giteeReleaseTag: compositeRelease.tag, wikisSource: access.wikisSource });
+    const wikis = await installWikis(runtimeDir, bundle.tag || priorState.runtimeTag, { ...options, wikisSource: access.wikisSource });
     blank();
 
     step(5, 7, "生成本地配置");
@@ -386,7 +373,6 @@ export async function installCommand(options = {}) {
     writeState(runtimeDir, {
       installMode: options.metricCliPath ? "local-path" : "gitee-public",
       runtimeTag: bundle.tag || priorState.runtimeTag,
-      giteeReleaseTag: compositeRelease.tag,
       wikis,
       localTools,
       tools: manifest.installedTools || {},

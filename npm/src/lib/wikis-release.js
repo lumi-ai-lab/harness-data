@@ -21,8 +21,7 @@ export function encryptedWikisAssetName(tag) {
 
 export function wikisReleaseUrl(tag, asset, options = {}) {
   const base = (options.wikisReleaseBaseUrl || wikisReleaseBaseUrl).replace(/\/$/, "");
-  const releaseTag = options.giteeReleaseTag || tag;
-  return `${base}/${encodeURIComponent(releaseTag)}/${encodeURIComponent(asset)}`;
+  return `${base}/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;
 }
 
 export function validateWikisDirectory(source) {
