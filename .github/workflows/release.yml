@@ -234,6 +234,7 @@ jobs:
     secrets:
       GITEE_TOKEN: ${{ secrets.GITEE_MIRROR_TOKEN }}
       METRIC_GH_TOKEN: ${{ secrets.METRIC_GH_TOKEN }}
+      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN }}
 
   npm:
     name: Publish npm installer
