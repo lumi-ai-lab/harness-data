@@ -63,15 +63,22 @@ function ghJson(args) {
 
 /** 取 GitHub release 元数据。 */
 function getGitHubRelease(tag, repo = GITHUB_REPO, token = "") {
+  const opts = token ? { env: { ...process.env, GH_TOKEN: token } } : {};
+  let resolvedTag = tag;
+  if (!resolvedTag) {
+    const releases = JSON.parse(gh(["release", "list", "--repo", repo, "--limit", "1", "--json", "tagName"], opts));
+    resolvedTag = releases[0]?.tagName || "";
+    if (!resolvedTag) throw new Error(`GitHub repo ${repo} has no published Release`);
+  }
   return ghJson([
     "release",
     "view",
-    ...(tag ? [tag] : []),
+    resolvedTag,
     "--repo",
     repo,
     "--json",
     "tagName,assets",
-  ], token ? { env: { ...process.env, GH_TOKEN: token } } : {});
+  ], opts);
 }
 
 /** 通用 Gitee GET。 */
