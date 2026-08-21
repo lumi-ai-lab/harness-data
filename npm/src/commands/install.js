@@ -30,6 +30,27 @@ async function resolveTokenMode(options = {}) {
   return hasGithubAuth(options);
 }
 
+export function validateInstallAuthOptions(options = {}) {
+  const noAuth = options.noAuth === true;
+  const dataAuth = options.dataAuth === true;
+  const hasBlob = typeof options.authBlob === "string" && options.authBlob.trim() !== "";
+  const hasUserID = typeof options.authUserId === "string" && options.authUserId.trim() !== "";
+  const hasOffPassword = typeof options.authOffPassword === "string" && options.authOffPassword !== "";
+
+  if (noAuth && (dataAuth || hasBlob || hasUserID)) {
+    throw new Error("--no-auth cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
+  }
+  if (dataAuth && (hasBlob || hasUserID)) {
+    throw new Error("--data-auth cannot be combined with --auth-blob or --auth-user-id");
+  }
+  if (hasOffPassword && !noAuth) {
+    throw new Error("--auth-off-password requires --no-auth");
+  }
+  if (hasBlob !== hasUserID) {
+    throw new Error("--auth-blob and --auth-user-id must be provided together");
+  }
+}
+
 export async function collectInstallAccess(options = {}, runtimeDir) {
   const tokenMode = await resolveTokenMode(options);
   const explicit = options.wikisSource ? path.resolve(options.wikisSource) : "";
@@ -265,6 +286,7 @@ export function printDoctorSummary(doctor, options = {}) {
 }
 
 export async function installCommand(options = {}) {
+  validateInstallAuthOptions(options);
   const key = platformKey();
   const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [

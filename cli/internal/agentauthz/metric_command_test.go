@@ -42,16 +42,37 @@ func TestMetricCommandDetectionMatchesPowerShellQuotedPath(t *testing.T) {
 	}
 }
 
+func TestInjectDataAuthReplacesRelativeSubdirectoryExecutableOnly(t *testing.T) {
+	got, err := InjectDataAuth(`./real/qdm-metric-cli.exe analysis execute --auth-blob qdm1enc.model --metric saleAmt`, "qdm1enc.runtime", `D:\Harness Runtime\bin\qdm-metric-cli.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, `'D:\Harness Runtime\bin\qdm-metric-cli.exe' analysis execute`) || strings.Contains(got, "./real/qdm-metric-cli.exe") || strings.Contains(got, "qdm1enc.model") {
+		t.Fatalf("expected trusted relative executable rewrite: %s", got)
+	}
+}
+
+func TestRelativeSubdirectoryDetectionRequiresExactMetricCLIBaseName(t *testing.T) {
+	for _, command := range []string{`./original/not-qdm-metric-cli.exe auth describe`, `./original/qdm-metric-cli-helper.exe auth describe`, `relative/qdm-metric-cli.exe.bak analysis execute --metric saleAmt`} {
+		if IsMetricAuthzGatedCommand(command) {
+			t.Fatalf("non-exact executable basename must not be gated: %s", command)
+		}
+	}
+}
+
 func TestInjectAuthDescribeSupportsPowerShellQuotedPath(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows PowerShell command syntax")
 	}
 
-	got := InjectAuthDescribeBlob(
+	got, err := InjectAuthDescribeBlob(
 		`& 'E:\Harness Data\bin\qdm-metric-cli.exe' auth describe`,
 		"qdm1enc.runtime",
 		`E:\Harness Data\bin\qdm-metric-cli.exe`,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(got, "auth describe --auth-blob 'qdm1enc.runtime'") {
 		t.Fatalf("expected auth blob injection: %s", got)
 	}
@@ -176,12 +197,31 @@ func TestStripAuthFlagsRemovesModelSuppliedSecretsAndFixtureCats(t *testing.T) {
 	}
 }
 
+func TestRewriteGatedMetricCommandsReplacesBackslashEscapedAuthFlags(t *testing.T) {
+	command := `./original/qdm-metric-cli.exe auth describe \--data-auth \--auth-blob 'qdm1enc.model-supplied' \--auth-json '{"fake":true}'`
+	got, err := InjectAuthDescribeBlob(command, "qdm1enc.runtime", `D:\Harness Runtime\bin\qdm-metric-cli.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"./original/qdm-metric-cli.exe", "qdm1enc.model-supplied", `\--`, "--auth-json", "--data-auth"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("expected %q to be removed: %s", forbidden, got)
+		}
+	}
+	if strings.Count(got, "--auth-blob") != 1 || !strings.Contains(got, "--auth-blob 'qdm1enc.runtime'") {
+		t.Fatalf("expected exactly one runtime blob: %s", got)
+	}
+}
+
 func TestInjectDataAuthStripsAndReplacesBeforePipe(t *testing.T) {
-	got := InjectDataAuth(
+	got, err := InjectDataAuth(
 		`qdm-metric-cli analysis execute --auth-blob "$(cat config/dev-auth.blob)" --metric saleAmt | jq .`,
 		"qdm1enc.runtime",
 		"/abs/bin/qdm-metric-cli",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasPrefix(got, `'/abs/bin/qdm-metric-cli' analysis execute`) {
 		t.Fatalf("expected metric cli path rewrite: %s", got)
 	}
@@ -194,7 +234,10 @@ func TestInjectDataAuthStripsAndReplacesBeforePipe(t *testing.T) {
 }
 
 func TestInjectAuthDescribeAddsOnlyAuthBlob(t *testing.T) {
-	got := InjectAuthDescribeBlob("qdm-metric-cli auth describe --auth-json fake", "qdm1enc.runtime", "")
+	got, err := InjectAuthDescribeBlob("qdm-metric-cli auth describe --auth-json fake", "qdm1enc.runtime", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(got, "--data-auth") {
 		t.Fatalf("auth describe must not add --data-auth: %s", got)
 	}

@@ -20,7 +20,7 @@ const (
 // This pattern is used only on Windows; Bash parsing remains unchanged.
 var windowsMetricBinPattern = `(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^;|&'"\r\n]*[/\\]qdm-metric-cli(?:\.exe)?`
 
-var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|(?:\./|\.\\)?(?:bin[/\\])?qdm-metric-cli(?:\.exe)?|[A-Za-z]:[/\\](?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?)`
+var metricBinPattern = `(?:\$\{QDM_METRIC_CLI(?::-[^}]*)?\}|\$QDM_METRIC_CLI|[A-Za-z]:[/\\](?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?|/(?:[^\s;|&'"]+/)*qdm-metric-cli(?:\.exe)?|(?:[^\s;|&'"]+[/\\])*qdm-metric-cli(?:\.exe)?)`
 
 func IsMetricAnalysisExecute(command string) bool {
 	return matchesMetricInvocation(command, `analysis\s+execute`)
@@ -34,9 +34,19 @@ func IsMetricAuthzGatedCommand(command string) bool {
 	return IsMetricAnalysisExecute(command) || IsMetricAuthDescribe(command)
 }
 
+func MetricInvocationCount(command string) int {
+	return len(metricInvocationRegexp(`(?:analysis\s+execute|auth\s+describe)`).FindAllStringIndex(MaskQuotedAndHeredocRegions(command), -1))
+}
+
+func looksLikeGatedMetricCommand(command string) bool {
+	marker := regexp.MustCompile(`(?i)(?:qdm-metric-cli(?:\.exe)?|%QDM_METRIC_CLI%|\$env:QDM_METRIC_CLI|\$\{?QDM_METRIC_CLI(?:\:-[^}]*)?\}?)`)
+	subcommand := regexp.MustCompile(`(?i)(?:analysis\s+execute|auth\s+describe)`)
+	return marker.MatchString(command) && subcommand.MatchString(command)
+}
+
 func CommandHasModelAuthFlags(command string) bool {
 	skeleton := MaskQuotedAndHeredocRegions(command)
-	return regexp.MustCompile(`(?:^|\s)--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
+	return regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth|auth-blob|auth-json)\b`).MatchString(skeleton)
 }
 
 func matchesMetricInvocation(command, subcmd string) bool {
@@ -259,35 +269,41 @@ func RewriteMetricCliInvocation(command, metricCliPath string, dialect ...ShellD
 }
 
 func StripAuthFlags(command string) string {
-	out := command
-	out = regexp.MustCompile(`(^|\s)--data-auth\b`).ReplaceAllString(out, " ")
-	out = regexp.MustCompile(`(^|\s)--auth-blob(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)`).ReplaceAllString(out, " ")
-	out = regexp.MustCompile(`(^|\s)--auth-json(?:\s*=\s*|\s+)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)`).ReplaceAllString(out, " ")
-	return strings.TrimSpace(regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(out, " "))
+	return stripAuthFlagsWithSkeleton(command, MaskQuotedAndHeredocRegions(command))
 }
 
-func InjectDataAuth(command, blob, metricCliPath string) string {
-	if strings.TrimSpace(metricCliPath) == "" {
-		cleaned := StripAuthFlags(command)
-		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute")
+func stripAuthFlagsWithSkeleton(command, skeleton string) string {
+	// Bash treats an unquoted \--flag token as --flag. Strip both spellings so
+	// model-supplied authorization cannot survive the runtime rewrite.
+	re := regexp.MustCompile(`(?i)(?:^|\s)\\?--(?:data-auth\b|(?:auth-blob|auth-json)(?:\s*=\s*|\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;|&]+))`)
+	matches := re.FindAllStringIndex(skeleton, -1)
+	if len(matches) == 0 {
+		return strings.TrimSpace(command)
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
-	if err == nil {
-		return rewritten
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		out.WriteString(command[last:match[0]])
+		last = match[1]
 	}
-	return command
+	out.WriteString(command[last:])
+	return strings.TrimSpace(out.String())
 }
 
-func InjectAuthDescribeBlob(command, blob, metricCliPath string) string {
+func InjectDataAuth(command, blob, metricCliPath string) (string, error) {
 	if strings.TrimSpace(metricCliPath) == "" {
 		cleaned := StripAuthFlags(command)
-		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe")
+		return InsertFlagsBeforeShellTail(cleaned, " --data-auth --auth-blob "+ShellQuote(blob), "execute"), nil
 	}
-	rewritten, err := RewriteGatedMetricCommands(command, blob, metricCliPath)
-	if err == nil {
-		return rewritten
+	return RewriteGatedMetricCommands(command, blob, metricCliPath)
+}
+
+func InjectAuthDescribeBlob(command, blob, metricCliPath string) (string, error) {
+	if strings.TrimSpace(metricCliPath) == "" {
+		cleaned := StripAuthFlags(command)
+		return InsertFlagsBeforeShellTail(cleaned, " --auth-blob "+ShellQuote(blob), "describe"), nil
 	}
-	return command
+	return RewriteGatedMetricCommands(command, blob, metricCliPath)
 }
 
 type metricInvocation struct {

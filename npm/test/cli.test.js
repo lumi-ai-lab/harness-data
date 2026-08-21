@@ -1566,9 +1566,10 @@ test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
   assert.equal(agentIncludesWorkBuddy("both"), false);
 });
 
-test("WorkBuddy auth installer parameters are macOS-only", () => {
+test("WorkBuddy auth installer parameters support macOS and Windows", () => {
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "darwin"));
-  assert.throws(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"), /supports macOS only/);
+  assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"));
+  assert.throws(() => assertWorkBuddyAuthPlatform("workbuddy", true, "linux"), /supports macOS and Windows only/);
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", false, "win32"));
   assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("all", true, "win32"));
 });
@@ -1844,14 +1845,15 @@ test("Windows Codex hook patch fails closed when a required hook cannot be rewri
   assert.equal(fs.readFileSync(hooksFile, "utf8"), original);
 });
 
-test("Windows Codex auth uses the cross-platform adapter", async () => {
+test("Windows keeps Codex default, allows explicit WorkBuddy, and supports both auth adapters", async () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
   try {
-    assert.equal(await chooseAgent({ agent: "workbuddy" }), "codex");
+    assert.equal(await chooseAgent({ agent: "workbuddy" }), "workbuddy");
     assert.equal(await chooseAgent({ agent: " CODEX " }), "codex");
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", false, "win32"));
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "win32"));
+    assert.doesNotThrow(() => assertWorkBuddyAuthPlatform("workbuddy", true, "win32"));
     assert.doesNotThrow(() => assertCodexAuthPlatform("codex", true, "linux"));
   } finally {
     Object.defineProperty(process, "platform", platformDescriptor);

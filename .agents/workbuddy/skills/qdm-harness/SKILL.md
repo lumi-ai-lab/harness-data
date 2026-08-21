@@ -13,7 +13,7 @@ Use this skill together with the QDM Harness WorkBuddy hooks.
 - Numeric values, rankings, comparisons, and thresholds must come from CLI output.
 - Do not estimate missing values, fabricate evidence, or replace missing data with examples.
 - Never supply or alter `--data-auth`, `--auth-blob`, or `--auth-json`; the WorkBuddy `PreToolUse` hook owns these flags. When the injected `authzMode` is `on`, the hook binds the required authorization; when it is `off`, the hook does not inject authorization flags.
-- On macOS, run QDM data commands through Bash (`Bash` or `execute_command`), not PowerShell. If the auth hook denies a command, stop the data flow and report the denial without exposing credential values.
+- On macOS and Windows, run QDM data commands through Bash (`Bash` or a Bash-backed `execute_command`), not PowerShell. If the auth hook denies a command, stop the data flow and report the denial without exposing credential values.
 - When `authzMode=on`, obtain the account data scope (`manageAreaId` and `categoryLevel1Id`) from `qdm-metric-cli auth describe` before the first user-facing answer based on metric results. Cache it for the current session, disclose it whenever reporting permission-scoped numbers, and never describe those numbers as unrestricted totals.
 - When `authzMode=off`, do not call `auth describe` solely for a permission-scope notice, and do not add such a notice. When the user asks about permissions, answer only from `auth describe` output and never guess authorization scopes.
 - Deliver analysis, query results, reports, summaries, and diagnostic conclusions in the current conversation by default.

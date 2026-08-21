@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,15 +84,8 @@ func TestWorkBuddyContextReportsAuthzMode(t *testing.T) {
 	for _, mode := range []string{"on", "off"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
-			if err := os.Symlink(filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis")); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index")); err != nil {
-				t.Fatal(err)
-			}
+			copyWorkBuddyTestTree(t, filepath.Join(sourceRoot, "wikis"), filepath.Join(root, "wikis"))
+			copyWorkBuddyTestTree(t, filepath.Join(sourceRoot, ".harness", "index"), filepath.Join(root, ".harness", "index"))
 			config := "paths:\n  knowledge: wikis\n\nauthz:\n  mode: " + mode + "\n"
 			writeWorkBuddyTestFile(t, root, "config/harness-config.yaml", config)
 			payload := []byte(`{"session_id":"authz-session","prompt":"销售额是多少？"}`)
@@ -111,6 +105,31 @@ func TestWorkBuddyContextReportsAuthzMode(t *testing.T) {
 				t.Fatalf("context must keep namespaced session state: %v", err)
 			}
 		})
+	}
+}
+
+func copyWorkBuddyTestTree(t *testing.T, source, target string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(pathname string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, pathname)
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(target, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		data, err := os.ReadFile(pathname)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
