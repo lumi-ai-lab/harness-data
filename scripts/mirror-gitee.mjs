@@ -5,6 +5,7 @@
 //   node scripts/mirror-gitee.mjs --init              一次性初始化空 Gitee 仓（建 README 于 master）
 //   node scripts/mirror-gitee.mjs --tag vX.Y.Z       镜像单个 release tag（CI / 手动）
 //   node scripts/mirror-gitee.mjs --all               回填所有 GitHub 有而 Gitee 无的版本
+//   node scripts/mirror-gitee.mjs --metric-latest   更新 qdm-metric-cli 最新槽位（只保留一版）
 //
 // 环境变量：
 //   GITEE_TOKEN   必填，Gitee 私人 access token（projects 读写权限）
@@ -13,6 +14,8 @@
 //   GITEE_REPO    默认 harness-release
 //   GITHUB_REPO   默认 lumi-ai-lab/harness-data
 //   GITEE_BRANCH  默认 master（release 锚点分支）
+//   METRIC_GITHUB_REPO 默认 pengmide/qdm-metric-cli
+//   METRIC_GITEE_TAG  默认 qdm-metric-cli-latest
 //
 // 零第三方依赖：仅用 Node 内置模块 + gh CLI + tar。
 
@@ -32,6 +35,8 @@ const GITEE_TOKEN = process.env.GITEE_TOKEN;
 const GITEE_OWNER = process.env.GITEE_OWNER || "git_pengmd";
 const GITEE_REPO = process.env.GITEE_REPO || "harness-release";
 const GITHUB_REPO = process.env.GITHUB_REPO || "lumi-ai-lab/harness-data";
+const METRIC_GITHUB_REPO = process.env.METRIC_GITHUB_REPO || "pengmide/qdm-metric-cli";
+const METRIC_GITEE_TAG = process.env.METRIC_GITEE_TAG || "qdm-metric-cli-latest";
 const TARGET_BRANCH = process.env.GITEE_BRANCH || "master";
 const GITEE_API = "https://gitee.com/api/v5";
 const MIRROR_RELEASE_BODY = "Release 产物下载。";
@@ -57,13 +62,13 @@ function ghJson(args) {
 }
 
 /** 取 GitHub release 元数据。 */
-function getGitHubRelease(tag) {
+function getGitHubRelease(tag, repo = GITHUB_REPO) {
   return ghJson([
     "release",
     "view",
-    tag,
+    ...(tag ? [tag] : []),
     "--repo",
-    GITHUB_REPO,
+    repo,
     "--json",
     "tagName,assets",
   ]);
@@ -140,13 +145,61 @@ async function ensureGiteeRelease(tagName, name, body) {
 }
 
 /** 取某 Gitee release 的现有附件名集合（用于查重）。 */
-async function giteeReleaseAssetNames(releaseId) {
+async function giteeReleaseAssets(releaseId) {
   const r = await giteeGet(
     `/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}`,
   );
   if (!r.ok) throw new Error(`获取 Gitee release ${releaseId} 失败: ${r.status}`);
   const assets = r.json?.assets || [];
-  return new Set(assets.map((a) => a.name));
+  return assets;
+}
+
+async function giteeReleaseAssetNames(releaseId) {
+  return new Set((await giteeReleaseAssets(releaseId)).map((asset) => asset.name));
+}
+
+async function deleteAttachFile(releaseId, attachFileId, assetName) {
+  const res = await fetch(
+    `${GITEE_API}/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files/${attachFileId}`,
+    { method: "DELETE", headers: authHeaders() },
+  );
+  const text = await res.text();
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`删除 ${assetName || attachFileId} 失败: ${res.status} ${text}`);
+  }
+}
+
+async function deleteGiteeRelease(releaseId, tagName) {
+  const res = await fetch(
+    `${GITEE_API}/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}`,
+    { method: "DELETE", headers: authHeaders() },
+  );
+  const text = await res.text();
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`删除 Gitee Release ${tagName}: ${res.status} ${text}`);
+  }
+}
+
+function downloadGitHubAsset(repo, tag, assetName, dest) {
+  const dir = mkdtempSync(join(tmpdir(), "gitee-gh-dl-"));
+  try {
+    execFileSync("gh", [
+      "release",
+      "download",
+      tag,
+      "--repo",
+      repo,
+      "--pattern",
+      assetName,
+      "--dir",
+      dir,
+    ], { stdio: "inherit" });
+    const source = join(dir, assetName);
+    if (!existsSync(source)) throw new Error(`gh release download did not produce ${assetName}`);
+    writeFileSync(dest, readFileSync(source));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** 下载 URL 到本地文件，返回 Buffer。 */
@@ -193,6 +246,7 @@ async function initRepo() {
     "- `data-harness-cli` 多平台二进制及对应 `.sha256`",
     "- `harness-data-runtime` 运行时包及对应 `.sha256`",
     "- `harness-data-wikis` 加密包（Gitee 独占）及对应 `.sha256`",
+    "- `qdm-metric-cli` 最新多平台二进制及对应 `.sha256`",
     "",
     "> 容器镜像（GHCR）与 npm 包不在本镜像范围。",
     "",
@@ -344,6 +398,87 @@ async function mirrorTag(tagName) {
   return { uploaded, skipped, failed };
 }
 
+/** 将私有 qdm-metric-cli 最新 Release 同步到固定 Gitee 槽位，只保留最新一套附件。 */
+async function mirrorMetricLatest() {
+  const ghRelease = getGitHubRelease("", METRIC_GITHUB_REPO);
+  const sourceTag = ghRelease.tagName;
+  if (!/^v\d+\.\d+\.\d+$/.test(sourceTag || "")) {
+    throw new Error(`qdm-metric-cli latest tag must match vMAJOR.MINOR.PATCH: ${sourceTag || "missing"}`);
+  }
+  const prefix = `qdm-metric-cli-${sourceTag}-`;
+  const assets = (ghRelease.assets || []).filter((asset) => asset.name.startsWith(prefix));
+  if (!assets.length) throw new Error(`qdm-metric-cli ${sourceTag} has no mirrored assets`);
+  const expectedNames = new Set(assets.map((asset) => asset.name));
+
+  const info = await giteeRepoInfo();
+  if (!info.ok || !info.json?.default_branch) await initRepo();
+  const rel = await ensureGiteeRelease(METRIC_GITEE_TAG, "qdm-metric-cli latest", MIRROR_RELEASE_BODY);
+  const existingAssets = await giteeReleaseAssets(rel.id);
+  const existingNames = new Set(existingAssets.map((asset) => asset.name));
+  const uploaded = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const asset of assets) {
+    if (existingNames.has(asset.name)) {
+      skipped.push(asset.name);
+      continue;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), "gitee-metric-"));
+    const dest = join(tmp, asset.name);
+    try {
+      downloadGitHubAsset(METRIC_GITHUB_REPO, sourceTag, asset.name, dest);
+      await uploadAttachFile(rel.id, dest, asset.name);
+      uploaded.push(asset.name);
+      console.log(`  ✓ ${asset.name}`);
+    } catch (error) {
+      failed.push({ name: asset.name, err: error.message });
+      console.error(`  ✗ ${asset.name}: ${error.message}`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  if (failed.length) {
+    console.error("  ⚠ 新版附件未全部上传，保留旧版附件，不执行清理");
+    return { sourceTag, uploaded, skipped, failed, deleted: [] };
+  }
+
+  const deleted = [];
+  for (const asset of existingAssets) {
+    if (expectedNames.has(asset.name)) continue;
+    try {
+      await deleteAttachFile(rel.id, asset.id, asset.name);
+      deleted.push(asset.name);
+      console.log(`  ✓ 删除旧附件 ${asset.name}`);
+    } catch (error) {
+      failed.push({ name: asset.name, err: error.message });
+      console.error(`  ✗ 删除旧附件 ${asset.name}: ${error.message}`);
+    }
+  }
+
+  const deletedReleases = [];
+  if (!failed.length) {
+    const legacyReleases = (await listGiteeReleases()).filter((release) => (
+      /^qdm-metric-cli-v\d+\.\d+\.\d+$/.test(release.tag_name || "") &&
+      release.tag_name !== METRIC_GITEE_TAG
+    ));
+    for (const release of legacyReleases) {
+      try {
+        await deleteGiteeRelease(release.id, release.tag_name);
+        deletedReleases.push(release.tag_name);
+        console.log(`  ✓ 删除旧 Metric CLI Release ${release.tag_name}`);
+      } catch (error) {
+        failed.push({ name: release.tag_name, err: error.message });
+        console.error(`  ✗ 删除旧 Metric CLI Release ${release.tag_name}: ${error.message}`);
+      }
+    }
+  }
+
+  console.log(`qdm-metric-cli ${sourceTag}: 上传 ${uploaded.length}，跳过 ${skipped.length}，删除附件 ${deleted.length}，删除 Release ${deletedReleases.length}，失败 ${failed.length}`);
+  return { sourceTag, uploaded, skipped, deleted, deletedReleases, failed };
+}
+
 /** 回填所有版本。 */
 async function mirrorAll() {
   const list = ghJson([
@@ -401,7 +536,11 @@ async function main() {
     await mirrorAll();
     return;
   }
-  console.error("用法: node scripts/mirror-gitee.mjs --init | --tag <tag> | --all");
+  if (cmd === "--metric-latest") {
+    const result = await mirrorMetricLatest();
+    process.exit(result.failed.length ? 1 : 0);
+  }
+  console.error("用法: node scripts/mirror-gitee.mjs --init | --tag <tag> | --all | --metric-latest");
   process.exit(1);
 }
 

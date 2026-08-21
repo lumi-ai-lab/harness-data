@@ -5,7 +5,7 @@ import { userStatePath } from "./paths.js";
 const trackedRoots = ["agents", "bootstrap", "bin", "wikis", "config", ".harness"];
 const hookRoots = [".claude", ".codex", ".pi", ".openclaw", ".hermes"];
 const cacheRoot = ".bootstrap-cache";
-const tempPrefixes = [".install-session-backup-", ".install-backup-", ".install-new-runtime-"];
+const tempPrefixes = [".install-session-backup-", ".install-backup-", ".install-new-runtime-", ".install-wikis-"];
 
 function cleanupTemps(root) {
   if (!fs.existsSync(root)) return;

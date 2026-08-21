@@ -2,18 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { chooseAgent, confirm } from "../lib/prompt.js";
 import { findWorkspaceDir, readWorkspaceState, writeState } from "../lib/paths.js";
-import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
-import { githubToken, latestRelease } from "../lib/github.js";
+import { latestRelease } from "../lib/github.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
-import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
 import { collectDoctor } from "./doctor.js";
 import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
-import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
+import { action, blank, header, ok, skip, step, warn } from "../lib/log.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin } from "../lib/workbuddy.js";
+import { installEncryptedWikis, wikisReleaseSource } from "../lib/wikis-release.js";
 
 export function isNonBlockingUpdateDoctorCheck(check) {
   return check.name === "Agent hook" ||
@@ -65,38 +64,34 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   return result;
 }
 
-export async function updateWikis(runtimeDir, options, state) {
+export async function updateWikis(runtimeDir, options = {}, state = {}, runtimeTag = state.runtimeTag) {
   const wikisDir = path.join(runtimeDir, "wikis");
-  if (!githubToken(options) && state.installMode !== "github-token") {
+  if (state.wikis?.source === "local-path" || (!state.wikis && state.installMode === "local-path")) {
     skip("harness-data-wikis 为本地路径模式，请手动检查");
     return null;
   }
-  if (!fs.existsSync(path.join(wikisDir, ".git"))) {
-    skip("harness-data-wikis 不是 git checkout");
+  if (!runtimeTag) {
+    warn("无法确定当前 Runtime tag，跳过 Wikis 更新；请先重新安装 Runtime bundle");
     return null;
   }
-  await runWikisGit(wikisDir, ["fetch", "origin"], options);
-  const local = (await run("git", ["-C", wikisDir, "rev-parse", "HEAD"], options)).stdout.trim();
-  const remoteRef = await remoteDefaultRef(wikisDir, options);
-  const remote = (await run("git", ["-C", wikisDir, "rev-parse", remoteRef], options)).stdout.trim();
-  const dirty = (await run("git", ["-C", wikisDir, "status", "--porcelain"], options)).stdout.trim();
-  if (local === remote && !dirty) {
-    ok(`harness-data-wikis 已是最新 ${shortSha(local)}`);
+  const current = state.wikis;
+  const legacyGit = fs.existsSync(path.join(wikisDir, ".git"));
+  if (current?.source === wikisReleaseSource && current.tag === runtimeTag && !legacyGit) {
+    ok(`harness-data-wikis 已与 Runtime ${runtimeTag} 对齐`);
     return null;
   }
-  if (dirty) warn("Wikis 存在本地修改，更新时将以远程版本强制覆盖");
-  action(local === remote
-    ? `发现 Wikis 本地修改：harness-data-wikis ${shortSha(local)}`
-    : `发现更新：harness-data-wikis ${shortSha(local)} -> ${shortSha(remote)}`);
-  if (!(await confirm("是否更新 harness-data-wikis？", options))) {
+  if (legacyGit) warn("检测到旧版 Git Wikis；迁移将覆盖其中的本地修改、提交和未跟踪文件");
+  action(current?.tag
+    ? `发现更新：harness-data-wikis ${current.tag} -> ${runtimeTag}`
+    : `将安装与 Runtime ${runtimeTag} 绑定的加密 Wikis 发布物`);
+  if (!(await (options.confirm || confirm)("是否更新 harness-data-wikis？", options))) {
     skip("harness-data-wikis");
-    options.skippedUpdates?.push(`harness-data-wikis ${shortSha(remote)}`);
+    options.skippedUpdates?.push(`harness-data-wikis ${runtimeTag}`);
     return null;
   }
-  action(`强制同步 Wikis 到 ${remoteRef}`);
-  const { commit } = await forceSyncWikis(wikisDir, options, { fetched: true });
-  ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
-  return { commit };
+  const installed = await installEncryptedWikis(runtimeDir, runtimeTag, options);
+  ok(`harness-data-wikis 已更新到 ${runtimeTag}（Gitee 加密发布物）`);
+  return installed;
 }
 
 export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
@@ -154,6 +149,7 @@ export async function updateCommand(options = {}) {
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
   const nextTools = { ...(state.tools || {}) };
+  let nextWikis = state.wikis;
   const applied = [];
   const skipped = [];
   const trackingOptions = { ...options, skippedUpdates: skipped };
@@ -209,10 +205,11 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(4, 7, "检查 Wikis 知识库");
-  const wikis = await updateWikis(runtimeDir, trackingOptions, state);
+  const wikis = await updateWikis(runtimeDir, trackingOptions, state, runtimeTag);
   if (wikis) {
     changed = true;
-    applied.push(`harness-data-wikis ${shortSha(wikis.commit)}`);
+    nextWikis = wikis;
+    applied.push(`harness-data-wikis ${wikis.tag}`);
   }
   blank();
 
@@ -238,6 +235,7 @@ export async function updateCommand(options = {}) {
     writeState(runtimeDir, {
       ...state,
       runtimeTag,
+      wikis: nextWikis,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
       ...(restoredAgent ? { agent: restoredAgent.agent } : {}),

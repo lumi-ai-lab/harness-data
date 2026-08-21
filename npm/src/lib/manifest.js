@@ -256,6 +256,10 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
+  if (tool.release?.provider === "gitee" || !asset.url.includes("github.com")) {
+    await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
+    return;
+  }
   if (!tool.private && !githubToken(options)) {
     await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;
@@ -288,7 +292,7 @@ async function expectedSha256(tool, asset, options = {}) {
   if (asset.sha256) return asset.sha256;
   try {
     const tmp = path.join(fs.mkdtempSync(path.join(process.cwd(), ".bootstrap-cache-sha-")), "asset.sha256");
-    await downloadAsset(tool, { ...asset, url: `${asset.url}.sha256` }, tmp, { ...options, log: false, progress: false, progressWriter: null });
+    await downloadAsset(tool, { ...asset, url: asset.shaAsset || `${asset.url}.sha256` }, tmp, { ...options, log: false, progress: false, progressWriter: null });
     return fs.readFileSync(tmp, "utf8").trim().split(/\s+/)[0];
   } catch {
     return "";

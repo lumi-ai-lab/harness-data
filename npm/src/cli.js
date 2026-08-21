@@ -18,7 +18,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
+    if (["yes", "force", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -44,6 +44,8 @@ Commands:
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --agent NAME                       claude, codex, pi, openclaw, hermes, workbuddy, both, or all
+  --force                            Reinstall the Runtime bundle when it already exists
+  --metric-cli-path PATH             Use a local qdm-metric-cli instead of the Gitee mirror
   --github-token TOKEN               GitHub token for private Release assets
   --auth-blob BLOB                   Auth blob string (qdm1enc...); default: interactive prompt
   --auth-user-id ID                  dev_user_id for authz; default: interactive prompt

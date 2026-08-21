@@ -29,6 +29,12 @@
       "binary": "qdm-metric-cli",
       "repo": "pengmide/qdm-metric-cli",
       "private": true,
+      "release": {
+        "provider": "gitee",
+        "owner": "git_pengmd",
+        "repo": "harness-release",
+        "tag": "qdm-metric-cli-latest"
+      },
       "platforms": {
         "darwin-arm64": {
           "archive": "tar.gz"

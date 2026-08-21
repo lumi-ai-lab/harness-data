@@ -16,7 +16,9 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
+import { giteeReleaseAssetName, resolveLatestGiteeTool } from "../src/lib/gitee-release.js";
 import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { encryptedWikisAssetName, installEncryptedWikis, wikisReleaseSource } from "../src/lib/wikis-release.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
 import { createInstallSession } from "../src/lib/install-session.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
@@ -71,6 +73,64 @@ console.log(result ? "true" : "false");`
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function encryptedWikisFixture(workspace, tag = "v1.2.3", plaintext) {
+  const asset = encryptedWikisAssetName(tag);
+  let archive = plaintext;
+  if (!archive) {
+    const source = path.join(workspace, "wikis-source");
+    for (const dir of ["metrics", "reports", "dims", "rules"]) fs.mkdirSync(path.join(source, "wikis", dir), { recursive: true });
+    fs.writeFileSync(path.join(source, "wikis", "index.md"), "# encrypted wikis\n");
+    fs.writeFileSync(path.join(source, "wikis", "metrics", "example.md"), "metric\n");
+    const archivePath = path.join(workspace, "fixture-wikis.tar.gz");
+    const result = spawnSync("tar", ["-czf", archivePath, "-C", source, "wikis"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    archive = fs.readFileSync(archivePath);
+  }
+  const key = Buffer.from("9mpI8QlIfrfsgnmWo127wHT2dTlTXXO4L934MOTFknU=", "base64");
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(archive), cipher.final()]);
+  const encrypted = Buffer.concat([
+    Buffer.from("QDMWIK1\0"),
+    iv,
+    cipher.getAuthTag(),
+    ciphertext,
+  ]);
+  return { asset, encrypted, sha: `${sha256(encrypted)}  ${asset}\n` };
+}
+
+async function withHttpsAssets(assets, fn) {
+  const originalGet = https.get;
+  https.get = (url, _options, callback) => {
+    const request = new EventEmitter();
+    process.nextTick(() => {
+      const response = new PassThrough();
+      const body = assets.get(String(url));
+      response.headers = {};
+      response.statusCode = body === undefined ? 404 : 200;
+      callback(response);
+      response.end(body === undefined ? "missing" : body);
+    });
+    return request;
+  };
+  try {
+    return await fn();
+  } finally {
+    https.get = originalGet;
+  }
+}
+
+function wikisAssetUrls(tag, fixture) {
+  const base = "https://fixture.test/releases/download";
+  return {
+    base,
+    assets: new Map([
+      [`${base}/${tag}/${fixture.asset}`, fixture.encrypted],
+      [`${base}/${tag}/${fixture.asset}.sha256`, fixture.sha],
+    ]),
+  };
 }
 
 function terminalTextWidth(value) {
@@ -164,16 +224,38 @@ test("workspace installer state is local-first and does not leak across runtimes
   }), { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" });
 });
 
-test("writeState preserves workspace state and upgrades it to schema version 2", () => {
+test("writeState preserves workspace state and upgrades it to schema version 3", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-write-"));
   fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
   fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), JSON.stringify({ agent: "workbuddy", runtimeTag: "v-local" }));
 
   const state = writeState(workspace, { packageVersion: "0.0.test" });
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, 3);
   assert.equal(state.agent, "workbuddy");
   assert.equal(state.runtimeTag, "v-local");
   assert.equal(state.packageVersion, "0.0.test");
+});
+
+test("doctor reports the encrypted Wikis release metadata and Runtime tag alignment", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-wikis-"));
+  const tag = "v1.2.3";
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), JSON.stringify({
+    runtimeTag: tag,
+    wikis: {
+      source: wikisReleaseSource,
+      tag,
+      asset: encryptedWikisAssetName(tag),
+      sha256: "a".repeat(64),
+    },
+  }));
+  const report = await collectDoctor(workspace);
+  assert.deepEqual(report.checks.find((check) => check.name === "Wikis 发布物"), {
+    name: "Wikis 发布物",
+    ok: true,
+    detail: "gitee-encrypted; v1.2.3; aaaaaaaaaaaa",
+    status: "pass",
+  });
 });
 
 test("normalizes git protocol options", () => {
@@ -469,6 +551,65 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("data-harn
   } finally {
     process.env.PATH = originalPath;
     https.get = originalGet;
+  }
+});
+
+test("qdm-metric-cli resolves its latest-only Gitee release independently of Harness Data version", async () => {
+  const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
+  const tool = manifest.tools.find((item) => item.name === "qdm-metric-cli");
+  const version = "v0.1.10";
+  const key = "darwin-arm64";
+  const asset = giteeReleaseAssetName(tool, version, key);
+  const originalFetch = global.fetch;
+  const platformAssets = Object.entries(tool.platforms).flatMap(([platform, settings]) => {
+    const suffix = settings.archive === "zip" ? "zip" : "tar.gz";
+    const name = `qdm-metric-cli-${version}-${platform}.${suffix}`;
+    return [
+      { name, browser_download_url: `https://gitee.example/${name}` },
+      { name: `${name}.sha256`, browser_download_url: `https://gitee.example/${name}.sha256` },
+    ];
+  });
+  global.fetch = async (url) => new Response(JSON.stringify({
+    id: 123,
+    tag_name: "qdm-metric-cli-latest",
+    html_url: "https://gitee.com/git_pengmd/harness-release/releases/tag/qdm-metric-cli-latest",
+    assets: [
+      ...platformAssets,
+      { name: "qdm-metric-cli-v0.1.9-darwin-arm64.tar.gz", browser_download_url: "https://gitee.example/old" },
+    ],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    const resolved = await resolveLatestGiteeTool(tool, key, { giteeApiBaseUrl: "https://gitee.example/api/v5" });
+    assert.equal(resolved.version, version);
+    assert.equal(resolved.release.provider, "gitee");
+    assert.equal(resolved.release.tag, "qdm-metric-cli-latest");
+    assert.equal(resolved.platforms[key].url, `https://gitee.example/${asset}`);
+    assert.equal(resolved.platforms[key].shaAsset, `https://gitee.example/${asset}.sha256`);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("qdm-metric-cli rejects a partially replaced Gitee latest slot", async () => {
+  const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
+  const tool = manifest.tools.find((item) => item.name === "qdm-metric-cli");
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({
+    assets: [
+      { name: "qdm-metric-cli-v0.1.11-darwin-arm64.tar.gz", browser_download_url: "https://gitee.example/new" },
+      { name: "qdm-metric-cli-v0.1.10-linux-amd64.tar.gz", browser_download_url: "https://gitee.example/old" },
+      { name: "qdm-metric-cli-v0.1.10-windows-amd64.zip", browser_download_url: "https://gitee.example/old" },
+      { name: "qdm-metric-cli-v0.1.10-windows-arm64.zip", browser_download_url: "https://gitee.example/old" },
+      { name: "qdm-metric-cli-v0.1.10-darwin-amd64.tar.gz", browser_download_url: "https://gitee.example/old" },
+    ],
+  }), { status: 200 });
+  try {
+    await assert.rejects(
+      resolveLatestGiteeTool(tool, "darwin-arm64", { giteeApiBaseUrl: "https://gitee.example/api/v5" }),
+      /mixed or incomplete platform versions/
+    );
+  } finally {
+    global.fetch = originalFetch;
   }
 });
 
@@ -2014,143 +2155,80 @@ test("skip wikis check passes skip checks to build-index", async () => {
   ]);
 });
 
-test("update wikis fetch uses GitHub token for HTTPS remotes", async () => {
+test("encrypted Wikis install validates, decrypts, atomically replaces, and clears plaintext", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const fakeBin = path.join(workspace, "fake-bin");
-  const wikisDir = path.join(workspace, "wikis");
-  const authLog = path.join(workspace, "auth.log");
-  fs.mkdirSync(path.join(wikisDir, ".git"), { recursive: true });
-  fs.mkdirSync(fakeBin, { recursive: true });
-  fs.writeFileSync(path.join(fakeBin, "git"), `#!/bin/sh
-if [ "$1" = "-C" ]; then
-  shift
-  shift
-fi
-case "$1 $2 $3" in
-  "remote get-url origin")
-    echo "https://github.com/lumi-ai-lab/harness-data-wikis.git"
-    ;;
-  "fetch origin ")
-    if [ -z "$GIT_ASKPASS" ]; then
-      echo "missing askpass" >&2
-      exit 2
-    fi
-    user="$("$GIT_ASKPASS" "Username for 'https://github.com':")"
-    pass="$("$GIT_ASKPASS" "Password for 'https://$user@github.com':")"
-    printf '%s:%s\\n' "$user" "$pass" > "${authLog}"
-    ;;
-  "rev-parse HEAD ")
-    echo "0123456789abcdef"
-    ;;
-  "symbolic-ref --short refs/remotes/origin/HEAD")
-    echo "origin/master"
-    ;;
-  "rev-parse origin/master ")
-    echo "0123456789abcdef"
-    ;;
-  "status --porcelain ") ;;
-  *)
-    echo "unexpected git args: $*" >&2
-    exit 3
-    ;;
-esac
-`, { mode: 0o755 });
+  const tag = "v1.2.3";
+  const fixture = encryptedWikisFixture(workspace, tag);
+  const { base, assets } = wikisAssetUrls(tag, fixture);
+  fs.mkdirSync(path.join(workspace, "wikis"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "old\n");
 
-  await updateWikis(workspace, {
-    githubToken: "secret-token",
-    env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
-  }, { installMode: "github-token" });
+  const installed = await withHttpsAssets(assets, () => installEncryptedWikis(workspace, tag, { wikisReleaseBaseUrl: base, log: false }));
 
-  assert.equal(fs.readFileSync(authLog, "utf8").trim(), "x-access-token:secret-token");
+  assert.deepEqual(installed, { source: wikisReleaseSource, tag, asset: fixture.asset, sha256: sha256(fixture.encrypted) });
+  assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8"), "# encrypted wikis\n");
+  assert.equal(fs.existsSync(path.join(workspace, "wikis", ".git")), false);
+  assert.deepEqual(fs.readdirSync(workspace).filter((name) => name.startsWith(".install-wikis-") || name.startsWith(".install-backup-wikis-")), []);
 });
 
-test("update wikis switches a feature branch to the remote default branch", async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const fakeBin = path.join(workspace, "fake-bin");
-  const wikisDir = path.join(workspace, "wikis");
-  const callsLog = path.join(workspace, "calls.log");
-  fs.mkdirSync(path.join(wikisDir, ".git"), { recursive: true });
-  fs.mkdirSync(fakeBin, { recursive: true });
-  fs.writeFileSync(path.join(fakeBin, "git"), `#!/bin/sh
-printf '%s\\n' "$*" >> "${callsLog}"
-if [ "$1" = "-C" ]; then
-  shift
-  shift
-fi
-case "$1 $2 $3" in
-  "remote get-url origin") echo "https://github.com/lumi-ai-lab/harness-data-wikis.git" ;;
-  "fetch origin ") ;;
-  "rev-parse HEAD ")
-    count=$(grep -c 'rev-parse HEAD' "${callsLog}")
-    if [ "$count" -eq 1 ]; then echo "old-feature"; else echo "new-master"; fi
-    ;;
-  "symbolic-ref --short refs/remotes/origin/HEAD") echo "origin/master" ;;
-  "rev-parse origin/master ") echo "new-master" ;;
-  "status --porcelain ") echo " M metrics/example.md" ;;
-  "reset --hard HEAD") ;;
-  "clean -fd ") ;;
-  "checkout -B master") ;;
-  "reset --hard origin/master") ;;
-  *) echo "unexpected git args: $*" >&2; exit 3 ;;
-esac
-`, { mode: 0o755 });
-
-  const result = await updateWikis(workspace, {
-    githubToken: "secret-token",
-    yes: true,
-    env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
-  }, { installMode: "github-token" });
-
-  assert.deepEqual(result, { commit: "new-master" });
-  const calls = fs.readFileSync(callsLog, "utf8");
-  assert.match(calls, /checkout -B master origin\/master/);
-  assert.match(calls, /reset --hard origin\/master/);
-  assert.match(calls, /clean -fd/);
-  assert.doesNotMatch(calls, /pull --ff-only/);
+test("encrypted Wikis rejects sha, magic, GCM, and tar failures without replacing existing Wikis", { skip: process.platform === "win32" }, async () => {
+  const cases = [
+    { name: "sha", mutate: (fixture) => ({ ...fixture, sha: `${"0".repeat(64)}  ${fixture.asset}\n` }), error: /sha256 mismatch/ },
+    { name: "magic", mutate: (fixture) => {
+      const encrypted = Buffer.from(fixture.encrypted);
+      encrypted[0] = 0;
+      return { ...fixture, encrypted, sha: `${sha256(encrypted)}  ${fixture.asset}\n` };
+    }, error: /invalid magic/ },
+    { name: "gcm", mutate: (fixture) => {
+      const encrypted = Buffer.from(fixture.encrypted);
+      encrypted[encrypted.length - 1] ^= 1;
+      return { ...fixture, encrypted, sha: `${sha256(encrypted)}  ${fixture.asset}\n` };
+    }, error: /AES-GCM authentication/ },
+    { name: "tar", mutate: (_fixture, workspace) => encryptedWikisFixture(workspace, "v1.2.3", Buffer.from("not a tar archive")), error: /tar .* failed/ },
+  ];
+  for (const item of cases) {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `harness-data-test-${item.name}-`));
+    const tag = "v1.2.3";
+    let fixture = encryptedWikisFixture(workspace, tag);
+    fixture = item.mutate(fixture, workspace);
+    const { base, assets } = wikisAssetUrls(tag, fixture);
+    fs.mkdirSync(path.join(workspace, "wikis", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "old\n");
+    await withHttpsAssets(assets, async () => {
+      await assert.rejects(installEncryptedWikis(workspace, tag, { wikisReleaseBaseUrl: base, log: false }), item.error);
+    });
+    assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8"), "old\n");
+    assert.deepEqual(fs.readdirSync(workspace).filter((name) => name.startsWith(".install-wikis-") || name.startsWith(".install-backup-wikis-")), []);
+  }
 });
 
-test("update wikis discards local commits, tracked changes, and untracked files", async () => {
+test("update migrates a legacy Git Wikis checkout to the Runtime-bound encrypted release", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const remote = path.join(workspace, "remote.git");
-  const seed = path.join(workspace, "seed");
-  const wikisDir = path.join(workspace, "wikis");
-  const git = (args, cwd = workspace) => {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    return result.stdout.trim();
-  };
+  const tag = "v1.2.3";
+  const fixture = encryptedWikisFixture(workspace, tag);
+  const { base, assets } = wikisAssetUrls(tag, fixture);
+  fs.mkdirSync(path.join(workspace, "wikis", ".git"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "legacy\n");
+  const result = await withHttpsAssets(assets, () => updateWikis(workspace, { yes: true, wikisReleaseBaseUrl: base, log: false }, { installMode: "github-token", runtimeTag: tag }, tag));
+  assert.equal(result.source, wikisReleaseSource);
+  assert.equal(result.tag, tag);
+  assert.equal(fs.existsSync(path.join(workspace, "wikis", ".git")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8"), "# encrypted wikis\n");
+});
 
-  git(["init", "--bare", remote]);
-  git(["clone", remote, seed]);
-  git(["config", "user.email", "test@example.com"], seed);
-  git(["config", "user.name", "Test"], seed);
-  fs.writeFileSync(path.join(seed, "index.md"), "remote-v1\n");
-  git(["add", "index.md"], seed);
-  git(["commit", "-m", "initial"], seed);
-  git(["push", "origin", "HEAD:master"], seed);
-  git(["symbolic-ref", "HEAD", "refs/heads/master"], remote);
-  git(["clone", remote, wikisDir]);
-  git(["config", "user.email", "test@example.com"], wikisDir);
-  git(["config", "user.name", "Test"], wikisDir);
-
-  fs.writeFileSync(path.join(wikisDir, "index.md"), "local-commit\n");
-  git(["add", "index.md"], wikisDir);
-  git(["commit", "-m", "local"], wikisDir);
-  fs.writeFileSync(path.join(wikisDir, "index.md"), "local-dirty\n");
-  fs.writeFileSync(path.join(wikisDir, "local-only.md"), "remove me\n");
-
-  fs.writeFileSync(path.join(seed, "index.md"), "remote-v2\n");
-  git(["add", "index.md"], seed);
-  git(["commit", "-m", "remote update"], seed);
-  git(["push", "origin", "HEAD:master"], seed);
-
-  const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
-
-  assert.equal(fs.readFileSync(path.join(wikisDir, "index.md"), "utf8"), "remote-v2\n");
-  assert.equal(fs.existsSync(path.join(wikisDir, "local-only.md")), false);
-  assert.equal(git(["status", "--porcelain"], wikisDir), "");
-  assert.equal(git(["rev-parse", "HEAD"], wikisDir), git(["rev-parse", "origin/master"], wikisDir));
-  assert.deepEqual(result, { commit: git(["rev-parse", "HEAD"], wikisDir) });
+test("update leaves Wikis unchanged when the user declines encrypted-release migration", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const tag = "v1.2.3";
+  fs.mkdirSync(path.join(workspace, "wikis"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "keep\n");
+  const skippedUpdates = [];
+  const result = await updateWikis(workspace, { confirm: async () => false, skippedUpdates }, {
+    runtimeTag: tag,
+    wikis: { source: wikisReleaseSource, tag: "v1.2.2", asset: encryptedWikisAssetName("v1.2.2"), sha256: "a".repeat(64) },
+  }, tag);
+  assert.equal(result, null);
+  assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8"), "keep\n");
+  assert.deepEqual(skippedUpdates, [`harness-data-wikis ${tag}`]);
 });
 
 test("build index prints concise Chinese summary", async () => {
@@ -2234,20 +2312,12 @@ test("install fails before writes when no-auth password is wrong", async () => {
   });
 });
 
-test("install fails before writes when GitHub auth and local wikis are both missing", async () => {
+test("install access defaults Wikis to the Gitee encrypted release without GitHub auth", async () => {
   await withCleanAuthEnv(async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-    await assert.rejects(
-      installCommand({
-        yes: true,
-        dir: workspace,
-        agent: "codex",
-        authBlob: "qdm1enc.test",
-        authUserId: "user-1",
-        githubAuth: false
-      }),
-      /harness-data-wikis is required/
-    );
+    const access = await collectInstallAccess({ yes: true, githubAuth: false }, workspace);
+    assert.equal(access.tokenMode, false);
+    assert.equal(access.wikisSource, "");
     assert.deepEqual(harnessResidue(workspace), []);
   });
 });

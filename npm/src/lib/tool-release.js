@@ -1,4 +1,5 @@
 import { latestRelease } from "./github.js";
+import { resolveLatestGiteeTool } from "./gitee-release.js";
 
 function archiveSuffix(asset, key) {
   if (asset?.archive) return asset.archive;
@@ -17,6 +18,7 @@ export function releaseAsset(release, name) {
 }
 
 export async function resolveLatestTool(tool, key, options = {}) {
+  if (tool.release?.provider === "gitee") return resolveLatestGiteeTool(tool, key, options);
   const release = await latestRelease(tool.repo, options);
   const tag = release.tag_name;
   const name = toolAssetName(tool, tag, key);

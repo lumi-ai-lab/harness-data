@@ -4,6 +4,7 @@ import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
 import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
+import { encryptedWikisAssetName, wikisReleaseSource } from "../lib/wikis-release.js";
 import {
   codeBuddyMinimumVersion,
   detectCodeBuddyVersion,
@@ -90,6 +91,24 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/reports", fs.existsSync(path.join(workspace, "wikis", "reports")));
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
+  const installerState = readWorkspaceState(workspace, { userState: options.userState });
+  const wikisState = installerState.wikis;
+  if (wikisState?.source === wikisReleaseSource) {
+    let valid = Boolean(wikisState.tag && wikisState.asset && wikisState.sha256);
+    try {
+      valid = valid && wikisState.asset === encryptedWikisAssetName(wikisState.tag);
+    } catch {
+      valid = false;
+    }
+    if (installerState.runtimeTag && wikisState.tag !== installerState.runtimeTag) valid = false;
+    add("Wikis 发布物", valid, valid
+      ? `${wikisState.source}; ${wikisState.tag}; ${wikisState.sha256.slice(0, 12)}`
+      : "加密发布物记录缺失或未与 Runtime tag 对齐");
+  } else if (wikisState?.source === "local-path") {
+    add("Wikis 发布物", true, "local-path");
+  } else {
+    add("Wikis 发布物", true, "未记录发布物来源；下次 update 将迁移", "warning");
+  }
   for (const binary of qdmCliBinaries) {
     add(`bin/${binary}`, isExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
