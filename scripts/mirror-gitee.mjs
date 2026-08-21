@@ -66,19 +66,19 @@ function getGitHubRelease(tag, repo = GITHUB_REPO, token = "") {
   const opts = token ? { env: { ...process.env, GH_TOKEN: token } } : {};
   let resolvedTag = tag;
   if (!resolvedTag) {
-    const releases = JSON.parse(gh(["release", "list", "--repo", repo, "--limit", "1", "--json", "tagName"], opts));
-    resolvedTag = releases[0]?.tagName || "";
+    const releases = ghJson(["api", `repos/${repo}/releases?per_page=1`], opts);
+    resolvedTag = releases[0]?.tag_name || "";
     if (!resolvedTag) throw new Error(`GitHub repo ${repo} has no published Release`);
   }
-  return ghJson([
-    "release",
-    "view",
-    resolvedTag,
-    "--repo",
-    repo,
-    "--json",
-    "tagName,assets",
-  ], opts);
+  const release = ghJson(["api", `repos/${repo}/releases/tags/${resolvedTag}`], opts);
+  return {
+    tagName: release.tag_name,
+    assets: (release.assets || []).map((asset) => ({
+      name: asset.name,
+      apiUrl: asset.url,
+      url: asset.browser_download_url,
+    })),
+  };
 }
 
 /** 通用 Gitee GET。 */
