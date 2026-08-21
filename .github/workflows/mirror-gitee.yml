@@ -60,7 +60,17 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Checkout mirror scripts
+      - name: Checkout mirror scripts for Harness
+        if: ${{ env.MIRROR_KIND == 'harness' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          path: harness-data-mirror
+          fetch-depth: 1
+
+      - name: Checkout mirror scripts for Metric
         if: ${{ env.MIRROR_KIND == 'metric-latest' }}
         uses: actions/checkout@v4
         with:
@@ -82,5 +92,5 @@ jobs:
           if [[ "${MIRROR_KIND}" == "metric-latest" ]]; then
             node harness-data-mirror/scripts/mirror-gitee.mjs --metric-latest
           else
-            node scripts/mirror-gitee.mjs --tag "${VERSION_TAG}"
+            node harness-data-mirror/scripts/mirror-gitee.mjs --tag "${VERSION_TAG}"
           fi
