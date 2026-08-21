@@ -1,8 +1,9 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { htmlReportScriptCandidates, matchesHtmlReportScript } from "../shared/script-paths.mjs";
 
 const FINAL_TOOLS = new Set(["structured_output", "structured-output"]);
 const SUBMIT_TOOL = "submit_review_scorecard";
-const VERDICT_SCRIPT = ".agents/pi/skills/html-report/scripts/write-verdict.mjs";
+const VERDICT_SCRIPTS = htmlReportScriptCandidates(import.meta.url, "write-verdict.mjs");
 const RUBRIC_IDS = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
 export const PARENT_REVIEWER_SCAN_MARKER = "PARENT QUALITY SCAN: passed with hardIssues=0.";
 export const REVIEWER_INPUT_MAX_BYTES = 512 * 1024;
@@ -231,7 +232,7 @@ export function classifyReviewerCommand(command, contract) {
   const tokens = tokenizeStandaloneShell(command);
   if (!tokens || tokens[0] !== "node") return null;
 
-  if (tokens[1] === VERDICT_SCRIPT) {
+  if (matchesHtmlReportScript(tokens[1], VERDICT_SCRIPTS)) {
     const options = optionsFrom(tokens, 2, new Set(["--result", "--verdict-file"]));
     if (
       options &&

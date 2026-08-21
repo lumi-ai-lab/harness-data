@@ -58,6 +58,17 @@ import {
   validateDesignerArtifacts,
 } from "../../skills/html-report/scripts/designer-return.mjs";
 import { checkSessionLayout } from "../../skills/html-report/scripts/check-session-layout.mjs";
+import {
+  REPORT_AGENT_ROLES,
+  isReportAgentName,
+  rememberObservedReportAgentsFromListText,
+  reportAgentDispatchName,
+  runtimeListHasReportAgent,
+} from "../shared/report-agents.mjs";
+import {
+  HTML_REPORT_ADAPTER_VERSION,
+  HTML_REPORT_KERNEL_API_VERSION,
+} from "./orchestration/contracts.ts";
 import { composeMain } from "../../skills/html-report/scripts/compose-main.mjs";
 import {
   PARENT_REVIEWER_SCAN_MARKER,
@@ -295,12 +306,7 @@ const EDITOR_PLANNER_MODEL = "qdm-market/deepseek-v4-flash";
 // typed scorecard tool and parent layout remain the authority for artifacts.
 const REPORT_REVIEWER_MODEL = "qdm-market/deepseek-v4-flash";
 const REPORT_REVIEWER_MAX_RUNTIME_MS = 150_000;
-const REQUIRED_REPORT_AGENTS = [
-  "report-writer",
-  "report-researcher",
-  "report-reviewer",
-  "report-designer",
-] as const;
+const REQUIRED_REPORT_AGENTS = REPORT_AGENT_ROLES;
 
 type ContextFormat = "agent-hook" | "json";
 
@@ -344,6 +350,8 @@ export const HTML_REPORT_RUNTIME_SOURCE_FILES = [
   ".agents/pi/extensions/report-researcher-guard/index.mjs",
   ".agents/pi/extensions/report-researcher-guard/guard.mjs",
   ".agents/pi/extensions/shared/subagent-structured-output-capture.mjs",
+  ".agents/pi/extensions/shared/report-agents.mjs",
+  ".agents/pi/extensions/shared/script-paths.mjs",
   ".agents/pi/extensions/report-reviewer-guard/index.mjs",
   ".agents/pi/extensions/report-reviewer-guard/guard.mjs",
   ".agents/pi/extensions/report-designer-guard/index.mjs",
@@ -489,6 +497,8 @@ export function writeHtmlReportRuntimeContract(
     version: RUNTIME_CONTRACT_VERSION,
     producer: RUNTIME_CONTRACT_PRODUCER,
     sessionId: sid,
+    kernelVersion: HTML_REPORT_KERNEL_API_VERSION,
+    adapterVersion: HTML_REPORT_ADAPTER_VERSION,
     fingerprint: runtimeSourceFingerprint(snapshot),
     sources,
     createdAt: new Date().toISOString(),
@@ -1406,21 +1416,21 @@ function unsupportedParallelReportAgent(
   if (!input) return undefined;
   if (
     Array.isArray(input.tasks) &&
-    input.tasks.some((task) => isObject(task) && task.agent === agent)
+    input.tasks.some((task) => isObject(task) && isReportAgentName(task.agent, agent))
   ) {
     return "top-level tasks[]";
   }
   if (!Array.isArray(input.chain)) return undefined;
   for (const step of input.chain) {
     if (!isObject(step) || !("parallel" in step)) continue;
-    if (step.agent === agent) return "a mixed chain parallel step";
+    if (isReportAgentName(step.agent, agent)) return "a mixed chain parallel step";
     if (
       Array.isArray(step.parallel) &&
-      step.parallel.some((task) => isObject(task) && task.agent === agent)
+      step.parallel.some((task) => isObject(task) && isReportAgentName(task.agent, agent))
     ) {
       return "chain[].parallel[]";
     }
-    if (isObject(step.parallel) && step.parallel.agent === agent) {
+    if (isObject(step.parallel) && isReportAgentName(step.parallel.agent, agent)) {
       return "chain[].parallel dynamic fan-out";
     }
   }
@@ -1501,12 +1511,12 @@ export function runningGateSubagentDecision(
     reason: `html-report ${stageId} Gate 的 subagent 仅允许 ${expected}；当前调用不属于该阶段，已阻止。`,
   });
   const carriesEditorPlannerMarker =
-    (input.agent === "report-researcher" &&
+    (isReportAgentName(input.agent, "report-researcher") &&
       typeof input.task === "string" &&
       isEditorPlannerAssignment(input.task)) ||
     (Array.isArray(input.chain) && input.chain.some(
       (step) => isObject(step) &&
-        step.agent === "report-researcher" &&
+        isReportAgentName(step.agent, "report-researcher") &&
         typeof step.task === "string" &&
         isEditorPlannerAssignment(step.task)
     ));
@@ -1520,7 +1530,7 @@ export function runningGateSubagentDecision(
   }
   if (stageId === "B25_EDITOR") {
     const plannerStep = Array.isArray(input.chain) && input.chain.length === 1 &&
-      isObject(input.chain[0]) && input.chain[0].agent === "report-researcher" &&
+      isObject(input.chain[0]) && isReportAgentName(input.chain[0].agent, "report-researcher") &&
       typeof input.chain[0].task === "string" && isEditorPlannerAssignment(input.chain[0].task);
     return action === null && plannerStep
       ? undefined
@@ -1529,7 +1539,7 @@ export function runningGateSubagentDecision(
   if (policy === "none") return reject("不调用任何子代理");
   if (!policy) return reject("已登记的阶段专属子代理");
   if (action !== null || declaredAgents.length === 0) return reject(policy.join(" 或 "));
-  const disallowed = declaredAgents.find((agent) => !policy.includes(agent));
+  const disallowed = declaredAgents.find((agent) => !policy.some((role) => isReportAgentName(agent, role)));
   if (disallowed) return reject(policy.join(" 或 "));
   return undefined;
 }
@@ -1594,10 +1604,7 @@ const FOREGROUND_SUBAGENT_BRIDGE_TIMEOUT_MAX_MS = 725_000;
 
 function runtimeAgentListObservedAgents(event: PiToolResultEvent): string[] {
   const text = runtimeAgentListText(event);
-  return REQUIRED_REPORT_AGENTS.filter((name) => {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|\\n)\\s*-\\s*${escaped}(?:\\s|\\()`, "m").test(text);
-  });
+  return REQUIRED_REPORT_AGENTS.filter((name) => runtimeListHasReportAgent(text, name));
 }
 
 /**
@@ -1762,10 +1769,8 @@ export function inspectRuntimeAgentListResult(event: PiToolResultEvent): {
   if (event.isError === true) {
     return { ok: false, missingAgents: [...REQUIRED_REPORT_AGENTS], error: text.trim() || "subagent list failed" };
   }
-  const missingAgents = REQUIRED_REPORT_AGENTS.filter((name) => {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return !new RegExp(`(?:^|\\n)\\s*-\\s*${escaped}(?:\\s|\\()`, "m").test(text);
-  });
+  const missingAgents = REQUIRED_REPORT_AGENTS.filter((name) => !runtimeListHasReportAgent(text, name));
+  if (!missingAgents.length) rememberObservedReportAgentsFromListText(text);
   return missingAgents.length
     ? { ok: false, missingAgents, error: `runtime list 缺少 Agent：${missingAgents.join(", ")}` }
     : { ok: true, missingAgents: [] };
@@ -1955,12 +1960,12 @@ function writerInvocationFromSubagentInput(input: JsonObject | undefined): {
   if (!input) return {};
   const unsupported = unsupportedParallelReportAgent(input, "report-writer");
   if (unsupported) return { error: parallelReportAgentError("Report Writer", unsupported) };
-  if (input.agent === "report-writer") {
+  if (isReportAgentName(input.agent, "report-writer")) {
     return { error: "Report Writer 必须使用单步骤 chain 调用，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const writers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-writer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-writer")
   );
   if (!writers.length) return {};
   if (input.chain.length !== 1 || writers.length !== 1) {
@@ -2055,7 +2060,7 @@ function attachWriterRunEnvelope(
   if (unsupported) return { error: parallelReportAgentError("Report Writer", unsupported) };
   if (!input || !Array.isArray(input.chain)) return {};
   const writers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-writer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-writer")
   );
   if (!writers.length || input.chain.length !== 1 || writers.length !== 1) return {};
 
@@ -2103,7 +2108,7 @@ type WriterToolResultPatch = ToolResultPatch & {
 function writerDispatchInput(sessionDir: string, cardId: string): JsonObject {
   return {
     chain: [{
-      agent: "report-writer",
+      agent: reportAgentDispatchName("report-writer"),
       task: [
         `按 report-writer 处理 cardId=${cardId}`,
         `SESSION=${sessionDir}`,
@@ -2493,12 +2498,12 @@ function editorPlannerInvocationFromSubagentInput(input: JsonObject | undefined)
   if (!input) return {};
   const unsupported = unsupportedParallelReportAgent(input, "report-researcher");
   if (unsupported) return { error: parallelReportAgentError("Editor Planner", unsupported) };
-  if (input.agent === "report-researcher" && typeof input.task === "string" && isEditorPlannerAssignment(input.task)) {
+  if (isReportAgentName(input.agent, "report-researcher") && typeof input.task === "string" && isEditorPlannerAssignment(input.task)) {
     return { error: "Editor Planner 必须使用 fresh 单步骤 chain，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const planners = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-researcher" &&
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-researcher") &&
       typeof step.task === "string" && isEditorPlannerAssignment(step.task)
   );
   if (!planners.length) return {};
@@ -2532,7 +2537,7 @@ function attachEditorPlannerOutputSchema(
 ): { error?: string } {
   if (!input || !Array.isArray(input.chain)) return {};
   const planners = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-researcher" &&
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-researcher") &&
       typeof step.task === "string" && isEditorPlannerAssignment(step.task)
   );
   if (!planners.length) return {};
@@ -2624,7 +2629,7 @@ function editorPlannerNextTool(
     "机器契约：由 qdm-harness 根据当前 task、mode、requirements 和 outputSchema 注入；父代理不得在这里展开、转述或追加规则。",
   ].join("\n");
   return deterministicNextTool("subagent", {
-    chain: [{ agent: "report-researcher", task }],
+    chain: [{ agent: reportAgentDispatchName("report-researcher"), task }],
   });
 }
 
@@ -2741,12 +2746,12 @@ function researcherInvocationFromSubagentInput(input: JsonObject | undefined): {
   )) return {};
   const unsupported = unsupportedParallelReportAgent(input, "report-researcher");
   if (unsupported) return { error: parallelReportAgentError("Report Researcher", unsupported) };
-  if (input.agent === "report-researcher") {
+  if (isReportAgentName(input.agent, "report-researcher")) {
     return { error: "Report Researcher 必须使用带固定 outputSchema 的单步骤 chain，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const researchers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-researcher"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-researcher")
   );
   if (!researchers.length) return {};
   if (input.chain.length !== 1 || researchers.length !== 1) {
@@ -2873,7 +2878,7 @@ function attachResearcherOutputSchema(
   if (unsupported) return { error: parallelReportAgentError("Report Researcher", unsupported) };
   if (!input || !Array.isArray(input.chain)) return {};
   const researchers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-researcher"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-researcher")
   );
   if (!researchers.length || input.chain.length !== 1 || researchers.length !== 1) return {};
   const [researcher] = researchers;
@@ -2971,12 +2976,12 @@ function reviewerInvocationFromSubagentInput(input: JsonObject | undefined): {
   if (!input) return {};
   const unsupported = unsupportedParallelReportAgent(input, "report-reviewer");
   if (unsupported) return { error: parallelReportAgentError("Report Reviewer", unsupported) };
-  if (input.agent === "report-reviewer") {
+  if (isReportAgentName(input.agent, "report-reviewer")) {
     return { error: "Report Reviewer 必须使用带固定 outputSchema 的单步骤 chain，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const reviewers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-reviewer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-reviewer")
   );
   if (!reviewers.length) return {};
   if (input.chain.length !== 1 || reviewers.length !== 1) {
@@ -3276,7 +3281,7 @@ function attachReviewerOutputSchema(
   if (unsupported) return { error: parallelReportAgentError("Report Reviewer", unsupported) };
   if (!input || !Array.isArray(input.chain)) return {};
   const reviewers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-reviewer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-reviewer")
   );
   if (!reviewers.length || input.chain.length !== 1 || reviewers.length !== 1) return {};
   const [reviewer] = reviewers;
@@ -3433,12 +3438,12 @@ function designerInvocationFromSubagentInput(input: JsonObject | undefined): {
   if (!input) return {};
   const unsupported = unsupportedParallelReportAgent(input, "report-designer");
   if (unsupported) return { error: parallelReportAgentError("Report Designer", unsupported) };
-  if (input.agent === "report-designer") {
+  if (isReportAgentName(input.agent, "report-designer")) {
     return { error: "Report Designer 必须使用带固定 outputSchema 的单步骤 chain，不能使用自由文本单代理调用。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const designers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-designer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-designer")
   );
   if (!designers.length) return {};
   if (input.chain.length !== 1 || designers.length !== 1) {
@@ -3532,12 +3537,12 @@ function attachDesignerOutputSchema(
   const unsupported = unsupportedParallelReportAgent(input, "report-designer");
   if (unsupported) return { error: parallelReportAgentError("Report Designer", unsupported) };
   if (!input) return {};
-  if (input.agent === "report-designer") {
+  if (isReportAgentName(input.agent, "report-designer")) {
     return { error: "Report Designer 必须使用单步骤 chain；请把 agent/task 放入 chain[0]。" };
   }
   if (!Array.isArray(input.chain)) return {};
   const designers = input.chain.filter(
-    (step): step is JsonObject => isObject(step) && step.agent === "report-designer"
+    (step): step is JsonObject => isObject(step) && isReportAgentName(step.agent, "report-designer")
   );
   if (!designers.length || input.chain.length !== 1 || designers.length !== 1) return {};
   const [designer] = designers;
@@ -3790,17 +3795,13 @@ function fixedPresetShouldOpenBrowser(): boolean {
   return process.env.HTML_REPORT_FIXED_RECOMMENDATIONS_OPEN !== "0";
 }
 
+function htmlReportSkillScript(fileName: string): string {
+  return join(packageResourceRoot, "skills", "html-report", "scripts", fileName);
+}
+
 function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
   if (!sid || sid === "unknown") return;
-  const uiScript = join(
-    projectRoot,
-    ".agents",
-    "pi",
-    "skills",
-    "html-report",
-    "scripts",
-    "open-metric-cli-ui.mjs"
-  );
+  const uiScript = htmlReportSkillScript("open-metric-cli-ui.mjs");
   try {
     spawnSync(
       process.execPath,
@@ -3812,15 +3813,7 @@ function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
   }
   const recommendationsPath = join(htmlReportSessionDir(projectRoot, sid), "recommendations.json");
   if (!existsSync(recommendationsPath)) return;
-  const serverScript = join(
-    projectRoot,
-    ".agents",
-    "pi",
-    "skills",
-    "html-report",
-    "scripts",
-    "server.mjs"
-  );
+  const serverScript = htmlReportSkillScript("server.mjs");
   try {
     spawnSync(
       process.execPath,
@@ -3842,15 +3835,7 @@ function seedFixedAConfig(
   sid: string,
   question: string
 ): { ok: true; seed: FixedRecommendationSeed } | { ok: false; error: string } {
-  const script = join(
-    projectRoot,
-    ".agents",
-    "pi",
-    "skills",
-    "html-report",
-    "scripts",
-    "open-metric-cli-ui.mjs"
-  );
+  const script = htmlReportSkillScript("open-metric-cli-ui.mjs");
   const args = [
     script,
     "--session-id",
@@ -6682,7 +6667,7 @@ export default function qdmHarnessExtension(pi: {
     const evidencePath = join(sessionDir, "analysis", "evidence", `${taskId}.json`);
     return {
       chain: [{
-        agent: "report-researcher",
+        agent: reportAgentDispatchName("report-researcher"),
         task: [
           `按 report-researcher 处理 taskId=${taskId}`,
           `SESSION=${sessionDir}`,
@@ -6994,7 +6979,7 @@ export default function qdmHarnessExtension(pi: {
       publishStageProgress(sid);
     } catch { /* display only */ }
     const sessionDir = htmlReportSessionDir(projectRoot, sid);
-    const input: JsonObject = { chain: [{ agent: "report-reviewer", task: `B4 scorecard\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
+    const input: JsonObject = { chain: [{ agent: reportAgentDispatchName("report-reviewer"), task: `B4 scorecard\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
     const attached = attachReviewerOutputSchema(input, { projectRoot, session: sid });
     if (attached.error) return failStageRun(sid, "B4_REVIEW", attached.error);
     const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;
@@ -7072,7 +7057,7 @@ export default function qdmHarnessExtension(pi: {
       return { status: "failed", text: "html_report_run_stage is not bound to a running B5_DESIGN attempt" };
     }
     const sessionDir = htmlReportSessionDir(projectRoot, sid);
-    const input: JsonObject = { chain: [{ agent: "report-designer", task: `B5 autonomous design\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
+    const input: JsonObject = { chain: [{ agent: reportAgentDispatchName("report-designer"), task: `B5 autonomous design\nSESSION=${sessionDir}\nresult.json=${join(sessionDir, "result.json")}` }] };
     const attached = attachDesignerOutputSchema(input, { projectRoot, session: sid });
     if (attached.error) return failStageRun(sid, "B5_DESIGN", attached.error);
     const step = Array.isArray(input.chain) && isObject(input.chain[0]) ? input.chain[0] : null;

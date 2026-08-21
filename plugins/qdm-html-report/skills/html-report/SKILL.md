@@ -28,9 +28,9 @@ B0_PREFLIGHT    validate result.json + metric CLI (no PI Agent check)
   ↓ auto-advance on pass
 B2_WRITER       per card: fetch-entry → prepare evidence → host writes caption
   ↓ submit_writer per card
-B2_MAIN         compose-main.mjs → analysis/main.md
+B2_MAIN         compose-main → analysis/main.md
   ↓ ask whether to generate HTML; only then html_report_generate_html
-optional HTML   export-main-html.mjs → analysis/main.html (same directory)
+optional HTML   export-main-html → analysis/main.html (same directory)
 ```
 
 Stops at `B2_MAIN`. No B25/B3/B4/B5, no P5 Designer HTML. Sibling `main.html`
@@ -88,8 +88,8 @@ Then call `html_report_submit_writer`:
 ### 4. Repeat
 
 Call `html_report_next` again to fetch the next card (or finish if all cards
-are done). When all cards have captions, `html_report_next` calls
-`compose-main.mjs` and returns `stage: "b2_main"` with the path to
+are done). When all cards have captions, `html_report_next` composes
+`analysis/main.md` and returns `stage: "b2_main"` with the path to
 `analysis/main.md` and `html: "awaiting_confirmation"`.
 
 ### 5. Optional HTML
@@ -126,4 +126,4 @@ html_report_generate_html({ "sessionId": "<id>" })
 
 - Full pipeline design: `docs/html-report-pipeline.md`
 - Quality rubric: `docs/html-report-quality-rubric.md`
-- PI version (full pipeline): `.agents/pi/skills/html-report/SKILL.md`
+- Runtime prerequisite: Harness Data installer (`npx @lumi-ai-lab/harness-data install`) must have initialized `qdm-metric-cli`, config, and authz.

@@ -9,12 +9,13 @@ import {
   EDITOR_PLANNER_MARKER,
   isEditorPlannerAssignment,
 } from "../../skills/html-report/scripts/editor-plan-contract.mjs";
+import { htmlReportScriptCandidates, matchesHtmlReportScript } from "../shared/script-paths.mjs";
 
 export const RESEARCHER_SUBMIT_TOOL = "submit_research_findings";
 const RESEARCHER_TOOLS = new Set(["read", "write", "bash", RESEARCHER_SUBMIT_TOOL]);
 const FINAL_TOOLS = new Set(["structured_output", "structured-output"]);
-const FETCH_SCRIPT = ".agents/pi/skills/html-report/scripts/fetch-explore.mjs";
-const PREPARE_SCRIPT = ".agents/pi/skills/html-report/scripts/prepare-research-evidence.mjs";
+const FETCH_SCRIPTS = htmlReportScriptCandidates(import.meta.url, "fetch-explore.mjs");
+const PREPARE_SCRIPTS = htmlReportScriptCandidates(import.meta.url, "prepare-research-evidence.mjs");
 const MAX_RECALLED_SPEC_PATHS = 2;
 
 function block(reason, state) {
@@ -372,7 +373,7 @@ export function classifyResearcherCommand(command, contract) {
   }
 
   if (tokens[0] !== "node") return null;
-  if (tokens[1] === FETCH_SCRIPT) {
+  if (matchesHtmlReportScript(tokens[1], FETCH_SCRIPTS)) {
     const options = optionsFrom(
       tokens,
       2,
@@ -390,7 +391,7 @@ export function classifyResearcherCommand(command, contract) {
     return null;
   }
 
-  if (tokens[1] === PREPARE_SCRIPT) {
+  if (matchesHtmlReportScript(tokens[1], PREPARE_SCRIPTS)) {
     const options = optionsFrom(tokens, 2, new Set(["--result", "--task-id"]));
     if (
       options &&

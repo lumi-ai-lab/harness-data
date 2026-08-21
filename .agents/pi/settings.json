@@ -5,5 +5,8 @@
   ],
   "skills": [
     ".pi/skills"
+  ],
+  "packages": [
+    "../plugins/pi-html-report"
   ]
 }

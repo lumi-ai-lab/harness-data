@@ -8,7 +8,6 @@
  */
 import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { fetchAllEntries } from "../../skills/html-report/scripts/fetch-entry.mjs";
 import {
   buildCaptionEvidence,
@@ -42,8 +41,9 @@ import {
   writerToolDecision,
   writerToolResultState,
 } from "./lifecycle.mjs";
+import { resolveProjectRoot } from "../shared/script-paths.mjs";
 
-const projectRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
+const projectRoot = resolveProjectRoot(import.meta.url);
 const sessionRoot = resolve(projectRoot, ".harness", "state", "html-report");
 
 function isInside(root, candidate) {

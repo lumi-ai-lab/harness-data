@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const serverPath = fileURLToPath(new URL("./server.mjs", import.meta.url));
 const repoRoot = resolve(new URL("../../../", import.meta.url).pathname);
@@ -110,6 +110,49 @@ async function seedB2MainSession(t, sessionId, { main = "# 报告\n" } = {}) {
   }, null, 2)}\n`);
   return sessionDir;
 }
+
+test("MCP loader and server do not import PI agent directories", async () => {
+  const files = [
+    serverPath,
+    fileURLToPath(new URL("./kernel-loader.mjs", import.meta.url)),
+    fileURLToPath(new URL("./runtime-resolver.mjs", import.meta.url)),
+  ];
+  for (const path of files) {
+    const src = await readFile(path, "utf8");
+    assert.equal(src.includes("resolveAgentsPath"), false, path);
+    assert.equal(src.includes("importScript("), false, path);
+    assert.equal(src.includes("join(workspace, \".agents\""), false, path);
+    assert.doesNotMatch(src, /from ["'][^"']*agents\/pi/);
+  }
+  const { resolveKernelPath, resolveRuntimePath, kernelSource } = await import(
+    new URL("./kernel-loader.mjs", import.meta.url)
+  );
+  assert.match(resolveKernelPath("data/fetch-entry.mjs"), /html-report-kernel/);
+  assert.match(resolveRuntimePath("authz-config.mjs"), /harness-runtime-node/);
+  assert.equal(["dist", "packages"].includes(kernelSource()), true);
+  assert.equal(resolveKernelPath("data/fetch-entry.mjs").includes("agents/pi"), false);
+  assert.equal(resolveRuntimePath("authz-config.mjs").includes("agents/pi"), false);
+
+  const researchEvidencePath = resolveKernelPath("evidence/prepare-research-evidence.mjs");
+  const assembleReportPath = resolveKernelPath("artifacts/assemble-report.mjs");
+  const [researchEvidence, assembleReport] = await Promise.all([
+    readFile(researchEvidencePath, "utf8"),
+    readFile(assembleReportPath, "utf8"),
+  ]);
+  assert.doesNotMatch(researchEvidence, /\.agents\/pi/);
+  assert.doesNotMatch(assembleReport, /prepare-research-evidence\.mjs/);
+  assert.match(assembleReport, /from ["']\.\.\/data\/fetch-entry\.mjs["']/);
+});
+
+test("packaged B2 and research evidence modules load without PI source directories", async () => {
+  const { resolveKernelPath } = await import(new URL("./kernel-loader.mjs", import.meta.url));
+  const [captionEvidence, researchEvidence] = await Promise.all([
+    import(pathToFileURL(resolveKernelPath("evidence/prepare-card-caption-evidence.mjs")).href),
+    import(pathToFileURL(resolveKernelPath("evidence/prepare-research-evidence.mjs")).href),
+  ]);
+  assert.equal(typeof captionEvidence.prepareCardCaptionEvidence, "function");
+  assert.equal(typeof researchEvidence.prepareSourceFieldInventory, "function");
+});
 
 test("self-test sees five tools including generate_html and export-main-html", async () => {
   const child = spawn(process.execPath, [serverPath, "--self-test"], {

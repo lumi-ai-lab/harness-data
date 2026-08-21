@@ -11,50 +11,16 @@
  *   html_report_generate_html  optional main.md → sibling main.html export
  *   html_report_status         query current state
  *
- * Reuses PI scripts in place — no code duplication, no PI runtime dependency.
+ * Loads the bundled Kernel / Runtime (plugin dist, else repo packages).
+ * Does not import .agents/pi or agents/pi at runtime.
  * B0 does NOT check for four PI agents (unlike PI B0).
  */
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-
-// ── path resolution ────────────────────────────────────────────────────
-
-const here = dirname(fileURLToPath(import.meta.url));
-
-/** Walk up from cwd to find the harness workspace root (has config/harness-config.yaml). */
-function findWorkspaceRoot(start = process.cwd()) {
-  let dir = start;
-  for (let i = 0; i < 20; i++) {
-    if (existsSync(join(dir, "config", "harness-config.yaml")) ||
-        existsSync(join(dir, "bin", "data-harness-cli"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return start;
-}
-
-const workspace = findWorkspaceRoot();
-// Source repo: <workspace>/.agents/pi/...  Runtime: <workspace>/agents/pi/...
-function resolveAgentsPath(...rel) {
-  for (const prefix of [".agents", "agents"]) {
-    const p = join(workspace, prefix, ...rel);
-    if (existsSync(p)) return p;
-  }
-  return join(workspace, ".agents", ...rel);
-}
-const scriptsDir = resolveAgentsPath("pi", "skills", "html-report", "scripts");
-const authzConfigPath = resolveAgentsPath("pi", "extensions", "qdm-harness", "authz-config.mjs");
-
-// ── lazy script imports (resolved at call time so missing files don't crash startup) ──
-
-async function importScript(rel) {
-  return import(join(scriptsDir, rel));
-}
+import { loadKernel, loadRuntime, resolveKernelPath, resolveRuntimePath, kernelSource } from "./kernel-loader.mjs";
+import { workspace } from "./runtime-resolver.mjs";
 
 // ── pipeline state ────────────────────────────────────────────────────
 
@@ -92,7 +58,8 @@ async function htmlReportStart(args) {
   const userQuestion = String(args.userQuestion || "").trim();
   const sessionDir = sessionDirFor(sessionId);
 
-  const { openMetricCliUi } = await importScript("open-metric-cli-ui.mjs");
+  const { bindCliScriptPath, openMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
+  bindCliScriptPath(resolveRuntimePath("open-metric-cli-ui.mjs"));
   const opened = await openMetricCliUi({
     projectRoot: workspace,
     sessionId,
@@ -141,9 +108,7 @@ async function htmlReportNext(args) {
     }
 
     // B0 preflight: validate result.json + metric CLI (no PI Agent check)
-    const { loadAuthzConfig, resolveMetricCliPath } = await import(
-      authzConfigPath
-    );
+    const { loadAuthzConfig, resolveMetricCliPath } = await loadRuntime("authz-config.mjs");
     const config = loadAuthzConfig(workspace);
     const cliPath = resolveMetricCliPath(workspace, config);
     if (!existsSync(cliPath)) {
@@ -178,7 +143,7 @@ async function htmlReportNext(args) {
     const allDone = state.cards.every((c) => c.captioned);
     if (allDone) {
       // compose-main.mjs
-      const { composeMain } = await importScript("compose-main.mjs");
+      const { composeMain } = await loadKernel("artifacts/compose-main.mjs");
       const output = await composeMain(sessionDir);
       state.stage = "b2_main";
       state.mainPath = join(sessionDir, "analysis", "main.md");
@@ -209,7 +174,7 @@ async function htmlReportNext(args) {
 
   // ── B2_MAIN: already done ──
   if (state.stage === "b2_main") {
-    const { htmlExportSummary } = await importScript("export-main-html.mjs");
+    const { htmlExportSummary } = await loadKernel("artifacts/export-main-html.mjs");
     const html = await htmlExportSummary(sessionDir);
     return {
       stage: "b2_main",
@@ -234,15 +199,15 @@ async function fetchCurrentCard(sessionDir, sessionId, result, state) {
   const resultPath = join(sessionDir, "result.json");
 
   // fetch-entry.mjs (CLI)
-  const { fetchAllEntries } = await importScript("fetch-entry.mjs");
-  const fetchResult = await fetchAllEntries(resultPath, { cardId: card.id });
+  const { fetchAllEntries } = await loadKernel("data/fetch-entry.mjs");
+  const fetchResult = await fetchAllEntries(resultPath, { cardId: card.id, projectRoot: workspace });
   const cardResult = fetchResult.cards.find((c) => c.cardId === card.id || c.id === card.id);
   if (!cardResult || cardResult.fetchStatus === "failed") {
     throw new Error(`fetch failed for card ${card.id}: ${cardResult?.error || "unknown"}`);
   }
 
   // prepare-card-caption-evidence.mjs
-  const { prepareCardCaptionEvidence } = await importScript("prepare-card-caption-evidence.mjs");
+  const { prepareCardCaptionEvidence } = await loadKernel("evidence/prepare-card-caption-evidence.mjs");
   const evidence = await prepareCardCaptionEvidence({ resultPath, cardId: card.id });
 
   return {
@@ -281,11 +246,11 @@ async function htmlReportSubmitWriter(args) {
   if (cardEntry.captioned) throw new Error(`card ${cardId} already has a caption`);
 
   // Resolve paths
-  const { writerReturnPaths } = await importScript("writer-return.mjs");
+  const { writerReturnPaths } = await loadKernel("session/writer-return.mjs");
   const paths = writerReturnPaths({ sessionDir, cardId });
 
   // submit-card-caption.mjs: input must contain ONLY paragraphs + pointers (no cardId)
-  const { writeCardCaption } = await importScript("submit-card-caption.mjs");
+  const { writeCardCaption } = await loadKernel("captions/submit-card-caption.mjs");
   const result = await writeCardCaption({
     input: { paragraphs, pointers },
     evidencePath: paths.evidencePath,
@@ -324,7 +289,7 @@ async function htmlReportGenerateHtml(args) {
   if (state.stage !== "b2_main") {
     throw new Error(`cannot generate HTML in stage ${state.stage}; expected b2_main`);
   }
-  const { exportMainHtml } = await importScript("export-main-html.mjs");
+  const { exportMainHtml } = await loadKernel("artifacts/export-main-html.mjs");
   return exportMainHtml(sessionDir);
 }
 
@@ -338,7 +303,7 @@ async function htmlReportStatus(args) {
   const state = await readState(sessionDir);
   if (!state) return { sessionId, stage: "none", message: "No active session. Call html_report_start first." };
 
-  const { htmlExportSummary } = await importScript("export-main-html.mjs");
+  const { htmlExportSummary } = await loadKernel("artifacts/export-main-html.mjs");
   const html = state.stage === "b2_main"
     ? await htmlExportSummary(sessionDir)
     : { status: "not_applicable", htmlPath: null, error: null, attempt: null };
@@ -442,7 +407,7 @@ async function handle(request) {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "html-report", version: "0.0.46" },
+            serverInfo: { name: "html-report", version: "0.0.49" },
           },
         });
         break;
@@ -512,14 +477,14 @@ async function selfTest() {
     "html_report_status",
   ]);
 
-  // path resolution
-  eq("scriptsDir exists", existsSync(scriptsDir), true);
-  eq("open-metric-cli-ui exists", existsSync(join(scriptsDir, "open-metric-cli-ui.mjs")), true);
-  eq("fetch-entry exists", existsSync(join(scriptsDir, "fetch-entry.mjs")), true);
-  eq("compose-main exists", existsSync(join(scriptsDir, "compose-main.mjs")), true);
-  eq("export-main-html exists", existsSync(join(scriptsDir, "export-main-html.mjs")), true);
-  eq("submit-card-caption exists", existsSync(join(scriptsDir, "submit-card-caption.mjs")), true);
-  eq("prepare-card-caption-evidence exists", existsSync(join(scriptsDir, "prepare-card-caption-evidence.mjs")), true);
+  eq("kernel source", ["dist", "packages"].includes(kernelSource()), true);
+  eq("open-metric-cli-ui exists", existsSync(resolveRuntimePath("open-metric-cli-ui.mjs")), true);
+  eq("fetch-entry exists", existsSync(resolveKernelPath("data/fetch-entry.mjs")), true);
+  eq("compose-main exists", existsSync(resolveKernelPath("artifacts/compose-main.mjs")), true);
+  eq("export-main-html exists", existsSync(resolveKernelPath("artifacts/export-main-html.mjs")), true);
+  eq("submit-card-caption exists", existsSync(resolveKernelPath("captions/submit-card-caption.mjs")), true);
+  eq("prepare-card-caption-evidence exists", existsSync(resolveKernelPath("evidence/prepare-card-caption-evidence.mjs")), true);
+  eq("authz-config exists", existsSync(resolveRuntimePath("authz-config.mjs")), true);
 
   const passed = asserts.filter((a) => a.ok).length;
   const failed = asserts.length - passed;

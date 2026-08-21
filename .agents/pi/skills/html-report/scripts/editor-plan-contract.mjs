@@ -20,6 +20,8 @@ import {
   isValidEvidenceGap,
 } from "./research-contract.mjs";
 
+export { persistEditorSourceInventory } from "../../../../../packages/html-report-kernel/src/editor/source-inventory-cache.mjs";
+
 export const EDITOR_PLANNER_MARKER = "HTML_REPORT_EDITOR_PLAN_V1";
 export const EDITOR_PLAN_VERSION = 1;
 export const EDITOR_PLAN_INPUT_VERSION = 1;
@@ -198,24 +200,6 @@ function currentResultSnapshot(resultPath) {
     throw new Error("result.json must be confirmed and contain a non-empty cards[]");
   }
   return { raw, value, sha256: sha256Text(raw) };
-}
-
-export function persistEditorSourceInventory(resultPath, inventory) {
-  const paths = editorPlannerCachePaths(resultPath);
-  const result = currentResultSnapshot(paths.resultPath);
-  if (!isPlainObject(inventory) || inventory.mode !== "source_fields" || !Array.isArray(inventory.sources)) {
-    throw new Error("source inventory must be a source_fields document with sources[]");
-  }
-  const document = {
-    version: EDITOR_PLANNER_CACHE_VERSION,
-    producer: EDITOR_PLANNER_CACHE_PRODUCER,
-    kind: "source_inventory",
-    resultPath: paths.resultPath,
-    resultSha256: result.sha256,
-    inventory,
-  };
-  atomicWriteJsonSync(paths.sourceInventoryPath, document);
-  return paths.sourceInventoryPath;
 }
 
 export function persistEditorWriterReturn(resultPath, writerReturn) {

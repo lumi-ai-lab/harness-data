@@ -48,8 +48,11 @@ Gate 确认 `result.json` 存在后才会批准进入 B0。
 This skill currently supports the **Pi Agent runtime only**. Before the parent
 model starts Phase A, qdm-harness emits an in-process pi-subagents slash bridge
 request with exactly `{ action: "list" }`. The extension binds the response to
-the current Session and Gate attempt and verifies `report-writer`,
-`report-researcher`, `report-reviewer`, and `report-designer`.
+the current Session and Gate attempt and verifies the four report agents.
+Canonical runtime names are `qdm-html-report.report-writer`,
+`qdm-html-report.report-researcher`, `qdm-html-report.report-reviewer`, and
+`qdm-html-report.report-designer`; legacy bare `report-*` names still satisfy
+the same check.
 
 The parent model must not repeat this call. A missing bridge, timeout, malformed
 response, missing Agent, or invalid audit automatically fails `A_CONFIG`. When
@@ -68,10 +71,11 @@ process, builtin `worker` / `delegate`, or by impersonating a `report-*` agent.
 > **`report-writer`**, **`report-researcher`**, **`report-reviewer`**,
 > **`report-designer`**.
 >
-> 1. Run `pi config` and enable the `npm:pi-subagents` extension (installed but
->    filtered/disabled is still unavailable).
-> 2. Confirm the four files exist under the repo-root `.pi/agents/` directory.
-> 3. Restart Pi from the repository root.
+> 1. Preferred: `pi install npm:@lumi-ai-lab/pi-html-report`, then restart Pi.
+> 2. Or run `pi config` and enable the `npm:pi-subagents` extension (installed but
+>    filtered/disabled is still unavailable), keeping the four files under
+>    `.pi/agents/` (legacy project mode).
+> 3. Restart Pi from the workspace root.
 > 4. Then reply **「重试当前阶段」**; the extension will run the runtime list again
 >    for the new Gate attempt.
 
@@ -227,10 +231,10 @@ Phase B requires these **Pi** agents (registry under `.pi/agents/`):
 
 | Display | `name` |
 | --- | --- |
-| Report Writer | `report-writer` |
-| Report Researcher | `report-researcher` |
-| Report Reviewer | `report-reviewer` |
-| Report Designer | `report-designer` |
+| Report Writer | `qdm-html-report.report-writer` (legacy `report-writer`) |
+| Report Researcher | `qdm-html-report.report-researcher` (legacy `report-researcher`) |
+| Report Reviewer | `qdm-html-report.report-reviewer` (legacy `report-reviewer`) |
+| Report Designer | `qdm-html-report.report-designer` (legacy `report-designer`) |
 
 **Before any fetch / analysis**, qdm-harness automatically emits one new
 `{ action: "list" }` request through the real pi-subagents event bridge. It
@@ -258,10 +262,10 @@ and stop; do not retry within the same attempt or hand-write a fail command:
 >
 > ### Configure
 >
-> 1. Files under repo root: `.pi/agents/report-writer.md`, `report-researcher.md`, `report-reviewer.md`, `report-designer.md`
-> 2. Pi **cwd = repo root**, pi-subagents installed
-> 3. **Restart Pi** so the pi-subagents event bridge is loaded
-> 4. Optional: `node .agents/pi/skills/html-report/scripts/check-report-agents.mjs`
+> 1. Preferred: `pi install npm:@lumi-ai-lab/pi-html-report` then restart Pi
+> 2. Legacy: files under repo root `.pi/agents/report-writer.md` 等四个
+> 3. Pi **cwd = workspace root**, pi-subagents installed
+> 4. **Restart Pi** so Extension / Agent registry reload
 > 5. 修复后回复「重试当前阶段」；扩展会在新 attempt 自动重新验收
 
 Only when the input/session check passes and the automatic list has **all four**

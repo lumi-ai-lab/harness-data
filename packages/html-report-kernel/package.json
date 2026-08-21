@@ -1,0 +1,29 @@
+{
+  "name": "@lumi-ai-lab/html-report-kernel",
+  "version": "0.0.46",
+  "description": "Deterministic HTML report kernel shared by Codex and PI adapters.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./query": "./src/query/metric-query-contract.mjs",
+    "./data": "./src/data/fetch-entry.mjs",
+    "./data/fetch-explore": "./src/data/fetch-explore.mjs",
+    "./session": "./src/session/writer-return.mjs",
+    "./evidence": "./src/evidence/prepare-card-caption-evidence.mjs",
+    "./evidence/caption-dims": "./src/evidence/caption-dims.mjs",
+    "./evidence/research": "./src/evidence/prepare-research-evidence.mjs",
+    "./editor/source-inventory-cache": "./src/editor/source-inventory-cache.mjs",
+    "./captions": "./src/captions/submit-card-caption.mjs",
+    "./artifacts": "./src/artifacts/compose-main.mjs",
+    "./artifacts/assemble": "./src/artifacts/assemble-report.mjs",
+    "./artifacts/html": "./src/artifacts/export-main-html.mjs",
+    "./contracts/research": "./src/contracts/research-contract.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

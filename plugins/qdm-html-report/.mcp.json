@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "html-report": {
+      "cwd": ".",
       "command": "node",
-      "args": ["mcp/server.mjs"]
+      "args": ["./mcp/server.mjs"]
     }
   }
 }

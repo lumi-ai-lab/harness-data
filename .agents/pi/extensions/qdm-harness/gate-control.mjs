@@ -9,6 +9,7 @@ import {
   pipelineStatePath,
 } from "../../skills/html-report/scripts/stage-gate.mjs";
 import { EDITOR_PLANNER_MARKER } from "../../skills/html-report/scripts/editor-plan-contract.mjs";
+import { reportAgentDispatchName } from "../shared/report-agents.mjs";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const MODEL_GATE_OPERATIONS = new Set(["status", "finish", "fail"]);
@@ -649,7 +650,7 @@ export function b25EditorBootstrapContract(projectRoot, sessionId) {
     sourceFieldsCommand,
     plannerInput: {
       context: "fresh",
-      chain: [{ agent: "report-researcher", task: plannerTask }],
+      chain: [{ agent: reportAgentDispatchName("report-researcher"), task: plannerTask }],
     },
   };
 }

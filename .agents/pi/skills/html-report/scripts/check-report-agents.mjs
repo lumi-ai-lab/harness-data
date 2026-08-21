@@ -67,9 +67,9 @@ async function checkOne(name) {
       const nameLine = m[1].split("\n").find((l) => /^name:\s*/.test(l));
       const n = nameLine ? nameLine.replace(/^name:\s*/, "").trim() : null;
       item.frontmatterName = n;
-      if (n !== name) {
+      if (n !== name && n !== `qdm-html-report.${name}`) {
         item.ok = false;
-        item.messages.push(`frontmatter name must be "${name}", got ${JSON.stringify(n)}`);
+        item.messages.push(`frontmatter name must be "${name}" or "qdm-html-report.${name}", got ${JSON.stringify(n)}`);
       }
       if (name === "report-writer") {
         const tools = String(frontmatter.tools || "")

@@ -15,6 +15,7 @@ import {
   persistEditorWriterReturn,
   validateEditorPlan,
 } from "../scripts/editor-plan-contract.mjs";
+import { persistEditorSourceInventory as persistKernelSourceInventory } from "../../../../../packages/html-report-kernel/src/editor/source-inventory-cache.mjs";
 import { materializeEditorPlan } from "../scripts/editor-plan.mjs";
 
 function inputFixture({ empty = false } = {}) {
@@ -945,6 +946,7 @@ test("semantic validation fails closed for malformed nested Planner values", () 
 });
 
 test("Planner cache is result-fingerprinted and builds compact authoritative input", async () => {
+  assert.equal(persistEditorSourceInventory, persistKernelSourceInventory);
   const session = await mkdtemp(join(tmpdir(), "html-report-editor-plan-cache-"));
   const resultPath = join(session, "result.json");
   const rowsSha256 = "b".repeat(64);

@@ -1,3 +1,6 @@
+export const HTML_REPORT_KERNEL_API_VERSION = "v1";
+export const HTML_REPORT_ADAPTER_VERSION = "0.0.46";
+
 export type JsonObject = Record<string, unknown>;
 
 export type ReportAgentStage =

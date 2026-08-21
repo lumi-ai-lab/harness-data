@@ -1,6 +1,7 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { validateDesignTemplate } from "../../skills/html-report/scripts/compose-report.mjs";
 import { designerReturnPaths, validateDesignerReturn } from "../../skills/html-report/scripts/designer-return.mjs";
+import { htmlReportScriptCandidates, matchesHtmlReportScript } from "../shared/script-paths.mjs";
 
 const FINAL_TOOLS = new Set(["structured_output", "structured-output"]);
 const CONTENT_SLOT = "<!-- HTML_REPORT_CONTENT -->";
@@ -10,6 +11,13 @@ const SCRIPT_PATHS = Object.freeze({
   capture: ".agents/pi/skills/html-report/scripts/capture-report.mjs",
   finalize: ".agents/pi/skills/html-report/scripts/finalize-design.mjs",
   layout: ".agents/pi/skills/html-report/scripts/check-session-layout.mjs",
+});
+const PACKAGED_SCRIPT_PATHS = Object.freeze({
+  compile: htmlReportScriptCandidates(import.meta.url, "compile-report-content.mjs"),
+  compose: htmlReportScriptCandidates(import.meta.url, "compose-report.mjs"),
+  capture: htmlReportScriptCandidates(import.meta.url, "capture-report.mjs"),
+  finalize: htmlReportScriptCandidates(import.meta.url, "finalize-design.mjs"),
+  layout: htmlReportScriptCandidates(import.meta.url, "check-session-layout.mjs"),
 });
 
 function allow(state) {
@@ -219,7 +227,9 @@ export function classifyDesignerCommand(command, contract) {
   if (!tokens || tokens[0] !== "node" || tokens.length < 4) return null;
   const script = tokens[1];
   const kind = Object.keys(contract.scripts).find((name) =>
-    script === contract.scripts[name] || script === SCRIPT_PATHS[name]
+    script === contract.scripts[name]
+    || script === SCRIPT_PATHS[name]
+    || matchesHtmlReportScript(script, PACKAGED_SCRIPT_PATHS[name] || [])
   );
   if (!kind) return null;
   const allowed = kind === "finalize"

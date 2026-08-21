@@ -306,6 +306,24 @@ function createForegroundSubagentEventBus(responder) {
   return { events, requests, listeners };
 }
 
+test("runtime agent list inspection accepts canonical package agent names", () => {
+  const inspected = inspectRuntimeAgentListResult({
+    toolName: "subagent",
+    content: [{
+      type: "text",
+      text: [
+        "- qdm-html-report.report-writer (package): write",
+        "- qdm-html-report.report-researcher (package): research",
+        "- qdm-html-report.report-reviewer (package): review",
+        "- qdm-html-report.report-designer (package): design",
+      ].join("\n"),
+    }],
+    isError: false,
+  });
+  assert.equal(inspected.ok, true);
+  assert.deepEqual(inspected.missingAgents, []);
+});
+
 test("runtime agent list inspection requires executable-agent rows, not description substrings", () => {
   assert.equal(inspectRuntimeAgentListResult({
     toolName: "subagent",
@@ -1457,6 +1475,15 @@ test("parent gate state is not reused by a child Pi session id", async (t) => {
 
   assert.equal(readGateState(root, "parent-session")?.status, "awaiting_approval");
   assert.equal(readGateState(root, "child-session"), null);
+});
+
+test("A_CONFIG UI launcher is resolved from the extension package, not workspace .agents/pi", async () => {
+  const src = await readFile(new URL("../../../extensions/qdm-harness/index.ts", import.meta.url), "utf8");
+  assert.match(src, /htmlReportSkillScript\("open-metric-cli-ui\.mjs"\)/);
+  assert.doesNotMatch(
+    src,
+    /projectRoot[\s\S]{0,80}"\.agents"[\s\S]{0,80}"open-metric-cli-ui\.mjs"/
+  );
 });
 
 test("runtime contract fingerprints child guards and authoritative report scripts", () => {
