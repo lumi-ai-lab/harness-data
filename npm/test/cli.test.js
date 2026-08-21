@@ -16,7 +16,7 @@ import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { toolAssetName } from "../src/lib/tool-release.js";
-import { giteeReleaseAssetName, resolveLatestGiteeTool } from "../src/lib/gitee-release.js";
+import { giteeReleaseAssetName, parseCompositeReleaseTag, resolveLatestCompositeRelease, resolveLatestGiteeTool } from "../src/lib/gitee-release.js";
 import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { encryptedWikisAssetName, installEncryptedWikis, wikisReleaseSource } from "../src/lib/wikis-release.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
@@ -608,6 +608,37 @@ test("qdm-metric-cli rejects a partially replaced Gitee latest slot", async () =
       resolveLatestGiteeTool(tool, "darwin-arm64", { giteeApiBaseUrl: "https://gitee.example/api/v5" }),
       /mixed or incomplete platform versions/
     );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("composite Gitee releases expose independent Harness and Metric versions", async () => {
+  assert.deepEqual(parseCompositeReleaseTag("harness-v0.0.48-metric-v0.1.10"), {
+    tag: "harness-v0.0.48-metric-v0.1.10",
+    harnessTag: "v0.0.48",
+    metricTag: "v0.1.10",
+  });
+  assert.equal(parseCompositeReleaseTag("v0.0.48"), null);
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify([
+    {
+      id: 2,
+      tag_name: "harness-v0.0.48-metric-v0.1.10",
+      assets: [],
+    },
+    {
+      id: 1,
+      tag_name: "harness-v0.0.47-metric-v0.1.9",
+      assets: [],
+    },
+  ]), { status: 200 });
+  try {
+    const release = await resolveLatestCompositeRelease({ giteeApiBaseUrl: "https://gitee.example/api/v5" });
+    assert.equal(release.tag, "harness-v0.0.48-metric-v0.1.10");
+    assert.equal(release.harnessTag, "v0.0.48");
+    assert.equal(release.metricTag, "v0.1.10");
   } finally {
     global.fetch = originalFetch;
   }

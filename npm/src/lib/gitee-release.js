@@ -1,5 +1,6 @@
 const defaultApiBaseUrl = "https://gitee.com/api/v5";
 const defaultDownloadBaseUrl = "https://gitee.com";
+const compositeTagPattern = /^harness-(v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-metric-(v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/;
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -18,6 +19,40 @@ function compareVersions(left, right) {
 function releaseApiUrl(release, options = {}) {
   const base = (options.giteeApiBaseUrl || defaultApiBaseUrl).replace(/\/$/, "");
   return `${base}/repos/${encodeURIComponent(release.owner)}/${encodeURIComponent(release.repo)}/releases/tags/${encodeURIComponent(release.tag)}`;
+}
+
+export function parseCompositeReleaseTag(tag) {
+  const match = String(tag || "").match(compositeTagPattern);
+  return match ? { tag, harnessTag: match[1], metricTag: match[2] } : null;
+}
+
+export function compositeAssetUrl(asset, release, options = {}) {
+  return assetDownloadUrl(asset, {
+    owner: release.owner || "git_pengmd",
+    repo: release.repo || "harness-release",
+    tag: release.tag,
+  }, options);
+}
+
+export async function resolveLatestCompositeRelease(options = {}) {
+  const owner = options.giteeReleaseOwner || "git_pengmd";
+  const repo = options.giteeReleaseRepo || "harness-release";
+  const base = (options.giteeApiBaseUrl || defaultApiBaseUrl).replace(/\/$/, "");
+  const data = await fetchJson(`${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases?per_page=100&page=1`, options);
+  const releases = (Array.isArray(data) ? data : [])
+    .map((release) => ({ release, parsed: parseCompositeReleaseTag(release.tag_name) }))
+    .filter((item) => item.parsed && !item.release.draft)
+    .sort((left, right) => (right.release.id || 0) - (left.release.id || 0));
+  if (!releases.length) throw new Error("Gitee 中没有可用的 Harness/Metric 组合 Release");
+  const selected = releases[0];
+  return {
+    ...selected.release,
+    owner,
+    repo,
+    tag: selected.parsed.tag,
+    harnessTag: selected.parsed.harnessTag,
+    metricTag: selected.parsed.metricTag,
+  };
 }
 
 function assetDownloadUrl(asset, release, options = {}) {
@@ -49,6 +84,7 @@ export function giteeReleaseAssetName(tool, version, key) {
 }
 
 export async function resolveLatestGiteeTool(tool, key, options = {}) {
+  if (options.compositeRelease) return resolveCompositeGiteeTool(tool, key, options.compositeRelease, options);
   const release = {
     owner: tool.release?.owner || "git_pengmd",
     repo: tool.release?.repo || "harness-release",
@@ -95,6 +131,44 @@ export async function resolveLatestGiteeTool(tool, key, options = {}) {
         url: assetDownloadUrl(selected.asset, release, options),
         sha256: "",
         shaAsset: shaAsset ? assetDownloadUrl(shaAsset, release, options) : "",
+      },
+    },
+  };
+}
+
+export async function resolveCompositeGiteeTool(tool, key, composite, options = {}) {
+  const assets = Array.isArray(composite.assets) ? composite.assets : [];
+  const metricTag = composite.metricTag || parseCompositeReleaseTag(composite.tag)?.metricTag;
+  if (!metricTag) throw new Error("组合 Release 缺少 Metric CLI 版本");
+  const pattern = new RegExp(`^${escapeRegExp(tool.binary)}-${escapeRegExp(metricTag)}-${escapeRegExp(key)}\\.${escapeRegExp(archiveSuffix(tool.platforms?.[key], key))}$`);
+  const selected = assets.find((asset) => pattern.test(asset?.name || ""));
+  if (!selected) throw new Error(`${tool.name} composite release ${composite.tag} missing ${key} asset`);
+  const platformNames = Object.keys(tool.platforms || {});
+  for (const platform of platformNames) {
+    const suffix = archiveSuffix(tool.platforms?.[platform], platform);
+    const expected = `${tool.binary}-${metricTag}-${platform}.${suffix}`;
+    if (!assets.some((asset) => asset?.name === expected)) throw new Error(`${tool.name} composite release missing ${platform} asset`);
+  }
+  const shaAsset = assets.find((asset) => asset?.name === `${selected.name}.sha256`);
+  return {
+    ...tool,
+    version: metricTag,
+    release: {
+      ...tool.release,
+      provider: "gitee",
+      strategy: "composite",
+      owner: composite.owner || "git_pengmd",
+      repo: composite.repo || "harness-release",
+      tag: composite.tag,
+      releaseId: composite.id || "",
+      sourceUrl: composite.html_url || "",
+    },
+    platforms: {
+      [key]: {
+        archive: archiveSuffix(tool.platforms?.[key], key),
+        url: compositeAssetUrl(selected, composite, options),
+        sha256: "",
+        shaAsset: shaAsset ? compositeAssetUrl(shaAsset, composite, options) : "",
       },
     },
   };

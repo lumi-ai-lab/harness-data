@@ -31,9 +31,9 @@
       "private": true,
       "release": {
         "provider": "gitee",
+        "strategy": "composite",
         "owner": "git_pengmd",
-        "repo": "harness-release",
-        "tag": "qdm-metric-cli-latest"
+        "repo": "harness-release"
       },
       "platforms": {
         "darwin-arm64": {
