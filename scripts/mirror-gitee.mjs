@@ -247,22 +247,25 @@ async function downloadToFile(url, dest) {
 
 /** 通过 attach_files 上传一个附件到 Gitee release。 */
 async function uploadAttachFile(releaseId, filePath, assetName) {
-  const buf = readFileSync(filePath);
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
     try {
-      const blob = new Blob([buf], { type: "application/octet-stream" });
-      const form = new FormData();
-      form.append("name", assetName);
-      form.append("file", blob, assetName);
-      const res = await fetch(
+      // Gitee 对 Node FormData 的 chunked multipart 响应偶尔会无限等待，
+      // 使用 curl 的 max-time 确保单个附件不会卡住整个 workflow。
+      await execFileAsync("curl", [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        "90",
+        "-H",
+        `Authorization: token ${GITEE_TOKEN}`,
+        "-F",
+        `name=${assetName}`,
+        "-F",
+        `file=@${filePath};type=application/octet-stream`,
         `${GITEE_API}/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files`,
-        { method: "POST", headers: authHeaders(), body: form, signal: controller.signal },
-      );
-      const text = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${text}`);
+      ], { encoding: "utf8" });
       return;
     } catch (error) {
       lastError = error;
@@ -270,8 +273,6 @@ async function uploadAttachFile(releaseId, filePath, assetName) {
         console.warn(`  ! ${assetName} 上传第 ${attempt} 次失败，准备重试: ${error.message}`);
         await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
-    } finally {
-      clearTimeout(timeout);
     }
   }
   throw new Error(`上传 ${assetName} 失败: ${lastError?.message || "未知错误"}`);
