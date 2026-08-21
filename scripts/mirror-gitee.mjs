@@ -473,7 +473,9 @@ async function mirrorMetricLatest() {
 
   const deleted = [];
   for (const asset of existingAssets) {
-    if (expectedNames.has(asset.name)) continue;
+    // Gitee 会为固定 tag 自动生成 qdm-metric-cli-latest.zip/.tar.gz 源码归档，
+    // 这些条目没有可删除的附件 ID；只清理由镜像脚本上传的版本化二进制附件。
+    if (expectedNames.has(asset.name) || !asset.id || !/^qdm-metric-cli-v\d+\.\d+\.\d+-/.test(asset.name)) continue;
     try {
       await deleteAttachFile(rel.id, asset.id, asset.name);
       deleted.push(asset.name);
