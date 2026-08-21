@@ -19,7 +19,7 @@
 //
 // 零第三方依赖：仅用 Node 内置模块 + gh CLI + tar。
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -30,6 +30,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const GITEE_TOKEN = process.env.GITEE_TOKEN;
 const GITEE_OWNER = process.env.GITEE_OWNER || "git_pengmd";
@@ -180,25 +183,36 @@ async function deleteGiteeRelease(releaseId, tagName) {
   }
 }
 
-function downloadGitHubAsset(repo, tag, assetName, dest) {
+async function downloadGitHubAssets(repo, tag, assets) {
   const dir = mkdtempSync(join(tmpdir(), "gitee-gh-dl-"));
+  const files = new Map();
   try {
-    execFileSync("gh", [
-      "release",
-      "download",
-      tag,
-      "--repo",
-      repo,
-      "--pattern",
-      assetName,
-      "--dir",
-      dir,
-    ], { stdio: "inherit" });
-    const source = join(dir, assetName);
-    if (!existsSync(source)) throw new Error(`gh release download did not produce ${assetName}`);
-    writeFileSync(dest, readFileSync(source));
-  } finally {
+    await Promise.all(assets.map(async (asset) => {
+      const assetDir = mkdtempSync(join(dir, "asset-"));
+      try {
+        await execFileAsync("gh", [
+          "release",
+          "download",
+          tag,
+          "--repo",
+          repo,
+          "--pattern",
+          asset.name,
+          "--dir",
+          assetDir,
+        ], { encoding: "utf8" });
+        const source = join(assetDir, asset.name);
+        if (!existsSync(source)) throw new Error(`gh release download did not produce ${asset.name}`);
+        files.set(asset.name, source);
+      } catch (error) {
+        const detail = error.stderr?.trim() || error.message;
+        throw new Error(`下载 ${asset.name} 失败: ${detail}`);
+      }
+    }));
+    return { dir, files };
+  } catch (error) {
     rmSync(dir, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -419,29 +433,42 @@ async function mirrorMetricLatest() {
   const skipped = [];
   const failed = [];
 
-  for (const asset of assets) {
-    if (existingNames.has(asset.name)) {
-      skipped.push(asset.name);
-      continue;
-    }
-    const tmp = mkdtempSync(join(tmpdir(), "gitee-metric-"));
-    const dest = join(tmp, asset.name);
-    try {
-      downloadGitHubAsset(METRIC_GITHUB_REPO, sourceTag, asset.name, dest);
-      await uploadAttachFile(rel.id, dest, asset.name);
+  let downloads;
+  try {
+    downloads = await downloadGitHubAssets(METRIC_GITHUB_REPO, sourceTag, assets.filter((asset) => !existingNames.has(asset.name)));
+  } catch (error) {
+    return {
+      sourceTag,
+      uploaded,
+      skipped: assets.filter((asset) => existingNames.has(asset.name)).map((asset) => asset.name),
+      failed: [{ name: "download", err: error.message }],
+      deleted: [],
+      deletedReleases: [],
+    };
+  }
+
+  try {
+    for (const asset of assets) {
+      if (existingNames.has(asset.name)) {
+        skipped.push(asset.name);
+        continue;
+      }
+      const file = downloads.files.get(asset.name);
+      if (!file) throw new Error(`缺少已下载附件 ${asset.name}`);
+      await uploadAttachFile(rel.id, file, asset.name);
       uploaded.push(asset.name);
       console.log(`  ✓ ${asset.name}`);
-    } catch (error) {
-      failed.push({ name: asset.name, err: error.message });
-      console.error(`  ✗ ${asset.name}: ${error.message}`);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
     }
+  } catch (error) {
+    failed.push({ name: "upload", err: error.message });
+    console.error(`  ✗ 上传附件失败: ${error.message}`);
+  } finally {
+    rmSync(downloads.dir, { recursive: true, force: true });
   }
 
   if (failed.length) {
     console.error("  ⚠ 新版附件未全部上传，保留旧版附件，不执行清理");
-    return { sourceTag, uploaded, skipped, failed, deleted: [] };
+    return { sourceTag, uploaded, skipped, failed, deleted: [], deletedReleases: [] };
   }
 
   const deleted = [];
