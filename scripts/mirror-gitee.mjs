@@ -19,7 +19,7 @@
 //
 // 零第三方依赖：仅用 Node 内置模块 + gh CLI + tar。
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -30,9 +30,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 const GITEE_TOKEN = process.env.GITEE_TOKEN;
 const GITEE_OWNER = process.env.GITEE_OWNER || "git_pengmd";
@@ -65,7 +62,7 @@ function ghJson(args) {
 }
 
 /** 取 GitHub release 元数据。 */
-function getGitHubRelease(tag, repo = GITHUB_REPO) {
+function getGitHubRelease(tag, repo = GITHUB_REPO, token = "") {
   return ghJson([
     "release",
     "view",
@@ -74,7 +71,7 @@ function getGitHubRelease(tag, repo = GITHUB_REPO) {
     repo,
     "--json",
     "tagName,assets",
-  ]);
+  ], token ? { env: { ...process.env, GH_TOKEN: token } } : {});
 }
 
 /** 通用 Gitee GET。 */
@@ -183,30 +180,27 @@ async function deleteGiteeRelease(releaseId, tagName) {
   }
 }
 
-async function downloadGitHubAssets(repo, tag, assets) {
+async function downloadGitHubAssets(repo, tag, assets, token = process.env.GH_TOKEN || "") {
   const dir = mkdtempSync(join(tmpdir(), "gitee-gh-dl-"));
   const files = new Map();
   try {
     await Promise.all(assets.map(async (asset) => {
       const assetDir = mkdtempSync(join(dir, "asset-"));
       try {
-        await execFileAsync("gh", [
-          "release",
-          "download",
-          tag,
-          "--repo",
-          repo,
-          "--pattern",
-          asset.name,
-          "--dir",
-          assetDir,
-        ], { encoding: "utf8" });
         const source = join(assetDir, asset.name);
-        if (!existsSync(source)) throw new Error(`gh release download did not produce ${asset.name}`);
+        const url = asset.apiUrl || asset.url;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/octet-stream",
+            "User-Agent": "harness-data-gitee-mirror",
+          },
+        });
+        if (!response.ok) throw new Error(`GitHub asset download failed ${response.status}`);
+        writeFileSync(source, Buffer.from(await response.arrayBuffer()));
         files.set(asset.name, source);
       } catch (error) {
-        const detail = error.stderr?.trim() || error.message;
-        throw new Error(`下载 ${asset.name} 失败: ${detail}`);
+        throw new Error(`下载 ${asset.name} 失败: ${error.message}`);
       }
     }));
     return { dir, files };
@@ -509,6 +503,155 @@ async function mirrorMetricLatest() {
 }
 
 /** 回填所有版本。 */
+const COMPOSITE_TAG_PATTERN = /^harness-(v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-metric-(v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/;
+
+function parseCompositeTag(tag) {
+  const match = String(tag || "").match(COMPOSITE_TAG_PATTERN);
+  return match ? { tag, harnessTag: match[1], metricTag: match[2] } : null;
+}
+
+function compositeTag(harnessTag, metricTag) {
+  if (!/^v\d+\.\d+\.\d+$/.test(harnessTag || "") || !/^v\d+\.\d+\.\d+$/.test(metricTag || "")) {
+    throw new Error(`invalid composite release versions: ${harnessTag} / ${metricTag}`);
+  }
+  return `harness-${harnessTag}-metric-${metricTag}`;
+}
+
+function isHarnessMirrorAsset(name, tag) {
+  return name.startsWith(`data-harness-cli-${tag}-`) ||
+    name === `harness-data-runtime-${tag}.tar.gz` ||
+    name === `harness-data-runtime-${tag}.tar.gz.sha256` ||
+    name === `harness-data-wikis-${tag}.tar.gz.enc` ||
+    name === `harness-data-wikis-${tag}.tar.gz.enc.sha256`;
+}
+
+function isMetricMirrorAsset(name, tag) {
+  return name.startsWith(`qdm-metric-cli-${tag}-`);
+}
+
+function giteeAssetUrl(asset, releaseTag) {
+  return asset.browser_download_url || `${GITEE_API.replace("/api/v5", "")}/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(asset.name)}`;
+}
+
+async function downloadGiteeAssets(releaseTag, assets) {
+  const dir = mkdtempSync(join(tmpdir(), "gitee-copy-"));
+  const files = new Map();
+  try {
+    await Promise.all(assets.map(async (asset) => {
+      const file = join(dir, asset.name);
+      const response = await fetch(giteeAssetUrl(asset, releaseTag));
+      if (!response.ok) throw new Error(`下载 Gitee 附件 ${asset.name} 失败: ${response.status}`);
+      writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+      files.set(asset.name, file);
+    }));
+    return { dir, files };
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function latestCompositeRelease(releases) {
+  return releases
+    .map((release) => ({ release, parsed: parseCompositeTag(release.tag_name) }))
+    .filter((item) => item.parsed)
+    .sort((left, right) => right.release.id - left.release.id)[0] || null;
+}
+
+async function cleanupLegacyReleases(targetTag) {
+  const releases = await listGiteeReleases();
+  const removed = [];
+  for (const release of releases) {
+    const legacyHarness = /^v\d+\.\d+\.\d+$/.test(release.tag_name || "");
+    const legacyMetric = /^qdm-metric-cli(?:-v\d+\.\d+\.\d+|-latest)$/.test(release.tag_name || "");
+    const oldComposite = COMPOSITE_TAG_PATTERN.test(release.tag_name || "") && release.tag_name !== targetTag;
+    if (!legacyHarness && !legacyMetric && !oldComposite) continue;
+    await deleteGiteeRelease(release.id, release.tag_name);
+    removed.push(release.tag_name);
+    console.log(`  ✓ 删除旧 Release ${release.tag_name}`);
+  }
+  return removed;
+}
+
+async function mirrorComposite(mode, harnessTagInput = "") {
+  const metricToken = process.env.METRIC_GH_TOKEN || process.env.GH_TOKEN || "";
+  const metricRelease = getGitHubRelease("", METRIC_GITHUB_REPO, metricToken);
+  const metricTag = metricRelease.tagName;
+  const metricAssets = (metricRelease.assets || []).filter((asset) => isMetricMirrorAsset(asset.name, metricTag));
+  if (!metricAssets.length) throw new Error(`qdm-metric-cli ${metricTag} has no mirror assets`);
+
+  const releases = await listGiteeReleases();
+  let harnessTag = harnessTagInput;
+  let harnessSource = null;
+  let harnessAssets = [];
+  let harnessFromGitHub = false;
+  if (mode === "harness") {
+    harnessTag = harnessTagInput;
+    const harnessRelease = getGitHubRelease(harnessTag, GITHUB_REPO, process.env.GH_TOKEN || "");
+    harnessAssets = (harnessRelease.assets || []).filter((asset) => isHarnessMirrorAsset(asset.name, harnessTag));
+    if (!harnessAssets.length) throw new Error(`Harness Data ${harnessTag} has no mirror assets`);
+    harnessFromGitHub = true;
+  } else {
+    const current = latestCompositeRelease(releases);
+    const legacyHarness = releases
+      .filter((release) => /^v\d+\.\d+\.\d+$/.test(release.tag_name || ""))
+      .sort((left, right) => (right.id || 0) - (left.id || 0))[0];
+    if (!current && !legacyHarness) throw new Error("Gitee 中没有现有组合或 Harness Data Release，无法确定 Harness Data 版本");
+    harnessTag = current ? current.parsed.harnessTag : legacyHarness.tag_name;
+    harnessSource = current ? current.release : legacyHarness;
+    harnessSource = { ...harnessSource, assets: await giteeReleaseAssets(harnessSource.id) };
+    harnessAssets = (harnessSource.assets || []).filter((asset) => isHarnessMirrorAsset(asset.name, harnessTag));
+    if (!harnessAssets.length) throw new Error(`组合 Release ${harnessSource.tag_name} 缺少 Harness Data 附件`);
+  }
+
+  const targetTag = compositeTag(harnessTag, metricTag);
+  const info = await giteeRepoInfo();
+  if (!info.ok || !info.json?.default_branch) await initRepo();
+  const target = await ensureGiteeRelease(targetTag, targetTag, MIRROR_RELEASE_BODY);
+  const existing = await giteeReleaseAssets(target.id);
+  const existingNames = new Set(existing.map((asset) => asset.name));
+  const desiredNames = new Set([
+    ...harnessAssets.map((asset) => asset.name),
+    ...metricAssets.map((asset) => asset.name),
+  ]);
+  const localFiles = new Map();
+  const tempDirs = [];
+  try {
+    if (harnessFromGitHub) {
+      const downloaded = await downloadGitHubAssets(GITHUB_REPO, harnessTag, harnessAssets, process.env.GH_TOKEN || "");
+      tempDirs.push(downloaded.dir);
+      for (const [name, file] of downloaded.files) localFiles.set(name, file);
+      const wikis = buildEncryptedWikisBundle(harnessTag);
+      tempDirs.push(wikis.dir);
+      localFiles.set(wikis.encryptedName, wikis.encryptedPath);
+      localFiles.set(wikis.shaName, wikis.shaPath);
+      desiredNames.add(wikis.encryptedName);
+      desiredNames.add(wikis.shaName);
+    } else {
+      const copied = await downloadGiteeAssets(harnessSource.tag_name, harnessAssets);
+      tempDirs.push(copied.dir);
+      for (const [name, file] of copied.files) localFiles.set(name, file);
+    }
+    const metricDownloaded = await downloadGitHubAssets(METRIC_GITHUB_REPO, metricTag, metricAssets, metricToken);
+    tempDirs.push(metricDownloaded.dir);
+    for (const [name, file] of metricDownloaded.files) localFiles.set(name, file);
+
+    for (const name of desiredNames) {
+      if (existingNames.has(name)) continue;
+      const file = localFiles.get(name);
+      if (!file) throw new Error(`组合 Release 缺少待上传附件: ${name}`);
+      await uploadAttachFile(target.id, file, name);
+      console.log(`  ✓ ${name}`);
+    }
+  } finally {
+    for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  }
+
+  const removed = await cleanupLegacyReleases(targetTag);
+  console.log(`${targetTag}: 组合 Release 已同步，删除旧 Release ${removed.length} 个`);
+  return { targetTag, harnessTag, metricTag, removed };
+}
+
 async function mirrorAll() {
   const list = ghJson([
     "release",
@@ -569,7 +712,17 @@ async function main() {
     const result = await mirrorMetricLatest();
     process.exit(result.failed.length ? 1 : 0);
   }
-  console.error("用法: node scripts/mirror-gitee.mjs --init | --tag <tag> | --all | --metric-latest");
+  if (cmd === "--composite-harness") {
+    const tag = rest[0];
+    if (!tag) throw new Error("--composite-harness 需要 Harness Data tag，例如 v0.0.48");
+    await mirrorComposite("harness", tag);
+    return;
+  }
+  if (cmd === "--composite-metric") {
+    await mirrorComposite("metric");
+    return;
+  }
+  console.error("用法: node scripts/mirror-gitee.mjs --init | --tag <tag> | --all | --metric-latest | --composite-harness <tag> | --composite-metric");
   process.exit(1);
 }
 

@@ -5,6 +5,7 @@ import { binaryName, isExecutable } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
 import { encryptedWikisAssetName, wikisReleaseSource } from "../lib/wikis-release.js";
+import { parseCompositeReleaseTag } from "../lib/gitee-release.js";
 import {
   codeBuddyMinimumVersion,
   detectCodeBuddyVersion,
@@ -92,6 +93,14 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   const installerState = readWorkspaceState(workspace, { userState: options.userState });
+  const composite = parseCompositeReleaseTag(installerState.giteeReleaseTag);
+  if (installerState.giteeReleaseTag) {
+    const metricVersion = installerState.tools?.["qdm-metric-cli"]?.version;
+    add("Gitee 组合发布物", Boolean(composite && installerState.runtimeTag === composite.harnessTag && metricVersion === composite.metricTag),
+      composite ? `${composite.tag}; runtime=${installerState.runtimeTag || "missing"}; metric=${metricVersion || "missing"}` : "组合 Release tag 格式无效");
+  } else {
+    add("Gitee 组合发布物", true, "未记录组合 Release；下次安装或更新将迁移", "warning");
+  }
   const wikisState = installerState.wikis;
   if (wikisState?.source === wikisReleaseSource) {
     let valid = Boolean(wikisState.tag && wikisState.asset && wikisState.sha256);
