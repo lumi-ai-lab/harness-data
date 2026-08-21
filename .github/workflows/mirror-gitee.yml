@@ -1,0 +1,83 @@
+name: Mirror to Gitee
+
+on:
+  workflow_call:
+    inputs:
+      kind:
+        description: "Mirror target: harness release or the qdm-metric-cli latest slot"
+        required: false
+        default: harness
+        type: string
+      version_tag:
+        description: Release tag to mirror, for example v0.0.48
+        required: false
+        type: string
+    secrets:
+      GITEE_TOKEN:
+        required: true
+      METRIC_GH_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Mirror target
+        required: true
+        default: harness
+        type: choice
+        options:
+          - harness
+          - metric-latest
+      tag:
+        description: Existing release tag to mirror, for example v0.0.48
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror release assets
+    runs-on: ubuntu-latest
+
+    env:
+      MIRROR_KIND: ${{ inputs.kind || 'harness' }}
+      VERSION_TAG: ${{ inputs.version_tag || inputs.tag }}
+      GITEE_OWNER: git_pengmd
+      GITEE_REPO: harness-release
+      GITHUB_REPO: lumi-ai-lab/harness-data
+      GH_TOKEN: ${{ inputs.kind == 'metric-latest' && secrets.METRIC_GH_TOKEN || github.token }}
+
+    steps:
+      - name: Checkout Harness release tag
+        if: ${{ env.MIRROR_KIND == 'harness' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VERSION_TAG }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Checkout mirror scripts
+        if: ${{ env.MIRROR_KIND == 'metric-latest' }}
+        uses: actions/checkout@v4
+        with:
+          repository: lumi-ai-lab/harness-data
+          ref: master
+          path: harness-data-mirror
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Mirror release assets to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || secrets.GITEE_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${MIRROR_KIND}" == "metric-latest" ]]; then
+            node harness-data-mirror/scripts/mirror-gitee.mjs --metric-latest
+          else
+            node scripts/mirror-gitee.mjs --tag "${VERSION_TAG}"
+          fi
