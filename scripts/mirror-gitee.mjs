@@ -218,11 +218,31 @@ async function downloadGitHubAssets(repo, tag, assets) {
 
 /** 下载 URL 到本地文件，返回 Buffer。 */
 async function downloadToFile(url, dest) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`下载 ${url} 失败: ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  writeFileSync(dest, buf);
-  return buf;
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+    try {
+      const headers = { Accept: "application/octet-stream" };
+      if (process.env.GH_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
+      }
+      const res = await fetch(url, { headers, signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      writeFileSync(dest, buf);
+      return buf;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`  ! ${url} 下载第 ${attempt} 次失败，准备重试: ${error.message}`);
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw new Error(`下载 ${url} 失败: ${lastError?.message || "未知错误"}`);
 }
 
 /** 通过 attach_files 上传一个附件到 Gitee release。 */
