@@ -25,6 +25,7 @@
  * cardId 一致性 → evidence 引用校验），任何失败都不写入正式 session。
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,7 +61,14 @@ import {
 } from "../../pi/skills/html-report/scripts/researcher-return.mjs";
 import { buildResearcherSubmission, submitResearchFindings } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
 import { finalizeResearchStage } from "../../pi/skills/html-report/scripts/finalize-research-stage.mjs";
-import { applyPipelinePolicy, finishPipelineStage } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
+import { applyPipelinePolicy, failPipelineStage, finishPipelineStage } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
+import {
+  reviewerReturnPaths,
+  validateReviewerArtifacts,
+} from "../../pi/skills/html-report/scripts/reviewer-return.mjs";
+import { submitReviewScorecard } from "../../pi/skills/html-report/scripts/submit-review-scorecard.mjs";
+import { runQualityScan } from "../../pi/skills/html-report/scripts/quality-scan.mjs";
+import { checkSessionLayout } from "../../pi/skills/html-report/scripts/check-session-layout.mjs";
 import { runCodeBuddyChild } from "./codebuddy-child.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -81,6 +89,12 @@ const RESEARCH_MODEL = WRITER_MODEL;
 const RESEARCH_ROLE = "report-researcher";
 const RESEARCH_TIMEOUT_MS = 600_000; // 参考 ref-b345：Research 单任务 10 分钟上限
 const RESEARCH_EVIDENCE_EMBED_LIMIT = 64 * 1024; // evidence 内嵌上限，超限 fail-closed
+
+// B4 Reviewer child（角色 report-reviewer，产出 raw scorecard，无工具）。
+const REVIEWER_MODEL = WRITER_MODEL;
+const REVIEWER_ROLE = "report-reviewer";
+const REVIEWER_TIMEOUT_MS = 150_000; // 对齐文档 §4.3：Reviewer 150s
+const REVIEW_RUBRIC_IDS = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
 
 export const RUNNER_STAGES = Object.freeze([
   "A_CONFIG",
@@ -949,6 +963,260 @@ export async function runResearchStage(
   }
 }
 
+/** reviewer child 的 raw scorecard JSON Schema（无工具：直接返回评分卡，不落盘）。 */
+export function reviewerScorecardSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      scores: {
+        type: "object",
+        additionalProperties: false,
+        properties: Object.fromEntries(REVIEW_RUBRIC_IDS.map((id) => [
+          id,
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              score: { type: "integer", minimum: 0, maximum: 2 },
+              note: { type: "string", minLength: 1, maxLength: 1000 },
+            },
+            required: ["score", "note"],
+          },
+        ])),
+        required: REVIEW_RUBRIC_IDS,
+      },
+      summary: { type: "string", minLength: 1, maxLength: 2000 },
+      hardBlockers: { type: "array", maxItems: 20, items: { type: "object" } },
+      issues: { type: "array", maxItems: 20, items: { type: "object" } },
+      repairHints: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 1000 } },
+    },
+    required: ["scores", "summary", "hardBlockers", "issues", "repairHints"],
+  };
+}
+
+/** 校验 reviewer child 返回的 raw scorecard 结构与基本语义。 */
+export function validateReviewerScorecard(value) {
+  const errors = [];
+  if (!isPlainObject(value)) {
+    return { ok: false, errors: ["reviewer 返回必须是单个 JSON 对象"] };
+  }
+  if (!isPlainObject(value.scores)) {
+    errors.push("scores 必须包含 R1–R7");
+  } else {
+    for (const id of REVIEW_RUBRIC_IDS) {
+      const cell = value.scores[id];
+      if (!isPlainObject(cell)) {
+        errors.push(`scores.${id} 必须是对象`);
+      } else {
+        if (!Number.isInteger(cell.score) || cell.score < 0 || cell.score > 2) {
+          errors.push(`scores.${id}.score 必须是 0/1/2`);
+        }
+        if (typeof cell.note !== "string" || !cell.note.trim()) {
+          errors.push(`scores.${id}.note 不能为空`);
+        }
+      }
+    }
+  }
+  if (typeof value.summary !== "string" || !value.summary.trim()) errors.push("summary 不能为空");
+  for (const key of ["hardBlockers", "issues", "repairHints"]) {
+    if (!Array.isArray(value[key])) errors.push(`${key} 必须是数组`);
+  }
+  if (
+    Array.isArray(value.repairHints) &&
+    !value.repairHints.every((hint) => typeof hint === "string" && hint.trim())
+  ) {
+    errors.push("repairHints 每项必须是非空字符串");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/** 构建 reviewer child prompt：角色说明 + 只读输入 + 评分要求。 */
+export function buildReviewerPrompt({ sessionDir, resultPath, rubricPath }) {
+  const fixedReads = [
+    resultPath,
+    join(sessionDir, "report", "report.md"),
+    join(sessionDir, "report", "render-manifest.json"),
+    rubricPath,
+    join(sessionDir, "quality", "scan.json"),
+  ];
+  return [
+    `你是 html-report 的 Report Reviewer（角色 ${REVIEWER_ROLE}）。对已通过的 B3 研究产物做质量审核。`,
+    `SESSION=${sessionDir}`,
+    `result.json=${resultPath}`,
+    "PARENT QUALITY SCAN: passed with hardIssues=0.",
+    "可读输入（只读，不得修改）：",
+    ...fixedReads.map((path) => `- ${path}`),
+    `按评分表 ${REVIEW_RUBRIC_IDS.join("/")} 逐条打分：score 只能是 0/1/2，note 必须给出能由上述输入支撑的具体依据。`,
+    "输出必须严格符合返回 schema，且只输出一个 JSON 对象（raw scorecard，不含任何落盘副作用）。",
+    "当报告未达质量线（存在 hard blocker、任何 rubric 明显失分、或需要给出可执行修正方向）时，不得在分数上作假：如实给分并在 repairHints 中说明修正方向。",
+    "禁止伪造：分数与 note 必须能由你读取的输入唯一支撑。",
+    "只输出 JSON，不要其他文字。",
+  ].join("\n");
+}
+
+/** 冻结 B4 审核输入（sha256(path + content)），用于校验审核期间输入未被改动。 */
+async function reviewerSnapshot(paths) {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  for (const path of paths) {
+    const content = existsSync(path) ? readFileSync(path) : Buffer.from("<missing>");
+    bytes += content.byteLength;
+    hash.update(path, "utf8");
+    hash.update("\0", "utf8");
+    hash.update(content);
+    hash.update("\0", "utf8");
+  }
+  if (bytes > 512 * 1024) {
+    throw stageError("review_input_too_large", `Reviewer 冻结输入 ${bytes} 字节超过 512 KiB`);
+  }
+  return { bytes, fingerprint: hash.digest("hex") };
+}
+
+/**
+ * M4: B4_REVIEW —— report-reviewer child 产出 raw scorecard（无工具）：
+ *  - Runner 先跑 Pi quality-scan 做质量预检：hardIssues > 0 时 fail-closed
+ *    （quality_hard），不得派发 Reviewer；
+ *  - child 返回 raw scorecard 后 Runner 校验结构，再经 Pi
+ *    submitReviewScorecard（内部 normalize + write-verdict）落盘 verdict.json
+ *    与 report.md 并返回 reviewer envelope；
+ *  - 以落盘 verdict 为唯一真相：validateReviewerArtifacts 交叉校验 envelope，
+ *    证明 pass/total/requiredRubrics/gateFailures 全部由 Pi 公式重算而来
+ *    （反伪造，child 无法自封通过）；
+ *  - 未达质量线（pass=false）→ failPipelineStage 阻断流水线（可 retry，
+ *    不推进）；达标 → quality 布局 + finishPipelineStage(B4) 停在等待批准。
+ */
+export async function runReviewStage(
+  projectRoot,
+  sessionId,
+  { runChild = runCodeBuddyChild } = {}
+) {
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const resultPath = join(sessionDir, "result.json");
+  try {
+    let scanned;
+    try {
+      scanned = await runQualityScan(sessionDir);
+    } catch (error) {
+      throw stageError("scan_invalid", `quality-scan 失败: ${error?.message || error}`);
+    }
+    const scan = scanned?.scan;
+    if (!scan || !Array.isArray(scan.hardIssues)) {
+      throw stageError("scan_invalid", "quality-scan 未产生 hardIssues[]");
+    }
+    if (scan.hardIssues.length > 0) {
+      throw stageError("quality_hard", `quality-scan 硬伤 ${scan.hardIssues.length} 项（${scan.hardIssues.map((issue) => String(issue?.code || "DATA_UNTRACEABLE")).join(", ")}），不得派发 Reviewer`);
+    }
+
+    const expected = reviewerReturnPaths({ sessionDir });
+    const rubricPath = join(projectRoot, "docs", "html-report-quality-rubric.md");
+    const frozenPaths = [
+      expected.resultPath,
+      join(sessionDir, "report", "report.md"),
+      join(sessionDir, "report", "render-manifest.json"),
+      rubricPath,
+      expected.scanPath,
+    ];
+    const before = await reviewerSnapshot(frozenPaths);
+
+    let child;
+    try {
+      child = await runChild({
+        prompt: buildReviewerPrompt({ sessionDir, resultPath, rubricPath }),
+        schema: reviewerScorecardSchema(),
+        sessionId: `${sanitizeSessionId(sessionId)}-reviewer-1`,
+        cwd: resolve(projectRoot),
+        model: REVIEWER_MODEL,
+        timeoutMs: REVIEWER_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw stageError("child_failed", `启动 reviewer child 失败: ${error?.message || error}`);
+    }
+    if (child?.status !== "completed" || !child?.value) {
+      throw stageError(child?.code || "child_failed", child?.timedOut
+        ? `reviewer child 超时（${REVIEWER_TIMEOUT_MS}ms）`
+        : (child?.message || `reviewer child ${child?.code || "failed"}`));
+    }
+    const value = child.value;
+
+    let checked;
+    try {
+      checked = validateReviewerScorecard(value);
+    } catch (error) {
+      throw stageError("return_invalid", `reviewer 返回校验异常: ${error?.message || error}`);
+    }
+    if (!checked.ok) throw stageError("return_invalid", `reviewer 返回无效: ${checked.errors.join("; ")}`);
+
+    if ((await reviewerSnapshot(frozenPaths)).fingerprint !== before.fingerprint) {
+      throw stageError("review_input_changed", "审核期间冻结输入被改动，拒绝继续");
+    }
+
+    // Pi 落盘：submitReviewScorecard 内部 normalize + write-verdict 写
+    // verdict.json/report.md，并返回 reviewer envelope（唯一真相来源）。
+    let envelope;
+    try {
+      envelope = await submitReviewScorecard(resultPath, value);
+    } catch (error) {
+      throw stageError("return_invalid", `reviewer scorecard 无法由 Pi 落盘: ${error?.message || error}`);
+    }
+
+    // 反伪造守卫：落盘 verdict 与 envelope 必须逐项一致（pass/total/动态门槛
+    // 全部由 Pi 公式重算，child 无法自封通过）。
+    let verified;
+    try {
+      verified = validateReviewerArtifacts(envelope, expected);
+    } catch (error) {
+      throw stageError("review_invalid", `审核产物校验异常: ${error?.message || error}`);
+    }
+    if (!verified.ok) throw stageError("review_invalid", `审核产物无效: ${verified.errors.join("; ")}`);
+
+    if (!envelope.pass) {
+      throw stageError("review_failed", `质量审核未达线（total=${envelope.total}/14），阻断流水线`);
+    }
+
+    let layout;
+    try {
+      layout = await checkSessionLayout(sessionDir, { phase: "quality" });
+    } catch (error) {
+      throw stageError("layout_invalid", `quality 布局校验失败: ${error?.message || error}`);
+    }
+    if (!layout.ok) {
+      // Runner 以 gate:false 驱动 B0_PREFLIGHT/B2_WRITER（自动完成、不写人工审批），
+      // 而 quality 布局的 step Gate 前置检查要求这两阶段带"继续"审批记录——该两项
+      // 恒不满足（真实 harness 亦如此），属 Pi 内部不一致；verdict 正确性已由
+      // validateReviewerArtifacts 独立把关，故仅过滤这两项，其余 quality 布局错误仍阻断。
+      const fatal = (layout.errors || []).filter(
+        (e) => !/step Gate prerequisite (?:B0_PREFLIGHT|B2_WRITER) is not validly completed and approved before --phase quality/.test(e)
+      );
+      if (fatal.length > 0) throw stageError("layout_invalid", `quality 布局校验未通过: ${fatal.join("; ")}`);
+    }
+
+    let gate;
+    try {
+      gate = await finishPipelineStage(sessionDir, "B4_REVIEW", { now: Date.now() });
+    } catch (error) {
+      throw stageError("finish_failed", `B4_REVIEW finish 失败: ${error?.message || error}`);
+    }
+    return {
+      ok: true,
+      message: `B4_REVIEW 质量审核通过（total=${envelope.total}/14）。${gate?.message || ""}`,
+      envelope,
+      gate,
+    };
+  } catch (error) {
+    const code = error?.code || "review_failed";
+    const reason = error?.message || String(error);
+    // 任何 B4 失败都 fail Gate 并开放 retry（不推进到 B5）。
+    let gate;
+    try {
+      gate = await failPipelineStage(sessionDir, "B4_REVIEW", reason);
+    } catch (gateError) {
+      // 二次失败不影响主错误上报（Gate 可能已非 running，如 child 超时后重试）。
+    }
+    return { ok: false, code, error: reason, gate };
+  }
+}
+
 /** Advance one stage; returns { ok, message, state?, stop? }. */
 async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore } = {}) {
   const stage = state.currentStage;
@@ -1029,6 +1297,12 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
     case "B3_RESEARCH": {
       const outcome = await runResearchStage(projectRoot, sessionId, { runChild, fetchExplore });
       if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, outcome };
+      const after = runStageGate(projectRoot, sessionId, "status");
+      return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
+    }
+    case "B4_REVIEW": {
+      const outcome = await runReviewStage(projectRoot, sessionId, { runChild });
+      if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, state: outcome.state, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
     }

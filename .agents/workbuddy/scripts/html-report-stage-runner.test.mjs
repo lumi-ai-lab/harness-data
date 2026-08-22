@@ -15,11 +15,13 @@ import { spawnSync } from "node:child_process";
 
 import {
   advance,
+  buildReviewerPrompt,
   buildWriterPrompt,
   cancel,
   htmlReportSessionDir,
   normalizeWriterChildValue,
   retryTask,
+  reviewerScorecardSchema,
   runEditorPlannerStage,
   runStageGate,
   runWriterForCard,
@@ -27,6 +29,7 @@ import {
   sanitizeSessionId,
   start,
   status,
+  validateReviewerScorecard,
   writerSchema,
 } from "./html-report-stage-runner.mjs";
 import { rowsSha256 } from "../../../packages/html-report-kernel/src/index.mjs";
@@ -53,6 +56,10 @@ import {
   validateResearcherAnalysisRequirements,
 } from "../../pi/skills/html-report/scripts/researcher-return.mjs";
 import { buildResearcherSubmission } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
+import {
+  approvePipelineStage,
+  retryPipelineStage,
+} from "../../pi/skills/html-report/scripts/stage-gate.mjs";
 
 function fixtureCard(cardId, overrides = {}) {
   return {
@@ -208,6 +215,11 @@ function validEditorPlan(cardId) {
 /** sha256( canonicalizeJson )，与 kernel canonicalFingerprint / sha256Json 一致。 */
 function sha256Hex(value) {
   return createHash("sha256").update(canonicalizeJson(value), "utf8").digest("hex");
+}
+
+/** sha256( 原始文本 )，与 check-session-layout 的 fingerprintScanText 一致。 */
+function textSha256(text) {
+  return createHash("sha256").update(String(text), "utf8").digest("hex");
 }
 
 /**
@@ -1066,6 +1078,238 @@ test("advance on a disabled stage reports 未启用 and does not change state", 
     const after = JSON.parse(readFileSync(statePath, "utf8"));
     assert.equal(after.currentStage, "B3_RESEARCH", "state must not change on a disabled stage");
     assert.equal(after.status, "paused");
+  } finally {
+    cleanup(root);
+  }
+});
+
+/** B3 合法结论：走完 B25+B3，approve B3 后停在 B4_REVIEW running。 */
+async function driveToReview(root, sessionId) {
+  await driveToResearch(root, sessionId);
+  const params = researcherRankingParams(JSON.parse(readFileSync(join(htmlReportSessionDir(root, sessionId), "analysis", "evidence", "drill-001.json"), "utf8")));
+  const outcome = await advance(root, sessionId, { runChild: mockOkResearcher(htmlReportSessionDir(root, sessionId), params) });
+  assert.equal(outcome.ok, true, outcome.message);
+  const approved = await approvePipelineStage(htmlReportSessionDir(root, sessionId), { phrase: "继续" });
+  assert.equal(approved.ok, true, JSON.stringify(approved));
+  const gate = runStageGate(root, sessionId, "status");
+  assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW", `expected B4_REVIEW, got ${gate.payload?.state?.currentStage}`);
+  assert.equal(gate.payload?.state?.status, "running");
+}
+
+/** 一份可通过全部 Pi 校验的通过型 raw scorecard（R1/R5=2 满足动态门槛，total=14）。 */
+function passingScorecard(overrides = {}) {
+  const scores = Object.fromEntries(["R1", "R2", "R3", "R4", "R5", "R6", "R7"].map((id) => [id, { score: 2, note: `${id} 检查通过` }]));
+  return {
+    scores,
+    summary: "报告满足当前质量门禁。",
+    hardBlockers: [],
+    issues: [],
+    repairHints: [],
+    ...overrides,
+  };
+}
+
+test("reviewerScorecardSchema + validateReviewerScorecard accept a passing raw scorecard", () => {
+  const schema = reviewerScorecardSchema();
+  const ok = validateJsonSchema(passingScorecard(), schema);
+  assert.equal(ok.ok, true, ok.errors?.join("; "));
+  const checked = validateReviewerScorecard(passingScorecard());
+  assert.equal(checked.ok, true, checked.errors?.join("; "));
+  // 非法：score 越界 / note 为空 / summary 缺失。
+  assert.equal(validateReviewerScorecard(passingScorecard({ scores: { R1: { score: 5, note: "x" } } })).ok, false);
+  assert.equal(validateReviewerScorecard(passingScorecard({ scores: { R1: { score: 2, note: "  " } } })).ok, false);
+  assert.equal(validateReviewerScorecard({ ...passingScorecard(), summary: "" }).ok, false);
+  assert.equal(validateReviewerScorecard("nope").ok, false);
+});
+
+test("buildReviewerPrompt embeds session/result and forbids side effects", () => {
+  const prompt = buildReviewerPrompt({ sessionDir: "/s", resultPath: "/s/result.json", rubricPath: "/r/docs/html-report-quality-rubric.md" });
+  assert.match(prompt, /SESSION=\/s/);
+  assert.match(prompt, /result\.json=\/s\/result\.json/);
+  assert.match(prompt, /PARENT QUALITY SCAN: passed/);
+  assert.match(prompt, /只输出 JSON/);
+});
+
+test("M4 B4 happy path: scorecard passes → verdict stamped + quality layout → awaiting_approval, approve → B5_DESIGN", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+
+    const runChild = async () => ({ status: "completed", code: "ok", value: passingScorecard(), message: "ok" });
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /质量审核通过/);
+
+    // 落盘：verdict.json 最终态（draft=false, pass=true, total=14），report.md 非空。
+    const verdict = JSON.parse(readFileSync(join(sessionDir, "quality", "verdict.json"), "utf8"));
+    assert.equal(verdict.producer, "write-verdict.mjs");
+    assert.equal(verdict.draft, false);
+    assert.equal(verdict.pass, true);
+    assert.equal(verdict.total, 14);
+    assert.equal(verdict.maxTotal, 14);
+    assert.ok(verdict.scanFingerprint && /^[a-f0-9]{64}$/.test(verdict.scanFingerprint));
+    assert.equal(readFileSync(join(sessionDir, "quality", "report.md"), "utf8").trim().length > 0, true);
+
+    // B4 为人工 Gate：停在 awaiting_approval，Runner 不自动批准。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
+
+    // 批准 B4 → 推进到 B5_DESIGN running（达标 scorecard 推进到 B5）。
+    const approved = await approvePipelineStage(sessionDir, { phrase: "继续" });
+    assert.equal(approved.ok, true, JSON.stringify(approved));
+    const after = runStageGate(root, sessionId, "status");
+    assert.equal(after.payload?.state?.currentStage, "B5_DESIGN", `expected B5_DESIGN, got ${after.payload?.state?.currentStage}`);
+    assert.equal(after.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M4 B4 failed verdict: below-quality scorecard fails the Gate (blocked + retryable), then retry passes", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+
+    // R5=1 < 动态任务门槛 minScore=2 → gateFailures=[R5] → pass=false。
+    let calls = 0;
+    const runChild = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { status: "completed", code: "ok", value: passingScorecard({ scores: { ...passingScorecard().scores, R5: { score: 1, note: "R5 范围忠实不足" } } }), message: "ok" };
+      }
+      return { status: "completed", code: "ok", value: passingScorecard(), message: "ok" };
+    };
+
+    const first = await advance(root, sessionId, { runChild });
+    assert.equal(first.ok, false, "failed verdict must block");
+    assert.equal(first.code, "review_failed");
+    assert.match(first.error, /未达线/);
+
+    // fail Gate：流水线 failed，不推进到 B5，且已开放 retry。
+    const gate1 = runStageGate(root, sessionId, "status");
+    assert.equal(gate1.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate1.payload?.state?.status, "failed");
+    assert.match(gate1.payload?.state?.stages?.B4_REVIEW?.failureReason || "", /未达线/);
+    const verdict1 = JSON.parse(readFileSync(join(sessionDir, "quality", "verdict.json"), "utf8"));
+    assert.equal(verdict1.pass, false);
+    assert.equal(verdict1.gateFailures.length, 1);
+    assert.equal(verdict1.gateFailures[0].rubric, "R5");
+
+    // advance 在 failed 态返回 retry 指引，不推进。
+    const blocked = await advance(root, sessionId, { runChild });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /retry/);
+
+    // retry → B4 重新 running，重跑 scorecard（这次通过）→ awaiting_approval。
+    const retried = await retryPipelineStage(sessionDir, { phrase: "重试当前阶段" });
+    assert.equal(retried.ok, true, JSON.stringify(retried));
+    const gate2 = runStageGate(root, sessionId, "status");
+    assert.equal(gate2.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate2.payload?.state?.status, "running");
+    const second = await advance(root, sessionId, { runChild });
+    assert.equal(second.ok, true, second.message);
+    assert.match(second.message, /质量审核通过/);
+    const gate3 = runStageGate(root, sessionId, "status");
+    assert.equal(gate3.payload?.state?.status, "awaiting_approval");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M4 B4 anti-fabrication: hardBlockers force pass=false even with all-2 scores", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+
+    // child 给满分但夹带 hard blocker：Pi 公式强制 pass=false（child 无法自封通过）。
+    const runChild = async () => ({
+      status: "completed",
+      code: "ok",
+      value: passingScorecard({
+        hardBlockers: [{ code: "BALANCE_MISSING", rubric: "R5", message: "报告未回答平衡性问题", where: "report/report.md" }],
+      }),
+      message: "ok",
+    });
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false, "hardBlocker must force pass=false");
+    assert.equal(outcome.code, "review_failed");
+    const verdict = JSON.parse(readFileSync(join(sessionDir, "quality", "verdict.json"), "utf8"));
+    assert.equal(verdict.pass, false);
+    assert.equal(verdict.hardBlockers.length, 1);
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.status, "failed");
+    assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M4 B4 fail-closed: quality scan hardIssues > 0 → quality_hard before dispatch", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+
+    // 往已审核报告里注入一个无法从证据复算的数字 → scan hardIssues > 0。
+    // 同步更新 render-manifest.json 的 reportSha256，使报告指纹校验通过、
+    // 真正命中硬伤检测（而不是先被 assembly fingerprint 拦截成 scan_invalid）。
+    const reportPath = join(sessionDir, "report", "report.md");
+    const tamperedReport = `${readFileSync(reportPath, "utf8")}\n另：总销售额高达 999999 元。\n`;
+    writeFileSync(reportPath, tamperedReport);
+    const manifestPath = join(sessionDir, "report", "render-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.reportSha256 = textSha256(tamperedReport);
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    let dispatched = 0;
+    const runChild = async () => {
+      dispatched += 1;
+      return { status: "completed", code: "ok", value: passingScorecard(), message: "ok" };
+    };
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "quality_hard");
+    assert.match(outcome.error, /不得派发 Reviewer/);
+    assert.equal(dispatched, 0, "reviewer must not be dispatched on hard scan issues");
+    // fail Gate：阻断，不推进。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate.payload?.state?.status, "failed");
+    assert.equal(existsSync(join(sessionDir, "quality", "verdict.json")), false, "no verdict must be stamped");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M4 B4 fail-closed: invalid reviewer return → return_invalid, no verdict, gate failed", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+
+    const runChild = async () => ({
+      status: "completed",
+      code: "ok",
+      value: passingScorecard({ scores: { ...passingScorecard().scores, R1: { score: 5, note: "非法" } } }),
+      message: "ok",
+    });
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "return_invalid");
+    assert.match(outcome.error, /返回无效/);
+    assert.equal(existsSync(join(sessionDir, "quality", "verdict.json")), false, "no verdict must be stamped");
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate.payload?.state?.status, "failed");
   } finally {
     cleanup(root);
   }
