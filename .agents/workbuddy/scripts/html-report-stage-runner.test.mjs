@@ -27,6 +27,7 @@ import {
   status,
   writerSchema,
 } from "./html-report-stage-runner.mjs";
+import { rowsSha256 } from "../../../packages/html-report-kernel/src/index.mjs";
 import {
   buildCodeBuddyChildArgs,
   codeBuddySensitiveValues,
@@ -64,6 +65,7 @@ function fixtureResult(cards) {
     status: "confirmed",
     session_id: "test-session",
     title: "测试分析报告",
+    userQuestion: "本月各区域销售表现如何？",
     cards,
   };
 }
@@ -83,6 +85,26 @@ function writeCardFixtures(sessionDir, cardId, rows) {
   writeFileSync(join(cardDir, "entry.meta.json"), JSON.stringify({
     rowCount: rows.length,
     rowsSha256: "0".repeat(64),
+  }, null, 2));
+  writeFileSync(join(cardDir, "entry.column-meta.json"), JSON.stringify({
+    saleAmt: "销售额",
+    profitAmt: "利润额",
+    regionId: "区域",
+    bizDate: "日期",
+  }, null, 2));
+}
+
+/**
+ * B25 路径需要 kernel 级校验（prepareSourceFieldInventory / check-session-layout）：
+ * rowsSha256 必须是 rows 的真实指纹（"0".repeat(64) 无法通过）。
+ */
+function writeCardFixturesReal(sessionDir, cardId, rows) {
+  const cardDir = join(sessionDir, "data", "cards", cardId);
+  mkdirSync(cardDir, { recursive: true });
+  writeFileSync(join(cardDir, "entry.json"), JSON.stringify(rows, null, 2));
+  writeFileSync(join(cardDir, "entry.meta.json"), JSON.stringify({
+    rowCount: rows.length,
+    rowsSha256: rowsSha256(rows),
   }, null, 2));
   writeFileSync(join(cardDir, "entry.column-meta.json"), JSON.stringify({
     saleAmt: "销售额",
@@ -113,6 +135,59 @@ function driveGateToWriter(root, sessionId) {
   assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "B0_PREFLIGHT"]).ok, true, "finish B0_PREFLIGHT");
   const gate = runStageGate(root, sessionId, "status");
   assert.equal(gate.payload?.state?.currentStage, "B2_WRITER", `expected B2_WRITER, got ${gate.payload?.state?.currentStage}`);
+}
+
+/**
+ * M3：走到 B25_EDITOR running。必须先经 Runner start 应用 policy（raw
+ * runStageGate 不启用 B25/B3/B4/B5），再 raw finish/approve 依次推进。
+ */
+async function driveGateToEditor(root, sessionId) {
+  const started = await start(root, sessionId);
+  assert.equal(started.ok, true, started.error);
+  assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "A_CONFIG"]).ok, true, "finish A_CONFIG");
+  assert.equal(runStageGate(root, sessionId, "approve", ["--phrase", "继续"]).ok, true, "approve A_CONFIG");
+  assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "B0_PREFLIGHT"]).ok, true, "finish B0_PREFLIGHT");
+  assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "B2_WRITER"]).ok, true, "finish B2_WRITER");
+  assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "B2_MAIN"]).ok, true, "finish B2_MAIN");
+  assert.equal(runStageGate(root, sessionId, "approve", ["--phrase", "继续"]).ok, true, "approve B2_MAIN");
+  const gate = runStageGate(root, sessionId, "status");
+  assert.equal(gate.payload?.state?.currentStage, "B25_EDITOR", `expected B25_EDITOR, got ${gate.payload?.state?.currentStage}`);
+}
+
+/** 一份可通过 schema 与语义校验的 reuse_entry/ranking 编辑计划。 */
+function validEditorPlan(cardId) {
+  return {
+    version: 1,
+    tasks: [{
+      fromCardId: cardId,
+      goal: "梳理本月各区域销售排名",
+      gap: "需要按销售额排序选出 Top 区域",
+      mode: "reuse_entry",
+      reason: "可用行已包含区域与销售额，直接排序即可回答",
+      evidenceGap: null,
+      candidateIndicators: [],
+      candidateDims: [],
+      operations: [{
+        id: "op-top-sale",
+        type: "topN",
+        field: "saleAmt",
+        fields: ["saleAmt", "regionId", "bizDate"],
+        count: 3,
+        direction: "desc",
+      }],
+      requirements: [{
+        id: "req-top-sale",
+        question: "本月销售额最高的区域与日期组合是哪些？",
+        capability: "ranking",
+        evidenceViewIds: ["op-top-sale"],
+        targetRubric: ["R1", "R5"],
+      }],
+      successCriteria: "给出按销售额排序的 Top 记录，并说明排名依据",
+      hint: "使用 op-top-sale 的排序结果",
+    }],
+    answerRequirements: [],
+    noDeeperReason: null,
+  };
 }
 
 test("sanitizeSessionId strips unsafe chars", () => {
@@ -277,11 +352,17 @@ test("resolveCodeBuddyCli finds codebuddy on PATH", () => {
   assert.ok(cli, "should resolve a codebuddy CLI path");
 });
 
-test("start + status + cancel on a fresh session", () => {
+test("start + status + cancel on a fresh session", async () => {
   const { root, sessionId } = makeSession();
   try {
-    const started = start(root, sessionId);
+    const started = await start(root, sessionId);
     assert.equal(started.ok, true, started.error);
+    // start 会程序化启用 M3-M5 policy（B25/B3/B4/B5 enabled）
+    const statePath = join(htmlReportSessionDir(root, sessionId), "debug", "pipeline-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.equal(state.policy?.B25_EDITOR?.enabled, true, "policy must enable B25_EDITOR");
+    assert.equal(state.policy?.B3_RESEARCH?.enabled, true, "policy must enable B3_RESEARCH");
+    assert.equal(state.policy?.B5_DESIGN?.enabled, true, "policy must enable B5_DESIGN");
     const st = status(root, sessionId);
     assert.equal(st.ok, true);
     assert.equal(st.exists, true);
@@ -455,6 +536,84 @@ test("M1 runWriterStage card isolation: one bad card does not block the next goo
     const retried = await retryTask(root, sessionId, badId, { fetchEntries, runChild: retryRunChild });
     assert.equal(retried.ok, true, retried.error);
     assert.equal(existsSync(join(sessionDir, "data", "cards", badId, "caption.md")), true);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B25 fail-closed: invalid editor plan is rejected, no artifacts, gate stays on B25_EDITOR", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    await driveGateToEditor(root, sessionId);
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+
+    const runChild = async () => ({
+      status: "completed",
+      code: "ok",
+      value: {
+        ...validEditorPlan(cardId),
+        tasks: [{ ...validEditorPlan(cardId).tasks[0], operations: [{ id: "op-top-sale", type: "topN", field: "bogusField", fields: ["saleAmt", "regionId"], count: 3 }] }],
+      },
+      message: "ok",
+    });
+
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.error, /Editor Planner 返回校验失败/);
+    // 失败不得写任何正式 session 产物，也不得推进 Gate。
+    assert.equal(existsSync(join(sessionDir, "analysis", "tasks.json")), false, "tasks.json must not be written");
+    assert.equal(existsSync(join(sessionDir, "analysis", "main.md")), false, "main.md must not be written");
+    assert.equal(existsSync(join(sessionDir, "report", "report.md")), false, "report must not be assembled");
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B25_EDITOR", "gate must stay on B25_EDITOR");
+    assert.equal(gate.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B25 happy path: materialize version-2 research plan and advance to B3_RESEARCH", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    await driveGateToEditor(root, sessionId);
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+
+    const runChild = async (opts) => {
+      assert.equal(opts.schema.properties.version.const, 1, "child schema must pin plan version 1");
+      return { status: "completed", code: "ok", value: validEditorPlan(cardId), message: "ok" };
+    };
+
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /B25_EDITOR 已物化研究计划（1 个任务）/);
+
+    // 研究计划物化为版本 2 的 tasks.json + main.md。
+    const tasksPath = join(sessionDir, "analysis", "tasks.json");
+    const tasks = JSON.parse(readFileSync(tasksPath, "utf8"));
+    assert.equal(tasks.version, 2);
+    assert.equal(tasks.tasks.length, 1);
+    const task = tasks.tasks[0];
+    assert.equal(task.id, "drill-001");
+    assert.equal(task.status, "pending");
+    assert.equal(task.analysisContractVersion, 1);
+    assert.equal(task.evidencePlan.mode, "reuse_entry");
+    assert.equal(task.evidencePlan.sourceCardId, cardId);
+    assert.ok(Array.isArray(task.analysisRequirements) && task.analysisRequirements.length === 1);
+    assert.equal(existsSync(join(sessionDir, "analysis", "main.md")), true);
+
+    // reuse_entry 已由 finalizer 预生成 evidence 包。
+    assert.equal(existsSync(join(sessionDir, "analysis", "evidence", "drill-001.json")), true, "prepared evidence packet must exist");
+
+    // B2.5 finalizer 顺带组装 report 骨架（report.md + render-manifest.json）。
+    assert.equal(existsSync(join(sessionDir, "report", "report.md")), true, "report.md must be assembled");
+    assert.equal(existsSync(join(sessionDir, "report", "render-manifest.json")), true, "render-manifest.json must be assembled");
+
+    // B25_EDITOR gate:false → 自动推进到 B3_RESEARCH running。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH", `expected B3_RESEARCH, got ${gate.payload?.state?.currentStage}`);
+    assert.equal(gate.payload?.state?.status, "running");
   } finally {
     cleanup(root);
   }
