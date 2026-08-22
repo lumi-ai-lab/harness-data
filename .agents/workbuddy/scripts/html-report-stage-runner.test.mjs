@@ -10,11 +10,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 
 import {
   advance,
+  buildDesignerPrompt,
   buildReviewerPrompt,
   buildWriterPrompt,
   cancel,
@@ -22,6 +25,7 @@ import {
   normalizeWriterChildValue,
   retryTask,
   reviewerScorecardSchema,
+  runDesignStage,
   runEditorPlannerStage,
   runStageGate,
   runWriterForCard,
@@ -56,6 +60,7 @@ import {
   validateResearcherAnalysisRequirements,
 } from "../../pi/skills/html-report/scripts/researcher-return.mjs";
 import { buildResearcherSubmission } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
+import { designerReturnPaths } from "../../pi/skills/html-report/scripts/designer-return.mjs";
 import {
   approvePipelineStage,
   retryPipelineStage,
@@ -222,6 +227,11 @@ function textSha256(text) {
   return createHash("sha256").update(String(text), "utf8").digest("hex");
 }
 
+/** sha256( 原始字节 )，与 Pi sha256Text 的 Buffer 分支一致（截图指纹）。 */
+function bufferSha256(buf) {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
 /**
  * B3 前置：先走 B25 物化研究计划，停在 B3_RESEARCH running。
  * 注意：advance 的 while 循环会从 B25（gate:false）自动级联进入 B3_RESEARCH
@@ -373,6 +383,162 @@ function mockNeedsNewQueryResearcher(sessionDir) {
     const built = buildResearcherSubmission(expected, evidence, researcherRankingParams(evidence));
     return { status: "completed", code: "ok", value: built.researcherReturn, message: "ok" };
   };
+}
+
+/** Pi html-report design scripts 目录（真实脚本，B5 mock 通过 spawnSync 运行）。 */
+const PI_SCRIPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "pi", "skills", "html-report", "scripts");
+
+function runPiScript(sessionDir, script, extraArgs = []) {
+  const scriptPath = join(PI_SCRIPTS_DIR, script);
+  const spawned = spawnSync(process.execPath, [scriptPath, "--result", join(sessionDir, "result.json"), ...extraArgs], {
+    cwd: sessionDir,
+    encoding: "utf8",
+  });
+  assert.equal(spawned.status, 0, `${script} failed:\n${spawned.stderr || spawned.stdout}`);
+  return spawned;
+}
+
+const PNG_SIGNATURE = Buffer.from("89504e470d0a1a0a", "hex");
+function crc32(data) {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type, body) {
+  const typeBuf = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(body.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, body])), 0);
+  return Buffer.concat([length, typeBuf, body, crc]);
+}
+/** 生成一张 8bit RGB、filter-0 的真实 PNG（满足 pngViewport 校验）。 */
+function makePng(width, height) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bitDepth
+  ihdr[9] = 2; // colorType RGB
+  ihdr[10] = 0; // compression
+  ihdr[11] = 0; // filter
+  ihdr[12] = 0; // interlace
+  const rowBytes = width * 3;
+  const raw = Buffer.alloc(height * (1 + rowBytes));
+  for (let y = 0; y < height; y += 1) raw[y * (1 + rowBytes)] = 0;
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * 走真实 Pi 脚本合成 B5 产物（compile → 写模板 → compose → capture 造假 →
+ * draft → finalize-design），skipFinalize=true 时跳过 finalize-design 以模拟
+ * child 声称 ok 但未产出 design-result.json。
+ */
+function fabricateDesignArtifacts(sessionDir, { skipFinalize = false } = {}) {
+  const reportDir = join(sessionDir, "report");
+  runPiScript(sessionDir, "compile-report-content.mjs");
+  const template = [
+    "<!doctype html>",
+    '<html lang="zh-CN">',
+    "<head>",
+    '<meta charset="utf-8">',
+    "<title>{{HTML_REPORT_TITLE}}</title>",
+    "</head>",
+    "<body>",
+    '<main id="report"><!-- HTML_REPORT_CONTENT --></main>',
+    "</body>",
+    "</html>",
+  ].join("\n");
+  writeFileSync(join(reportDir, "report.design.html"), template);
+  runPiScript(sessionDir, "compose-report.mjs");
+
+  const html = readFileSync(join(reportDir, "report.html"), "utf8");
+  const screenshotsDir = join(reportDir, "screenshots");
+  mkdirSync(screenshotsDir, { recursive: true });
+  const screenshots = [
+    { id: "desktop", viewport: "1440,1000", filename: "desktop-1440x1000.png", width: 1440, height: 1000 },
+    { id: "mobile", viewport: "390,844", filename: "mobile-390x844.png", width: 390, height: 844 },
+  ].map((shot) => {
+    const png = makePng(shot.width, shot.height);
+    const path = join(screenshotsDir, shot.filename);
+    writeFileSync(path, png);
+    return { id: shot.id, viewport: shot.viewport, path, bytes: png.length, sha256: bufferSha256(png) };
+  });
+  const visual = {
+    producer: "capture-report.mjs",
+    htmlPath: join(reportDir, "report.html"),
+    htmlSha256: textSha256(html),
+    screenshots,
+  };
+  writeFileSync(join(reportDir, "visual-check.json"), `${JSON.stringify(visual, null, 2)}\n`);
+  const draft = {
+    status: "pass",
+    viewports: {
+      desktop: { pass: true, notes: "桌面端布局正常" },
+      mobile: { pass: true, notes: "移动端布局正常" },
+    },
+    notes: [],
+  };
+  writeFileSync(join(reportDir, "design-result.draft.json"), `${JSON.stringify(draft, null, 2)}\n`);
+  if (!skipFinalize) {
+    runPiScript(sessionDir, "finalize-design.mjs", ["--assessment-file", join(reportDir, "design-result.draft.json")]);
+  }
+}
+
+/** B5 mock runChild：真实合成产物后返回 designer envelope（与 Pi 契约一致）。 */
+function mockDesignerChild(sessionDir, { status = "ok", skipFinalize = false, tamper = null } = {}) {
+  return async () => {
+    fabricateDesignArtifacts(sessionDir, { skipFinalize });
+    if (tamper) tamper(sessionDir);
+    const expected = designerReturnPaths({ sessionDir });
+    const failed = status === "failed";
+    return {
+      status: "completed",
+      code: "ok",
+      value: {
+        status,
+        paths: {
+          reportHtml: expected.reportHtml,
+          renderMeta: expected.renderMeta,
+          designResult: expected.designResult,
+          desktopScreenshot: expected.desktopScreenshot,
+          mobileScreenshot: expected.mobileScreenshot,
+        },
+        layoutOk: !failed,
+        repairRounds: 0,
+        elapsedMs: 1234,
+        residualNotes: failed ? ["模板可见缺陷未修复"] : [],
+        ...(failed ? { error: "截图校验失败：桌面端内容溢出" } : {}),
+      },
+      message: "ok",
+    };
+  };
+}
+
+/** B5 前置：走完 B4 质量审核并 approve B4，停在 B5_DESIGN running。 */
+async function driveToDesign(root, sessionId) {
+  const sessionDir = htmlReportSessionDir(root, sessionId);
+  const reviewed = await advance(root, sessionId, {
+    runChild: async () => ({ status: "completed", code: "ok", value: passingScorecard(), message: "ok" }),
+  });
+  assert.equal(reviewed.ok, true, reviewed.message);
+  const gate = runStageGate(root, sessionId, "status");
+  assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+  assert.equal(gate.payload?.state?.status, "awaiting_approval");
+  const approved = await approvePipelineStage(sessionDir, { phrase: "继续" });
+  assert.equal(approved.ok, true, JSON.stringify(approved));
+  const after = runStageGate(root, sessionId, "status");
+  assert.equal(after.payload?.state?.currentStage, "B5_DESIGN", `expected B5_DESIGN, got ${after.payload?.state?.currentStage}`);
+  assert.equal(after.payload?.state?.status, "running");
 }
 
 test("sanitizeSessionId strips unsafe chars", () => {
@@ -1309,6 +1475,140 @@ test("M4 B4 fail-closed: invalid reviewer return → return_invalid, no verdict,
     assert.equal(existsSync(join(sessionDir, "quality", "verdict.json")), false, "no verdict must be stamped");
     const gate = runStageGate(root, sessionId, "status");
     assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate.payload?.state?.status, "failed");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M5 buildDesignerPrompt embeds session/result, read-only inputs, fixed chain, and ok/failed spec", () => {
+  const sessionDir = "/s";
+  const resultPath = "/s/result.json";
+  const expected = designerReturnPaths({ sessionDir });
+  const prompt = buildDesignerPrompt({ sessionDir, resultPath, expected });
+  assert.match(prompt, /SESSION=\/s/);
+  assert.match(prompt, /result\.json=\/s\/result\.json/);
+  assert.match(prompt, /只读输入（不得修改）/);
+  assert.match(prompt, /quality\/verdict\.json/);
+  assert.match(prompt, /compile-report-content\.mjs --result/);
+  assert.match(prompt, /compose-report\.mjs --result/);
+  assert.match(prompt, /capture-report\.mjs --result/);
+  assert.match(prompt, /finalize-design\.mjs --result/);
+  assert.match(prompt, /check-session-layout\.mjs --result/);
+  assert.match(prompt, /--phase html/);
+  assert.match(prompt, /repairRounds 0-2/);
+  assert.match(prompt, /status=ok/);
+  assert.match(prompt, /status=failed/);
+  assert.match(prompt, /不得改动任何已审核输入/);
+});
+
+test("M5 B5 happy path: designer child builds final HTML → layout(html) + finalize-design → pipeline completed", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    await driveToDesign(root, sessionId);
+
+    const outcome = await advance(root, sessionId, { runChild: mockDesignerChild(sessionDir) });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /layout\(html\) 与 finalize-design/);
+
+    // 全部 B5 产物落盘（含真实脚本合成的 report.html/render.meta.json/design-result.json）。
+    for (const rel of [
+      "report/report.html",
+      "report/render.meta.json",
+      "report/design-result.json",
+      "report/visual-check.json",
+      "report/report.content.html",
+      "report/design-input.json",
+      "report/report.design.html",
+      "report/screenshots/desktop-1440x1000.png",
+      "report/screenshots/mobile-390x844.png",
+    ]) {
+      assert.equal(existsSync(join(sessionDir, rel)), true, `missing ${rel}`);
+    }
+    const designResult = JSON.parse(readFileSync(join(sessionDir, "report", "design-result.json"), "utf8"));
+    assert.equal(designResult.producer, "finalize-design.mjs");
+    assert.equal(designResult.status, "pass");
+    assert.match(designResult.htmlPath || "", /report\/report\.html$/);
+
+    // B5 gate:false → finish 后流水线 completed。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B5_DESIGN");
+    assert.equal(gate.payload?.state?.status, "completed", JSON.stringify(gate.payload?.state));
+    assert.equal(gate.payload?.state?.stages?.B5_DESIGN?.status, "completed");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M5 B5 fail-closed: ok return without finalize-design → layout_invalid, gate failed", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    await driveToDesign(root, sessionId);
+
+    // child 声称 ok 但跳过 finalize-design（无 design-result.json）→ 布局校验拦截。
+    const outcome = await advance(root, sessionId, { runChild: mockDesignerChild(sessionDir, { skipFinalize: true }) });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "layout_invalid");
+    assert.match(outcome.error, /design-result\.json/);
+    assert.equal(existsSync(join(sessionDir, "report", "design-result.json")), false, "finalize must not run");
+
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B5_DESIGN");
+    assert.equal(gate.payload?.state?.status, "failed");
+    assert.match(gate.payload?.state?.stages?.B5_DESIGN?.failureReason || "", /design-result\.json/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M5 B5 fail-closed: designer status=failed → design_failed, gate failed", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    await driveToDesign(root, sessionId);
+
+    const outcome = await advance(root, sessionId, { runChild: mockDesignerChild(sessionDir, { status: "failed" }) });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "design_failed");
+    assert.match(outcome.error, /截图校验失败/);
+
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B5_DESIGN");
+    assert.equal(gate.payload?.state?.status, "failed");
+    assert.match(gate.payload?.state?.stages?.B5_DESIGN?.failureReason || "", /截图校验失败/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M5 B5 anti-fabrication: designer child tampers a frozen input → design_input_changed, gate failed", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    await driveToDesign(root, sessionId);
+
+    // 冻结输入之一（quality/scan.json）在 child 运行期间被改动 → 拒绝继续。
+    const outcome = await advance(root, sessionId, {
+      runChild: mockDesignerChild(sessionDir, {
+        tamper: (dir) => writeFileSync(join(dir, "quality", "scan.json"), `${readFileSync(join(dir, "quality", "scan.json"), "utf8")}\n  // designer 越权改写\n`, "utf8"),
+      }),
+    });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "design_input_changed");
+    assert.match(outcome.error, /冻结输入被改动/);
+
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B5_DESIGN");
     assert.equal(gate.payload?.state?.status, "failed");
   } finally {
     cleanup(root);
