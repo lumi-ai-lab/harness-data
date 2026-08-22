@@ -25,14 +25,30 @@
  * cardId 一致性 → evidence 引用校验），任何失败都不写入正式 session。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { fetchAllEntries, writerReturnPaths } from "../../../packages/html-report-kernel/src/index.mjs";
+import {
+  fetchAllEntries,
+  persistEditorSourceInventory,
+  prepareSourceFieldInventory,
+  rowsSha256,
+  validateWriterReturn,
+  writerReturnPaths,
+} from "../../../packages/html-report-kernel/src/index.mjs";
 import { prepareCardCaptionEvidence } from "../../../packages/html-report-kernel/src/evidence/prepare-card-caption-evidence.mjs";
 import { validateCaptionSubmissionDetailed, writeCardCaption } from "../../../packages/html-report-kernel/src/captions/submit-card-caption.mjs";
 import { composeMain } from "../../../packages/html-report-kernel/src/artifacts/compose-main.mjs";
+import { ensureResultUserQuestion } from "../../../packages/harness-runtime-node/src/open-metric-cli-ui.mjs";
+import {
+  buildEditorPlannerAssignment,
+  buildEditorPlanSchema,
+  loadEditorPlannerInput,
+  persistEditorWriterReturn,
+} from "../../pi/skills/html-report/scripts/editor-plan-contract.mjs";
+import { materializeEditorPlan } from "../../pi/skills/html-report/scripts/editor-plan.mjs";
+import { applyPipelinePolicy } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
 import { runCodeBuddyChild } from "./codebuddy-child.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +58,11 @@ const STAGE_GATE_SCRIPT = resolve(SCRIPT_DIR, "../../pi/skills/html-report/scrip
 const WRITER_MODEL = "custom-local:gpt-5.5";
 const WRITER_ROLE = "report-writer";
 const WRITER_TIMEOUT_MS = 120_000; // 对齐文档 §4.3：Writer 120s，Reviewer 150s
+
+// B25 Editor Planner child（角色沿用 report-researcher，负责产出研究计划）。
+const EDITOR_MODEL = WRITER_MODEL;
+const EDITOR_ROLE = "report-researcher";
+const EDITOR_TIMEOUT_MS = 840_000; // 参考 ref-b345：Editor Planner 14 分钟上限
 
 export const RUNNER_STAGES = Object.freeze([
   "A_CONFIG",
@@ -56,6 +77,17 @@ export const RUNNER_STAGES = Object.freeze([
 
 /** Pi 默认只启用到 B2_MAIN（对齐文档 §3.1/§9）；其余阶段 M2-M6 再启用。 */
 const DISABLED_RUNNER_STAGES = new Set(["B25_EDITOR", "B3_RESEARCH", "B4_REVIEW", "B5_DESIGN"]);
+
+/**
+ * M3-M5 由 Runner 在 init 后程序化启用（stage-gate 无 CLI policy 命令）。
+ * gate 语义沿用 Pi：B25/B5 自动完成，B3/B4 为人工 Gate。
+ */
+export const RUNNER_STAGE_POLICY = Object.freeze({
+  B25_EDITOR: { enabled: true, gate: false },
+  B3_RESEARCH: { enabled: true, gate: true },
+  B4_REVIEW: { enabled: true, gate: true },
+  B5_DESIGN: { enabled: true, gate: false },
+});
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -407,9 +439,171 @@ export async function runWriterStage(
   return { ok: true, message: `B2_WRITER 完成 ${succeeded.length} 张卡；B2_MAIN 已开始（人工 Gate，等待批准）。`, started, succeeded };
 }
 
+/** M3-M5：阶段是否已由 Runner policy 显式启用。 */
+function runnerPolicyEnabled(state, stageId) {
+  return state?.policy?.[stageId]?.enabled === true;
+}
+
+function readJsonFile(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** 提升文件 mtime 到当前时间，避免早于被重写的 result.json（见 prepareSourceFieldInventory 前置条件）。 */
+function bumpFileMtime(path) {
+  const now = new Date();
+  try {
+    utimesSync(path, now, now);
+  } catch {
+    try {
+      const content = readFileSync(path, "utf8");
+      writeFileSync(path, content);
+    } catch {
+      // 忽略：后续 prepareSourceFieldInventory 会以 fail-closed 兜底
+    }
+  }
+}
+
+/**
+ * M3: 从已落盘的 entry 文件构建 editor-planner 缓存（不触发 CLI 重取数）。
+ * 当 ensureResultUserQuestion 重写了 result.json（userQuestion 缺失补齐）时，
+ * entry 文件 mtime 可能早于 result.json —— 同步提升其 mtime 以满足
+ * prepareSourceFieldInventory 的 mtime 前置条件。
+ */
+export async function prepareEditorPlannerCaches(sessionDir, resultPath, { result, questionChanged = false } = {}) {
+  const cards = Array.isArray(result?.cards) ? result.cards.map((card) => card?.id).filter(Boolean) : [];
+  if (cards.length === 0) throw new Error("result.json 没有可用 cards[]");
+  for (const cardId of cards) {
+    const paths = writerReturnPaths({ sessionDir, cardId });
+    const data = readJsonFile(paths.dataPath);
+    const meta = readJsonFile(paths.metaPath);
+    if (data === null || meta === null) {
+      throw new Error(`卡片 ${cardId} 缺少 entry.json/entry.meta.json，无法构建 Writer 缓存`);
+    }
+    const receipt = {
+      cardId,
+      fetchStatus: "success",
+      dataPath: paths.dataPath,
+      metaPath: paths.metaPath,
+      rowCount: Array.isArray(data) ? data.length : 0,
+      rowsSha256: rowsSha256(data),
+    };
+    const checked = validateWriterReturn(receipt, { cardId, dataPath: paths.dataPath, metaPath: paths.metaPath });
+    if (!checked.ok) {
+      throw new Error(`卡片 ${cardId} Writer 返回校验失败: ${checked.errors.join("; ")}`);
+    }
+    if (questionChanged) {
+      bumpFileMtime(paths.dataPath);
+      bumpFileMtime(paths.metaPath);
+    }
+    persistEditorWriterReturn(resultPath, receipt);
+  }
+  persistEditorSourceInventory(resultPath, await prepareSourceFieldInventory(resultPath));
+  return { ok: true };
+}
+
+/**
+ * M3: B25_EDITOR —— 运行 Editor Planner child（report-researcher），
+ * Runner 校验并物化版本 2 研究计划（analysis/tasks.json + analysis/main.md），
+ * 经 materializeEditorPlan（内部调用 finalize-editor-stage）后 finish B25_EDITOR，
+ * gate:false 自动推进到 B3_RESEARCH。
+ */
+export async function runEditorPlannerStage(
+  projectRoot,
+  sessionId,
+  { runChild = runCodeBuddyChild } = {}
+) {
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const resultPath = join(sessionDir, "result.json");
+  const result = readResult(projectRoot, sessionId);
+  if (!result) return { ok: false, error: "result.json 不存在或不可读" };
+  if (result.status !== "confirmed") {
+    return { ok: false, error: `B25_EDITOR 需要 result.status=confirmed，当前为 ${JSON.stringify(result.status)}` };
+  }
+
+  // 1. 确保 result.userQuestion（缺失时从 A_CONFIG 问题文件补齐）
+  let question;
+  try {
+    question = await ensureResultUserQuestion(sessionDir, resultPath);
+  } catch (error) {
+    return { ok: false, error: `B25_EDITOR 准备 userQuestion 失败: ${error?.message || error}` };
+  }
+
+  // 2. 构建 editor-planner 缓存（writer-returns + source-inventory）
+  try {
+    await prepareEditorPlannerCaches(sessionDir, resultPath, {
+      result,
+      questionChanged: Boolean(question?.changed),
+    });
+  } catch (error) {
+    return { ok: false, error: `B25_EDITOR 准备 planner 缓存失败: ${error?.message || error}` };
+  }
+
+  // 3. 加载 planner 输入并启动 child（M0 launcher，独立 child，无业务凭据）
+  let input;
+  try {
+    input = loadEditorPlannerInput(resultPath);
+  } catch (error) {
+    return { ok: false, error: `B25_EDITOR 加载 planner 输入失败: ${error?.message || error}` };
+  }
+  let child;
+  try {
+    child = await runChild({
+      prompt: buildEditorPlannerAssignment({ sessionDir, resultPath, input }),
+      schema: buildEditorPlanSchema(input),
+      sessionId: `${sanitizeSessionId(sessionId)}-editor`,
+      cwd: resolve(projectRoot),
+      model: EDITOR_MODEL,
+      timeoutMs: EDITOR_TIMEOUT_MS,
+    });
+  } catch (error) {
+    return { ok: false, error: `启动 editor planner child 失败: ${error?.message || error}` };
+  }
+  if (child?.status !== "completed" || !child?.value) {
+    return {
+      ok: false,
+      error: child?.timedOut
+        ? `editor planner child 超时（${EDITOR_TIMEOUT_MS}ms）`
+        : (child?.message || `editor planner child ${child?.code || "failed"}`),
+    };
+  }
+
+  // 4. Runner 校验并物化（materializeEditorPlan 内部做语义校验，任何失败都不写正式 session）
+  let materialized;
+  try {
+    materialized = await materializeEditorPlan(resultPath, child.value);
+  } catch (error) {
+    return { ok: false, error: `Editor Planner 返回校验失败: ${error?.message || error}` };
+  }
+  if (!materialized?.ok) return { ok: false, error: "Editor Planner 返回校验失败（materializeEditorPlan 未通过）" };
+
+  // 5. finish B25_EDITOR（gate:false → completed → 自动 start B3_RESEARCH）
+  const finished = runStageGate(projectRoot, sessionId, "finish", ["--stage", "B25_EDITOR"]);
+  if (!finished.ok) return { ok: false, error: finished.error || "stage-gate finish B25_EDITOR 失败" };
+  const after = runStageGate(projectRoot, sessionId, "status");
+  return {
+    ok: true,
+    sessionDir,
+    resultPath,
+    tasksPath: materialized.tasksPath,
+    mainPath: materialized.mainPath,
+    taskCount: materialized.taskCount,
+    researchTasks: materialized.researchTasks,
+    state: after.payload?.state,
+    message: `B25_EDITOR 已物化研究计划（${materialized.taskCount} 个任务），完成并进入 ${after.payload?.state?.currentStage}。`,
+  };
+}
+
 /** Advance one stage; returns { ok, message, state?, stop? }. */
 async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries } = {}) {
   const stage = state.currentStage;
+  // M3-M5 阶段默认关闭；仅当当前 state 的 policy 显式启用时才进入各 case。
+  if (DISABLED_RUNNER_STAGES.has(stage) && !runnerPolicyEnabled(state, stage)) {
+    return { ok: true, message: `${stage} 未启用（对齐文档 §9 默认只到 B2_MAIN），不改变状态。`, state };
+  }
   switch (stage) {
     case "A_CONFIG": {
       const result = readResult(projectRoot, sessionId);
@@ -475,10 +669,12 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       // B2_MAIN 是人工 Gate，step 模式下 finish 后停在 awaiting_approval；Runner 不自动 approve。
       return { ok: true, message: `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，等待人工批准（不自动 approve）。`, state: after.payload?.state, composed };
     }
+    case "B25_EDITOR": {
+      const outcome = await runEditorPlannerStage(projectRoot, sessionId, { runChild });
+      if (!outcome.ok) return { ok: false, message: outcome.error, outcome };
+      return { ok: true, message: outcome.message, state: outcome.state, outcome };
+    }
     default:
-      if (DISABLED_RUNNER_STAGES.has(stage)) {
-        return { ok: true, message: `${stage} 未启用（对齐文档 §9 默认只到 B2_MAIN），不改变状态。`, state };
-      }
       return { ok: true, message: `阶段 ${stage} 无需 runner advance。`, state };
   }
 }
@@ -512,12 +708,20 @@ export async function advance(projectRoot, sessionId, { runChild, fetchEntries }
   return { ok: true, message: logs.join("\n"), state };
 }
 
-/** start：初始化 gate 并 start A_CONFIG。 */
-export function start(projectRoot, sessionId) {
+/** start：初始化 gate、启用 M3-M5 policy 并 start A_CONFIG。 */
+export async function start(projectRoot, sessionId, { applyPolicy = true } = {}) {
   const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
   const init = runStageGate(projectRoot, sessionId, "init", ["--mode", "step", "--session-id", sanitizeSessionId(sessionId)]);
   if (!init.ok && !/already/i.test(String(init.error || ""))) {
     return { ok: false, error: init.error || "stage-gate init 失败" };
+  }
+  // stage-gate 无 CLI policy 命令；启用 B25/B3/B4/B5 必须程序化执行（幂等）。
+  if (applyPolicy) {
+    try {
+      await applyPipelinePolicy(sessionDir, RUNNER_STAGE_POLICY);
+    } catch (error) {
+      return { ok: false, error: `启用 B25/B3/B4/B5 失败: ${error?.message || error}` };
+    }
   }
   const started = runStageGate(projectRoot, sessionId, "start", ["--stage", "A_CONFIG"]);
   if (!started.ok && !/already/i.test(String(started.error || ""))) {
@@ -623,7 +827,7 @@ export async function main(argv = process.argv.slice(2)) {
     let output;
     switch (command) {
       case "start":
-        output = start(projectRoot, sessionId);
+        output = await start(projectRoot, sessionId);
         break;
       case "status":
         output = status(projectRoot, sessionId, { format });
