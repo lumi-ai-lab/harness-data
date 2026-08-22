@@ -13,6 +13,7 @@
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs start   --session <id>
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs advance --session <id>
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs status  --session <id>
+ *   node agents/workbuddy/scripts/html-report-stage-runner.mjs approve --session <id>
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs retry   --session <id> --task <taskId>
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs cancel  --session <id>
  *
@@ -61,7 +62,7 @@ import {
 } from "../../pi/skills/html-report/scripts/researcher-return.mjs";
 import { buildResearcherSubmission, submitResearchFindings } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
 import { finalizeResearchStage } from "../../pi/skills/html-report/scripts/finalize-research-stage.mjs";
-import { applyPipelinePolicy, failPipelineStage, finishPipelineStage } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
+import { applyPipelinePolicy, approvePipelineStage, failPipelineStage, finishPipelineStage } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
 import {
   reviewerReturnPaths,
   validateReviewerArtifacts,
@@ -1562,6 +1563,31 @@ export function cancel(projectRoot, sessionId) {
   return { ok: true, state: result.payload?.state, message: "当前阶段已暂停（cancel）。" };
 }
 
+/** approve：通过人工 Gate（awaiting_approval）并继续推进；其余状态拒绝。 */
+export async function approveGate(projectRoot, sessionId) {
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const before = runStageGate(projectRoot, sessionId, "status");
+  if (!before.ok) return { ok: false, error: before.error || "stage-gate status 失败" };
+  if (!before.payload?.exists) {
+    return { ok: false, error: `Session ${sessionId} 尚未初始化 html-report Gate（目录：${sessionDir}）。请先运行 start。` };
+  }
+  const state = before.payload?.state;
+  const current = state?.currentStage;
+  const stage = current ? state?.stages?.[current] : null;
+  if (state?.status !== "awaiting_approval" || stage?.status !== "awaiting_approval") {
+    return {
+      ok: false,
+      error: `当前不在等待批准，无法 approve（state=${state?.status || "unknown"}，${current || "unknown"}=${stage?.status || "unknown"}）。`,
+      state,
+    };
+  }
+  const approved = await approvePipelineStage(sessionDir, { phrase: "继续" });
+  if (approved.approvalRejected) {
+    return { ok: false, error: `approve 被拒绝：${approved.approvalRejected}。`, state: approved.state };
+  }
+  return { ok: true, state: approved.state, message: `已通过人工 Gate ${current}，继续推进。` };
+}
+
 /** retry --task：对指定卡重跑 writer（仅 B2_WRITER 支持）。 */
 export async function retryTask(projectRoot, sessionId, taskId, { runChild, fetchEntries } = {}) {
   const status0 = runStageGate(projectRoot, sessionId, "status");
@@ -1590,6 +1616,7 @@ function usage() {
     "  agents/workbuddy/scripts/html-report-stage-runner.mjs start  --session <id>",
     "  agents/workbuddy/scripts/html-report-stage-runner.mjs advance --session <id>",
     "  agents/workbuddy/scripts/html-report-stage-runner.mjs status --session <id>",
+    "  agents/workbuddy/scripts/html-report-stage-runner.mjs approve --session <id>",
     "  agents/workbuddy/scripts/html-report-stage-runner.mjs retry  --session <id> --task <cardId>",
     "  agents/workbuddy/scripts/html-report-stage-runner.mjs cancel --session <id>",
     "可选：--root <projectRoot>（默认自动探测）、--format text|json（仅 status）",
@@ -1607,7 +1634,7 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${usage()}\n`);
     return { ok: true, command };
   }
-  if (!["start", "advance", "status", "retry", "cancel"].includes(command)) {
+  if (!["start", "advance", "status", "approve", "retry", "cancel"].includes(command)) {
     process.stderr.write(`未知命令 ${JSON.stringify(command)}\n${usage()}\n`);
     process.exitCode = 2;
     return { ok: false, error: "unknown command" };
@@ -1636,6 +1663,9 @@ export async function main(argv = process.argv.slice(2)) {
         break;
       case "retry":
         output = await retryTask(projectRoot, sessionId, taskId);
+        break;
+      case "approve":
+        output = await approveGate(projectRoot, sessionId);
         break;
       case "advance":
         output = await advance(projectRoot, sessionId);

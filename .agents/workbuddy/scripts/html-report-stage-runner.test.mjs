@@ -17,6 +17,7 @@ import { deflateSync } from "node:zlib";
 
 import {
   advance,
+  approveGate,
   buildDesignerPrompt,
   buildReviewerPrompt,
   buildWriterPrompt,
@@ -36,6 +37,7 @@ import {
   validateReviewerScorecard,
   writerSchema,
 } from "./html-report-stage-runner.mjs";
+import { runWorkbuddy } from "./html-report-workbuddy.mjs";
 import { rowsSha256 } from "../../../packages/html-report-kernel/src/index.mjs";
 import {
   applyQueryPatch,
@@ -1610,6 +1612,131 @@ test("M5 B5 anti-fabrication: designer child tampers a frozen input → design_i
     const gate = runStageGate(root, sessionId, "status");
     assert.equal(gate.payload?.state?.currentStage, "B5_DESIGN");
     assert.equal(gate.payload?.state?.status, "failed");
+  } finally {
+    cleanup(root);
+  }
+});
+
+// ---------------- M6：WorkBuddy 薄入口 ----------------
+
+test("M6 approveGate rejects when not awaiting approval", async () => {
+  const { root, sessionId } = makeSession();
+  try {
+    const started = await start(root, sessionId);
+    assert.equal(started.ok, true, started.error);
+    const rejected = await approveGate(root, sessionId);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /不在等待批准/);
+    const ghost = await approveGate(root, "ghost-session");
+    assert.equal(ghost.ok, false);
+    assert.match(ghost.error, /尚未初始化/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 approveGate passes a human gate and advances via the same state source", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    const reviewed = await advance(root, sessionId, {
+      runChild: async () => ({ status: "completed", code: "ok", value: passingScorecard(), message: "ok" }),
+    });
+    assert.equal(reviewed.ok, true, reviewed.message);
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B4_REVIEW");
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
+
+    const approved = await approveGate(root, sessionId);
+    assert.equal(approved.ok, true, approved.error);
+    assert.match(approved.message, /已通过人工 Gate B4_REVIEW/);
+
+    const after = runStageGate(root, sessionId, "status");
+    assert.equal(after.payload?.state?.currentStage, "B5_DESIGN", `expected B5_DESIGN, got ${after.payload?.state?.currentStage}`);
+    assert.equal(after.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry forwards start/status/retry/cancel to Runner", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    const started = await runWorkbuddy(["start", "--session", sessionId, "--root", root]);
+    assert.equal(started.ok, true, started.error);
+    assert.match(started.message, /已启动/);
+
+    const s1 = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
+    assert.equal(s1.ok, true, s1.error);
+    assert.match(s1.message, /当前阶段/);
+
+    const s2 = await runWorkbuddy(["status", "--session", sessionId, "--root", root, "--format", "json"]);
+    assert.equal(s2.ok, true, s2.error);
+    assert.equal(JSON.parse(s2.message).state?.sessionId, sessionId);
+
+    const retried = await runWorkbuddy(["retry", "--session", sessionId, "--root", root, "--task", cardId]);
+    assert.equal(retried.ok, false);
+    assert.match(retried.error, /仅支持 B2_WRITER/);
+
+    const cancelled = await runWorkbuddy(["cancel", "--session", sessionId, "--root", root]);
+    assert.equal(cancelled.ok, true, cancelled.error);
+    assert.match(cancelled.message, /已暂停/);
+
+    const bad = await runWorkbuddy(["foo", "--session", sessionId, "--root", root]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.exitCode, 2);
+    assert.match(bad.error, /未知命令/);
+    const noSession = await runWorkbuddy(["start"]);
+    assert.equal(noSession.ok, false);
+    assert.equal(noSession.exitCode, 2);
+    assert.match(noSession.error, /--session/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry status surfaces the Runner's human gate, approve forwards to Runner", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToReview(root, sessionId);
+    const reviewed = await advance(root, sessionId, {
+      runChild: async () => ({ status: "completed", code: "ok", value: passingScorecard(), message: "ok" }),
+    });
+    assert.equal(reviewed.ok, true, reviewed.message);
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
+
+    const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
+    assert.equal(s.ok, true, s.error);
+    assert.match(s.message, /人工 Gate：B4_REVIEW/);
+    assert.match(s.message, /approve --session/);
+
+    const approved = await runWorkbuddy(["approve", "--session", sessionId, "--root", root]);
+    assert.equal(approved.ok, true, approved.error);
+    assert.match(approved.message, /已通过人工 Gate B4_REVIEW/);
+    const after = runStageGate(root, sessionId, "status");
+    assert.equal(after.payload?.state?.currentStage, "B5_DESIGN", `expected B5_DESIGN, got ${after.payload?.state?.currentStage}`);
+    assert.equal(after.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry CLI entry guard works end to end (spawn)", async () => {
+  const { root, sessionId } = makeSession();
+  try {
+    const started = await start(root, sessionId);
+    assert.equal(started.ok, true, started.error);
+    const script = fileURLToPath(new URL("./html-report-workbuddy.mjs", import.meta.url));
+    const run = spawnSync(process.execPath, [script, "status", "--session", sessionId, "--root", root], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /当前阶段/);
   } finally {
     cleanup(root);
   }

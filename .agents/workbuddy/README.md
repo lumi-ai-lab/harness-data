@@ -39,6 +39,24 @@ codebuddy plugin install qdm-harness@lumi-harness-data --scope user
 
 The npm installer deliberately does not edit WorkBuddy settings or Marketplace registration automatically. Preparing the Marketplace and enabling its plugin in WorkBuddy are separate operations.
 
+## HTML report Stage Runner (thin entry)
+
+WorkBuddy drives the html-report pipeline through a thin entry that only forwards to the Stage Runner — it does not maintain a second state machine. The Runner is the single owner of Gate state (the `stage-gate` pipeline state file under the session directory); the thin entry only reads and displays it.
+
+```bash
+# All commands forward to scripts/html-report-stage-runner.mjs.
+node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id>
+node agents/workbuddy/scripts/html-report-workbuddy.mjs status  --session <id> [--format text|json]
+node agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session <id>
+node agents/workbuddy/scripts/html-report-workbuddy.mjs approve --session <id>   # pass a human gate (awaiting_approval)
+node agents/workbuddy/scripts/html-report-workbuddy.mjs retry   --session <id> --task <cardId>
+node agents/workbuddy/scripts/html-report-workbuddy.mjs cancel  --session <id>
+```
+
+- `status` shows the Runner's Gate state and highlights any human gate (`awaiting_approval`) that needs `approve`.
+- Run from the Harness runtime workspace root, or pass `--root <path>`.
+- Install path is the plugin enable flow above: add the runtime `agents` directory as a Marketplace, install `qdm-harness@lumi-harness-data`, then the scripts (including this thin entry and the Runner) are available under `agents/workbuddy/scripts/`. Validate with `harness-data doctor --dir <runtime>`.
+
 ## Hooks
 
 - `PreToolUse` matches `Bash|PowerShell|execute_command` and calls `authz-hook --agent workbuddy`. macOS uses Bash-compatible executors; Windows gated PowerShell commands fail closed before credentials are resolved and must be retried with Bash.
