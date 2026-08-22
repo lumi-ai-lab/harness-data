@@ -29,8 +29,12 @@ import {
 } from "./html-report-stage-runner.mjs";
 import {
   buildCodeBuddyChildArgs,
+  codeBuddySensitiveValues,
   extractJsonObject,
+  redactCodeBuddyOutput,
   resolveCodeBuddyCli,
+  resolveDevelopmentCodeBuddy,
+  resolveWorkBuddyCodeBuddy,
   validateJsonSchema,
 } from "./codebuddy-child.mjs";
 
@@ -185,6 +189,55 @@ test("validateJsonSchema enforces required and const", () => {
   const schema = { type: "object", properties: { a: { type: "string" } }, required: ["a"] };
   assert.equal(validateJsonSchema({ a: "x" }, schema).ok, true);
   assert.equal(validateJsonSchema({}, schema).ok, false);
+});
+
+test("validateJsonSchema supports oneOf, pattern, and uniqueItems (from ref codebuddy-process)", () => {
+  const oneOf = { oneOf: [{ type: "string" }, { type: "number" }] };
+  assert.equal(validateJsonSchema("x", oneOf).ok, true);
+  assert.equal(validateJsonSchema(3, oneOf).ok, true);
+  assert.equal(validateJsonSchema(null, oneOf).ok, false);
+  assert.equal(validateJsonSchema("x", { oneOf: [{ type: "string" }, { type: "string" }] }).ok, false, "exactly one branch");
+
+  const pattern = { type: "string", pattern: "^[a-f0-9]{64}$" };
+  assert.equal(validateJsonSchema("a".repeat(64), pattern).ok, true);
+  assert.equal(validateJsonSchema("not-hex", pattern).ok, false);
+
+  const unique = { type: "array", items: { type: "number" }, uniqueItems: true };
+  assert.equal(validateJsonSchema([1, 2], unique).ok, true);
+  assert.equal(validateJsonSchema([1, 1], unique).ok, false);
+});
+
+test("redactCodeBuddyOutput scrubs metric secrets and sensitive env values", () => {
+  const blob = "qdm1enc.abc123";
+  const token = "secret-token-value";
+  const out = redactCodeBuddyOutput(`blob=${blob} HARNESS_AUTH_BLOB=${blob} QDM_TOKEN=${token}`, [token]);
+  assert.ok(!out.includes(blob), "metric blob must be redacted");
+  assert.ok(!out.includes(token), "sensitive source value must be redacted");
+  assert.match(out, /<redacted>/);
+});
+
+test("codeBuddySensitiveValues collects sensitive env values", () => {
+  const values = codeBuddySensitiveValues({
+    HARNESS_AUTH_BLOB: "qdm1enc.zzz",
+    HARNESS_AUTH_BLOB_FILE: "/secret/blob",
+    QDM_METRIC_TOKEN: "tok",
+    OTHER: "keep-me",
+  });
+  assert.deepEqual(values.sort(), ["/secret/blob", "qdm1enc.zzz", "tok"]);
+});
+
+test("resolveDevelopmentCodeBuddy validates absolute launcher and node paths", () => {
+  const nodePath = process.execPath;
+  const launcherPath = resolveCodeBuddyCli();
+  const resolved = resolveDevelopmentCodeBuddy({ launcherPath, nodePath });
+  assert.equal(resolved.launcherPath, launcherPath);
+  assert.equal(resolved.nodePath, nodePath);
+  assert.throws(() => resolveDevelopmentCodeBuddy({ launcherPath: "relative/path", nodePath }), /absolute/);
+});
+
+test("resolveWorkBuddyCodeBuddy fails closed when WorkBuddy.app is absent", () => {
+  // Never point at a real app in tests; use a non-existent path and expect fail-closed.
+  assert.throws(() => resolveWorkBuddyCodeBuddy({ appPath: "/Applications/Definitely-Not-WorkBuddy.app" }), /unavailable|macOS only/i);
 });
 
 test("runStageGate fails closed on stage-gate non-zero exit", () => {
