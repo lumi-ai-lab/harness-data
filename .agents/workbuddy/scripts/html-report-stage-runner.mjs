@@ -30,8 +30,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  canonicalizeJson,
   fetchAllEntries,
+  fetchExploreTask,
+  metricQueryFromCard,
   persistEditorSourceInventory,
+  prepareResearchEvidence,
   prepareSourceFieldInventory,
   rowsSha256,
   validateWriterReturn,
@@ -48,7 +52,15 @@ import {
   persistEditorWriterReturn,
 } from "../../pi/skills/html-report/scripts/editor-plan-contract.mjs";
 import { materializeEditorPlan } from "../../pi/skills/html-report/scripts/editor-plan.mjs";
-import { applyPipelinePolicy } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
+import {
+  buildResearcherReturnSchema,
+  researcherReturnPaths,
+  validateResearcherAnalysisRequirements,
+  validateResearcherReturn,
+} from "../../pi/skills/html-report/scripts/researcher-return.mjs";
+import { buildResearcherSubmission, submitResearchFindings } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
+import { finalizeResearchStage } from "../../pi/skills/html-report/scripts/finalize-research-stage.mjs";
+import { applyPipelinePolicy, finishPipelineStage } from "../../pi/skills/html-report/scripts/stage-gate.mjs";
 import { runCodeBuddyChild } from "./codebuddy-child.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -63,6 +75,12 @@ const WRITER_TIMEOUT_MS = 120_000; // 对齐文档 §4.3：Writer 120s，Reviewe
 const EDITOR_MODEL = WRITER_MODEL;
 const EDITOR_ROLE = "report-researcher";
 const EDITOR_TIMEOUT_MS = 840_000; // 参考 ref-b345：Editor Planner 14 分钟上限
+
+// B3 Research child（角色沿用 report-researcher，逐任务研究分析）。
+const RESEARCH_MODEL = WRITER_MODEL;
+const RESEARCH_ROLE = "report-researcher";
+const RESEARCH_TIMEOUT_MS = 600_000; // 参考 ref-b345：Research 单任务 10 分钟上限
+const RESEARCH_EVIDENCE_EMBED_LIMIT = 64 * 1024; // evidence 内嵌上限，超限 fail-closed
 
 export const RUNNER_STAGES = Object.freeze([
   "A_CONFIG",
@@ -597,8 +615,342 @@ export async function runEditorPlannerStage(
   };
 }
 
+/** 带 error.code 的 fail-closed 阶段错误。 */
+function stageError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function sameCanonicalJson(left, right) {
+  return canonicalizeJson(left) === canonicalizeJson(right);
+}
+
+function uniqueCanonical(values) {
+  return values.filter((value, index) => values.findIndex((candidate) => sameCanonicalJson(candidate, value)) === index);
+}
+
+/**
+ * 由源卡 canonical query + task.candidateIndicators/candidateDims +
+ * evidenceGap.requiredIndicators/requiredDims 确定性构建补查 payload。
+ * 这是 Runner 对 child 返回 needs_new_query 的闭环：补查查询由 Runner 生成，
+ * 不依赖 child 提供 queryDelta（child schema 也不允许返回该字段）。
+ */
+function buildCandidateQuery(sourceQuery, task) {
+  const candidate = structuredClone(sourceQuery);
+  const gap = isPlainObject(task?.evidenceGap) ? task.evidenceGap : null;
+  candidate.metrics = uniqueCanonical([
+    ...(Array.isArray(candidate.metrics) ? candidate.metrics : []),
+    ...(Array.isArray(task?.candidateIndicators) ? task.candidateIndicators : []),
+    ...(Array.isArray(gap?.requiredIndicators) ? gap.requiredIndicators : []),
+  ]);
+  candidate.dimensions = uniqueCanonical([
+    ...(Array.isArray(candidate.dimensions) ? candidate.dimensions : []),
+    ...(Array.isArray(task?.candidateDims) ? task.candidateDims : []),
+    ...(Array.isArray(gap?.requiredDims) ? gap.requiredDims : []),
+  ]);
+  return candidate;
+}
+
+/**
+ * 准备一次 dispatch 的 evidence 包：
+ *  - new_query：先由 Runner 确定性补查（fetchExplore 写 data/explore 产物），再走 Pi prepare。
+ *  - reuse_entry：直接走 Pi prepare（evidence 包按当前 task 重新生成，保证与后继任务一致）。
+ * evidence JSON 超限时 fail-closed（evidence_overflow）。
+ */
+async function prepareResearchEvidenceForRun({ resultPath, task, fetchExplore }) {
+  const mode = String(task?.evidencePlan?.mode || "");
+  if (mode === "new_query") {
+    const result = readJsonFile(resultPath);
+    if (!isPlainObject(result) || result.status !== "confirmed") {
+      throw stageError("evidence_invalid", `task ${task.id} new_query 需要 result.status=confirmed`);
+    }
+    const fromCardId = String(task.fromCardId || "");
+    const sourceCard = Array.isArray(result.cards)
+      ? result.cards.find((card) => String(card?.id) === fromCardId)
+      : null;
+    if (!sourceCard) {
+      throw stageError("evidence_invalid", `task ${task.id} 的源卡 ${fromCardId} 不在 result.json`);
+    }
+    let sourceQuery;
+    try {
+      sourceQuery = metricQueryFromCard(sourceCard);
+    } catch (error) {
+      throw stageError("evidence_invalid", `task ${task.id} 源卡 ${fromCardId} 的 canonical query 无效: ${error?.message || error}`);
+    }
+    const payload = buildCandidateQuery(sourceQuery, task);
+    let explore;
+    try {
+      explore = await fetchExplore(resultPath, {
+        taskId: String(task.id),
+        payload,
+        goal: String(task.goal || ""),
+        fromCardId,
+        hint: "Runner 依据 Researcher evidenceGap 确定性补查",
+      });
+    } catch (error) {
+      throw stageError("fetch_failed", `task ${task.id} new_query 补查失败: ${error?.message || error}`);
+    }
+    if (!isPlainObject(explore) || explore.status !== "ok") {
+      throw stageError("fetch_failed", `task ${task.id} new_query 补查未成功：${explore?.failedMessage || explore?.errorCode || "unknown"}`);
+    }
+  }
+  let packet;
+  try {
+    packet = await prepareResearchEvidence(resultPath, { taskId: String(task.id) });
+  } catch (error) {
+    throw stageError("evidence_invalid", `task ${task.id} evidence 准备失败: ${error?.message || error}`);
+  }
+  if (!isPlainObject(packet)) throw stageError("evidence_invalid", `task ${task.id} evidence 包无效`);
+  const evidenceText = JSON.stringify(packet);
+  if (Buffer.byteLength(evidenceText, "utf8") > RESEARCH_EVIDENCE_EMBED_LIMIT) {
+    throw stageError("evidence_overflow", `task ${task.id} evidence JSON ${Buffer.byteLength(evidenceText, "utf8")} 字节超过 ${RESEARCH_EVIDENCE_EMBED_LIMIT} 上限`);
+  }
+  return { evidence: packet, evidenceText };
+}
+
+/** 构建 researcher child prompt：角色说明 + 分析要求 + 内嵌 evidence capsule。 */
+export function buildResearcherPrompt({ sessionDir, resultPath, task, paths, evidenceText }) {
+  const requirementLines = (Array.isArray(task?.analysisRequirements) ? task.analysisRequirements : [])
+    .map((requirement, index) => [
+      `  ${index + 1}. requirementId=${requirement.id}`,
+      `     question：${requirement.question}`,
+      `     允许证据视图：${(requirement.evidenceViewIds || []).join(", ")}`,
+    ].join("\n"))
+    .join("\n");
+  return [
+    `你是 html-report 的 Report Researcher（角色 report-researcher）。处理任务 taskId=${task.id}。`,
+    `SESSION=${sessionDir}`,
+    `result.json=${resultPath}`,
+    `evidencePath=${paths.evidencePath}（evidenceMode=${task.evidencePlan?.mode}）`,
+    `研究目标：${task.goal}`,
+    "分析要求（analysisRequirements，逐条回答）：",
+    requirementLines,
+    "证据（evidence packet JSON）已完整内嵌在下方 capsule 中。结论只能引用证据中出现的数字、日期、指标名、维度名与视图节点。",
+    "输出必须严格符合返回 schema，且只输出一个 JSON 对象。",
+    "当证据足以回答全部要求时，status 用 ok，并为每条 requirement 给一个 finding（requirementId/claim/evidencePointers），evidencePointers 必须是证据内可解析的 /views/ 指针。",
+    "当证据不足、需要补查（缺指标/维度/粒度/范围/口径/对比）时，不得编造结论：返回 status=needs_new_query（附 evidenceGap.type/reason/requiredIndicators/requiredDims）或 status=needs_evidence_plan（gap.type=missing_operation + requiredOperations）。",
+    "禁止伪造结论：任何 ok 结论都必须能被内嵌证据唯一支撑；summary 由 findings 的 claim 拼接，不得额外编造。",
+    "",
+    "capsule evidence JSON:",
+    evidenceText,
+    "",
+    "只输出 JSON，不要其他文字。",
+  ].join("\n");
+}
+
+function buildResearcherExpected(task, requirements, paths) {
+  return {
+    taskId: String(task.id),
+    mode: String(task?.evidencePlan?.mode || ""),
+    task,
+    analysisRequirements: requirements,
+    ...paths,
+  };
+}
+
+/** needs_new_query / needs_evidence_plan → 后继任务（仅 Runner 内确定性改写 tasks.json）。 */
+function researcherSuccessor(task, value) {
+  const gap = isPlainObject(value?.evidenceGap) ? value.evidenceGap : null;
+  const plan = isPlainObject(task?.evidencePlan) ? task.evidencePlan : null;
+  if (!gap || !plan) throw stageError("successor_invalid", "researcher needs_* 返回缺少 evidenceGap/evidencePlan");
+  if (value.status === "needs_new_query") {
+    return {
+      ...task,
+      evidencePlan: { ...plan, mode: "new_query" },
+      evidenceGap: gap,
+      candidateIndicators: uniqueCanonical([
+        ...(Array.isArray(task.candidateIndicators) ? task.candidateIndicators : []),
+        ...(Array.isArray(gap.requiredIndicators) ? gap.requiredIndicators : []),
+      ]),
+      candidateDims: uniqueCanonical([
+        ...(Array.isArray(task.candidateDims) ? task.candidateDims : []),
+        ...(Array.isArray(gap.requiredDims) ? gap.requiredDims : []),
+      ]),
+    };
+  }
+  if (value.status === "needs_evidence_plan" && gap.type === "missing_operation") {
+    const required = Array.isArray(gap.requiredOperations) ? gap.requiredOperations : [];
+    if (!required.length) throw stageError("successor_invalid", "missing_operation 缺少 requiredOperations");
+    const operations = [...(Array.isArray(plan.operations) ? plan.operations : [])];
+    for (const operation of required) {
+      if (!operations.some((current) => sameCanonicalJson(current, operation))) operations.push(operation);
+    }
+    const requiredColumns = [...(Array.isArray(plan.requiredColumns) ? plan.requiredColumns : [])];
+    for (const operation of required) {
+      for (const field of Array.isArray(operation?.fields) ? operation.fields : []) {
+        if (typeof field === "string" && !requiredColumns.includes(field)) requiredColumns.push(field);
+      }
+    }
+    return { ...task, evidencePlan: { ...plan, operations, requiredColumns } };
+  }
+  throw stageError("successor_invalid", `researcher ${String(value.status)} 无法推导唯一后继`);
+}
+
+/** 把后继任务写回 analysis/tasks.json（同 index 替换，版本保持 2）。 */
+async function persistResearcherSuccessor(sessionDir, task) {
+  const tasksPath = join(sessionDir, "analysis", "tasks.json");
+  const document = readJsonFile(tasksPath);
+  if (!isPlainObject(document) || !Array.isArray(document.tasks)) {
+    throw stageError("tasks_invalid", "analysis/tasks.json 必须是含 tasks[] 的对象文档");
+  }
+  const index = document.tasks.findIndex((candidate) => String(candidate?.id) === String(task.id));
+  if (index < 0) throw stageError("tasks_invalid", `analysis/tasks.json 缺少任务 ${task.id}`);
+  document.tasks[index] = task;
+  writeFileSync(tasksPath, `${JSON.stringify(document, null, 2)}\n`);
+}
+
+/**
+ * M3: B3_RESEARCH —— 按任务串行 dispatch report-researcher child：
+ *  - evidence 由 Runner 内嵌（≤64KB），child 无工具，结论必须由证据唯一支撑；
+ *  - child 返回 needs_new_query/needs_evidence_plan 时，Runner 确定性改写后继
+ *    任务并重新准备 evidence 再跑一次（绝不把补查写成伪造结论）；
+ *  - ok 时由 Pi submitResearchFindings 落盘 section+summary，并用
+ *    canonicalizeJson 比对 Pi 重建 envelope 与 child 返回值（反伪造守卫）；
+ *  - 全部任务终态后 finalizeResearchStage + finish B3（人工 Gate，停在等待批准）。
+ */
+export async function runResearchStage(
+  projectRoot,
+  sessionId,
+  { runChild = runCodeBuddyChild, fetchExplore = fetchExploreTask } = {}
+) {
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const resultPath = join(sessionDir, "result.json");
+  try {
+    const tasksDocument = readJsonFile(join(sessionDir, "analysis", "tasks.json"));
+    if (!isPlainObject(tasksDocument) || Number(tasksDocument.version) !== 2 || !Array.isArray(tasksDocument.tasks)) {
+      return { ok: false, code: "tasks_invalid", error: "B3 需要 B25 物化的 version 2 analysis/tasks.json（含 tasks[]）" };
+    }
+    const tasks = tasksDocument.tasks.filter((task) => isPlainObject(task) && String(task.status) === "pending");
+    const completed = [];
+    for (let task of tasks) {
+      for (let dispatch = 0; dispatch < 2; dispatch += 1) {
+        const paths = researcherReturnPaths({ sessionDir, taskId: task.id });
+        let requirements;
+        try {
+          const checked = validateResearcherAnalysisRequirements(task);
+          if (!checked.ok) {
+            throw stageError("task_invalid", `task ${task.id} analysisRequirements 无效: ${checked.errors.join("; ")}`);
+          }
+          requirements = checked.requirements;
+        } catch (error) {
+          if (error?.code) throw error;
+          throw stageError("task_invalid", `task ${task.id} analysisRequirements 校验异常: ${error?.message || error}`);
+        }
+        const expected = buildResearcherExpected(task, requirements, paths);
+        if (expected.mode !== "reuse_entry" && expected.mode !== "new_query") {
+          throw stageError("task_invalid", `task ${task.id} evidencePlan.mode=${JSON.stringify(expected.mode)} 不受支持`);
+        }
+        let prepared;
+        try {
+          prepared = await prepareResearchEvidenceForRun({ resultPath, task, fetchExplore });
+        } catch (error) {
+          if (error?.code) throw error;
+          throw stageError("evidence_invalid", `task ${task.id} evidence 准备失败: ${error?.message || error}`);
+        }
+        let child;
+        try {
+          child = await runChild({
+            prompt: buildResearcherPrompt({ sessionDir, resultPath, task, paths, evidenceText: prepared.evidenceText }),
+            schema: buildResearcherReturnSchema(expected),
+            sessionId: `${sanitizeSessionId(sessionId)}-researcher-${paths.safeTaskId}-${dispatch}`,
+            cwd: resolve(projectRoot),
+            model: RESEARCH_MODEL,
+            timeoutMs: RESEARCH_TIMEOUT_MS,
+          });
+        } catch (error) {
+          throw stageError("child_failed", `启动 researcher child 失败: ${error?.message || error}`);
+        }
+        if (child?.status !== "completed" || !child?.value) {
+          throw stageError(child?.code || "child_failed", child?.timedOut
+            ? `researcher child 超时（${RESEARCH_TIMEOUT_MS}ms）`
+            : (child?.message || `researcher child ${child?.code || "failed"}`));
+        }
+        const value = child.value;
+        let checkedReturn;
+        try {
+          checkedReturn = validateResearcherReturn(value, expected);
+        } catch (error) {
+          throw stageError("return_invalid", `task ${task.id} researcher 返回校验异常: ${error?.message || error}`);
+        }
+        if (!checkedReturn.ok) {
+          throw stageError("return_invalid", `task ${task.id} researcher 返回无效: ${checkedReturn.errors.join("; ")}`);
+        }
+        if (value.status === "failed") {
+          throw stageError("research_failed", `task ${task.id} researcher 返回 failed：${value.error || "unknown"}`);
+        }
+        if (value.status === "needs_evidence_plan" || value.status === "needs_new_query") {
+          if (dispatch === 1) {
+            throw stageError("successor_exhausted", `task ${task.id} 已耗尽唯一一次补查/补 plan 机会`);
+          }
+          let successor;
+          try {
+            successor = researcherSuccessor(task, value);
+          } catch (error) {
+            if (error?.code) throw error;
+            throw stageError("successor_invalid", error?.message || "researcher 返回无法推导后继任务");
+          }
+          await persistResearcherSuccessor(sessionDir, successor);
+          task = successor;
+          continue;
+        }
+        if (value.status !== "ok") {
+          throw stageError("return_invalid", `task ${task.id} researcher 返回未知 status=${JSON.stringify(value.status)}`);
+        }
+        // 反伪造守卫（先于任何落盘）：Pi 从 findings 重建 envelope，必须与 child
+        // 返回值一致，证明 child 的 summary/selfCheck/evidencePointers 不是伪造的补查结论。
+        let built;
+        try {
+          built = buildResearcherSubmission(expected, prepared.evidence, {
+            findings: value.findings,
+            suggestedDeeper: value.suggestedDeeper,
+          });
+        } catch (error) {
+          throw stageError("return_invalid", `task ${task.id} researcher 结论无法由 Pi 重建: ${error?.message || error}`);
+        }
+        if (canonicalizeJson(built.researcherReturn) !== canonicalizeJson(value)) {
+          throw stageError("return_inconsistent", `task ${task.id} researcher 返回值与 Pi 重建结果不一致（疑似伪造），拒绝落盘`);
+        }
+        // Pi 落盘：submitResearchFindings 内部做完整校验；success 即写入 section+summary。
+        try {
+          await submitResearchFindings(expected, prepared.evidence, {
+            findings: value.findings,
+            suggestedDeeper: value.suggestedDeeper,
+          });
+        } catch (error) {
+          throw stageError("research_failed", `task ${task.id} 结论落盘失败: ${error?.message || error}`);
+        }
+        completed.push(String(task.id));
+        break;
+      }
+    }
+    let finalized;
+    try {
+      finalized = await finalizeResearchStage(resultPath);
+    } catch (error) {
+      throw stageError("finalize_failed", `研究收尾失败: ${error?.message || error}`);
+    }
+    if (!finalized?.ok) throw stageError("finalize_failed", "研究收尾校验未通过");
+    let gate;
+    try {
+      gate = await finishPipelineStage(sessionDir, "B3_RESEARCH", { now: Date.now() });
+    } catch (error) {
+      throw stageError("finish_failed", `B3_RESEARCH finish 失败: ${error?.message || error}`);
+    }
+    return {
+      ok: true,
+      message: `B3_RESEARCH 完成 ${completed.length} 个任务，研究阶段结束（B3 为人工 Gate，停在等待批准）。${gate?.message || ""}`,
+      completed,
+      finalized,
+      gate,
+    };
+  } catch (error) {
+    return { ok: false, code: error?.code || "research_failed", error: error?.message || String(error) };
+  }
+}
+
 /** Advance one stage; returns { ok, message, state?, stop? }. */
-async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries } = {}) {
+async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore } = {}) {
   const stage = state.currentStage;
   // M3-M5 阶段默认关闭；仅当当前 state 的 policy 显式启用时才进入各 case。
   if (DISABLED_RUNNER_STAGES.has(stage) && !runnerPolicyEnabled(state, stage)) {
@@ -674,13 +1026,19 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       if (!outcome.ok) return { ok: false, message: outcome.error, outcome };
       return { ok: true, message: outcome.message, state: outcome.state, outcome };
     }
+    case "B3_RESEARCH": {
+      const outcome = await runResearchStage(projectRoot, sessionId, { runChild, fetchExplore });
+      if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, outcome };
+      const after = runStageGate(projectRoot, sessionId, "status");
+      return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
+    }
     default:
       return { ok: true, message: `阶段 ${stage} 无需 runner advance。`, state };
   }
 }
 
 /** advance：按当前 Gate 阶段分发；自动阶段（A_CONFIG→B0→B2_WRITER→B2_MAIN）级联推进。 */
-export async function advance(projectRoot, sessionId, { runChild, fetchEntries } = {}) {
+export async function advance(projectRoot, sessionId, { runChild, fetchEntries, fetchExplore } = {}) {
   let status = runStageGate(projectRoot, sessionId, "status");
   if (!status.ok) return { ok: false, error: status.error || "stage-gate status 失败" };
   let state = status.payload?.state;
@@ -695,9 +1053,9 @@ export async function advance(projectRoot, sessionId, { runChild, fetchEntries }
   const logs = [];
   let guard = 0;
   while (state && guard < RUNNER_STAGES.length) {
-    const outcome = await advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries });
+    const outcome = await advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore });
     logs.push(outcome.message);
-    if (!outcome.ok) return { ok: false, message: logs.join("\n"), error: outcome.message, state: outcome.state || state };
+    if (!outcome.ok) return { ok: false, message: logs.join("\n"), error: outcome.message, code: outcome.code, state: outcome.state || state };
     const after = outcome.state || runStageGate(projectRoot, sessionId, "status").payload?.state;
     if (!after || after.currentStage === state.currentStage || after.status === "awaiting_approval") {
       return { ok: true, message: logs.join("\n"), state: after || state };

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -19,6 +20,7 @@ import {
   htmlReportSessionDir,
   normalizeWriterChildValue,
   retryTask,
+  runEditorPlannerStage,
   runStageGate,
   runWriterForCard,
   runWriterStage,
@@ -29,6 +31,14 @@ import {
 } from "./html-report-stage-runner.mjs";
 import { rowsSha256 } from "../../../packages/html-report-kernel/src/index.mjs";
 import {
+  applyQueryPatch,
+  canonicalizeJson,
+  computeQueryPatch,
+  materialQueryDelta,
+  metricQueryFromCard,
+  normalizeMetricQuery,
+} from "../../../packages/html-report-kernel/src/index.mjs";
+import {
   buildCodeBuddyChildArgs,
   codeBuddySensitiveValues,
   extractJsonObject,
@@ -38,6 +48,11 @@ import {
   resolveWorkBuddyCodeBuddy,
   validateJsonSchema,
 } from "./codebuddy-child.mjs";
+import {
+  researcherReturnPaths,
+  validateResearcherAnalysisRequirements,
+} from "../../pi/skills/html-report/scripts/researcher-return.mjs";
+import { buildResearcherSubmission } from "../../pi/skills/html-report/scripts/submit-research-findings.mjs";
 
 function fixtureCard(cardId, overrides = {}) {
   return {
@@ -187,6 +202,164 @@ function validEditorPlan(cardId) {
     }],
     answerRequirements: [],
     noDeeperReason: null,
+  };
+}
+
+/** sha256( canonicalizeJson )，与 kernel canonicalFingerprint / sha256Json 一致。 */
+function sha256Hex(value) {
+  return createHash("sha256").update(canonicalizeJson(value), "utf8").digest("hex");
+}
+
+/**
+ * B3 前置：先走 B25 物化研究计划，停在 B3_RESEARCH running。
+ * 注意：advance 的 while 循环会从 B25（gate:false）自动级联进入 B3_RESEARCH
+ * 并执行研究任务，因此这里直接用 runEditorPlannerStage 停在 B3 running，
+ * 让各 B3 用例用自己的 researcher mock 单独 advance。
+ */
+async function driveToResearch(root, sessionId) {
+  await driveGateToEditor(root, sessionId);
+  const outcome = await runEditorPlannerStage(root, sessionId, {
+    runChild: async () => ({ status: "completed", code: "ok", value: validEditorPlan("card-001"), message: "ok" }),
+  });
+  assert.equal(outcome.ok, true, outcome.error);
+  const gate = runStageGate(root, sessionId, "status");
+  assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH", `expected B3_RESEARCH, got ${gate.payload?.state?.currentStage}`);
+  assert.equal(gate.payload?.state?.status, "running");
+}
+
+/** 复刻 Runner 的 expected 契约（taskId/mode/task/analysisRequirements/paths）。 */
+function researcherExpected(sessionDir, taskId) {
+  const document = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+  const task = document.tasks.find((candidate) => String(candidate.id) === taskId);
+  assert.ok(task, `task ${taskId} not found in tasks.json`);
+  const checked = validateResearcherAnalysisRequirements(task);
+  assert.equal(checked.ok, true, checked.errors?.join("; "));
+  const paths = researcherReturnPaths({ sessionDir, taskId });
+  return {
+    taskId: String(task.id),
+    mode: String(task.evidencePlan?.mode || ""),
+    task,
+    analysisRequirements: checked.requirements,
+    ...paths,
+  };
+}
+
+/** 依据当前物化的 evidence，构造一份可通过全部语义校验的 ranking findings。 */
+function researcherRankingParams(evidence) {
+  const view = evidence.views["op-top-sale"];
+  assert.ok(view, "evidence must have an op-top-sale view");
+  const top = view.rows[0].row;
+  const bottom = view.rows[2].row;
+  return {
+    findings: [{
+      requirementId: "req-top-sale",
+      claim: `本月销售额最高的是${top.bizDate}${top.regionId}，${top.saleAmt}元；最低的是${bottom.bizDate}${bottom.regionId}，${bottom.saleAmt}元。`,
+      evidencePointers: [
+        "/views/op-top-sale/rows/0/row/bizDate",
+        "/views/op-top-sale/rows/0/row/saleAmt",
+        "/views/op-top-sale/rows/2/row/bizDate",
+        "/views/op-top-sale/rows/2/row/saleAmt",
+      ],
+    }],
+    suggestedDeeper: [],
+  };
+}
+
+/** B3 mock runChild：用 Pi buildResearcherSubmission 重建合法 ok envelope（与 Runner 落盘一致）。 */
+function mockOkResearcher(sessionDir, params) {
+  return async () => {
+    const expected = researcherExpected(sessionDir, "drill-001");
+    const evidence = JSON.parse(readFileSync(expected.evidencePath, "utf8"));
+    const built = buildResearcherSubmission(expected, evidence, params);
+    return { status: "completed", code: "ok", value: built.researcherReturn, message: "ok" };
+  };
+}
+
+/**
+ * B3 mock fetchExplore：确定性写 explore 产物，meta 与 fetch-explore.mjs
+ * 成功路径契约一致（queryDelta/queryPatch/hash/rowCount/rowsSha256）。
+ */
+function mockFetchExplore(sessionDir) {
+  return async (resultPath, opts) => {
+    const taskId = "drill-001";
+    const outDir = join(sessionDir, "data", "explore");
+    mkdirSync(outDir, { recursive: true });
+    const result = JSON.parse(readFileSync(resultPath, "utf8"));
+    const sourceCard = result.cards.find((card) => String(card?.id) === opts.fromCardId);
+    const sourceQuery = metricQueryFromCard(sourceCard);
+    const candidate = normalizeMetricQuery(opts.payload, { defaultComparisons: sourceQuery.comparisons });
+    const queryDelta = materialQueryDelta(sourceQuery, candidate);
+    const queryPatch = computeQueryPatch(sourceQuery, candidate);
+    const rows = [
+      { bizDate: "2026-01-05", regionId: "east", saleAmt: 120000, profitAmt: 30000, uv: 1800, "saleAmt同比增长率": null, "saleAmt环比增长率": null, "profitAmt同比增长率": null, "profitAmt环比增长率": null },
+      { bizDate: "2026-01-06", regionId: "west", saleAmt: 40000, profitAmt: 10000, uv: 900, "saleAmt同比增长率": null, "saleAmt环比增长率": null, "profitAmt同比增长率": null, "profitAmt环比增长率": null },
+      { bizDate: "2026-01-07", regionId: "north", saleAmt: 90000, profitAmt: 25000, uv: 1300, "saleAmt同比增长率": null, "saleAmt环比增长率": null, "profitAmt同比增长率": null, "profitAmt环比增长率": null },
+    ];
+    const meta = {
+      producer: "fetch-explore.mjs",
+      producerVersion: 3,
+      sessionDir,
+      resultPath,
+      writtenAt: new Date().toISOString(),
+      taskId,
+      status: "ok",
+      goal: opts.goal || "",
+      fromCardId: opts.fromCardId || null,
+      hint: opts.hint || "",
+      queryDelta,
+      queryDeltaSha256: sha256Hex(queryDelta),
+      queryPatch,
+      queryPatchSha256: sha256Hex(queryPatch),
+      sourceQuerySha256: sha256Hex(sourceQuery),
+      executedQuerySha256: sha256Hex(candidate),
+      dataPath: join(outDir, `${taskId}.json`),
+      rowCount: rows.length,
+      rowsSha256: rowsSha256(rows),
+      attempts: [{ attempt: 1, status: 0, durationMs: 5, signal: null, error: null, argsSummary: [] }],
+      pagination: { mode: "all-pages", singlePage: false, pageSize: candidate.pageSize },
+    };
+    writeFileSync(join(outDir, `${taskId}.json`), `${JSON.stringify(rows, null, 2)}\n`);
+    writeFileSync(join(outDir, `${taskId}.meta.json`), `${JSON.stringify(meta, null, 2)}\n`);
+    writeFileSync(join(outDir, `${taskId}.column-meta.json`), JSON.stringify({
+      saleAmt: "销售额",
+      profitAmt: "利润额",
+      regionId: "区域",
+      bizDate: "日期",
+      uv: "用户数",
+    }, null, 2));
+    return meta;
+  };
+}
+
+/** B3 mock runChild：dispatch 0 返回 needs_new_query，dispatch 1 返回合法 ok envelope。 */
+function mockNeedsNewQueryResearcher(sessionDir) {
+  let dispatch = 0;
+  return async () => {
+    if (dispatch === 0) {
+      dispatch += 1;
+      return {
+        status: "completed",
+        code: "ok",
+        value: {
+          taskId: "drill-001",
+          status: "needs_new_query",
+          evidenceModeUsed: "reuse_entry",
+          evidenceGap: {
+            type: "missing_indicator",
+            reason: "需要用户数指标 uv 才能完整回答排名依据",
+            requiredIndicators: ["uv"],
+            requiredDims: [],
+          },
+        },
+        message: "ok",
+      };
+    }
+    dispatch += 1;
+    const expected = researcherExpected(sessionDir, "drill-001");
+    assert.equal(expected.mode, "new_query", "second dispatch must run with evidencePlan.mode=new_query");
+    const evidence = JSON.parse(readFileSync(expected.evidencePath, "utf8"));
+    const built = buildResearcherSubmission(expected, evidence, researcherRankingParams(evidence));
+    return { status: "completed", code: "ok", value: built.researcherReturn, message: "ok" };
   };
 }
 
@@ -585,7 +758,9 @@ test("M3 B25 happy path: materialize version-2 research plan and advance to B3_R
       return { status: "completed", code: "ok", value: validEditorPlan(cardId), message: "ok" };
     };
 
-    const outcome = await advance(root, sessionId, { runChild });
+    // B25 是 gate:false 自动阶段，用 runEditorPlannerStage 直接物化并停在 B3_RESEARCH running
+    // （advance 的全循环 B25→B3 级联由专门的 full-advance 用例覆盖）。
+    const outcome = await runEditorPlannerStage(root, sessionId, { runChild });
     assert.equal(outcome.ok, true, outcome.message);
     assert.match(outcome.message, /B25_EDITOR 已物化研究计划（1 个任务）/);
 
@@ -614,6 +789,259 @@ test("M3 B25 happy path: materialize version-2 research plan and advance to B3_R
     const gate = runStageGate(root, sessionId, "status");
     assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH", `expected B3_RESEARCH, got ${gate.payload?.state?.currentStage}`);
     assert.equal(gate.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 full advance: one advance from B25_EDITOR cascades planner + research and stops at awaiting_approval", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveGateToEditor(root, sessionId);
+
+    // 一次 advance：B25（planner schema 有 version.const=1）→ 级联 B3（researcher schema）。
+    const runChild = async (opts) => {
+      if (opts.schema?.properties?.version?.const === 1) {
+        return { status: "completed", code: "ok", value: validEditorPlan(cardId), message: "ok" };
+      }
+      const expected = researcherExpected(sessionDir, "drill-001");
+      const evidence = JSON.parse(readFileSync(expected.evidencePath, "utf8"));
+      const built = buildResearcherSubmission(expected, evidence, researcherRankingParams(evidence));
+      return { status: "completed", code: "ok", value: built.researcherReturn, message: "ok" };
+    };
+
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /B25_EDITOR 已物化研究计划（1 个任务）/);
+    assert.match(outcome.message, /B3_RESEARCH 完成 1 个任务/);
+
+    // B25 物化 + B3 研究结论均在一次 advance 内落盘。
+    const tasks = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+    assert.equal(tasks.tasks[0].status, "done");
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.md")), true, "section must be persisted");
+
+    // B3 为人工 Gate：级联推进停在 awaiting_approval，Runner 不自动批准。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH", `expected B3_RESEARCH, got ${gate.payload?.state?.currentStage}`);
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 reuse_entry: serial dispatch, Pi persist, finalize, and stop at awaiting_approval", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    const params = researcherRankingParams(JSON.parse(readFileSync(join(sessionDir, "analysis", "evidence", "drill-001.json"), "utf8")));
+    const outcome = await advance(root, sessionId, { runChild: mockOkResearcher(sessionDir, params) });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /B3_RESEARCH 完成 1 个任务/);
+
+    // 任务终态 + Pi 落盘产物（section + summary）。
+    const tasks = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+    assert.equal(tasks.tasks[0].status, "done");
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.md")), true, "section must be persisted");
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.summary.json")), true, "summary must be persisted");
+
+    // reuse_entry 不产生 data/explore 产物。
+    assert.equal(existsSync(join(sessionDir, "data", "explore", "drill-001.json")), false, "reuse_entry must not create explore data");
+
+    // B3 为人工 Gate：停在 awaiting_approval，Runner 不自动批准。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH", `expected B3_RESEARCH, got ${gate.payload?.state?.currentStage}`);
+    assert.equal(gate.payload?.state?.status, "awaiting_approval", "B3 must stop at awaiting_approval");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 needs_new_query: deterministic candidate query closes the gap, successor persisted, then ok", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    const outcome = await advance(root, sessionId, {
+      runChild: mockNeedsNewQueryResearcher(sessionDir),
+      fetchExplore: mockFetchExplore(sessionDir),
+    });
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /B3_RESEARCH 完成 1 个任务/);
+
+    // 后继任务持久化：mode=new_query + evidenceGap + candidateIndicators 含 uv。
+    const tasks = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+    const task = tasks.tasks[0];
+    assert.equal(task.status, "done");
+    assert.equal(task.evidencePlan.mode, "new_query");
+    assert.equal(task.evidenceGap.type, "missing_indicator");
+    assert.ok(task.candidateIndicators.includes("uv"), "candidateIndicators must include uv");
+    assert.equal(task.candidateDims.length, 0);
+
+    // 确定性补查产物存在，且 meta 与 fetch-explore.mjs 契约一致。
+    const metaPath = join(sessionDir, "data", "explore", "drill-001.meta.json");
+    const dataPath = join(sessionDir, "data", "explore", "drill-001.json");
+    assert.equal(existsSync(metaPath), true, "explore meta must exist");
+    assert.equal(existsSync(dataPath), true, "explore data must exist");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    assert.equal(meta.producer, "fetch-explore.mjs");
+    assert.equal(meta.status, "ok");
+    assert.equal(meta.queryDelta.material, true);
+    assert.equal(meta.queryPatchSha256, sha256Hex(meta.queryPatch));
+    const result = JSON.parse(readFileSync(join(sessionDir, "result.json"), "utf8"));
+    const sourceCard = result.cards.find((card) => String(card?.id) === cardId);
+    assert.equal(meta.sourceQuerySha256, sha256Hex(metricQueryFromCard(sourceCard)), "source query fingerprint mismatch");
+
+    // 终态 + 人工 Gate 停在 awaiting_approval。
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH");
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 fail-closed: second needs_new_query exhausts the single retry, nothing persists, gate stays running", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    // 每次 dispatch 都返回 needs_new_query；第二次（mode 已变为 new_query）命中
+    // dispatch===1 的 successor_exhausted 分支。evidenceModeUsed 须跟随当前 task 模式。
+    let calls = 0;
+    const runChild = async () => {
+      calls += 1;
+      return {
+        status: "completed",
+        code: "ok",
+        value: {
+          taskId: "drill-001",
+          status: "needs_new_query",
+          evidenceModeUsed: calls === 1 ? "reuse_entry" : "new_query",
+          evidenceGap: { type: "missing_indicator", reason: "仍缺指标", requiredIndicators: ["uv"], requiredDims: [] },
+        },
+        message: "ok",
+      };
+    };
+    const outcome = await advance(root, sessionId, { runChild, fetchExplore: mockFetchExplore(sessionDir) });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "successor_exhausted");
+    assert.match(outcome.error, /已耗尽唯一一次补查/);
+
+    // 不落任何结论产物，任务保持 pending，Gate 停留在 B3_RESEARCH running。
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.md")), false, "no section must be persisted");
+    const tasks = JSON.parse(readFileSync(join(sessionDir, "analysis", "tasks.json"), "utf8"));
+    assert.equal(tasks.tasks[0].status, "pending");
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH");
+    assert.equal(gate.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 fail-closed: invalid researcher return is rejected, no artifacts, gate stays running", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    // summary 为空 → validateResearcherReturn 拒绝（return_invalid）。
+    const runChild = async () => ({
+      status: "completed",
+      code: "ok",
+      value: {
+        taskId: "drill-001",
+        status: "ok",
+        evidenceModeUsed: "reuse_entry",
+        evidencePath: "x",
+        sectionPath: "y",
+        summaryPath: "z",
+        summary: "",
+        noData: false,
+        evidencePointers: ["/views/op-top-sale/rows/0/row/saleAmt"],
+        findings: [{ requirementId: "req-top-sale", claim: "c", evidencePointers: ["/views/op-top-sale/rows/0/row/saleAmt"] }],
+        selfCheck: { modeCompliant: true, evidenceTraceable: true, hasContrastOrBreakdown: false, answersGoal: true, queryJustified: null },
+        suggestedDeeper: [],
+      },
+      message: "ok",
+    });
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "return_invalid");
+    assert.match(outcome.error, /返回无效/);
+
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.md")), false, "no section must be persisted");
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH");
+    assert.equal(gate.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 anti-fabrication: child envelope diverging from Pi rebuild is rejected (return_inconsistent)", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    const runChild = async () => {
+      const expected = researcherExpected(sessionDir, "drill-001");
+      const evidence = JSON.parse(readFileSync(expected.evidencePath, "utf8"));
+      const built = buildResearcherSubmission(expected, evidence, researcherRankingParams(evidence));
+      // 伪造：child 返回里塞一个 findings 未引用的证据指针（过 envelope 校验，但 Pi 重建不含它）。
+      return {
+        status: "completed",
+        code: "ok",
+        value: {
+          ...built.researcherReturn,
+          evidencePointers: [...built.researcherReturn.evidencePointers, "/views/op-top-sale/rows/1/row/saleAmt"],
+        },
+        message: "ok",
+      };
+    };
+    const outcome = await advance(root, sessionId, { runChild });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "return_inconsistent");
+    assert.match(outcome.error, /疑似伪造/);
+
+    assert.equal(existsSync(join(sessionDir, "analysis", "sections", "explore-drill-001.md")), false, "no section must be persisted");
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH");
+    assert.equal(gate.payload?.state?.status, "running");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M3 B3 empty tasks: no pending research tasks finalizes cleanly and advances to awaiting_approval", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    await driveToResearch(root, sessionId);
+
+    // 空任务：无 pending 研究任务（等价于 B25 已全部派工/完成）。
+    writeFileSync(join(sessionDir, "analysis", "tasks.json"), JSON.stringify({ version: 2, round: 0, maxRounds: 2, tasks: [] }, null, 2));
+
+    const outcome = await advance(root, sessionId);
+    assert.equal(outcome.ok, true, outcome.message);
+    assert.match(outcome.message, /B3_RESEARCH 完成 0 个任务/);
+
+    const gate = runStageGate(root, sessionId, "status");
+    assert.equal(gate.payload?.state?.currentStage, "B3_RESEARCH");
+    assert.equal(gate.payload?.state?.status, "awaiting_approval");
   } finally {
     cleanup(root);
   }
