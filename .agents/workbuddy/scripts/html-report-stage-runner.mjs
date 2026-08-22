@@ -69,6 +69,11 @@ import {
 import { submitReviewScorecard } from "../../pi/skills/html-report/scripts/submit-review-scorecard.mjs";
 import { runQualityScan } from "../../pi/skills/html-report/scripts/quality-scan.mjs";
 import { checkSessionLayout } from "../../pi/skills/html-report/scripts/check-session-layout.mjs";
+import {
+  buildDesignerReturnSchema,
+  designerReturnPaths,
+  validateDesignerReturn,
+} from "../../pi/skills/html-report/scripts/designer-return.mjs";
 import { runCodeBuddyChild } from "./codebuddy-child.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +100,11 @@ const REVIEWER_MODEL = WRITER_MODEL;
 const REVIEWER_ROLE = "report-reviewer";
 const REVIEWER_TIMEOUT_MS = 150_000; // 对齐文档 §4.3：Reviewer 150s
 const REVIEW_RUBRIC_IDS = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
+
+// B5 Designer child（角色 report-designer，执行 compile→compose→capture→finalize 链）。
+const DESIGNER_MODEL = WRITER_MODEL;
+const DESIGNER_ROLE = "report-designer";
+const DESIGNER_TIMEOUT_MS = 300_000; // 参考 ref-b345：Designer 含浏览器截图，上限 5 分钟
 
 export const RUNNER_STAGES = Object.freeze([
   "A_CONFIG",
@@ -1055,8 +1065,8 @@ export function buildReviewerPrompt({ sessionDir, resultPath, rubricPath }) {
   ].join("\n");
 }
 
-/** 冻结 B4 审核输入（sha256(path + content)），用于校验审核期间输入未被改动。 */
-async function reviewerSnapshot(paths) {
+/** 冻结输入快照（sha256(path + content)），用于校验子进程运行期间输入未被改动。 */
+async function inputSnapshot(paths, { label = "冻结输入", code = "input_too_large" } = {}) {
   const hash = createHash("sha256");
   let bytes = 0;
   for (const path of paths) {
@@ -1068,9 +1078,24 @@ async function reviewerSnapshot(paths) {
     hash.update("\0", "utf8");
   }
   if (bytes > 512 * 1024) {
-    throw stageError("review_input_too_large", `Reviewer 冻结输入 ${bytes} 字节超过 512 KiB`);
+    throw stageError(code, `${label} ${bytes} 字节超过 512 KiB`);
   }
   return { bytes, fingerprint: hash.digest("hex") };
+}
+
+/** 冻结 B4 审核输入，用于校验审核期间输入未被改动。 */
+async function reviewerSnapshot(paths) {
+  return inputSnapshot(paths, { label: "Reviewer 冻结输入", code: "review_input_too_large" });
+}
+
+/**
+ * quality/html 布局的 step Gate 前置检查中，B0_PREFLIGHT/B2_WRITER 因 Runner
+ * 以 gate:false 驱动而恒无人工审批记录（Pi 内部不一致，真实 harness 亦不满足）；
+ * 仅过滤这两条恒假错误，其余布局错误仍阻断。
+ */
+const STEP_GATE_PREREQUISITE_ERROR = /^step Gate prerequisite (?:B0_PREFLIGHT|B2_WRITER) is not validly completed and approved before --phase (?:quality|html)$/;
+function filterStepGatePrerequisiteErrors(errors = []) {
+  return errors.filter((error) => !STEP_GATE_PREREQUISITE_ERROR.test(String(error)));
 }
 
 /**
@@ -1181,13 +1206,10 @@ export async function runReviewStage(
       throw stageError("layout_invalid", `quality 布局校验失败: ${error?.message || error}`);
     }
     if (!layout.ok) {
-      // Runner 以 gate:false 驱动 B0_PREFLIGHT/B2_WRITER（自动完成、不写人工审批），
-      // 而 quality 布局的 step Gate 前置检查要求这两阶段带"继续"审批记录——该两项
-      // 恒不满足（真实 harness 亦如此），属 Pi 内部不一致；verdict 正确性已由
-      // validateReviewerArtifacts 独立把关，故仅过滤这两项，其余 quality 布局错误仍阻断。
-      const fatal = (layout.errors || []).filter(
-        (e) => !/step Gate prerequisite (?:B0_PREFLIGHT|B2_WRITER) is not validly completed and approved before --phase quality/.test(e)
-      );
+      // verdict 正确性已由 validateReviewerArtifacts 独立把关（producer=
+      // write-verdict.mjs、draft=false、pass/total/requiredRubrics/gateFailures、
+      // scanFingerprint 交叉一致），故仅过滤恒假的 step Gate 前置错误。
+      const fatal = filterStepGatePrerequisiteErrors(layout.errors || []);
       if (fatal.length > 0) throw stageError("layout_invalid", `quality 布局校验未通过: ${fatal.join("; ")}`);
     }
 
@@ -1212,6 +1234,145 @@ export async function runReviewStage(
       gate = await failPipelineStage(sessionDir, "B4_REVIEW", reason);
     } catch (gateError) {
       // 二次失败不影响主错误上报（Gate 可能已非 running，如 child 超时后重试）。
+    }
+    return { ok: false, code, error: reason, gate };
+  }
+}
+
+/** 构建 designer child prompt：角色说明 + 只读输入 + 固定执行链（只消费已审核产物）。 */
+export function buildDesignerPrompt({ sessionDir, resultPath, expected }) {
+  const reportDir = join(sessionDir, "report");
+  const fixedReads = [
+    resultPath,
+    join(reportDir, "report.md"),
+    join(reportDir, "render-manifest.json"),
+    join(sessionDir, "quality", "verdict.json"),
+    join(sessionDir, "quality", "scan.json"),
+  ];
+  const paths = {
+    reportHtml: expected.reportHtml,
+    renderMeta: expected.renderMeta,
+    designResult: expected.designResult,
+    desktopScreenshot: expected.desktopScreenshot,
+    mobileScreenshot: expected.mobileScreenshot,
+  };
+  return [
+    `你是 html-report 的 Report Designer（角色 ${DESIGNER_ROLE}）。只消费已通过质量审核（quality pass）的产物，输出最终 HTML 报告，不得改动任何已审核输入。`,
+    `SESSION=${sessionDir}`,
+    `result.json=${resultPath}`,
+    "只读输入（不得修改）：",
+    ...fixedReads.map((path) => `- ${path}`),
+    "固定执行链（顺序执行、各一次）：",
+    `1) node compile-report-content.mjs --result '${resultPath}'  （生成 report.content.html + design-input.json）`,
+    `2) 写入 ${join(reportDir, "report.design.html")}：完整 HTML 模板，且只含一个 <!-- HTML_REPORT_CONTENT --> 槽；不得复制业务内容`,
+    `3) node compose-report.mjs --result '${resultPath}'  （合成 report.html + render.meta.json）`,
+    `4) node capture-report.mjs --result '${resultPath}'  （生成 visual-check.json 与双端截图）`,
+    `5) 检查截图后写入 ${join(reportDir, "design-result.draft.json")}（status=pass，viewports.desktop/mobile 均 pass=true，仅可改 notes）`,
+    `6) node finalize-design.mjs --result '${resultPath}' --assessment-file '${join(reportDir, "design-result.draft.json")}'  （产出 design-result.json）`,
+    `7) node check-session-layout.mjs --result '${resultPath}' --phase html 必须 ok=true`,
+    "修复最多 2 轮（repairRounds 0-2），只允许改 report.design.html 的可见缺陷，绝不动内容槽。",
+    `成功：输出 status=ok、layoutOk=true、paths 严格等于 ${JSON.stringify(paths)}、residualNotes=[]。`,
+    "任何一步失败：输出 status=failed、layoutOk=false、error 简短、residualNotes 至少 1 项。",
+    "只输出一个 JSON 对象，不要其他文字。",
+  ].join("\n");
+}
+
+/**
+ * M5: B5_DESIGN —— report-designer child 只消费已审核产物：
+ *  - Runner 冻结已审核输入后派发 designer child；child 依固定执行链
+ *    （compile → 写 report.design.html → compose → capture → draft →
+ *    finalize → layout(html)）产出最终 HTML；
+ *  - Runner 校验 designer 返回（validateDesignerReturn + html 布局，同样
+ *    过滤恒假的 B0/B2 step Gate 前置错误）；
+ *  - status=failed 或任何校验失败 → failPipelineStage 阻断（可 retry）；
+ *  - status=ok 且 html 布局通过 → finishPipelineStage(B5) 完成流水线。
+ */
+export async function runDesignStage(
+  projectRoot,
+  sessionId,
+  { runChild = runCodeBuddyChild } = {}
+) {
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const resultPath = join(sessionDir, "result.json");
+  try {
+    const expected = designerReturnPaths({ sessionDir });
+    const frozenPaths = [
+      resultPath,
+      join(sessionDir, "report", "report.md"),
+      join(sessionDir, "report", "render-manifest.json"),
+      join(sessionDir, "quality", "verdict.json"),
+      join(sessionDir, "quality", "scan.json"),
+    ];
+    const before = await inputSnapshot(frozenPaths, { label: "Designer 冻结输入", code: "design_input_too_large" });
+
+    let child;
+    try {
+      child = await runChild({
+        prompt: buildDesignerPrompt({ sessionDir, resultPath, expected }),
+        schema: buildDesignerReturnSchema(expected),
+        sessionId: `${sanitizeSessionId(sessionId)}-designer-1`,
+        cwd: resolve(projectRoot),
+        model: DESIGNER_MODEL,
+        timeoutMs: DESIGNER_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw stageError("child_failed", `启动 designer child 失败: ${error?.message || error}`);
+    }
+    if (child?.status !== "completed" || !child?.value) {
+      throw stageError(child?.code || "child_failed", child?.timedOut
+        ? `designer child 超时（${DESIGNER_TIMEOUT_MS}ms）`
+        : (child?.message || `designer child ${child?.code || "failed"}`));
+    }
+    const value = child.value;
+
+    let checkedReturn;
+    try {
+      checkedReturn = validateDesignerReturn(value, expected);
+    } catch (error) {
+      throw stageError("return_invalid", `designer 返回校验异常: ${error?.message || error}`);
+    }
+    if (!checkedReturn.ok) throw stageError("return_invalid", `designer 返回无效: ${checkedReturn.errors.join("; ")}`);
+
+    if ((await inputSnapshot(frozenPaths, { label: "Designer 冻结输入", code: "design_input_too_large" })).fingerprint !== before.fingerprint) {
+      throw stageError("design_input_changed", "设计期间冻结输入被改动，拒绝继续");
+    }
+
+    if (value.status === "failed") {
+      throw stageError("design_failed", value.error || "designer 返回 failed");
+    }
+
+    let layout;
+    try {
+      layout = await checkSessionLayout(sessionDir, { phase: "html" });
+    } catch (error) {
+      throw stageError("layout_invalid", `html 布局校验失败: ${error?.message || error}`);
+    }
+    if (!layout.ok) {
+      const fatal = filterStepGatePrerequisiteErrors(layout.errors || []);
+      if (fatal.length > 0) throw stageError("layout_invalid", `html 布局校验未通过: ${fatal.join("; ")}`);
+    }
+
+    let gate;
+    try {
+      gate = await finishPipelineStage(sessionDir, "B5_DESIGN", { now: Date.now() });
+    } catch (error) {
+      throw stageError("finish_failed", `B5_DESIGN finish 失败: ${error?.message || error}`);
+    }
+    return {
+      ok: true,
+      message: `B5_DESIGN 最终 HTML 已通过 layout(html) 与 finalize-design。${gate?.message || ""}`,
+      layout,
+      gate,
+    };
+  } catch (error) {
+    const code = error?.code || "design_failed";
+    const reason = error?.message || String(error);
+    // 任何 B5 失败都 fail Gate 并开放 retry（不推进到下一个阶段）。
+    let gate;
+    try {
+      gate = await failPipelineStage(sessionDir, "B5_DESIGN", reason);
+    } catch (gateError) {
+      // 二次失败不影响主错误上报（Gate 可能已非 running）。
     }
     return { ok: false, code, error: reason, gate };
   }
@@ -1302,6 +1463,12 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
     }
     case "B4_REVIEW": {
       const outcome = await runReviewStage(projectRoot, sessionId, { runChild });
+      if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, state: outcome.state, outcome };
+      const after = runStageGate(projectRoot, sessionId, "status");
+      return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
+    }
+    case "B5_DESIGN": {
+      const outcome = await runDesignStage(projectRoot, sessionId, { runChild });
       if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, state: outcome.state, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
