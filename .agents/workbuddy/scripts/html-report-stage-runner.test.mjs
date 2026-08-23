@@ -1666,13 +1666,15 @@ test("M6 thin entry forwards start/status/retry/cancel to Runner", async () => {
   const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
   try {
     writeCardFixturesReal(sessionDir, cardId, rowsFixture());
-    const started = await runWorkbuddy(["start", "--session", sessionId, "--root", root]);
+    const started = await runWorkbuddy(["start", "--session", sessionId, "--root", root, "--phase-a", "agent"]);
     assert.equal(started.ok, true, started.error);
     assert.match(started.message, /已启动/);
+    assert.equal(existsSync(join(sessionDir, "debug", "metric-cli-ui.json")), false, "agent 模式不应写 UI marker");
 
     const s1 = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
     assert.equal(s1.ok, true, s1.error);
     assert.match(s1.message, /当前阶段/);
+    assert.doesNotMatch(s1.message, /报告文件:/);
 
     const s2 = await runWorkbuddy(["status", "--session", sessionId, "--root", root, "--format", "json"]);
     assert.equal(s2.ok, true, s2.error);
@@ -1714,6 +1716,8 @@ test("M6 thin entry status surfaces the Runner's human gate, approve forwards to
 
     const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
     assert.equal(s.ok, true, s.error);
+    assert.match(s.message, /报告文件:/);
+    assert.equal(s.message.includes(join(sessionDir, "analysis", "main.md")), true);
     assert.match(s.message, /人工 Gate：B4_REVIEW/);
     assert.match(s.message, /approve --session/);
 
@@ -1737,6 +1741,52 @@ test("M6 thin entry CLI entry guard works end to end (spawn)", async () => {
     const run = spawnSync(process.execPath, [script, "status", "--session", sessionId, "--root", root], { encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /当前阶段/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry start --phase-a rejects unknown values", async () => {
+  const { root, sessionId } = makeSession();
+  try {
+    const bad = await runWorkbuddy(["start", "--session", sessionId, "--root", root, "--phase-a", "bogus"]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.exitCode, 2);
+    assert.match(bad.error, /--phase-a 仅支持 ui\|agent/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry start default phase-a ui persists question and writes UI marker (spawn off)", async () => {
+  const { root, sessionDir, sessionId } = makeSession();
+  const prev = process.env.HTML_REPORT_METRIC_CLI_UI_OPEN;
+  process.env.HTML_REPORT_METRIC_CLI_UI_OPEN = "0";
+  try {
+    const started = await runWorkbuddy(["start", "--session", sessionId, "--root", root, "--question", "销售额最近怎么样"]);
+    assert.equal(started.ok, true, started.error);
+    assert.match(started.message, /qdm-metric-cli ui/);
+    const marker = join(sessionDir, "debug", "metric-cli-ui.json");
+    assert.equal(existsSync(marker), true, "默认 ui 模式应写 UI marker");
+    const question = JSON.parse(readFileSync(join(sessionDir, "debug", "a-config-question.json"), "utf8"));
+    assert.equal(question.userQuestion, "销售额最近怎么样");
+
+    const stopped = await runWorkbuddy(["stop", "--session", sessionId, "--root", root]);
+    assert.equal(stopped.ok, true, stopped.error);
+    assert.equal(existsSync(marker), false, "stop 应清理 UI marker");
+  } finally {
+    if (prev === undefined) delete process.env.HTML_REPORT_METRIC_CLI_UI_OPEN;
+    else process.env.HTML_REPORT_METRIC_CLI_UI_OPEN = prev;
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry stop without a running UI reports cleanly", async () => {
+  const { root, sessionId } = makeSession();
+  try {
+    const stopped = await runWorkbuddy(["stop", "--session", sessionId, "--root", root]);
+    assert.equal(stopped.ok, true, stopped.error);
+    assert.match(stopped.message, /没有正在运行的/);
   } finally {
     cleanup(root);
   }

@@ -1440,6 +1440,7 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
     case "B2_MAIN": {
       // 用 composeMain 生成 analysis/main.md（answerFirst 可选，当前用默认）
       let composed;
+      const mainPath = join(htmlReportSessionDir(projectRoot, sessionId), "analysis", "main.md");
       try {
         composed = await composeMain(htmlReportSessionDir(projectRoot, sessionId));
       } catch (error) {
@@ -1449,7 +1450,7 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       if (!finished.ok) return { ok: false, message: finished.error || "stage-gate finish B2_MAIN 失败" };
       const after = runStageGate(projectRoot, sessionId, "status");
       // B2_MAIN 是人工 Gate，step 模式下 finish 后停在 awaiting_approval；Runner 不自动 approve。
-      return { ok: true, message: `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，等待人工批准（不自动 approve）。`, state: after.payload?.state, composed };
+      return { ok: true, message: `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，报告文件：${mainPath}，等待人工批准（不自动 approve）。`, state: after.payload?.state, composed };
     }
     case "B25_EDITOR": {
       const outcome = await runEditorPlannerStage(projectRoot, sessionId, { runChild });
@@ -1539,10 +1540,14 @@ export function status(projectRoot, sessionId, { format = "text" } = {}) {
     return { ok: true, exists: false, message: `Session ${sessionId} 尚未初始化 html-report Gate（目录：${htmlReportSessionDir(projectRoot, sessionId)}）。请先运行 start。` };
   }
   const state = result.payload?.state;
+  const mainPath = join(htmlReportSessionDir(projectRoot, sessionId), "analysis", "main.md");
   const summary = state
     ? [
         `Session: ${state.sessionId}`,
         `目录: ${state.sessionDir}`,
+        existsSync(mainPath)
+          ? `报告文件: ${mainPath}`
+          : null,
         `Gate 模式: ${state.mode}  状态: ${state.status}`,
         `当前阶段: ${state.currentStage}`,
         ...RUNNER_STAGES.map((id) => {
@@ -1551,7 +1556,7 @@ export function status(projectRoot, sessionId, { format = "text" } = {}) {
           const reason = stage.failureReason ? `（${stage.failureReason}）` : "";
           return `  ${id}: ${stage.status}${reason}`;
         }).filter(Boolean),
-      ].join("\n")
+      ].filter(Boolean).join("\n")
     : "（无 state）";
   return { ok: true, exists: true, state, message: format === "json" ? JSON.stringify(result.payload, null, 2) : summary };
 }

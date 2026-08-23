@@ -20,3 +20,10 @@ Use this skill together with the QDM Harness WorkBuddy hooks.
 - Do not write final or intermediate results to files unless the user explicitly asks to export, save, or generate a file.
 - Never read, open, guess, or use a template file directly. A selected template is valid only when the `PostToolUse` hook injects it after `bin/data-harness-cli stage template` or `inject-template` (Windows PowerShell: `.\\bin\\data-harness-cli.exe stage template`).
 - If a hook denies a command or reports `QDM_HARNESS_UNAVAILABLE` or `QDM_HARNESS_BLOCKED`, stop the affected data flow and briefly report the failure without quoting credential material or local credential paths.
+
+## html-report
+
+生成 html-report 时，遵循专门的技能 `.agents/workbuddy/skills/html-report/SKILL.md`
+（默认阶段 A 打开 `qdm-metric-cli ui` 让用户搭卡保存 result.json，对齐 PI 流水线；
+`--phase-a agent` 可动态切回本会话构建 result.json）。本处不再重复流程细节，避免与
+专门技能分叉；命令仍从仓库根运行。

@@ -2,17 +2,22 @@
 /**
  * WorkBuddy 薄入口 —— html-report Stage Runner。
  *
- * 只做转发，不建第二状态源：start/status/advance/approve/retry/cancel 全部转调
+ * 只做转发，不建第二状态源：start/status/advance/approve/retry/cancel/stop 全部转调
  * scripts/html-report-stage-runner.mjs 的导出函数；Gate 状态与人工 Gate 一律来自
  * Runner 读取的 stage-gate 状态文件，本入口只展示、不写入任何状态。
  *
+ * 阶段 A 默认打开 qdm-metric-cli ui（对齐 PI html-report 流水线）：用户在该页面搭卡
+ * 点「保存」写 result.json，回话回复「继续」后再 advance。`--phase-a agent` 可动态
+ * 切换回「agent 解析问题并构建 result.json」的旧路径（调试/自动化用）。
+ *
  * 命令面：
- *   node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id>
+ *   node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id> [--phase-a ui|agent] [--question <原问题>]
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs status  --session <id> [--format text|json]
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session <id>
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs approve --session <id>
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs retry   --session <id> --task <cardId>
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs cancel  --session <id>
+ *   node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>
  * 可选：--root <projectRoot>（默认自动探测）。
  */
 import { resolve } from "node:path";
@@ -27,19 +32,31 @@ import {
   start,
   status,
 } from "./html-report-stage-runner.mjs";
+import { openMetricCliUi, stopMetricCliUi } from "../../../packages/harness-runtime-node/src/open-metric-cli-ui.mjs";
 
-export const WORKBUDDY_COMMANDS = Object.freeze(["start", "status", "advance", "approve", "retry", "cancel"]);
+export const WORKBUDDY_COMMANDS = Object.freeze(["start", "status", "advance", "approve", "retry", "cancel", "stop"]);
 
 const USAGE = [
   "用法：",
-  "  node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id>",
+  "  node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id> [--phase-a ui|agent] [--question <原问题>]",
   "  node agents/workbuddy/scripts/html-report-workbuddy.mjs status  --session <id> [--format text|json]",
   "  node agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session <id>",
   "  node agents/workbuddy/scripts/html-report-workbuddy.mjs approve --session <id>",
   "  node agents/workbuddy/scripts/html-report-workbuddy.mjs retry   --session <id> --task <cardId>",
   "  node agents/workbuddy/scripts/html-report-workbuddy.mjs cancel  --session <id>",
+  "  node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>",
+  "  --phase-a：默认 ui（打开 qdm-metric-cli ui 让用户保存 result.json，对齐 PI）；agent 表示本会话构建 result.json。",
+  "  --question：阶段 A 原问题，持久化到 <session>/debug/a-config-question.json，供 result.json 缺 userQuestion 时回填。",
   "可选：--root <projectRoot>（默认自动探测）。全部命令转调 Runner，Gate 状态由 Runner 唯一 owner。",
 ].join("\n");
+
+function parsePhaseA(value) {
+  const v = String(value || "ui").trim().toLowerCase();
+  if (v !== "ui" && v !== "agent") {
+    return { ok: false, error: `--phase-a 仅支持 ui|agent，收到 ${JSON.stringify(value)}` };
+  }
+  return { ok: true, value: v };
+}
 
 function cliValue(args, name) {
   const index = args.indexOf(name);
@@ -77,9 +94,35 @@ export async function runWorkbuddy(argv = []) {
   }
   let output;
   switch (command) {
-    case "start":
+    case "start": {
+      const phaseA = parsePhaseA(cliValue(argv, "--phase-a"));
+      if (!phaseA.ok) return { ok: false, exitCode: 2, error: phaseA.error };
       output = await start(projectRoot, sessionId);
+      if (!output.ok) break;
+      if (phaseA.value === "ui") {
+        const question = cliValue(argv, "--question");
+        try {
+          const opened = await openMetricCliUi({
+            projectRoot,
+            sessionId,
+            userQuestion: question,
+            open: true,
+            detach: true,
+          });
+          const uiNote = opened.serverUrl
+            ? `qdm-metric-cli ui 已打开：${opened.serverUrl}\n请在 UI 里搭卡并点击「保存」写 result.json；回到会话回复「继续」后再运行 advance --session ${sessionId}。`
+            : `qdm-metric-cli ui 未获取到监听地址（marker：${opened.markerPath}）。`;
+          output = { ...output, message: `${output.message}\n${uiNote}` };
+        } catch (error) {
+          const message = `${error?.message || error}`;
+          const hint = /AUTHORIZATION_FAILED/.test(message)
+            ? "\n（提示：qdm-metric-cli ui 需要 QDM_AUTH_BLOB 提供 qdm.admin 权限；见 html-report skill 阶段 A。）"
+            : "";
+          output = { ok: false, error: `启动 qdm-metric-cli ui 失败：${message}${hint}` };
+        }
+      }
       break;
+    }
     case "status":
       output = status(projectRoot, sessionId, { format });
       break;
@@ -95,6 +138,16 @@ export async function runWorkbuddy(argv = []) {
     case "cancel":
       output = cancel(projectRoot, sessionId);
       break;
+    case "stop": {
+      const stopped = await stopMetricCliUi({ projectRoot, sessionId });
+      output = {
+        ok: true,
+        message: stopped.stopped
+          ? `已停止 qdm-metric-cli ui（pid=${stopped.pid || 0}，cliPid=${stopped.cliPid || 0}）。`
+          : `没有正在运行的 qdm-metric-cli ui（session ${sessionId} 无 marker）。`,
+      };
+      break;
+    }
     default:
       output = { ok: false, error: "unreachable" };
   }
