@@ -6,6 +6,7 @@ import { run } from "../lib/exec.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
+import { collectReleaseArchivePassword } from "../lib/release-password.js";
 import { githubToken, latestRelease } from "../lib/github.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
@@ -151,12 +152,13 @@ export async function updateCommand(options = {}) {
   assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
+  const archivePassword = await collectReleaseArchivePassword(options);
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
   const nextTools = { ...(state.tools || {}) };
   const applied = [];
   const skipped = [];
-  const trackingOptions = { ...options, skippedUpdates: skipped };
+  const trackingOptions = { ...options, _releaseArchivePassword: archivePassword, skippedUpdates: skipped };
 
   step(1, 7, "检查 installer");
   const latestInstaller = await npmLatest();

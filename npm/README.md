@@ -4,9 +4,9 @@
 
 - **Node.js 18+**
 - **Git** (on PATH)
-- **tar** (on PATH; bundled with Git for Windows on Windows)
+- **tar** (on PATH; retained for historical `.tar.gz` Release fallback, and bundled with Git for Windows on Windows)
+- **unzip** (on PATH on every supported platform; not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.)
 - **Windows only** — additional requirements:
-  - **unzip** — not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.
   - **Codex Agent only** — Windows supports Codex exclusively; other agents (Claude, Pi, OpenClaw, Hermes, WorkBuddy) are not available on Windows.
   - **No-auth mode** — Windows Codex authorization adaptation is tracked separately. Until it lands, install with `--no-auth`; the installer rejects an auth-enabled Windows install instead of creating a runtime whose authorization hook cannot execute safely.
   - **Windows x64 + ARM64** are both supported.
@@ -22,6 +22,21 @@ Install into an explicit runtime directory:
 ```bash
 npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
 ```
+
+Release ZIP password: interactive commands request it with hidden input. Non-interactive
+`install` and `update` require the single public entry point `HARNESS_RELEASE_PASSWORD`:
+
+```bash
+HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data install --yes
+HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data update --yes
+```
+
+There is intentionally no `--release-password` option, so the password is not put in shell
+history as a `harness-data` argument. During extraction the installer invokes `unzip` with a
+redacted sensitive argument; the password is held only for the current run and is never
+written to installer state, configuration, logs, or errors. New Releases use traditional
+password ZIP encryption as an access barrier only; it is not strong confidentiality against
+a determined recipient.
 
 Use a GitHub token for private Release assets:
 
@@ -84,6 +99,9 @@ npx @lumi-ai-lab/harness-data doctor
 ```
 
 The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets (`data-harness-cli`, `qdm-metric-cli`), `harness-data-wikis`, generated local config, selected Agent symlinks, and the WorkBuddy plugin package.
+
+Supported Release platforms are Windows x64, Windows ARM64, Linux x64, and Apple Silicon
+macOS. Intel macOS (`darwin-amd64`) is no longer supported.
 
 `--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `workbuddy`, `both`, and `all`. `both` remains Claude + Codex. Until the project-owned WorkBuddy desktop E2E matrix passes, `all` keeps its existing Claude + Codex + Pi + OpenClaw + Hermes semantics; choose `--agent workbuddy` explicitly. On Windows, only `codex` is available and is auto-selected.
 

@@ -9,6 +9,7 @@ import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/path
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
 import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
+import { collectReleaseArchivePassword, releaseArchivePassword } from "../lib/release-password.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
@@ -117,33 +118,32 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
 
   const release = await latestRelease(runtimeRepo, options);
   const tag = release.tag_name;
-  const assetName = `harness-data-runtime-${tag}.tar.gz`;
-  const asset = findReleaseAsset(release, assetName);
-  const shaAsset = findReleaseAsset(release, `${assetName}.sha256`);
-  if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${assetName}`);
+  const zipAssetName = `harness-data-runtime-${tag}.zip`;
+  const tarAssetName = `harness-data-runtime-${tag}.tar.gz`;
+  const asset = findReleaseAsset(release, zipAssetName) || findReleaseAsset(release, tarAssetName);
+  if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${zipAssetName} or ${tarAssetName}`);
+  const assetName = asset.name;
 
   const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
   action(`下载 harness-data-runtime ${tag}`);
   await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
-  if (shaAsset) {
-    const shaFile = `${archive}.sha256`;
-    await downloadReleaseAsset(shaAsset, shaFile, options);
-    const expected = fs.readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
-    const crypto = await import("node:crypto");
-    const actual = crypto.createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
-    if (expected && actual !== expected) throw new Error("runtime bundle sha256 mismatch");
-  } else {
-    warn("runtime bundle 未提供 sha256，已继续安装");
-  }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
   const stagedRoot = fs.mkdtempSync(path.join(runtimeDir, ".install-new-runtime-"));
   const backups = [];
   try {
     // 在 Git Bash 中 tar 无法处理 Windows 绝对路径（E:\...），使用相对路径执行
-    await run("tar", ["-xzf", path.relative(cacheDir, archive), "-C", path.relative(cacheDir, extractDir)], { cwd: cacheDir });
+    if (assetName.endsWith(".zip")) {
+      const password = releaseArchivePassword(options);
+      await run("unzip", ["-P", password, "-o", path.relative(cacheDir, archive), "-d", path.relative(cacheDir, extractDir)], {
+        cwd: cacheDir,
+        sensitiveArgs: [1]
+      });
+    } else {
+      await run("tar", ["-xzf", path.relative(cacheDir, archive), "-C", path.relative(cacheDir, extractDir)], { cwd: cacheDir });
+    }
     for (const dir of ["agents", "bootstrap"]) if (!fs.existsSync(path.join(extractDir, dir))) throw new Error(`runtime bundle missing ${dir}/`);
     const configSource = path.join(extractDir, "config");
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
@@ -321,9 +321,11 @@ export async function installCommand(options = {}) {
   assertWorkBuddyAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
 
   step(1, 7, "授权与访问预检");
-  await requireCommands(key.startsWith("windows-") ? ["git", "tar", "unzip"] : ["git", "tar"]);
+  await requireCommands(["git", "tar", "unzip"]);
   const auth = await collectInstallAuth(options);
   const access = await collectInstallAccess(options, targetRuntimeDir);
+  const archivePassword = await collectReleaseArchivePassword(options);
+  const installOptions = { ...options, _releaseArchivePassword: archivePassword };
   ok("授权材料已校验");
   blank();
 
@@ -333,7 +335,7 @@ export async function installCommand(options = {}) {
     const runtimeDir = targetRuntimeDir;
 
     step(2, 7, "安装 runtime bundle");
-    const bundle = await installRuntimeBundle(runtimeDir, { ...options, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
+    const bundle = await installRuntimeBundle(runtimeDir, { ...installOptions, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
     blank();
 
     step(3, 7, "安装 CLI 工具");
@@ -345,13 +347,13 @@ export async function installCommand(options = {}) {
     let localTools = {};
     if (tokenMode) {
       manifest = readManifest(manifestPath);
-      const latestManifest = await resolveLatestManifest(manifest, key, options);
-      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
+      const latestManifest = await resolveLatestManifest(manifest, key, installOptions);
+      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...installOptions, state: installState, manifestOverride: latestManifest });
     } else {
       manifest = readManifest(manifestPath);
-      const latestManifest = await resolveLatestManifest(manifest, key, { ...options, tools: ["data-harness-cli"] });
-      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...options, state: installState, manifestOverride: latestManifest });
-      localTools = await installLocalTools(runtimeDir, options);
+      const latestManifest = await resolveLatestManifest(manifest, key, { ...installOptions, tools: ["data-harness-cli"] });
+      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...installOptions, state: installState, manifestOverride: latestManifest });
+      localTools = await installLocalTools(runtimeDir, installOptions);
     }
     ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
     const removedLegacy = removeLegacyDataCLIs(runtimeDir);
@@ -359,7 +361,7 @@ export async function installCommand(options = {}) {
     blank();
 
     step(4, 7, "同步 Wikis 知识库");
-    await installWikis(runtimeDir, { ...options, tokenMode, wikisSource: access.wikisSource });
+    await installWikis(runtimeDir, { ...installOptions, tokenMode, wikisSource: access.wikisSource });
     blank();
 
     step(5, 7, "生成本地配置");
@@ -367,7 +369,7 @@ export async function installCommand(options = {}) {
     blank();
 
     step(6, 7, "构建 Wikis 索引");
-    await buildAndCheck(runtimeDir, options);
+    await buildAndCheck(runtimeDir, installOptions);
     blank();
 
     step(7, 7, "配置 Agent Hook");
@@ -389,7 +391,7 @@ export async function installCommand(options = {}) {
     blank();
 
     console.log("安装校验");
-    const doctor = await collectDoctor(runtimeDir, { ...options, agent: selectedAgent });
+    const doctor = await collectDoctor(runtimeDir, { ...installOptions, agent: selectedAgent });
     printDoctorSummary(doctor);
     if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
     blank();

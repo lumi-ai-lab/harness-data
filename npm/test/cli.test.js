@@ -15,9 +15,10 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
-import { toolAssetName } from "../src/lib/tool-release.js";
+import { resolveLatestTool, toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
+import { collectReleaseArchivePassword } from "../src/lib/release-password.js";
 import { createInstallSession } from "../src/lib/install-session.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
@@ -107,6 +108,8 @@ test("prints help", () => {
   assert.match(result.stdout, /--data-auth/);
   assert.match(result.stdout, /--no-auth/);
   assert.match(result.stdout, /--auth-off-password/);
+  assert.doesNotMatch(result.stdout, /--release-password/);
+  assert.match(result.stdout, /HARNESS_RELEASE_PASSWORD/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -137,12 +140,27 @@ test("command failures redact sensitive arguments", async () => {
   );
 });
 
+test("non-interactive install and update require HARNESS_RELEASE_PASSWORD", async () => {
+  const previous = process.env.HARNESS_RELEASE_PASSWORD;
+  delete process.env.HARNESS_RELEASE_PASSWORD;
+  try {
+    await assert.rejects(
+      collectReleaseArchivePassword({ yes: true }),
+      /HARNESS_RELEASE_PASSWORD is required for non-interactive install and update/
+    );
+  } finally {
+    if (previous === undefined) delete process.env.HARNESS_RELEASE_PASSWORD;
+    else process.env.HARNESS_RELEASE_PASSWORD = previous;
+  }
+});
+
 test("loads package version", () => {
   assert.equal(packageVersion(), pkg.version);
 });
 
 test("resolves platform and state paths", () => {
-  assert.match(platformKey(), /^(darwin-arm64|darwin-amd64|linux-amd64|windows-(?:amd64|arm64))$/);
+  assert.match(platformKey(), /^(darwin-arm64|linux-amd64|windows-(?:amd64|arm64))$/);
+  assert.throws(() => platformKey("darwin", "x64"), /unsupported platform: darwin-amd64/);
   assert.equal(defaultWorkspaceDir(), process.cwd());
   assert.match(userStatePath(), /harness-data-installer/);
 });
@@ -224,14 +242,55 @@ test("tool manifest is a latest-release install catalog", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   assert.equal(manifest.schemaVersion, 2);
   const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.tar.gz");
+  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "data-harness-cli-v1.2.3-darwin-arm64.zip");
   assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
   assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "data-harness-cli-v1.2.3-windows-arm64.zip");
   for (const item of manifest.tools) {
     assert.equal(item.platforms["windows-arm64"]?.archive, "zip", `${item.name} missing Windows ARM64 asset`);
+    assert.equal(item.platforms["linux-amd64"]?.archive, "zip", `${item.name} missing Linux ZIP asset`);
+    assert.equal(item.platforms["darwin-arm64"]?.archive, "zip", `${item.name} missing Apple Silicon ZIP asset`);
+    assert.equal(item.platforms["darwin-amd64"], undefined, `${item.name} must not publish Intel Mac assets`);
   }
   assert.equal(tool.version, undefined);
   assert.equal(tool.platforms["linux-amd64"].url, undefined);
+});
+
+test("latest tool resolution prefers ZIP assets and falls back to legacy tar.gz", async () => {
+  const key = "linux-amd64";
+  const tool = {
+    name: "data-harness-cli",
+    binary: "data-harness-cli",
+    repo: "lumi-ai-lab/harness-data",
+    platforms: { [key]: { archive: "tar.gz" } }
+  };
+  let assets = [
+    { name: "data-harness-cli-v2.0.0-linux-amd64.tar.gz", browser_download_url: "https://fixtures.test/tool.tar.gz" },
+    { name: "data-harness-cli-v2.0.0-linux-amd64.zip", browser_download_url: "https://fixtures.test/tool.zip" }
+  ];
+  const originalGet = https.get;
+  try {
+    https.get = (_url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end(JSON.stringify({ tag_name: "v2.0.0", assets }));
+      });
+      return request;
+    };
+
+    const zip = await resolveLatestTool(tool, key, { githubToken: "fixture-token" });
+    assert.deepEqual(zip.platforms[key], { url: "https://fixtures.test/tool.zip", archive: "zip" });
+
+    assets = [{ name: "data-harness-cli-v2.0.0-linux-amd64.tar.gz", browser_download_url: "https://fixtures.test/tool.tar.gz" }];
+    const legacy = await resolveLatestTool(tool, key, { githubToken: "fixture-token" });
+    assert.deepEqual(legacy.platforms[key], { url: "https://fixtures.test/tool.tar.gz", archive: "tar.gz" });
+  } finally {
+    https.get = originalGet;
+  }
 });
 
 test("install skips CLI download when installed binary matches latest state", async () => {
@@ -250,8 +309,7 @@ test("install skips CLI download when installed binary matches latest state", as
         "data-harness-cli": {
           version: "v9.9.9",
           asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
-          sha256: sha256(binary),
-          assetSha256: "archive-sha"
+          sha256: sha256(binary)
         }
       }
     }
@@ -260,8 +318,7 @@ test("install skips CLI download when installed binary matches latest state", as
   assert.deepEqual(manifest.installedTools["data-harness-cli"], {
     version: "v9.9.9",
     asset: `data-harness-cli-v9.9.9-${key}.tar.gz`,
-    sha256: sha256(binary),
-    assetSha256: "archive-sha"
+    sha256: sha256(binary)
   });
 });
 
@@ -394,6 +451,224 @@ exit 3
     );
   } finally {
     process.env.PATH = originalPath;
+  }
+  assert.equal(fs.readFileSync(path.join(binDir, binaryName("data-harness-cli")), "utf8"), oldBinary);
+});
+
+test("runtime bundle prioritizes encrypted ZIP and falls back to legacy tar.gz", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-runtime-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "runtime-release-password";
+  const urls = [];
+  let assets = [
+    { name: "harness-data-runtime-v-runtime.zip", url: "https://fixtures.test/runtime.zip" },
+    { name: "harness-data-runtime-v-runtime.tar.gz", url: "https://fixtures.test/runtime.tar.gz" }
+  ];
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), `#!/bin/sh
+if [ "$1" != "-P" ] || [ "$2" != "${password}" ]; then
+  echo "bad password: $2" >&2
+  exit 9
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
+printf 'zip agents\\n' > "$dir/agents/source.txt"
+printf '{}' > "$dir/bootstrap/cli-manifest.json"
+printf 'zip config\\n' > "$dir/config/harness-config.yaml.example"
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(fakeBin, "tar"), "#!/bin/sh\necho tar should not run >&2\nexit 9\n", { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        if (String(url).endsWith("/releases/latest")) {
+          response.end(JSON.stringify({ tag_name: "v-runtime", assets }));
+          return;
+        }
+        response.end("runtime archive fixture");
+      });
+      return request;
+    };
+
+    await installRuntimeBundle(workspace, {
+      force: true,
+      githubToken: "fixture-token",
+      log: false,
+      _releaseArchivePassword: password
+    });
+    assert.equal(fs.readFileSync(path.join(workspace, "agents", "source.txt"), "utf8"), "zip agents\n");
+    assert.equal(urls.some((url) => url.endsWith("runtime.zip")), true);
+    assert.equal(urls.some((url) => url.endsWith("runtime.tar.gz")), false);
+
+    const legacyWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-runtime-legacy-"));
+    assets = [{ name: "harness-data-runtime-v-runtime.tar.gz", url: "https://fixtures.test/runtime.tar.gz" }];
+    urls.length = 0;
+    fs.writeFileSync(path.join(fakeBin, "tar"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
+printf 'tar agents\\n' > "$dir/agents/source.txt"
+printf '{}' > "$dir/bootstrap/cli-manifest.json"
+printf 'tar config\\n' > "$dir/config/harness-config.yaml.example"
+`, { mode: 0o755 });
+    await installRuntimeBundle(legacyWorkspace, { force: true, githubToken: "fixture-token", log: false });
+    assert.equal(fs.readFileSync(path.join(legacyWorkspace, "agents", "source.txt"), "utf8"), "tar agents\n");
+    assert.equal(urls.some((url) => url.endsWith("runtime.tar.gz")), true);
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+});
+
+test("encrypted ZIP CLI install uses the release password and never requests .sha256", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "release-password-for-test";
+  const binary = "#!/bin/sh\necho encrypted\n";
+  const urls = [];
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), `#!/bin/sh
+if [ "$1" != "-P" ] || [ "$2" != "${password}" ]; then
+  echo "wrong password: $2" >&2
+  exit 9
+fi
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+mkdir -p "$dir"
+printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("data-harness-cli")}"
+`, { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("encrypted zip fixture");
+      });
+      return request;
+    };
+
+    const manifest = await installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+      log: false,
+      _releaseArchivePassword: password,
+      manifestOverride: {
+        schemaVersion: 2,
+        tools: [{
+          name: "data-harness-cli",
+          binary: "data-harness-cli",
+          version: "v-encrypted",
+          platforms: {
+            [key]: { url: `https://fixtures.test/data-harness-cli-v-encrypted-${key}.zip`, archive: "zip" }
+          }
+        }]
+      }
+    });
+
+    assert.equal(fs.readFileSync(path.join(workspace, "bin", binaryName("data-harness-cli")), "utf8"), binary);
+    assert.deepEqual(manifest.installedTools["data-harness-cli"], {
+      version: "v-encrypted",
+      asset: `data-harness-cli-v-encrypted-${key}.zip`,
+      sha256: sha256(binary)
+    });
+    const state = writeState(workspace, { tools: manifest.installedTools });
+    assert.doesNotMatch(JSON.stringify(state), new RegExp(password));
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(workspace, ".harness", "installer-state.json"), "utf8"),
+      new RegExp(password)
+    );
+    assert.equal(urls.some((url) => url.endsWith(".sha256")), false);
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+});
+
+test("encrypted ZIP password failures redact the password and roll back the previous binary", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const key = platformKey();
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "release-password-must-not-leak";
+  const binDir = path.join(workspace, "bin");
+  const oldBinary = "#!/bin/sh\necho old\n";
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, binaryName("data-harness-cli")), oldBinary, { mode: 0o755 });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), "#!/bin/sh\necho \"bad password: $2\" >&2\nexit 9\n", { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (_url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("encrypted zip fixture");
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+        log: false,
+        _releaseArchivePassword: password,
+        manifestOverride: {
+          schemaVersion: 2,
+          tools: [{
+            name: "data-harness-cli",
+            binary: "data-harness-cli",
+            version: "v-encrypted",
+            platforms: {
+              [key]: { url: `https://fixtures.test/data-harness-cli-v-encrypted-${key}.zip`, archive: "zip" }
+            }
+          }]
+        }
+      }),
+      (error) => {
+        assert.match(error.message, /unzip -P \*\*\*\*\*\*/);
+        assert.doesNotMatch(error.message, new RegExp(password));
+        return true;
+      }
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
   }
   assert.equal(fs.readFileSync(path.join(binDir, binaryName("data-harness-cli")), "utf8"), oldBinary);
 });

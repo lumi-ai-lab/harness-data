@@ -85,6 +85,16 @@ npx @lumi-ai-lab/harness-data install \
   --agent codex
 ```
 
+所有受支持平台都需要 `git`、`tar` 和 `unzip` 在 PATH 中；`tar` 仅保留给历史明文
+`.tar.gz` Release 的兼容回退。交互式安装和更新会用隐藏输入获取 Release ZIP 密码；
+非交互模式必须通过唯一公开入口 `HARNESS_RELEASE_PASSWORD` 提供，且没有
+`--release-password` 参数：
+
+```bash
+HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data install --yes --agent codex
+HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data update --yes --dir ~/harness-data
+```
+
 WorkBuddy 安装会准备本地 Marketplace；完成后在 WorkBuddy 插件管理中选择 **Add Marketplace**，添加 runtime 的 `agents` 目录，再安装并启用 `qdm-harness@lumi-harness-data`、reload plugins：
 
 ```bash
@@ -157,10 +167,15 @@ docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-d
 GitHub Releases 同时提供可直接下载的 CLI 二进制包：
 
 - `data-harness-cli-v0.0.1-windows-amd64.zip`
-- `data-harness-cli-v0.0.1-linux-amd64.tar.gz`
-- `data-harness-cli-v0.0.1-darwin-amd64.tar.gz`
-- `data-harness-cli-v0.0.1-darwin-arm64.tar.gz`
-- 每个压缩包都有对应的 `.sha256` 校验文件
+- `data-harness-cli-v0.0.1-windows-arm64.zip`
+- `data-harness-cli-v0.0.1-linux-amd64.zip`
+- `data-harness-cli-v0.0.1-darwin-arm64.zip`
+- `harness-data-runtime-v0.0.1.zip`
+
+从新版本开始，Release ZIP 使用固定密码的传统 ZIP 加密。安装器通过
+`HARNESS_RELEASE_PASSWORD`（非交互）或隐藏输入（交互）取得密码；Intel Mac
+（`darwin-amd64`）不再受支持。传统 ZIP 加密只用于避免下载后被随手查看，不能作为
+对抗破解、再分发或源码泄露的安全边界。
 
 ## 发布流程
 
@@ -182,6 +197,11 @@ GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`�
 `data-harness-cli` GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
 才发布 npm 包，最后检查 npm public 状态、`latest` dist-tag 和实际 `npx` 执行结果。
 
+先在 `qdm-metric-cli` 发布包含四个平台加密 ZIP 的新 Tag，再发布本仓库 Tag；本仓库
+发布前会校验最新 `qdm-metric-cli` Release 的 ZIP 资产。Gitee 同步器只会原样同步新
+Tag 的 Release assets，不会删除或重建历史 Release，也不会同步 GitHub 自动生成的
+源码归档。
+
 发布失败后可以通过 Actions 页面重新运行失败的 job。需要针对已经存在的 Tag
 重新执行完整编排时，可手动运行 `Release` workflow 并填写 Tag；如果 npm 已成功发布，
 应关闭 `publish_npm`，因为 npm 的同版本内容不可覆盖。
@@ -190,6 +210,7 @@ GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`�
 
 - `NPM_TOKEN`：发布 `@lumi-ai-lab/harness-data` 到 npm registry。
 - `RELEASE_GH_TOKEN`：用于读取私有 `harness-data-wikis` submodule 和跨仓库 Release assets；当默认 `GITHUB_TOKEN` 没有这些权限时必须配置。
+- `RELEASE_ARCHIVE_PASSWORD`：两仓库使用相同值，生产 Tag 发布时用于生成和验证传统加密 ZIP；仅通过既有独立渠道分发，不能写入仓库、Release 文案或日志。
 
 ### Wikis submodule 与发布
 
@@ -222,7 +243,7 @@ printf '{"session_id":"workbuddy-debug","tool_name":"Bash","tool_input":{"comman
 ## 目录结构
 
 - `.agents/`：Agent 配置模板；npm 安装器可按用户选择链接到本地 `.claude`、`.codex`、`.pi`、`.openclaw` 或 `.hermes`，WorkBuddy 则使用 `.agents/workbuddy` 原生插件包。
-- `bootstrap/cli-manifest.json`：npm 安装器下载 5 个 CLI 的版本、平台包 URL 和 sha256 配置。
+- `bootstrap/cli-manifest.json`：npm 安装器下载两个 CLI 的四个平台 ZIP 坐标；安装状态仅保留本地二进制复用所需的 SHA-256。
 - `.harness/index/`：由 `data-harness-cli wikis build-index` 生成的机器索引。
 - `.harness/state/`：hook 运行态，包括 session 选择、取数模块记录和诊断日志。
 - `bin/data-harness-cli`：正式运行使用的 Data Harness CLI。

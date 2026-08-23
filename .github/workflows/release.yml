@@ -120,18 +120,14 @@ jobs:
       - name: Verify external CLI assets
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
         run: |
           set -euo pipefail
+          test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required for production releases"; exit 1; }
           node <<'NODE' > /tmp/external-assets.tsv
           const fs = require("fs");
           const childProcess = require("child_process");
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
-          function archiveSuffix(asset, platform) {
-            if (asset.archive) return asset.archive;
-            if (asset.url?.endsWith(".tar.gz")) return "tar.gz";
-            if (asset.url?.endsWith(".zip")) return "zip";
-            return platform.startsWith("windows-") ? "zip" : "tar.gz";
-          }
           for (const tool of manifest.tools || []) {
             if (tool.name === "data-harness-cli") continue;
             const release = childProcess.execFileSync(
@@ -139,17 +135,24 @@ jobs:
               ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"],
               { encoding: "utf8" }
             ).trim();
-            for (const [platform, asset] of Object.entries(tool.platforms || {})) {
-              const name = `${tool.binary}-${release}-${platform}.${archiveSuffix(asset, platform)}`;
+            for (const platform of Object.keys(tool.platforms || {})) {
+              const name = `${tool.binary}-${release}-${platform}.zip`;
               console.log(`${tool.repo}\t${release}\t${name}`);
-              console.log(`${tool.repo}\t${release}\t${name}.sha256`);
             }
           }
           NODE
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
           while IFS=$'\t' read -r repo tag asset; do
             echo "checking ${repo} ${tag} ${asset}"
             gh release view "$tag" --repo "$repo" --json assets \
               --jq '.assets[].name' | grep -Fx "$asset" >/dev/null
+            gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmp"
+            unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${tmp}/${asset}" >/dev/null
+            if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -t "${tmp}/${asset}" >/dev/null 2>&1; then
+              echo "::error::external archive accepted an incorrect password: ${asset}"
+              exit 1
+            fi
           done < /tmp/external-assets.tsv
 
   cli-release:
@@ -160,6 +163,8 @@ jobs:
       publish: true
       version_tag: ${{ needs.validate.outputs.version_tag }}
       ref: ${{ needs.validate.outputs.version_tag }}
+    secrets:
+      RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
 
   cli-container:
     name: Publish CLI container
@@ -193,17 +198,10 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
           const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
           if (!tool) throw new Error("manifest missing data-harness-cli");
-          function archiveSuffix(asset, platform) {
-            if (asset.archive) return asset.archive;
-            if (asset.url?.endsWith(".tar.gz")) return "tar.gz";
-            if (asset.url?.endsWith(".zip")) return "zip";
-            return platform.startsWith("windows-") ? "zip" : "tar.gz";
-          }
-          for (const [platform, asset] of Object.entries(tool.platforms || {})) {
-            const name = `${tool.binary}-${process.env.VERSION_TAG}-${platform}.${archiveSuffix(asset, platform)}`;
+          for (const platform of Object.keys(tool.platforms || {})) {
+            const name = `${tool.binary}-${process.env.VERSION_TAG}-${platform}.zip`;
             const url = `https://github.com/${tool.repo}/releases/download/${process.env.VERSION_TAG}/${name}`;
             console.log(url);
-            console.log(`${url}.sha256`);
           }
           NODE
           while IFS= read -r url; do
@@ -216,9 +214,8 @@ jobs:
           VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
         run: |
           set -euo pipefail
-          base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/harness-data-runtime-${VERSION_TAG}.tar.gz"
+          base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/harness-data-runtime-${VERSION_TAG}.zip"
           curl -fsIL --retry 5 --retry-delay 3 "$base" >/dev/null
-          curl -fsIL --retry 5 --retry-delay 3 "${base}.sha256" >/dev/null
 
   npm:
     name: Publish npm installer

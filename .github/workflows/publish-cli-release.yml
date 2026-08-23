@@ -16,6 +16,9 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      RELEASE_ARCHIVE_PASSWORD:
+        required: false
   pull_request:
     branches:
       - master
@@ -39,27 +42,18 @@ jobs:
             goos: windows
             goarch: amd64
             binary: data-harness-cli.exe
-            archive: zip
           - target: windows-arm64
             goos: windows
             goarch: arm64
             binary: data-harness-cli.exe
-            archive: zip
           - target: linux-amd64
             goos: linux
             goarch: amd64
             binary: data-harness-cli
-            archive: tar.gz
-          - target: darwin-amd64
-            goos: darwin
-            goarch: amd64
-            binary: data-harness-cli
-            archive: tar.gz
           - target: darwin-arm64
             goos: darwin
             goarch: arm64
             binary: data-harness-cli
-            archive: tar.gz
 
     steps:
       - name: Checkout
@@ -86,10 +80,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           BINARY: ${{ matrix.binary }}
-          ARCHIVE: ${{ matrix.archive }}
           REF_NAME: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
           VERSION_TAG: ${{ inputs.version_tag || '' }}
+          PUBLISH: ${{ inputs.publish || false }}
+          RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
         run: |
           set -euo pipefail
           if [[ -n "${VERSION_TAG}" ]]; then
@@ -101,15 +96,27 @@ jobs:
           fi
 
           base="data-harness-cli-${version}-${TARGET}"
-          if [[ "${ARCHIVE}" == "zip" ]]; then
-            (cd build && zip "../dist/${base}.zip" "${BINARY}")
-            asset="dist/${base}.zip"
+          asset="dist/${base}.zip"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required for production releases"; exit 1; }
+            (cd build && zip -q -P "${RELEASE_ARCHIVE_PASSWORD}" "../${asset}" "${BINARY}")
+            unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${asset}" >/dev/null
+            if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -t "${asset}" >/dev/null 2>&1; then
+              echo "::error::archive accepted an incorrect password"
+              exit 1
+            fi
+            if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -p "${asset}" "${BINARY}" | cmp -s - "build/${BINARY}"; then
+              echo "::error::archive accepted an incorrect password"
+              exit 1
+            fi
           else
-            tar -C build -czf "dist/${base}.tar.gz" "${BINARY}"
-            asset="dist/${base}.tar.gz"
+            (cd build && zip -q "../${asset}" "${BINARY}")
+            unzip -t "${asset}" >/dev/null
           fi
-
-          (cd dist && shasum -a 256 "$(basename "${asset}")" > "$(basename "${asset}").sha256")
+          if find dist -type f -name '*.sha256' -print -quit | grep -q .; then
+            echo "::error::dist must not contain .sha256 assets"
+            exit 1
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -140,6 +147,7 @@ jobs:
       - name: Package runtime bundle
         env:
           VERSION_TAG: ${{ inputs.version_tag || github.ref_name }}
+          RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p dist runtime/agents runtime/config runtime/bootstrap
@@ -167,8 +175,27 @@ jobs:
           cp config/fixtures/local-test-auth.json runtime/config/fixtures/local-test-auth.json
           cp config/fixtures/README.md runtime/config/fixtures/README.md
           cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
-          tar -C runtime -czf "dist/harness-data-runtime-${VERSION_TAG}.tar.gz" .
-          (cd dist && shasum -a 256 "harness-data-runtime-${VERSION_TAG}.tar.gz" > "harness-data-runtime-${VERSION_TAG}.tar.gz.sha256")
+          test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required for production releases"; exit 1; }
+          runtime_asset="dist/harness-data-runtime-${VERSION_TAG}.zip"
+          (cd runtime && zip -q -r -P "${RELEASE_ARCHIVE_PASSWORD}" "../${runtime_asset}" .)
+          unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${runtime_asset}" >/dev/null
+          if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -t "${runtime_asset}" >/dev/null 2>&1; then
+            echo "::error::runtime archive accepted an incorrect password"
+            exit 1
+          fi
+          if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -p "${runtime_asset}" bootstrap/cli-manifest.json | cmp -s - runtime/bootstrap/cli-manifest.json; then
+            echo "::error::runtime archive accepted an incorrect password"
+            exit 1
+          fi
+          if find dist -type f -name '*.sha256' -print -quit | grep -q .; then
+            echo "::error::dist must not contain .sha256 assets"
+            exit 1
+          fi
+          for target in windows-amd64 windows-arm64 linux-amd64 darwin-arm64; do
+            test -f "dist/data-harness-cli-${VERSION_TAG}-${target}.zip"
+          done
+          test "$(find dist -maxdepth 1 -type f -name 'data-harness-cli-*.zip' | wc -l | tr -d ' ')" = "4"
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "5"
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2

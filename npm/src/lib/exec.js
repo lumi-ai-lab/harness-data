@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
 
+function redactSensitiveValues(value, values) {
+  let redacted = value;
+  for (const sensitive of values) {
+    if (sensitive) redacted = redacted.split(sensitive).join("******");
+  }
+  return redacted;
+}
+
 export function run(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -19,8 +27,9 @@ export function run(command, args = [], options = {}) {
         resolve(result);
         return;
       }
-      const detail = stderr.trim() || stdout.trim();
       const sensitiveArgs = new Set(options.sensitiveArgs || []);
+      const sensitiveValues = args.filter((_, index) => sensitiveArgs.has(index));
+      const detail = redactSensitiveValues(stderr.trim() || stdout.trim(), sensitiveValues);
       const displayArgs = args.map((arg, index) => sensitiveArgs.has(index) ? "******" : arg);
       reject(new Error(`${command} ${displayArgs.join(" ")} failed${detail ? `: ${detail}` : ""}`));
     });

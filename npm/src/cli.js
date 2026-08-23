@@ -49,6 +49,9 @@ Install options:
   --auth-user-id ID                  dev_user_id for authz; default: interactive prompt
   --data-auth                        Use built-in local-test fixture blob (dev/test shortcut)
   --no-auth                          Install without authz (requires password)
-  --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)`);
+  --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)
+
+Environment:
+  HARNESS_RELEASE_PASSWORD            Password for encrypted Release ZIP assets; required non-interactively`);
   if (unknown) process.exitCode = 1;
 }
