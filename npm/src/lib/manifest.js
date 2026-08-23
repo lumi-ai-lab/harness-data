@@ -5,7 +5,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { commandExists, run } from "./exec.js";
 import { binaryName, isExecutable, platformKey } from "./platform.js";
-import { action, skip, warn } from "./log.js";
+import { action, skip } from "./log.js";
+import { releaseArchivePassword } from "./release-password.js";
 
 export function readManifest(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -284,17 +285,6 @@ async function downloadAsset(tool, asset, file, options = {}) {
   throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}${detail ? ` (${detail})` : ""}`);
 }
 
-async function expectedSha256(tool, asset, options = {}) {
-  if (asset.sha256) return asset.sha256;
-  try {
-    const tmp = path.join(fs.mkdtempSync(path.join(process.cwd(), ".bootstrap-cache-sha-")), "asset.sha256");
-    await downloadAsset(tool, { ...asset, url: `${asset.url}.sha256` }, tmp, { ...options, log: false, progress: false, progressWriter: null });
-    return fs.readFileSync(tmp, "utf8").trim().split(/\s+/)[0];
-  } catch {
-    return "";
-  }
-}
-
 function fileSha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
@@ -310,8 +300,7 @@ function reusableInstalledTool(workspace, tool, asset, options = {}) {
   return {
     version: current.version,
     asset: current.asset || assetName(asset),
-    sha256: current.sha256,
-    ...(current.assetSha256 ? { assetSha256: current.assetSha256 } : {})
+    sha256: current.sha256
   };
 }
 
@@ -319,11 +308,15 @@ function optionsStateTool(options, name) {
   return options?.state?.tools?.[name] || null;
 }
 
-async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool) {
+async function extractArchiveBinary(workspace, cacheDir, archive, binDir, tool, options = {}) {
   const extractDir = fs.mkdtempSync(path.join(cacheDir, `${tool.name}-extract-`));
   try {
     if (archive.endsWith(".zip")) {
-      await run("unzip", ["-o", path.relative(workspace, archive), "-d", path.relative(workspace, extractDir)], { cwd: workspace });
+      const password = releaseArchivePassword(options);
+      await run("unzip", ["-P", password, "-o", path.relative(workspace, archive), "-d", path.relative(workspace, extractDir)], {
+        cwd: workspace,
+        sensitiveArgs: [1]
+      });
     } else {
       await run("tar", ["-xzf", path.relative(workspace, archive), "-C", path.relative(workspace, extractDir)], { cwd: workspace });
     }
@@ -379,18 +372,13 @@ export async function installToolsFromManifest(workspace, manifestPath, options 
       const archive = path.join(cacheDir, assetName(asset));
       if (options.log !== false) action(`下载 ${tool.name} ${tool.version} (${key})`);
       await downloadAsset(tool, asset, archive, options);
-      const sha = await expectedSha256(tool, asset, options);
-      const actualSha = fileSha256(archive);
-      if (sha && actualSha !== sha) throw new Error(`${tool.name} sha256 mismatch`);
-      if (!sha) warn(`${tool.name} 未提供 sha256，已继续安装`);
-      await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool);
+      await extractArchiveBinary(workspace, cacheDir, archive, binDir, tool, options);
       if (!written.includes(binary)) written.push(binary);
       const binarySha = fileSha256(binary);
       installedTools[tool.name] = {
         version: tool.version || "",
         asset: assetName(asset),
-        sha256: binarySha,
-        assetSha256: sha || actualSha
+        sha256: binarySha
       };
     }
   } catch (error) {

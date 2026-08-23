@@ -8,13 +8,10 @@
       "repo": "lumi-ai-lab/harness-data",
       "platforms": {
         "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
+          "archive": "zip"
         },
         "linux-amd64": {
-          "archive": "tar.gz"
+          "archive": "zip"
         },
         "windows-amd64": {
           "archive": "zip"
@@ -31,13 +28,10 @@
       "private": true,
       "platforms": {
         "darwin-arm64": {
-          "archive": "tar.gz"
-        },
-        "darwin-amd64": {
-          "archive": "tar.gz"
+          "archive": "zip"
         },
         "linux-amd64": {
-          "archive": "tar.gz"
+          "archive": "zip"
         },
         "windows-amd64": {
           "archive": "zip"
