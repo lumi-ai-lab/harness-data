@@ -94,9 +94,10 @@ are done). When all cards have captions, `html_report_next` composes
 
 ### 5. Optional HTML
 
-After `html_report_next` returns `stage: "b2_main"`, ask the user exactly:
+After `html_report_next` returns `stage: "b2_main"`, tell the user the returned
+`mainPath`, then ask exactly:
 
-> 初版 `analysis/main.md` 已生成。是否生成同级 `analysis/main.html`？
+> 初版 `analysis/main.md` 已生成。报告文件路径：`<mainPath>`。是否生成同级 `analysis/main.html`？
 
 - If the user **explicitly agrees** (e.g. 生成 HTML / 要 / 是), call only:
 

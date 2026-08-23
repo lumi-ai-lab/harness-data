@@ -45,14 +45,31 @@ WorkBuddy drives the html-report pipeline through a thin entry that only forward
 
 ```bash
 # All commands forward to scripts/html-report-stage-runner.mjs.
-node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id>
+node agents/workbuddy/scripts/html-report-workbuddy.mjs start   --session <id> [--phase-a ui|agent] [--question <原问题>]
 node agents/workbuddy/scripts/html-report-workbuddy.mjs status  --session <id> [--format text|json]
 node agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session <id>
 node agents/workbuddy/scripts/html-report-workbuddy.mjs approve --session <id>   # pass a human gate (awaiting_approval)
 node agents/workbuddy/scripts/html-report-workbuddy.mjs retry   --session <id> --task <cardId>
 node agents/workbuddy/scripts/html-report-workbuddy.mjs cancel  --session <id>
+node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>   # stop a phase-a qdm-metric-cli ui
 ```
 
+- `start` defaults to `--phase-a ui`: it opens `qdm-metric-cli ui` (detached worker owns
+  the CLI; auto-opens the browser) for the user to build cards and click **保存**, which
+  writes `<session>/result.json`. `--question "<原问题>"` persists the original question
+  to `<session>/debug/a-config-question.json` (backfilled into `userQuestion` when
+  `result.json` omits it). This mirrors the PI html-report Phase A. Pass `--phase-a agent`
+  to keep the previous model-parses-and-builds-`result.json` path instead.
+- `qdm-metric-cli ui` is a `commandAdmin` command: it requires `QDM_AUTH_BLOB` granting
+  both `qdm.metric.query` and `qdm.admin`. The local `config/dev-auth.blob` only grants
+  query, so the UI fails with `AUTHORIZATION_FAILED` (code 77). Real runtimes inject auth
+  via the host; for manual debugging here, `export QDM_AUTH_BLOB=<admin-capable blob>` before `start --phase-a ui`.
+- Set `QDM_HARNESS_SKIP_RECALL=1` before launching WorkBuddy when testing html-report
+  Phase A. This mirrors PI html-report's default fixed A_CONFIG path: no wiki recall
+  context is injected, so the model opens `qdm-metric-cli ui` and waits for the user to
+  save `<session>/result.json` instead of reading report specs/playbooks first.
+- `stop` terminates the detached `qdm-metric-cli ui` for the session (idempotent; no-op
+  when no marker exists) to avoid orphan processes.
 - `status` shows the Runner's Gate state and highlights any human gate (`awaiting_approval`) that needs `approve`.
 - Run from the Harness runtime workspace root, or pass `--root <path>`.
 - Install path is the plugin enable flow above: add the runtime `agents` directory as a Marketplace, install `qdm-harness@lumi-harness-data`, then the scripts (including this thin entry and the Runner) are available under `agents/workbuddy/scripts/`. Validate with `harness-data doctor --dir <runtime>`.

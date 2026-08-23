@@ -219,7 +219,7 @@ html_report_next({ "sessionId": "mcp-a44f72de" })
   "stage": "b2_main",
   "mainPath": ".harness/state/html-report/mcp-a44f72de/analysis/main.md",
   "html": "awaiting_confirmation",
-  "message": "analysis/main.md is ready. Ask the user whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation."
+  "message": "analysis/main.md is ready at .harness/state/html-report/mcp-a44f72de/analysis/main.md. Tell the user this file path, then ask whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation."
 }
 ```
 

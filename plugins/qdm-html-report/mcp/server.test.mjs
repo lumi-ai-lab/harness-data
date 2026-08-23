@@ -190,6 +190,9 @@ test("B2_MAIN does not auto-export; generate_html works after explicit call", as
 
   const next = await callTool("html_report_next", { sessionId });
   assert.equal(next.result.stage, "b2_main");
+  assert.equal(next.result.mainPath, join(sessionDir, "analysis", "main.md"));
+  assert.equal(next.result.message.includes(next.result.mainPath), true);
+  assert.match(next.result.message, /Tell the user this file path/);
   assert.equal(next.result.html, "awaiting_confirmation");
   await assert.rejects(readFile(join(sessionDir, "analysis", "main.html")), (error) => error.code === "ENOENT");
 

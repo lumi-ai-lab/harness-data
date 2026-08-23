@@ -152,7 +152,7 @@ async function htmlReportNext(args) {
         stage: "b2_main",
         mainPath: state.mainPath,
         html: "awaiting_confirmation",
-        message: "analysis/main.md is ready. Ask the user whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation.",
+        message: `analysis/main.md is ready at ${state.mainPath}. Tell the user this file path, then ask whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation.`,
       };
     }
 
@@ -176,14 +176,15 @@ async function htmlReportNext(args) {
   if (state.stage === "b2_main") {
     const { htmlExportSummary } = await loadKernel("artifacts/export-main-html.mjs");
     const html = await htmlExportSummary(sessionDir);
+    const mainPath = state.mainPath || join(sessionDir, "analysis", "main.md");
     return {
       stage: "b2_main",
-      mainPath: state.mainPath || join(sessionDir, "analysis", "main.md"),
+      mainPath,
       html: html.status,
       htmlPath: html.htmlPath,
       message: html.status === "awaiting_confirmation"
-        ? "Pipeline already completed. analysis/main.md is ready. Ask the user whether to generate analysis/main.html."
-        : "Pipeline already completed. analysis/main.md is ready.",
+        ? `Pipeline already completed. analysis/main.md is ready at ${mainPath}. Tell the user this file path, then ask whether to generate analysis/main.html.`
+        : `Pipeline already completed. analysis/main.md is ready at ${mainPath}. Tell the user this file path.`,
     };
   }
 

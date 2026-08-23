@@ -114,6 +114,46 @@ func TestWorkBuddyContextReportsAuthzMode(t *testing.T) {
 	}
 }
 
+func TestWorkBuddyContextCanSkipRecallWithEnv(t *testing.T) {
+	root := currentRootWithIndex(t)
+	rawSessionID := "workbuddy-skip-recall"
+	statePath := sessionstate.Path(root, "workbuddy:"+rawSessionID)
+	if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(statePath) })
+	t.Setenv("QDM_HARNESS_SKIP_RECALL", "1")
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": rawSessionID,
+		"prompt":     "生成盈利情况分析报告",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, output, err := dhcontext.RunWorkBuddyHook(root, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !output.Continue {
+		t.Fatalf("expected WorkBuddy output, ok=%v continue=%v", ok, output.Continue)
+	}
+	context := output.HookSpecificOutput.AdditionalContext
+	for _, want := range []string{"authzMode:", "Harness recall skipped: QDM_HARNESS_SKIP_RECALL=1", "# Data Harness Context"} {
+		if !strings.Contains(context, want) {
+			t.Fatalf("missing %s in %s", want, context)
+		}
+	}
+	for _, unwanted := range []string{"必须先读取以下 contextFiles", "wikis/reports/盈利情况分析报告/spec.md", "selectedPlaybook:"} {
+		if strings.Contains(context, unwanted) {
+			t.Fatalf("unexpected recalled context %s in %s", unwanted, context)
+		}
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("skip recall must not write business recall state, err=%v", err)
+	}
+}
+
 func TestGenericHarnessContextIsAgentNeutral(t *testing.T) {
 	response, err := dhcontext.Build(currentRootWithIndex(t), "销售额最近怎么样？")
 	if err != nil {

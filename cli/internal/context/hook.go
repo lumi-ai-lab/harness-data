@@ -50,6 +50,18 @@ func runPromptHook(root, prompt, sessionID string) (bool, Output, error) {
 		return false, Output{}, err
 	}
 	tc := buildTimeContext(prompt, resolver)
+	if os.Getenv("QDM_HARNESS_SKIP_RECALL") == "1" {
+		additionalContext, err := buildSkippedRecallAdditionalContext(tc)
+		if err != nil {
+			return false, Output{}, err
+		}
+		return true, Output{
+			HookSpecificOutput: HookSpecificOutput{
+				HookEventName:     "UserPromptSubmit",
+				AdditionalContext: additionalContext,
+			},
+		}, nil
+	}
 	response, plan, err := BuildWithPlan(root, prompt)
 	if err != nil {
 		return false, Output{}, err
@@ -73,6 +85,27 @@ func runPromptHook(root, prompt, sessionID string) (bool, Output, error) {
 			AdditionalContext: additionalContext,
 		},
 	}, nil
+}
+
+func buildSkippedRecallAdditionalContext(tc timeContext) (string, error) {
+	timeJSON, err := json.Marshal(tc)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("# Data Harness Context\n\n")
+	b.WriteString("时间解析 JSON：`")
+	b.Write(timeJSON)
+	b.WriteString("`\n\n")
+	b.WriteString("Harness recall skipped: QDM_HARNESS_SKIP_RECALL=1\n")
+	b.WriteString("\nInstruction: Harness wiki recall/contextFiles are intentionally disabled for this turn. Do not read recalled specs/playbooks unless another loaded skill explicitly asks for them.\n")
+	b.WriteString("\nConstraints:\n")
+	for _, constraint := range constraints {
+		b.WriteString("- ")
+		b.WriteString(constraint)
+		b.WriteString("\n")
+	}
+	return b.String(), nil
 }
 
 func buildWikiAdditionalContext(tc timeContext, response harness.ContextResponse, plan WikiPlan, authNotes []string) (string, error) {
