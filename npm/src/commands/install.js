@@ -14,13 +14,31 @@ import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
 import { githubToken, hasGithubAuth } from "../lib/github.js";
-import { downloadReleaseAsset, resolveLatestRelease, resolveReleaseSource } from "../lib/release-source.js";
+import { downloadReleaseAsset, resolveLatestRelease, resolveLatestReleaseAssets, resolveReleaseSource } from "../lib/release-source.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
 
 const runtimeRepo = "lumi-ai-lab/harness-data";
 const wikisRepo = "lumi-ai-lab/harness-data-wikis";
+
+function runtimeAssetNames(tag) {
+  return [
+    "harness-data-runtime-" + tag + ".zip",
+    "harness-data-runtime-" + tag + ".tar.gz"
+  ];
+}
+
+export function wikisReleaseAssetName(tag) {
+  return "harness-data-wikis-" + tag + ".zip";
+}
+
+export async function resolveLatestHarnessRelease(options = {}) {
+  return resolveLatestReleaseAssets(runtimeRepo, (tag) => ({
+    runtime: runtimeAssetNames(tag),
+    wikis: [wikisReleaseAssetName(tag)]
+  }), options);
+}
 
 export function validateInstallAuthOptions(options = {}) {
   const noAuth = options.noAuth === true;
@@ -61,13 +79,8 @@ export async function collectInstallAccess(options = {}, runtimeDir) {
   if (tokenMode) return { tokenMode: true, remoteTools: true, wikisSource: "" };
 
   const auto = path.join(runtimeDir, "harness-data-wikis");
-  if (fs.existsSync(auto)) {
-    validateLocalWikisSource(auto);
-    return { tokenMode: false, remoteTools: releaseSource !== "github", wikisSource: auto };
-  }
-  if (options.yes) throw new Error("harness-data-wikis is required when GitHub auth is unavailable");
-  const source = path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
-  validateLocalWikisSource(source);
+  const source = options.wikisSource || (fs.existsSync(auto) ? auto : "");
+  if (source) validateLocalWikisSource(source);
   return { tokenMode: false, remoteTools: releaseSource !== "github", wikisSource: source };
 }
 
@@ -118,10 +131,9 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     return { tag: "", skipped: true };
   }
 
-  const resolved = await resolveLatestRelease(runtimeRepo, (tag) => [
-    `harness-data-runtime-${tag}.zip`,
-    `harness-data-runtime-${tag}.tar.gz`
-  ], options);
+  const resolved = options._harnessRelease
+    ? { tag: options._harnessRelease.tag, asset: options._harnessRelease.assets.runtime }
+    : await resolveLatestRelease(runtimeRepo, runtimeAssetNames, options);
   const { tag, asset } = resolved;
   const assetName = asset.name;
 
@@ -201,8 +213,70 @@ async function installLocalTools(runtimeDir, options = {}) {
   return installed;
 }
 
-async function installWikis(runtimeDir, options = {}) {
+async function installReleaseWikis(runtimeDir, options = {}) {
+  const resolved = options._harnessRelease || await resolveLatestHarnessRelease(options);
+  const { tag } = resolved;
+  const asset = resolved.assets?.wikis;
+  if (!asset) throw new Error("harness Release missing Wikis asset for " + tag);
+
   const target = path.join(runtimeDir, "wikis");
+  const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const archive = path.join(cacheDir, asset.name);
+  const extractDir = fs.mkdtempSync(path.join(cacheDir, "wikis-extract-"));
+  let backup = "";
+  let targetMoved = false;
+  let installed = false;
+
+  try {
+    action("下载 harness-data-wikis " + tag);
+    await downloadReleaseAsset(asset, archive, { ...options, progressLabel: asset.name });
+    const password = releaseArchivePassword(options);
+    await run("unzip", ["-P", password, "-o", path.relative(cacheDir, archive), "-d", path.relative(cacheDir, extractDir)], {
+      cwd: cacheDir,
+      sensitiveArgs: [1]
+    });
+    validateLocalWikisSource(extractDir);
+
+    backup = fs.mkdtempSync(path.join(runtimeDir, ".install-backup-wikis-"));
+    fs.rmSync(backup, { recursive: true, force: true });
+    if (fs.existsSync(target)) {
+      fs.renameSync(target, backup);
+      targetMoved = true;
+    }
+    fs.renameSync(extractDir, target);
+    installed = true;
+    if (targetMoved) fs.rmSync(backup, { recursive: true, force: true });
+    ok("harness-data-wikis " + tag);
+    return {
+      mode: "release",
+      tag,
+      asset: asset.name,
+      source: resolved.source,
+      path: target
+    };
+  } catch (error) {
+    if (installed) fs.rmSync(target, { recursive: true, force: true });
+    if (targetMoved && fs.existsSync(backup)) fs.renameSync(backup, target);
+    throw error;
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+    if (installed && fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
+  }
+}
+
+export async function installWikis(runtimeDir, options = {}) {
+  const target = path.join(runtimeDir, "wikis");
+  if (options.wikisSource) {
+    const source = path.resolve(options.wikisSource);
+    validateLocalWikisSource(source);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.cpSync(source, target, { recursive: true });
+    ok(`harness-data-wikis 本地路径 ${source}`);
+    return { mode: "local-path", source, path: target };
+  }
+  if (!options.useGitWikis) return installReleaseWikis(runtimeDir, options);
+
   const tokenMode = options.tokenMode ?? await resolveTokenMode(options);
   if (tokenMode && githubToken(options)) {
     if (fs.existsSync(path.join(target, ".git"))) {
@@ -337,7 +411,12 @@ export async function installCommand(options = {}) {
     const runtimeDir = targetRuntimeDir;
 
     step(2, 7, "安装 runtime bundle");
-    const bundle = await installRuntimeBundle(runtimeDir, { ...installOptions, requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent) });
+    const harnessRelease = await resolveLatestHarnessRelease(installOptions);
+    const bundle = await installRuntimeBundle(runtimeDir, {
+      ...installOptions,
+      _harnessRelease: harnessRelease,
+      requireWorkBuddy: agentIncludesWorkBuddy(selectedAgent)
+    });
     blank();
 
     step(3, 7, "安装 CLI 工具");
@@ -363,7 +442,12 @@ export async function installCommand(options = {}) {
     blank();
 
     step(4, 7, "同步 Wikis 知识库");
-    await installWikis(runtimeDir, { ...installOptions, tokenMode, wikisSource: access.wikisSource });
+    const wikis = await installWikis(runtimeDir, {
+      ...installOptions,
+      _harnessRelease: harnessRelease,
+      tokenMode,
+      wikisSource: access.wikisSource
+    });
     blank();
 
     step(5, 7, "生成本地配置");
@@ -405,7 +489,8 @@ export async function installCommand(options = {}) {
     writeState(runtimeDir, {
       installMode: undefined,
       releaseSource: selectedReleaseSource,
-      wikisMode: tokenMode ? "github" : "local-path",
+      wikisMode: wikis.mode,
+      ...(wikis.tag ? { wikisTag: wikis.tag } : {}),
       toolInstallModes,
       runtimeTag: bundle.tag,
       localTools,

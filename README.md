@@ -172,6 +172,7 @@ GitHub Releases 同时提供可直接下载的 CLI 二进制包：
 - `data-harness-cli-v0.0.1-linux-amd64.zip`
 - `data-harness-cli-v0.0.1-darwin-arm64.zip`
 - `harness-data-runtime-v0.0.1.zip`
+- `harness-data-wikis-v0.0.1.zip`
 
 从新版本开始，Release ZIP 使用固定密码的传统 ZIP 加密。安装器内置与发布产物一致的
 密码，用户不需要输入密码或设置环境变量；Intel Mac（`darwin-amd64`）不再受支持。
@@ -205,7 +206,8 @@ Tag 的 Release assets，不会删除或重建历史 Release，也不会同步 G
 
 Gitee 镜像由发布者手动维护：每个 GitHub Tag 都必须在对应 Gitee 仓库创建同 Tag 的
 Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的四平台
-`data-harness-cli-*.zip` 与 `harness-data-runtime-<tag>.zip`；
+`data-harness-cli-*.zip`、`harness-data-runtime-<tag>.zip` 与
+`harness-data-wikis-<tag>.zip`；
 `git_pengmd/harness-metric-release` 必须上传名称完全一致的四平台
 `qdm-metric-cli-*.zip`。安装器只选择这些普通附件，不使用源码归档；不要求额外上传
 `.sha256`。发布工作流的 `RELEASE_ARCHIVE_PASSWORD` 必须与安装器内置值保持一致。
@@ -218,14 +220,19 @@ Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名�
 
 - `NPM_TOKEN`：发布 `@lumi-ai-lab/harness-data` 到 npm registry。
 - `RELEASE_GH_TOKEN`：用于读取私有 `harness-data-wikis` submodule 和跨仓库 Release assets；当默认 `GITHUB_TOKEN` 没有这些权限时必须配置。
-- `RELEASE_ARCHIVE_PASSWORD`：两仓库使用相同值，生产 Tag 发布时用于生成和验证传统加密 ZIP；仅通过既有独立渠道分发，不能写入仓库、Release 文案或日志。
+- `RELEASE_ARCHIVE_PASSWORD`：两仓库使用相同值，生产 Tag 发布时用于生成和验证传统加密 ZIP；必须与安装器内置的 `RELEASE_ARCHIVE_PASSWORD` 值一致。它不是强保密边界，仍不应写入 Release 文案或工作流日志。
 
 ### Wikis submodule 与发布
 
 `wikis` submodule 指针用于固定开发和 CI 的兼容性测试快照。runtime bundle 不包含
-Wikis 内容；安装器会单独 clone 或更新 `harness-data-wikis`，并在安装端重新构建
-Wikis 索引。因此，指标、报告、维度、规则或模板等普通知识内容更新不要求重新发布
-本项目。
+Wikis 内容；Release 会从该固定快照额外生成
+`harness-data-wikis-<tag>.zip`，并使用与其他 Release ZIP 相同的密码加密。安装器
+会从所选 Release 源下载、校验并替换 Wikis，然后在安装端重新构建索引；Gitee 安装
+不需要 GitHub 访问条件或用户准备本地 `harness-data-wikis` 副本。
+
+因此，指标、报告、维度、规则或模板等知识内容需要通过新的本项目 Tag 下发。发布者
+同步 Gitee Release 时必须一并同步同 Tag 的 Wikis ZIP，保证 `auto` 和
+`--release-source gitee` 仍可完整安装。
 
 当 Wikis 目录结构、frontmatter/schema、索引格式或 Agent/CLI 运行时契约发生变化时，
 应先更新本项目实现和 submodule 指针，通过兼容性测试后再创建新的本项目 Tag。

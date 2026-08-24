@@ -165,6 +165,7 @@ jobs:
       ref: ${{ needs.validate.outputs.version_tag }}
     secrets:
       RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
+      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
 
   cli-container:
     name: Publish CLI container
@@ -209,13 +210,17 @@ jobs:
             curl -fsIL --retry 5 --retry-delay 3 "$url" >/dev/null
           done < /tmp/data-harness-assets.txt
 
-      - name: Verify runtime bundle assets
+      - name: Verify runtime and Wikis bundle assets
         env:
           VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
         run: |
           set -euo pipefail
-          base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/harness-data-runtime-${VERSION_TAG}.zip"
-          curl -fsIL --retry 5 --retry-delay 3 "$base" >/dev/null
+          for asset in \
+            "harness-data-runtime-${VERSION_TAG}.zip" \
+            "harness-data-wikis-${VERSION_TAG}.zip"; do
+            base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/${asset}"
+            curl -fsIL --retry 5 --retry-delay 3 "$base" >/dev/null
+          done
 
   npm:
     name: Publish npm installer

@@ -80,6 +80,42 @@ function missingAssetError(source, repo, tag, names) {
 }
 
 export async function resolveLatestRelease(repo, buildAssetNames, options = {}) {
+  const resolved = await resolveLatestReleaseAssets(repo, (tag) => ({
+    asset: typeof buildAssetNames === "function" ? buildAssetNames(tag) : buildAssetNames
+  }), options);
+  return {
+    ...resolved,
+    asset: resolved.assets.asset
+  };
+}
+
+function releaseAssetGroups(buildAssetNames, tag) {
+  const value = typeof buildAssetNames === "function" ? buildAssetNames(tag) : buildAssetNames;
+  if (!value || Array.isArray(value) || typeof value === "string") {
+    return { asset: releaseAssetNames(value, tag) };
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, names]) => [
+    key,
+    releaseAssetNames(names, tag)
+  ]));
+}
+
+function resolvedAssets(source, repo, tag, release, groups) {
+  const assets = {};
+  for (const [key, names] of Object.entries(groups)) {
+    const asset = releaseAsset(release, names);
+    if (!asset) throw missingAssetError(source, repo, tag, names);
+    assets[key] = {
+      ...asset,
+      downloadUrl: publicAssetUrl(source, repo, tag, asset),
+      releaseSource: source,
+      releaseRepo: repo
+    };
+  }
+  return assets;
+}
+
+export async function resolveLatestReleaseAssets(repo, buildAssetNames, options = {}) {
   const requestedSource = resolveReleaseSource(options);
   const candidates = requestedSource === "auto" ? ["gitee", "github"] : [requestedSource];
   const failures = [];
@@ -88,21 +124,15 @@ export async function resolveLatestRelease(repo, buildAssetNames, options = {}) 
     try {
       const result = await latestReleaseFrom(source, repo, options);
       const tag = result.release.tag_name;
-      const names = releaseAssetNames(buildAssetNames, tag);
-      if (!tag) throw missingAssetError(source, result.repo, tag, names);
-      const asset = releaseAsset(result.release, names);
-      if (!asset) throw missingAssetError(source, result.repo, tag, names);
+      const groups = releaseAssetGroups(buildAssetNames, tag);
+      const allNames = Object.values(groups).flat();
+      if (!tag) throw missingAssetError(source, result.repo, tag, allNames);
       return {
         source,
         repo: result.repo,
         release: result.release,
         tag,
-        asset: {
-          ...asset,
-          downloadUrl: publicAssetUrl(source, result.repo, tag, asset),
-          releaseSource: source,
-          releaseRepo: result.repo
-        }
+        assets: resolvedAssets(source, result.repo, tag, result.release, groups)
       };
     } catch (error) {
       if (requestedSource !== "auto") {

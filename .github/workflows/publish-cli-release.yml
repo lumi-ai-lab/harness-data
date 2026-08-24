@@ -19,6 +19,8 @@ on:
     secrets:
       RELEASE_ARCHIVE_PASSWORD:
         required: false
+      RELEASE_GH_TOKEN:
+        required: false
   pull_request:
     branches:
       - master
@@ -142,6 +144,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          submodules: recursive
           clean: false
 
       - name: Package runtime bundle
@@ -187,6 +191,28 @@ jobs:
             echo "::error::runtime archive accepted an incorrect password"
             exit 1
           fi
+          wikis_stage="$(mktemp -d)"
+          trap 'rm -rf "$wikis_stage"' EXIT
+          git -C wikis archive HEAD | tar -x -C "$wikis_stage"
+          test -f "$wikis_stage/index.md"
+          for dir in metrics reports dims rules; do
+            test -d "$wikis_stage/$dir"
+          done
+          wikis_asset="dist/harness-data-wikis-${VERSION_TAG}.zip"
+          (cd "$wikis_stage" && zip -q -r -P "${RELEASE_ARCHIVE_PASSWORD}" "${GITHUB_WORKSPACE}/$wikis_asset" .)
+          unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "$wikis_asset" >/dev/null
+          if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -t "$wikis_asset" >/dev/null 2>&1; then
+            echo "::error::Wikis archive accepted an incorrect password"
+            exit 1
+          fi
+          if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -p "$wikis_asset" index.md | cmp -s - "$wikis_stage/index.md"; then
+            echo "::error::Wikis archive accepted an incorrect password"
+            exit 1
+          fi
+          if unzip -Z1 "$wikis_asset" | grep -Eq '(^|/)\.git(/|$)'; then
+            echo "::error::Wikis archive must not contain Git metadata"
+            exit 1
+          fi
           if find dist -type f -name '*.sha256' -print -quit | grep -q .; then
             echo "::error::dist must not contain .sha256 assets"
             exit 1
@@ -194,8 +220,9 @@ jobs:
           for target in windows-amd64 windows-arm64 linux-amd64 darwin-arm64; do
             test -f "dist/data-harness-cli-${VERSION_TAG}-${target}.zip"
           done
+          test -f "dist/harness-data-wikis-${VERSION_TAG}.zip"
           test "$(find dist -maxdepth 1 -type f -name 'data-harness-cli-*.zip' | wc -l | tr -d ' ')" = "4"
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "5"
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "6"
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2

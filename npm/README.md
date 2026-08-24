@@ -40,12 +40,13 @@ npx @lumi-ai-lab/harness-data install --release-source gitee
 HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update
 ```
 
-Gitee mirrors `data-harness-cli` and the runtime from `git_pengmd/harness-release`,
-and `qdm-metric-cli` from `git_pengmd/harness-metric-release`. Only normal Release
+Gitee mirrors `data-harness-cli`, the runtime, and
+`harness-data-wikis-<tag>.zip` from `git_pengmd/harness-release`, and
+`qdm-metric-cli` from `git_pengmd/harness-metric-release`. Only normal Release
 attachments with the exact expected filename are selected; source archives are never
 used.
 
-Use a GitHub token for private GitHub Release assets and remote Wikis access:
+Use a GitHub token for private GitHub Release assets:
 
 ```bash
 npx @lumi-ai-lab/harness-data install --github-token ...
@@ -91,12 +92,12 @@ The same auth parameters support `--agent workbuddy` on macOS. WorkBuddy auth is
 
 The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
 
-Without GitHub auth, the installer still requires a local `harness-data-wikis` path.
-With `auto` or `gitee`, both CLI tools can be installed from a complete Gitee mirror
-without a GitHub token. With `--release-source github`, the existing private GitHub
-restriction remains: the installer asks for a local `qdm-metric-cli` path when GitHub
-auth is unavailable. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` /
-`qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli` are no longer installed).
+With `auto` or `gitee`, the runtime, Wikis, and both CLI tools can be installed from
+a complete Gitee mirror without a GitHub token or a local `harness-data-wikis` copy.
+With `--release-source github`, the existing private GitHub restriction remains: the
+installer asks for a local `qdm-metric-cli` path when GitHub auth is unavailable.
+Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` /
+`qdm-sql-cli` / `cas-cli` are no longer installed).
 
 Update an existing runtime interactively:
 
@@ -110,7 +111,10 @@ Diagnose a runtime:
 npx @lumi-ai-lab/harness-data doctor
 ```
 
-The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI Release assets (`data-harness-cli`, `qdm-metric-cli`), `harness-data-wikis`, generated local config, selected Agent symlinks, and the WorkBuddy plugin package.
+The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI
+Release assets (`data-harness-cli`, `qdm-metric-cli`), the version-matched
+`harness-data-wikis` Release ZIP, generated local config, selected Agent symlinks,
+and the WorkBuddy plugin package.
 
 Supported Release platforms are Windows x64, Windows ARM64, Linux x64, and Apple Silicon
 macOS. Intel macOS (`darwin-amd64`) is no longer supported.
