@@ -15,12 +15,13 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
+import { giteeReleaseRepo, resolveLatestRelease, resolveReleaseSource } from "../src/lib/release-source.js";
 import { resolveLatestTool, toolAssetName } from "../src/lib/tool-release.js";
 import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
-import { collectReleaseArchivePassword } from "../src/lib/release-password.js";
+import { collectReleaseArchivePassword, RELEASE_ARCHIVE_PASSWORD } from "../src/lib/release-password.js";
 import { createInstallSession } from "../src/lib/install-session.js";
-import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, updateWikis } from "../src/commands/update.js";
+import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, toolInstallMode, updateWikis, wikisInstallMode } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import {
   AUTH_OFF_PASSWORD,
@@ -108,8 +109,30 @@ test("prints help", () => {
   assert.match(result.stdout, /--data-auth/);
   assert.match(result.stdout, /--no-auth/);
   assert.match(result.stdout, /--auth-off-password/);
+  assert.match(result.stdout, /--release-source/);
   assert.doesNotMatch(result.stdout, /--release-password/);
-  assert.match(result.stdout, /HARNESS_RELEASE_PASSWORD/);
+  assert.match(result.stdout, /HARNESS_RELEASE_SOURCE/);
+  assert.doesNotMatch(result.stdout, /HARNESS_RELEASE_PASSWORD/);
+});
+
+test("release source command-line value overrides the environment and rejects invalid values", () => {
+  const previous = process.env.HARNESS_RELEASE_SOURCE;
+  process.env.HARNESS_RELEASE_SOURCE = "github";
+  try {
+    assert.equal(resolveReleaseSource({}), "github");
+    assert.equal(resolveReleaseSource({ releaseSource: "gitee" }), "gitee");
+    assert.equal(resolveReleaseSource({ releaseSource: "AUTO" }), "auto");
+    assert.throws(() => resolveReleaseSource({ releaseSource: "mirror" }), /expected auto, gitee, or github/);
+  } finally {
+    if (previous === undefined) delete process.env.HARNESS_RELEASE_SOURCE;
+    else process.env.HARNESS_RELEASE_SOURCE = previous;
+  }
+});
+
+test("invalid --release-source fails before install work starts", () => {
+  const result = spawnSync(process.execPath, [bin, "install", "--release-source", "mirror"], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /invalid release source/);
 });
 
 test("confirm defaults to yes on empty input", () => {
@@ -140,14 +163,12 @@ test("command failures redact sensitive arguments", async () => {
   );
 });
 
-test("non-interactive install and update require HARNESS_RELEASE_PASSWORD", async () => {
+test("install and update use the built-in Release ZIP password", async () => {
   const previous = process.env.HARNESS_RELEASE_PASSWORD;
-  delete process.env.HARNESS_RELEASE_PASSWORD;
+  process.env.HARNESS_RELEASE_PASSWORD = "ignored-password";
   try {
-    await assert.rejects(
-      collectReleaseArchivePassword({ yes: true }),
-      /HARNESS_RELEASE_PASSWORD is required for non-interactive install and update/
-    );
+    assert.equal(RELEASE_ARCHIVE_PASSWORD, "qdm-dev");
+    assert.equal(await collectReleaseArchivePassword({ yes: true }), RELEASE_ARCHIVE_PASSWORD);
   } finally {
     if (previous === undefined) delete process.env.HARNESS_RELEASE_PASSWORD;
     else process.env.HARNESS_RELEASE_PASSWORD = previous;
@@ -182,13 +203,13 @@ test("workspace installer state is local-first and does not leak across runtimes
   }), { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" });
 });
 
-test("writeState preserves workspace state and upgrades it to schema version 2", () => {
+test("writeState preserves workspace state and upgrades it to schema version 3", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-write-"));
   fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
   fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), JSON.stringify({ agent: "workbuddy", runtimeTag: "v-local" }));
 
   const state = writeState(workspace, { packageVersion: "0.0.test" });
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, 3);
   assert.equal(state.agent, "workbuddy");
   assert.equal(state.runtimeTag, "v-local");
   assert.equal(state.packageVersion, "0.0.test");
@@ -283,11 +304,218 @@ test("latest tool resolution prefers ZIP assets and falls back to legacy tar.gz"
     };
 
     const zip = await resolveLatestTool(tool, key, { githubToken: "fixture-token" });
-    assert.deepEqual(zip.platforms[key], { url: "https://fixtures.test/tool.zip", archive: "zip" });
+    assert.deepEqual(zip.platforms[key], {
+      url: "https://fixtures.test/tool.zip",
+      name: "data-harness-cli-v2.0.0-linux-amd64.zip",
+      releaseSource: "gitee",
+      archive: "zip"
+    });
 
     assets = [{ name: "data-harness-cli-v2.0.0-linux-amd64.tar.gz", browser_download_url: "https://fixtures.test/tool.tar.gz" }];
     const legacy = await resolveLatestTool(tool, key, { githubToken: "fixture-token" });
-    assert.deepEqual(legacy.platforms[key], { url: "https://fixtures.test/tool.tar.gz", archive: "tar.gz" });
+    assert.deepEqual(legacy.platforms[key], {
+      url: "https://fixtures.test/tool.tar.gz",
+      name: "data-harness-cli-v2.0.0-linux-amd64.tar.gz",
+      releaseSource: "gitee",
+      archive: "tar.gz"
+    });
+  } finally {
+    https.get = originalGet;
+  }
+});
+
+test("Gitee Release mirrors use exact assets for runtime and both CLI repositories", async () => {
+  const key = "linux-amd64";
+  const urls = [];
+  const originalGet = https.get;
+  try {
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        const text = String(url);
+        if (text.includes("harness-metric-release")) {
+          response.end(JSON.stringify({
+            tag_name: "v-metric",
+            assets: [
+              { name: "Source code (zip)", browser_download_url: "https://gitee.test/source.zip" },
+              { name: `qdm-metric-cli-v-metric-${key}.zip`, browser_download_url: "https://gitee.test/qdm.zip" }
+            ]
+          }));
+          return;
+        }
+        response.end(JSON.stringify({
+          tag_name: "v-runtime",
+          assets: [
+            { name: "Source code (zip)", browser_download_url: "https://gitee.test/source.zip" },
+            { name: "harness-data-runtime-v-runtime.zip", browser_download_url: "https://gitee.test/runtime.zip" },
+            { name: `data-harness-cli-v-runtime-${key}.zip`, browser_download_url: "https://gitee.test/data.zip" }
+          ]
+        }));
+      });
+      return request;
+    };
+
+    const runtime = await resolveLatestRelease("lumi-ai-lab/harness-data", (tag) => [
+      `harness-data-runtime-${tag}.zip`
+    ], { releaseSource: "gitee" });
+    const data = await resolveLatestTool({
+      name: "data-harness-cli",
+      binary: "data-harness-cli",
+      repo: "lumi-ai-lab/harness-data",
+      platforms: { [key]: { archive: "zip" } }
+    }, key, { releaseSource: "gitee" });
+    const qdm = await resolveLatestTool({
+      name: "qdm-metric-cli",
+      binary: "qdm-metric-cli",
+      repo: "pengmide/qdm-metric-cli",
+      private: true,
+      platforms: { [key]: { archive: "zip" } }
+    }, key, { releaseSource: "gitee" });
+
+    assert.equal(giteeReleaseRepo("lumi-ai-lab/harness-data"), "git_pengmd/harness-release");
+    assert.equal(giteeReleaseRepo("pengmide/qdm-metric-cli"), "git_pengmd/harness-metric-release");
+    assert.equal(runtime.source, "gitee");
+    assert.equal(runtime.asset.name, "harness-data-runtime-v-runtime.zip");
+    assert.equal(data.platforms[key].url, "https://gitee.test/data.zip");
+    assert.equal(qdm.platforms[key].url, "https://gitee.test/qdm.zip");
+    assert.equal(urls.every((url) => url.startsWith("https://gitee.com/api/v5/repos/")), true);
+    assert.equal(urls.some((url) => url.includes("git_pengmd/harness-release")), true);
+    assert.equal(urls.some((url) => url.includes("git_pengmd/harness-metric-release")), true);
+  } finally {
+    https.get = originalGet;
+  }
+});
+
+test("auto Release source prefers Gitee and falls back to GitHub only when the attachment is missing", async () => {
+  const target = "harness-data-runtime-v-auto.zip";
+  const originalGet = https.get;
+  const urls = [];
+  let missingGiteeAsset = false;
+  try {
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        if (String(url).startsWith("https://gitee.com/")) {
+          response.end(JSON.stringify({
+            tag_name: "v-auto",
+            assets: missingGiteeAsset
+              ? [{ name: "Source code (zip)", browser_download_url: "https://gitee.test/source.zip" }]
+              : [{ name: target, browser_download_url: "https://gitee.test/runtime.zip" }]
+          }));
+          return;
+        }
+        response.end(JSON.stringify({
+          tag_name: "v-auto",
+          assets: [{ name: target, browser_download_url: "https://github.test/runtime.zip" }]
+        }));
+      });
+      return request;
+    };
+
+    const gitee = await resolveLatestRelease("lumi-ai-lab/harness-data", [target], {
+      releaseSource: "auto",
+      githubToken: "fixture-token"
+    });
+    assert.equal(gitee.source, "gitee");
+    assert.deepEqual(urls, ["https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest"]);
+
+    missingGiteeAsset = true;
+    urls.length = 0;
+    const github = await resolveLatestRelease("lumi-ai-lab/harness-data", [target], {
+      releaseSource: "auto",
+      githubToken: "fixture-token"
+    });
+    assert.equal(github.source, "github");
+    assert.deepEqual(urls, [
+      "https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest",
+      "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/latest"
+    ]);
+  } finally {
+    https.get = originalGet;
+  }
+});
+
+test("auto Release source falls back to GitHub when the Gitee API is unavailable", async () => {
+  const target = "harness-data-runtime-v-api-fallback.zip";
+  const originalGet = https.get;
+  const urls = [];
+  try {
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.headers = {};
+        if (String(url).startsWith("https://gitee.com/")) {
+          response.statusCode = 404;
+          callback(response);
+          response.end("not found");
+          return;
+        }
+        response.statusCode = 200;
+        callback(response);
+        response.end(JSON.stringify({
+          tag_name: "v-api-fallback",
+          assets: [{ name: target, browser_download_url: "https://github.test/runtime.zip" }]
+        }));
+      });
+      return request;
+    };
+
+    const resolved = await resolveLatestRelease("lumi-ai-lab/harness-data", [target], {
+      releaseSource: "auto",
+      githubToken: "fixture-token"
+    });
+    assert.equal(resolved.source, "github");
+    assert.deepEqual(urls, [
+      "https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest",
+      "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/latest"
+    ]);
+  } finally {
+    https.get = originalGet;
+  }
+});
+
+test("forced Release sources never fall back to the other provider", async () => {
+  const target = "harness-data-runtime-v-forced.zip";
+  const originalGet = https.get;
+  const urls = [];
+  try {
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end(JSON.stringify({ tag_name: "v-forced", assets: [] }));
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      resolveLatestRelease("lumi-ai-lab/harness-data", [target], { releaseSource: "gitee" }),
+      /Gitee Release lookup failed/
+    );
+    assert.deepEqual(urls, ["https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest"]);
+
+    urls.length = 0;
+    await assert.rejects(
+      resolveLatestRelease("lumi-ai-lab/harness-data", [target], { releaseSource: "github", githubToken: "fixture-token" }),
+      /GitHub Release lookup failed/
+    );
+    assert.deepEqual(urls, ["https://api.github.com/repos/lumi-ai-lab/harness-data/releases/latest"]);
   } finally {
     https.get = originalGet;
   }
@@ -671,6 +899,130 @@ test("encrypted ZIP password failures redact the password and roll back the prev
     https.get = originalGet;
   }
   assert.equal(fs.readFileSync(path.join(binDir, binaryName("data-harness-cli")), "utf8"), oldBinary);
+});
+
+test("Gitee can install the private qdm CLI without a GitHub token", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-gitee-qdm-"));
+  const key = platformKey();
+  const fakeBin = path.join(workspace, "fake-bin");
+  const asset = `qdm-metric-cli-v-gitee-${key}.tar.gz`;
+  const requests = [];
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "tar"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    dir="$1"
+  fi
+  shift
+done
+printf '%s' '#!/bin/sh\\necho gitee-qdm\\n' > "$dir/${binaryName("qdm-metric-cli")}"
+`, { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, options, callback) => {
+      requests.push({ url: String(url), authorization: options.headers?.Authorization });
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("qdm archive");
+      });
+      return request;
+    };
+
+    const installed = await installToolsFromManifest(workspace, path.join(workspace, "missing.json"), {
+      githubToken: "must-not-be-used",
+      log: false,
+      manifestOverride: {
+        schemaVersion: 2,
+        tools: [{
+          name: "qdm-metric-cli",
+          binary: "qdm-metric-cli",
+          private: true,
+          version: "v-gitee",
+          platforms: {
+            [key]: {
+              url: `https://gitee.com/git_pengmd/harness-metric-release/releases/download/v-gitee/${asset}`,
+              name: asset,
+              releaseSource: "gitee",
+              archive: "tar.gz"
+            }
+          }
+        }]
+      }
+    });
+
+    assert.equal(installed.installedTools["qdm-metric-cli"].version, "v-gitee");
+    assert.equal(fs.existsSync(path.join(workspace, "bin", binaryName("qdm-metric-cli"))), true);
+    assert.deepEqual(requests, [{
+      url: `https://gitee.com/git_pengmd/harness-metric-release/releases/download/v-gitee/${asset}`,
+      authorization: undefined
+    }]);
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+});
+
+test("auto source does not switch away from Gitee after a ZIP extraction failure", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-gitee-runtime-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "gitee-password";
+  const calls = [];
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), "#!/bin/sh\nexit 9\n", { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = `${fakeBin}:${originalPath || ""}`;
+    https.get = (url, _options, callback) => {
+      calls.push(String(url));
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        if (String(url).endsWith("/releases/latest")) {
+          response.end(JSON.stringify({
+            tag_name: "v-gitee",
+            assets: [{
+              name: "harness-data-runtime-v-gitee.zip",
+              browser_download_url: "https://gitee.test/harness-data-runtime-v-gitee.zip"
+            }]
+          }));
+          return;
+        }
+        response.end("runtime archive");
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      installRuntimeBundle(workspace, {
+        force: true,
+        releaseSource: "auto",
+        githubToken: "fixture-token",
+        log: false,
+        _releaseArchivePassword: password
+      }),
+      /unzip -P \*\*\*\*\*\*/
+    );
+    assert.deepEqual(calls, [
+      "https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest",
+      "https://gitee.test/harness-data-runtime-v-gitee.zip"
+    ]);
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
 });
 
 test("public GitHub asset falls back to anonymous download when token API fails", { skip: process.platform === "win32" }, async () => {
@@ -2265,6 +2617,17 @@ test("update doctor treats missing agent hooks as non-blocking only", async () =
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "config CLI paths" }), false);
 });
 
+test("tool update modes migrate legacy state while new state is independent of installMode", () => {
+  assert.equal(toolInstallMode({ installMode: "local-path" }, "data-harness-cli"), "release");
+  assert.equal(toolInstallMode({ installMode: "local-path" }, "qdm-metric-cli"), "local-path");
+  assert.equal(wikisInstallMode({ installMode: "github-token" }), "github");
+  assert.equal(wikisInstallMode({ installMode: "local-path" }), "local-path");
+  assert.equal(toolInstallMode({
+    installMode: "local-path",
+    toolInstallModes: { "qdm-metric-cli": "release" }
+  }, "qdm-metric-cli"), "release");
+});
+
 test("skip wikis check passes skip checks to build-index", { skip: process.platform === "win32" }, async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
   const binDir = path.join(workspace, "bin");
@@ -2536,8 +2899,9 @@ test("collectInstallAccess accepts a local wikis source without GitHub", async (
   const source = path.join(workspace, "harness-data-wikis");
   for (const dir of ["metrics", "reports", "dims", "rules"]) fs.mkdirSync(path.join(source, dir), { recursive: true });
   fs.writeFileSync(path.join(source, "index.md"), "# wikis\n");
-  const access = await collectInstallAccess({ yes: true, githubAuth: false }, workspace);
+  const access = await collectInstallAccess({ yes: true, githubAuth: false, releaseSource: "gitee" }, workspace);
   assert.equal(access.tokenMode, false);
+  assert.equal(access.remoteTools, true);
   assert.equal(access.wikisSource, source);
 });
 

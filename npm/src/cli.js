@@ -44,6 +44,7 @@ Commands:
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
   --agent NAME                       claude, codex, pi, openclaw, hermes, workbuddy, both, or all
+  --release-source SOURCE            auto, gitee, or github (default: auto)
   --github-token TOKEN               GitHub token for private Release assets
   --auth-blob BLOB                   Auth blob string (qdm1enc...); default: interactive prompt
   --auth-user-id ID                  dev_user_id for authz; default: interactive prompt
@@ -52,6 +53,8 @@ Install options:
   --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)
 
 Environment:
-  HARNESS_RELEASE_PASSWORD            Password for encrypted Release ZIP assets; required non-interactively`);
+  HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github
+
+Release ZIP password is built in; install and update need no password setup.`);
   if (unknown) process.exitCode = 1;
 }

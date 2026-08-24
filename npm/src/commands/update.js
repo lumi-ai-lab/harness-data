@@ -7,7 +7,8 @@ import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/m
 import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { collectReleaseArchivePassword } from "../lib/release-password.js";
-import { githubToken, latestRelease } from "../lib/github.js";
+import { githubToken } from "../lib/github.js";
+import { resolveLatestRelease, resolveReleaseSource } from "../lib/release-source.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
 import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
@@ -68,7 +69,8 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
 
 export async function updateWikis(runtimeDir, options, state) {
   const wikisDir = path.join(runtimeDir, "wikis");
-  if (!githubToken(options) && state.installMode !== "github-token") {
+  const wikisMode = wikisInstallMode(state);
+  if (!githubToken(options) && wikisMode !== "github") {
     skip("harness-data-wikis 为本地路径模式，请手动检查");
     return null;
   }
@@ -98,6 +100,29 @@ export async function updateWikis(runtimeDir, options, state) {
   const { commit } = await forceSyncWikis(wikisDir, options, { fetched: true });
   ok(`harness-data-wikis 已更新到 ${shortSha(commit)}`);
   return { commit };
+}
+
+export function toolInstallMode(state = {}, toolName) {
+  if (state.toolInstallModes?.[toolName]) return state.toolInstallModes[toolName];
+  if (state.localTools?.[toolName]?.mode === "local-path") return "local-path";
+  if (state.installMode === "local-path" && toolName !== "data-harness-cli") return "local-path";
+  return "release";
+}
+
+export function wikisInstallMode(state = {}) {
+  return state.wikisMode || (state.installMode === "github-token" ? "github" : "local-path");
+}
+
+function migratedInstallState(state, manifest, releaseSource) {
+  return {
+    installMode: undefined,
+    releaseSource,
+    wikisMode: wikisInstallMode(state),
+    toolInstallModes: Object.fromEntries((manifest.tools || []).map((tool) => [
+      tool.name,
+      toolInstallMode(state, tool.name)
+    ]))
+  };
 }
 
 export async function restoreAgentHooksIfMissing(runtimeDir, options = {}) {
@@ -138,6 +163,7 @@ export async function checkUpdates(workspace, options = {}) {
 }
 
 export async function updateCommand(options = {}) {
+  const selectedReleaseSource = resolveReleaseSource(options);
   const runtimeDir = findWorkspaceDir(options.dir);
   if (!fs.existsSync(runtimeDir)) throw new Error(`runtime directory does not exist: ${runtimeDir}`);
   const key = platformKey();
@@ -152,6 +178,7 @@ export async function updateCommand(options = {}) {
   assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");
   const manifest = readManifest(manifestPath);
+  const migratedState = migratedInstallState(state, manifest, selectedReleaseSource);
   const archivePassword = await collectReleaseArchivePassword(options);
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
@@ -171,33 +198,36 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(2, 7, "检查 runtime bundle");
-  const runtimeRelease = await latestRelease("lumi-ai-lab/harness-data", options);
+  const runtimeRelease = await resolveLatestRelease("lumi-ai-lab/harness-data", (tag) => [
+    `harness-data-runtime-${tag}.zip`,
+    `harness-data-runtime-${tag}.tar.gz`
+  ], options);
   const workBuddyPlugin = inspectWorkBuddyPlugin(runtimeDir);
   const workBuddyRepairNeeded = agentIncludesWorkBuddy(configuredAgent) &&
     (!workBuddyPlugin.prepared || !workBuddyPlugin.versionMatchesPackage);
-  if ((state.runtimeTag && state.runtimeTag !== runtimeRelease.tag_name) || workBuddyRepairNeeded) {
-    if (workBuddyRepairNeeded && state.runtimeTag === runtimeRelease.tag_name) {
+  if ((state.runtimeTag && state.runtimeTag !== runtimeRelease.tag) || workBuddyRepairNeeded) {
+    if (workBuddyRepairNeeded && state.runtimeTag === runtimeRelease.tag) {
       action("发现 WorkBuddy plugin package 缺失或不完整，需要修复 runtime bundle");
     } else {
-      action(`发现更新：runtime bundle ${state.runtimeTag || "unknown"} -> ${runtimeRelease.tag_name}`);
+      action(`发现更新：runtime bundle ${state.runtimeTag || "unknown"} -> ${runtimeRelease.tag}`);
     }
     if (await confirm(workBuddyRepairNeeded ? "是否修复 runtime bundle？" : "是否更新 runtime bundle？")) {
       const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true, requireWorkBuddy: agentIncludesWorkBuddy(configuredAgent) });
-      runtimeTag = bundle.tag || runtimeRelease.tag_name;
+      runtimeTag = bundle.tag || runtimeRelease.tag;
       changed = true;
       applied.push(`runtime bundle ${runtimeTag}`);
     } else {
       skip("runtime bundle");
-      skipped.push(`runtime bundle ${runtimeRelease.tag_name}`);
+      skipped.push(`runtime bundle ${runtimeRelease.tag}`);
     }
   } else {
-    ok(`runtime bundle 已是最新 ${state.runtimeTag || runtimeRelease.tag_name}`);
+    ok(`runtime bundle 已是最新 ${state.runtimeTag || runtimeRelease.tag}`);
   }
   blank();
 
   step(3, 7, "检查 CLI 工具");
   for (const tool of manifest.tools || []) {
-    if (state.installMode === "local-path" && tool.name !== "data-harness-cli") {
+    if (toolInstallMode(state, tool.name) === "local-path") {
       skip(`${tool.name} 为本地路径模式，请手动检查`);
       continue;
     }
@@ -239,6 +269,7 @@ export async function updateCommand(options = {}) {
     if (doctor.checks.some((check) => !check.ok && !isNonBlockingUpdateDoctorCheck(check))) throw new Error("doctor failed; update is incomplete");
     writeState(runtimeDir, {
       ...state,
+      ...migratedState,
       runtimeTag,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
@@ -264,7 +295,7 @@ export async function updateCommand(options = {}) {
     }
   } else if (restoredAgent) {
     ok("Agent Hook 已恢复");
-    writeState(runtimeDir, { ...state, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, { ...state, ...migratedState, agent: restoredAgent.agent, lastCheckAt: new Date().toISOString() });
     blank();
     console.log(`配置已恢复：${runtimeDir}`);
     console.log("");
@@ -277,7 +308,7 @@ export async function updateCommand(options = {}) {
     }
   } else {
     skip("没有组件更新");
-    writeState(runtimeDir, { ...state, lastCheckAt: new Date().toISOString() });
+    writeState(runtimeDir, { ...state, ...migratedState, lastCheckAt: new Date().toISOString() });
     blank();
     console.log(skipped.length ? "没有应用任何更新。" : "没有发现需要更新的内容。");
     if (skipped.length) {

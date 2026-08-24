@@ -150,7 +150,7 @@ export function download(url, file, headers = {}, options = {}) {
 }
 
 function assetName(asset) {
-  return path.basename(new URL(asset.url).pathname);
+  return asset.name || path.basename(new URL(asset.url).pathname);
 }
 
 function githubAssetParts(asset) {
@@ -257,6 +257,15 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 }
 
 async function downloadAsset(tool, asset, file, options = {}) {
+  if (asset.releaseSource === "gitee") {
+    await download(asset.url, file, { "User-Agent": "harness-data-installer" }, {
+      progressLabel: assetName(asset),
+      log: options.log,
+      progress: options.progress,
+      progressWriter: options.progressWriter
+    });
+    return;
+  }
   if (!tool.private && !githubToken(options)) {
     await download(asset.url, file, {}, { progressLabel: assetName(asset), log: options.log, progress: options.progress, progressWriter: options.progressWriter });
     return;

@@ -13,7 +13,8 @@ import { collectReleaseArchivePassword, releaseArchivePassword } from "../lib/re
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
 import { packageVersion } from "../lib/package.js";
-import { downloadReleaseAsset, findReleaseAsset, githubToken, hasGithubAuth, latestRelease } from "../lib/github.js";
+import { githubToken, hasGithubAuth } from "../lib/github.js";
+import { downloadReleaseAsset, resolveLatestRelease, resolveReleaseSource } from "../lib/release-source.js";
 import { action, blank, fail, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
 import { gitUrls, runGitWithProtocol } from "../lib/git-auth.js";
 import { agentIncludesWorkBuddy, assertWorkBuddyAuthPlatform, inspectWorkBuddyPlugin, workBuddyMinimumVersion } from "../lib/workbuddy.js";
@@ -56,17 +57,18 @@ async function resolveTokenMode(options = {}) {
 
 export async function collectInstallAccess(options = {}, runtimeDir) {
   const tokenMode = await resolveTokenMode(options);
-  if (tokenMode) return { tokenMode: true, wikisSource: "" };
+  const releaseSource = resolveReleaseSource(options);
+  if (tokenMode) return { tokenMode: true, remoteTools: true, wikisSource: "" };
 
   const auto = path.join(runtimeDir, "harness-data-wikis");
   if (fs.existsSync(auto)) {
     validateLocalWikisSource(auto);
-    return { tokenMode: false, wikisSource: auto };
+    return { tokenMode: false, remoteTools: releaseSource !== "github", wikisSource: auto };
   }
   if (options.yes) throw new Error("harness-data-wikis is required when GitHub auth is unavailable");
   const source = path.resolve(await ask("请输入 harness-data-wikis 的绝对路径：", options));
   validateLocalWikisSource(source);
-  return { tokenMode: false, wikisSource: source };
+  return { tokenMode: false, remoteTools: releaseSource !== "github", wikisSource: source };
 }
 
 function replaceRuntimePath(runtimeDir, name, stagedRoot, backups) {
@@ -116,12 +118,11 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     return { tag: "", skipped: true };
   }
 
-  const release = await latestRelease(runtimeRepo, options);
-  const tag = release.tag_name;
-  const zipAssetName = `harness-data-runtime-${tag}.zip`;
-  const tarAssetName = `harness-data-runtime-${tag}.tar.gz`;
-  const asset = findReleaseAsset(release, zipAssetName) || findReleaseAsset(release, tarAssetName);
-  if (!asset) throw new Error(`runtime bundle asset missing in ${runtimeRepo} ${tag}: ${zipAssetName} or ${tarAssetName}`);
+  const resolved = await resolveLatestRelease(runtimeRepo, (tag) => [
+    `harness-data-runtime-${tag}.zip`,
+    `harness-data-runtime-${tag}.tar.gz`
+  ], options);
+  const { tag, asset } = resolved;
   const assetName = asset.name;
 
   const cacheDir = path.join(runtimeDir, ".bootstrap-cache");
@@ -309,6 +310,7 @@ export function printDoctorSummary(doctor, options = {}) {
 
 export async function installCommand(options = {}) {
   validateInstallAuthOptions(options);
+  const selectedReleaseSource = resolveReleaseSource(options);
   const key = platformKey();
   const targetRuntimeDir = resolveWorkspaceDir(options.dir || process.cwd());
   header("Harness Data 安装器", packageVersion(), [
@@ -345,7 +347,7 @@ export async function installCommand(options = {}) {
 
     let manifest;
     let localTools = {};
-    if (tokenMode) {
+    if (access.remoteTools) {
       manifest = readManifest(manifestPath);
       const latestManifest = await resolveLatestManifest(manifest, key, installOptions);
       manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...installOptions, state: installState, manifestOverride: latestManifest });
@@ -396,8 +398,15 @@ export async function installCommand(options = {}) {
     if (doctor.checks.some((check) => !check.ok)) throw new Error("doctor failed; install is incomplete");
     blank();
 
+    const toolInstallModes = Object.fromEntries([
+      ...Object.keys(manifest.installedTools || {}).map((name) => [name, "release"]),
+      ...Object.keys(localTools).map((name) => [name, "local-path"])
+    ]);
     writeState(runtimeDir, {
-      installMode: tokenMode ? "github-token" : "local-path",
+      installMode: undefined,
+      releaseSource: selectedReleaseSource,
+      wikisMode: tokenMode ? "github" : "local-path",
+      toolInstallModes,
       runtimeTag: bundle.tag,
       localTools,
       tools: manifest.installedTools || {},
