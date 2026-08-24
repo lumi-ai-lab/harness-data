@@ -55,9 +55,9 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 npx @lumi-ai-lab/harness-data install
 ```
 
-安装器访问 GitHub 私有仓库时默认使用 `--git-protocol auto`：先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，如果本机没有可用 GitHub SSH key 或无权限，会自动回退到 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
+Wikis 仍通过 GitHub 访问：默认 `--git-protocol auto` 会先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，不可用时回退 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
 
-`qdm-metric-cli` 的二进制文件来自私有仓库 GitHub Release：`pengmide/qdm-metric-cli`。数据查询唯一入口是 `qdm-metric-cli`（不再安装 `qdm-cmr-cli` / `qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli`）。安装器下载私有 Release asset 时优先使用本机 `gh auth login` 的登录状态；如果没有可用 `gh` 登录，则回退到 `--github-token-env` 指定的 token 环境变量。两者都没有时安装会停止并提示配置其中之一。
+Release 下载与 GitHub 授权解耦。安装器默认 `--release-source auto`，先从 Gitee 的同 Tag Release 查找精确同名的普通附件，缺少该附件、Release 不存在或接口失败时才回退 GitHub。可强制指定 `gitee` 或 `github`，环境变量为 `HARNESS_RELEASE_SOURCE`；命令行优先级更高。`data-harness-cli` 与 runtime 映射到 `git_pengmd/harness-release`，`qdm-metric-cli` 映射到 `git_pengmd/harness-metric-release`。Gitee 镜像完整时，即使没有 GitHub token 也能远程安装两个 CLI；但没有 GitHub 授权时仍需提供本地 `harness-data-wikis`。强制 GitHub 时，`qdm-metric-cli` 保持私有 Release 的 `gh auth login` / `GITHUB_TOKEN` / `--github-token` 限制。
 
 强制使用 SSH：
 
@@ -77,6 +77,13 @@ npx @lumi-ai-lab/harness-data install --git-protocol https
 npx @lumi-ai-lab/harness-data install --dir ~/harness-data
 ```
 
+指定 Release 下载源：
+
+```bash
+npx @lumi-ai-lab/harness-data install --release-source gitee
+HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update --dir ~/harness-data
+```
+
 非交互安装需要显式选择 Agent：
 
 ```bash
@@ -86,14 +93,8 @@ npx @lumi-ai-lab/harness-data install \
 ```
 
 所有受支持平台都需要 `git`、`tar` 和 `unzip` 在 PATH 中；`tar` 仅保留给历史明文
-`.tar.gz` Release 的兼容回退。交互式安装和更新会用隐藏输入获取 Release ZIP 密码；
-非交互模式必须通过唯一公开入口 `HARNESS_RELEASE_PASSWORD` 提供，且没有
-`--release-password` 参数：
-
-```bash
-HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data install --yes --agent codex
-HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data update --yes --dir ~/harness-data
-```
+`.tar.gz` Release 的兼容回退。Release ZIP 密码已内置在安装器中，交互式与非交互式
+安装、更新都不会再询问密码，也不需要设置 `HARNESS_RELEASE_PASSWORD`。
 
 WorkBuddy 安装会准备本地 Marketplace；完成后在 WorkBuddy 插件管理中选择 **Add Marketplace**，添加 runtime 的 `agents` 目录，再安装并启用 `qdm-harness@lumi-harness-data`、reload plugins：
 
@@ -110,7 +111,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
   --yes \
   --agent codex \
   --git-protocol https \
-  --github-token-env GITHUB_TOKEN
+  --release-source github
 ```
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
@@ -172,10 +173,10 @@ GitHub Releases 同时提供可直接下载的 CLI 二进制包：
 - `data-harness-cli-v0.0.1-darwin-arm64.zip`
 - `harness-data-runtime-v0.0.1.zip`
 
-从新版本开始，Release ZIP 使用固定密码的传统 ZIP 加密。安装器通过
-`HARNESS_RELEASE_PASSWORD`（非交互）或隐藏输入（交互）取得密码；Intel Mac
-（`darwin-amd64`）不再受支持。传统 ZIP 加密只用于避免下载后被随手查看，不能作为
-对抗破解、再分发或源码泄露的安全边界。
+从新版本开始，Release ZIP 使用固定密码的传统 ZIP 加密。安装器内置与发布产物一致的
+密码，用户不需要输入密码或设置环境变量；Intel Mac（`darwin-amd64`）不再受支持。
+传统 ZIP 加密只用于避免下载后被随手查看，不能作为对抗破解、再分发或源码泄露的安全
+边界。
 
 ## 发布流程
 
@@ -201,6 +202,13 @@ GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`�
 发布前会校验最新 `qdm-metric-cli` Release 的 ZIP 资产。Gitee 同步器只会原样同步新
 Tag 的 Release assets，不会删除或重建历史 Release，也不会同步 GitHub 自动生成的
 源码归档。
+
+Gitee 镜像由发布者手动维护：每个 GitHub Tag 都必须在对应 Gitee 仓库创建同 Tag 的
+Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的四平台
+`data-harness-cli-*.zip` 与 `harness-data-runtime-<tag>.zip`；
+`git_pengmd/harness-metric-release` 必须上传名称完全一致的四平台
+`qdm-metric-cli-*.zip`。安装器只选择这些普通附件，不使用源码归档；不要求额外上传
+`.sha256`。发布工作流的 `RELEASE_ARCHIVE_PASSWORD` 必须与安装器内置值保持一致。
 
 发布失败后可以通过 Actions 页面重新运行失败的 job。需要针对已经存在的 Tag
 重新执行完整编排时，可手动运行 `Release` workflow 并填写 Tag；如果 npm 已成功发布，

@@ -9,7 +9,7 @@
       "name": "qdm-harness",
       "description": "为 WorkBuddy 注入 QDM Harness 上下文、运行约束和报告模板。",
       "source": "./workbuddy",
-      "version": "0.0.49"
+      "version": "0.0.50"
     }
   ]
 }

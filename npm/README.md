@@ -23,22 +23,29 @@ Install into an explicit runtime directory:
 npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
 ```
 
-Release ZIP password: interactive commands request it with hidden input. Non-interactive
-`install` and `update` require the single public entry point `HARNESS_RELEASE_PASSWORD`:
+Release ZIP password is built into the installer. `install` and `update` do not prompt for it
+and do not require `HARNESS_RELEASE_PASSWORD`. There is intentionally no `--release-password`
+option. During extraction the installer invokes `unzip` with a redacted sensitive argument;
+the password is never written to installer state, configuration, logs, or errors. Releases use
+traditional password ZIP encryption as an access barrier only; it is not strong confidentiality
+against a determined recipient.
+
+Release downloads default to `auto`: the installer first checks the mirrored Gitee
+Release for the exact required uploaded ZIP, then falls back to GitHub only when the
+Gitee Release is unavailable or missing that asset. Choose a provider explicitly with
+`--release-source auto|gitee|github` or `HARNESS_RELEASE_SOURCE`:
 
 ```bash
-HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data install --yes
-HARNESS_RELEASE_PASSWORD='...' npx @lumi-ai-lab/harness-data update --yes
+npx @lumi-ai-lab/harness-data install --release-source gitee
+HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update
 ```
 
-There is intentionally no `--release-password` option, so the password is not put in shell
-history as a `harness-data` argument. During extraction the installer invokes `unzip` with a
-redacted sensitive argument; the password is held only for the current run and is never
-written to installer state, configuration, logs, or errors. New Releases use traditional
-password ZIP encryption as an access barrier only; it is not strong confidentiality against
-a determined recipient.
+Gitee mirrors `data-harness-cli` and the runtime from `git_pengmd/harness-release`,
+and `qdm-metric-cli` from `git_pengmd/harness-metric-release`. Only normal Release
+attachments with the exact expected filename are selected; source archives are never
+used.
 
-Use a GitHub token for private Release assets:
+Use a GitHub token for private GitHub Release assets and remote Wikis access:
 
 ```bash
 npx @lumi-ai-lab/harness-data install --github-token ...
@@ -84,7 +91,12 @@ The same auth parameters support `--agent workbuddy` on macOS. WorkBuddy auth is
 
 The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
 
-Without a GitHub token, the installer interactively asks for a local absolute path to `qdm-metric-cli` and `harness-data-wikis`. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli` are no longer installed).
+Without GitHub auth, the installer still requires a local `harness-data-wikis` path.
+With `auto` or `gitee`, both CLI tools can be installed from a complete Gitee mirror
+without a GitHub token. With `--release-source github`, the existing private GitHub
+restriction remains: the installer asks for a local `qdm-metric-cli` path when GitHub
+auth is unavailable. Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` /
+`qdm-indicators-cli` / `qdm-sql-cli` / `cas-cli` are no longer installed).
 
 Update an existing runtime interactively:
 

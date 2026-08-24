@@ -1,4 +1,4 @@
-import { latestRelease } from "./github.js";
+import { resolveLatestRelease } from "./release-source.js";
 
 function archiveSuffix(asset, key) {
   if (asset?.archive) return asset.archive;
@@ -17,23 +17,20 @@ export function releaseAsset(release, name) {
 }
 
 export async function resolveLatestTool(tool, key, options = {}) {
-  const release = await latestRelease(tool.repo, options);
-  const tag = release.tag_name;
-  const names = [...new Set([
+  const resolved = await resolveLatestRelease(tool.repo, (tag) => [
     `${tool.binary}-${tag}-${key}.zip`,
     toolAssetName(tool, tag, key),
     `${tool.binary}-${tag}-${key}.tar.gz`
-  ])];
-  const asset = names.map((name) => releaseAsset(release, name)).find(Boolean);
-  if (!asset) {
-    throw new Error(`${tool.name} latest release ${tag} missing ${key} asset in ${tool.repo}: ${names.join(", ")}`);
-  }
+  ], options);
+  const { asset, tag } = resolved;
   return {
     ...tool,
     version: tag,
     platforms: {
       [key]: {
-        url: asset.browser_download_url || `https://github.com/${tool.repo}/releases/download/${tag}/${asset.name}`,
+        url: asset.downloadUrl,
+        name: asset.name,
+        releaseSource: resolved.source,
         archive: asset.name.endsWith(".zip") ? "zip" : "tar.gz"
       }
     }
