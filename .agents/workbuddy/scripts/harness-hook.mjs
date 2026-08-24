@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -279,6 +280,71 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
   );
 }
 
+const HTML_REPORT_SKILL_PATTERN = /(<skill\s+name=["']html-report["']|\/skill:\s*html-report\b|\bskill:\s*html-report\b)/i;
+const HTML_REPORT_TEXT_PATTERNS = [/html[- ]?report/i, /html\s*报告/i];
+const REPORT_TRIGGERS = ["生成", "做", "制作", "输出", "写", "创建", "出一份", "来一份", "周例会", "经营分析", "盈利情况", "销售情况", "分析报告"];
+const CONTINUATION_TRIGGERS = ["继续", "确认", "已保存", "保存好了", "保存完", "下一步", "往下", "推进", "开始生成", "开始取数", "advance"];
+
+export function shouldBypassHtmlReportContext(root, canonicalPayload) {
+  const sessionID = typeof canonicalPayload?.session_id === "string" ? canonicalPayload.session_id.trim() : "";
+  const prompt = typeof canonicalPayload?.prompt === "string" ? canonicalPayload.prompt : "";
+  if (!root || !sessionID || !prompt.trim()) return false;
+  if (isHtmlReportPrompt(prompt)) {
+    rememberHtmlReportSession(root, sessionID);
+    return true;
+  }
+  if (!htmlReportSessionMarked(root, sessionID)) return false;
+  if (isHtmlReportContinuation(prompt)) return true;
+  forgetHtmlReportSession(root, sessionID);
+  return false;
+}
+
+function isHtmlReportPrompt(prompt) {
+  const text = String(prompt || "").trim();
+  if (!text) return false;
+  if (HTML_REPORT_SKILL_PATTERN.test(text) || HTML_REPORT_TEXT_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (!text.includes("报告")) return false;
+  return REPORT_TRIGGERS.some((trigger) => text.includes(trigger));
+}
+
+function isHtmlReportContinuation(prompt) {
+  const text = String(prompt || "").trim().replace(/^[，。,.!！?？；;：:"'“”‘’\s]+|[，。,.!！?？；;：:"'“”‘’\s]+$/g, "").toLowerCase();
+  return Boolean(text) && CONTINUATION_TRIGGERS.some((trigger) => text.includes(trigger));
+}
+
+function rememberHtmlReportSession(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  if (!marker) return;
+  try {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "{}\n", { mode: 0o644 });
+  } catch {
+    // A marker failure must not block WorkBuddy; the first html-report turn is still bypassed.
+  }
+}
+
+function forgetHtmlReportSession(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  if (!marker) return;
+  try {
+    rmSync(marker, { force: true });
+  } catch {
+    // Ignore stale marker cleanup failures.
+  }
+}
+
+function htmlReportSessionMarked(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  if (!marker) return false;
+  return existsSync(marker);
+}
+
+function htmlReportSessionMarkerPath(root, sessionID) {
+  if (!root || !sessionID) return "";
+  const digest = createHash("sha256").update(sessionID).digest("hex");
+  return join(root, ".harness", "state", "workbuddy-html-report", `${digest}.json`);
+}
+
 async function readStdin() {
   let data = "";
   process.stdin.setEncoding("utf8");
@@ -325,6 +391,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     emit(mode === "authz"
       ? safeOutput(mode, "QDM_HARNESS_AUTHZ_DENIED: WorkBuddy provided an invalid PreToolUse payload; the command was blocked.")
       : {});
+    return;
+  }
+  if (mode === "context" && shouldBypassHtmlReportContext(root, canonical)) {
+    emit({});
     return;
   }
   const output = runCanonicalHook(mode, canonical, root, env);

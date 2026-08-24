@@ -12,9 +12,12 @@ description: Generate an html-report (阶段 A 配置确认 + 阶段 B 报告生
 `.harness/state/html-report/<session>/debug/pipeline-state.json`。
 
 所有命令从仓库根运行。本 skill 只通过薄入口命令推进；不要直接读写 Gate 状态文件。
-如果 WorkBuddy 的 QDM Harness recall 抢先要求读取报告 spec/playbook，重启 WorkBuddy 前设置
-`QDM_HARNESS_SKIP_RECALL=1` 可跳过这层召回；这对齐 PI html-report 默认路径（先开
-`qdm-metric-cli ui`，不让模型先读召回文档，也不让模型生成 `result.json`）。
+WorkBuddy 会对 html-report 首轮和同会话「继续」类提示自动跳过通用 QDM Harness recall；
+这对齐 PI html-report 默认路径（先开 `qdm-metric-cli ui`，不让模型先读召回文档，也不让模型生成 `result.json`）。
+
+交互纪律：每次运行 `start` / `advance` / `status` 后，必须立即把命令输出中的
+URL、错误摘要、报告文件路径或“下一步”转述给用户；不要只说“后台在跑”，也不要让用户
+反复询问状态。若输出提示“不要后台继续推进”或当前停在 `B2_MAIN`，必须停下等用户确认。
 
 ## 阶段 A — 配置确认（默认打开 qdm-metric-cli ui，用户保存 result.json）
 
@@ -63,15 +66,18 @@ description: Generate an html-report (阶段 A 配置确认 + 阶段 B 报告生
      `analysis execute` / `auth describe` 注入鉴权；**不要**单独调用 `analysis validate`
      （hook 不绑定鉴权，会得到 `AUTHORIZATION_FAILED`）。任一卡取数失败会 fail Gate 并给出
      精确契约违规（如 `filters` 不支持某维度、`pageSize` 超限）。按报错修卡后：
-     `node .agents/workbuddy/scripts/html-report-workbuddy.mjs retry --session <id> --task <cardId>`，
-     或直接再次 `advance`。
+     - 若失败阶段仍是 `B0_PREFLIGHT`，先恢复当前 Gate：
+       `node .agents/pi/skills/html-report/scripts/stage-gate.mjs retry --session-dir "<projectRoot>/.harness/state/html-report/<session>" --phrase "重试当前阶段"`，再运行 `advance`。
+     - 若失败阶段是 `B2_WRITER` 单卡失败，再使用：
+       `node .agents/workbuddy/scripts/html-report-workbuddy.mjs retry --session <id> --task <cardId>`。
+     - 不要在 `B0_PREFLIGHT` 阶段使用 `retry --task`；当前薄入口只支持 B2_WRITER 单卡重试。
 6. 需要时关闭 UI 服务（避免孤儿进程）：
    `node .agents/workbuddy/scripts/html-report-workbuddy.mjs stop --session <id>`
 
 ## 阶段 B — 报告生成（止于 B2_MAIN）
 
-7. `B0_PREFLIGHT` 通过后 Runner 自动进入 `B2_WRITER`；继续 `advance` 会逐卡派生 codebuddy
-    子会话取数并写 `caption.md`，再进入 `B2_MAIN` 生成 `analysis/main.md`，finish 后停在人工
+7. `B0_PREFLIGHT` 通过后 Runner 自动进入 `B2_WRITER`；继续 `advance` 会以低并发派生 codebuddy
+   子会话取数并写 `caption.md`（默认并发 4，可用 `HTML_REPORT_WRITER_CONCURRENCY=<1-8>` 调整），再进入 `B2_MAIN` 生成 `analysis/main.md`，finish 后停在人工
     Gate（`awaiting_approval`，Runner 不自动批准）。此时 `analysis/main.md` 就是本流程的
     交付物，`advance` / `status` 输出会包含“报告文件”路径；查看状态后必须把该路径提示给用户，
     再把报告呈现给用户：

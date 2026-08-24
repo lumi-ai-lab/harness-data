@@ -68,6 +68,7 @@ function humanGateHint(state) {
   if (!state) return "";
   const entry = Object.entries(state.stages || {}).find(([, stage]) => stage.status === "awaiting_approval");
   if (!entry) return "";
+  if (entry[0] === "B2_MAIN") return "";
   return `\n人工 Gate：${entry[0]} 等待批准 —— 运行 approve --session <id> 通过并继续推进。`;
 }
 
@@ -108,6 +109,7 @@ export async function runWorkbuddy(argv = []) {
             userQuestion: question,
             open: true,
             detach: true,
+            watchPid: "none",
           });
           const uiNote = opened.serverUrl
             ? `qdm-metric-cli ui 已打开：${opened.serverUrl}\n请在 UI 里搭卡并点击「保存」写 result.json；回到会话回复「继续」后再运行 advance --session ${sessionId}。`

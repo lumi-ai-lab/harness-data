@@ -146,6 +146,9 @@ export function resolveWatchPid({
   explicitWatchPid = 0,
   isWorker = isMetricCliUiWorker(env),
 } = {}) {
+  if (explicitWatchPid === false || String(explicitWatchPid || "").trim() === "none") {
+    return { pid: 0, source: "disabled" };
+  }
   const explicit = Number(explicitWatchPid || 0);
   if (explicit > 1 && pidAlive(explicit)) {
     return { pid: explicit, source: "explicit" };
@@ -390,6 +393,7 @@ async function launchDetachedWorker({
   const args = [cliScriptPath, "--session-id", sessionId, "--project-root", projectRoot];
   if (userQuestion) args.push("--question", userQuestion);
   args.push(open ? "--open" : "--no-open");
+  if (watch.source === "disabled") args.push("--watch-pid", "none");
   if (watch.pid > 1) args.push("--watch-pid", String(watch.pid));
   const child = spawn(process.execPath, args, {
     cwd: projectRoot,
@@ -580,7 +584,7 @@ export async function runCli() {
     open: flags.has("open") || !flags.has("no-open"),
     spawnUi: shouldSpawnMetricCliUi() && !flags.has("skip-spawn"),
     detach: flags.has("detach") && !isMetricCliUiWorker(),
-    watchPid: Number(values["watch-pid"] || 0),
+    watchPid: values["watch-pid"] === "none" ? "none" : Number(values["watch-pid"] || 0),
   });
   process.stdout.write(`${JSON.stringify(publicMetricCliUiResult(opened))}\n`);
   if (isMetricCliUiWorker()) {

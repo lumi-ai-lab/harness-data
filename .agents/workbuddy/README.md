@@ -12,6 +12,7 @@ PreToolUse
 
 UserPromptSubmit
   -> scripts/harness-hook.mjs context
+  -> html-report Phase A/continuation prompts return {} here
   -> data-harness-cli context --format workbuddy-hook
   -> shared context/session core
 
@@ -64,20 +65,22 @@ node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>  
   both `qdm.metric.query` and `qdm.admin`. The local `config/dev-auth.blob` only grants
   query, so the UI fails with `AUTHORIZATION_FAILED` (code 77). Real runtimes inject auth
   via the host; for manual debugging here, `export QDM_AUTH_BLOB=<admin-capable blob>` before `start --phase-a ui`.
-- Set `QDM_HARNESS_SKIP_RECALL=1` before launching WorkBuddy when testing html-report
-  Phase A. This mirrors PI html-report's default fixed A_CONFIG path: no wiki recall
-  context is injected, so the model opens `qdm-metric-cli ui` and waits for the user to
-  save `<session>/result.json` instead of reading report specs/playbooks first.
+- WorkBuddy's JavaScript adapter automatically suppresses generic Harness wiki recall for html-report turns
+  and same-session continuation prompts such as `继续`. This mirrors PI html-report's
+  default fixed A_CONFIG path: the model opens `qdm-metric-cli ui` and waits for the
+  user to save `<session>/result.json` instead of reading report specs/playbooks first.
 - `stop` terminates the detached `qdm-metric-cli ui` for the session (idempotent; no-op
   when no marker exists) to avoid orphan processes.
 - `status` shows the Runner's Gate state and highlights any human gate (`awaiting_approval`) that needs `approve`.
+- `B2_WRITER` processes card writers with bounded parallelism. Default concurrency is `4`; set
+  `HTML_REPORT_WRITER_CONCURRENCY=<1-8>` before running `advance` when local resources or child capacity need tuning.
 - Run from the Harness runtime workspace root, or pass `--root <path>`.
 - Install path is the plugin enable flow above: add the runtime `agents` directory as a Marketplace, install `qdm-harness@lumi-harness-data`, then the scripts (including this thin entry and the Runner) are available under `agents/workbuddy/scripts/`. Validate with `harness-data doctor --dir <runtime>`.
 
 ## Hooks
 
 - `PreToolUse` matches macOS `Bash|execute_command`, calls `authz-hook --agent workbuddy`, and only permits gated QDM commands through `updatedInput.command`.
-- `UserPromptSubmit` calls `context --format workbuddy-hook` and injects the current `authzMode`.
+- `UserPromptSubmit` short-circuits html-report Phase A/continuation prompts in `scripts/harness-hook.mjs`; other prompts call `context --format workbuddy-hook` and inject the current `authzMode`.
 - `PostToolUse` matches `Bash|PowerShell|execute_command`, normalizes the tool name to `Bash`, and calls `posttool --format workbuddy-hook`.
 - Outside a Harness workspace, all hooks return an empty object and do not alter normal WorkBuddy behavior.
 - Context/PostToolUse failures return model-visible `additionalContext` and host-visible `systemMessage`; auth failures return an explicit `permissionDecision=deny` reason and exit with status `2` so hosts that cannot enforce the JSON decision still fail closed.
