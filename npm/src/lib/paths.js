@@ -44,7 +44,7 @@ export function writeState(workspace, patch) {
   const file = userStatePath();
   const state = {
     ...readWorkspaceState(workspace),
-    schemaVersion: 3,
+    schemaVersion: 4,
     lastInstallDir: workspace,
     updatedAt: new Date().toISOString(),
     ...patch

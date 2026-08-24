@@ -15,9 +15,9 @@ import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
 import { downloadReleaseAsset } from "../src/lib/github.js";
-import { giteeReleaseRepo, resolveLatestRelease, resolveReleaseSource } from "../src/lib/release-source.js";
+import { giteeReleaseRepo, resolveLatestRelease, resolveLatestReleaseAssets, resolveReleaseSource } from "../src/lib/release-source.js";
 import { resolveLatestTool, toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, installWikis, resolveLatestHarnessRelease, validateLocalWikisSource } from "../src/commands/install.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
 import { collectReleaseArchivePassword, RELEASE_ARCHIVE_PASSWORD } from "../src/lib/release-password.js";
 import { createInstallSession } from "../src/lib/install-session.js";
@@ -203,13 +203,13 @@ test("workspace installer state is local-first and does not leak across runtimes
   }), { lastInstallDir: second, agent: "pi", runtimeTag: "v-global" });
 });
 
-test("writeState preserves workspace state and upgrades it to schema version 3", () => {
+test("writeState preserves workspace state and upgrades it to schema version 4", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-write-"));
   fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
   fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), JSON.stringify({ agent: "workbuddy", runtimeTag: "v-local" }));
 
   const state = writeState(workspace, { packageVersion: "0.0.test" });
-  assert.equal(state.schemaVersion, 3);
+  assert.equal(state.schemaVersion, 4);
   assert.equal(state.agent, "workbuddy");
   assert.equal(state.runtimeTag, "v-local");
   assert.equal(state.packageVersion, "0.0.test");
@@ -353,6 +353,7 @@ test("Gitee Release mirrors use exact assets for runtime and both CLI repositori
           assets: [
             { name: "Source code (zip)", browser_download_url: "https://gitee.test/source.zip" },
             { name: "harness-data-runtime-v-runtime.zip", browser_download_url: "https://gitee.test/runtime.zip" },
+            { name: "harness-data-wikis-v-runtime.zip", browser_download_url: "https://gitee.test/wikis.zip" },
             { name: `data-harness-cli-v-runtime-${key}.zip`, browser_download_url: "https://gitee.test/data.zip" }
           ]
         }));
@@ -363,6 +364,7 @@ test("Gitee Release mirrors use exact assets for runtime and both CLI repositori
     const runtime = await resolveLatestRelease("lumi-ai-lab/harness-data", (tag) => [
       `harness-data-runtime-${tag}.zip`
     ], { releaseSource: "gitee" });
+    const harness = await resolveLatestHarnessRelease({ releaseSource: "gitee" });
     const data = await resolveLatestTool({
       name: "data-harness-cli",
       binary: "data-harness-cli",
@@ -381,6 +383,8 @@ test("Gitee Release mirrors use exact assets for runtime and both CLI repositori
     assert.equal(giteeReleaseRepo("pengmide/qdm-metric-cli"), "git_pengmd/harness-metric-release");
     assert.equal(runtime.source, "gitee");
     assert.equal(runtime.asset.name, "harness-data-runtime-v-runtime.zip");
+    assert.equal(harness.assets.runtime.name, "harness-data-runtime-v-runtime.zip");
+    assert.equal(harness.assets.wikis.name, "harness-data-wikis-v-runtime.zip");
     assert.equal(data.platforms[key].url, "https://gitee.test/data.zip");
     assert.equal(qdm.platforms[key].url, "https://gitee.test/qdm.zip");
     assert.equal(urls.every((url) => url.startsWith("https://gitee.com/api/v5/repos/")), true);
@@ -436,6 +440,54 @@ test("auto Release source prefers Gitee and falls back to GitHub only when the a
       githubToken: "fixture-token"
     });
     assert.equal(github.source, "github");
+    assert.deepEqual(urls, [
+      "https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest",
+      "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/latest"
+    ]);
+  } finally {
+    https.get = originalGet;
+  }
+});
+
+test("auto Release source keeps runtime and Wikis on one complete provider release", async () => {
+  const runtimeAsset = "harness-data-runtime-v-group.zip";
+  const wikisAsset = "harness-data-wikis-v-group.zip";
+  const urls = [];
+  const originalGet = https.get;
+  try {
+    https.get = (url, _options, callback) => {
+      const request = new EventEmitter();
+      urls.push(String(url));
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        if (String(url).startsWith("https://gitee.com/")) {
+          response.end(JSON.stringify({
+            tag_name: "v-group",
+            assets: [{ name: runtimeAsset, browser_download_url: "https://gitee.test/runtime.zip" }]
+          }));
+          return;
+        }
+        response.end(JSON.stringify({
+          tag_name: "v-group",
+          assets: [
+            { name: runtimeAsset, browser_download_url: "https://github.test/runtime.zip" },
+            { name: wikisAsset, browser_download_url: "https://github.test/wikis.zip" }
+          ]
+        }));
+      });
+      return request;
+    };
+
+    const resolved = await resolveLatestReleaseAssets("lumi-ai-lab/harness-data", {
+      runtime: [runtimeAsset],
+      wikis: [wikisAsset]
+    }, { releaseSource: "auto", githubToken: "fixture-token" });
+    assert.equal(resolved.source, "github");
+    assert.equal(resolved.assets.runtime.downloadUrl, "https://github.test/runtime.zip");
+    assert.equal(resolved.assets.wikis.downloadUrl, "https://github.test/wikis.zip");
     assert.deepEqual(urls, [
       "https://gitee.com/api/v5/repos/git_pengmd/harness-release/releases/latest",
       "https://api.github.com/repos/lumi-ai-lab/harness-data/releases/latest"
@@ -968,6 +1020,133 @@ printf '%s' '#!/bin/sh\\necho gitee-qdm\\n' > "$dir/${binaryName("qdm-metric-cli
     process.env.PATH = originalPath;
     https.get = originalGet;
   }
+});
+
+test("Gitee Release installs encrypted Wikis without GitHub access", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-gitee-wikis-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "wikis-release-password";
+  const requests = [];
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), [
+    "#!/bin/sh",
+    'if [ "$1" != "-P" ] || [ "$2" != "' + password + '" ]; then',
+    "  exit 9",
+    "fi",
+    'while [ "$#" -gt 0 ]; do',
+    '  if [ "$1" = "-d" ]; then',
+    "    shift",
+    '    dir="$1"',
+    "  fi",
+    "  shift",
+    "done",
+    'mkdir -p "$dir/metrics" "$dir/reports" "$dir/dims" "$dir/rules"',
+    'echo release-wikis > "$dir/index.md"'
+  ].join("\n"), { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = fakeBin + ":" + (originalPath || "");
+    https.get = (url, options, callback) => {
+      requests.push({ url: String(url), authorization: options.headers?.Authorization });
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("encrypted wikis archive");
+      });
+      return request;
+    };
+
+    const installed = await installWikis(workspace, {
+      githubToken: "must-not-be-used",
+      log: false,
+      _releaseArchivePassword: password,
+      _harnessRelease: {
+        source: "gitee",
+        tag: "v-wikis",
+        assets: {
+          wikis: {
+            name: "harness-data-wikis-v-wikis.zip",
+            downloadUrl: "https://gitee.test/harness-data-wikis-v-wikis.zip",
+            releaseSource: "gitee"
+          }
+        }
+      }
+    });
+
+    assert.equal(installed.mode, "release");
+    assert.equal(installed.tag, "v-wikis");
+    assert.equal(fs.readFileSync(path.join(workspace, "wikis", "index.md"), "utf8").trim(), "release-wikis");
+    assert.deepEqual(requests, [{
+      url: "https://gitee.test/harness-data-wikis-v-wikis.zip",
+      authorization: undefined
+    }]);
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+});
+
+test("Wikis Release password failure keeps the previous Wikis directory", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-wikis-rollback-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "wikis-password-must-not-leak";
+  const wikis = path.join(workspace, "wikis");
+  fs.mkdirSync(path.join(wikis, "metrics"), { recursive: true });
+  fs.mkdirSync(path.join(wikis, "reports"), { recursive: true });
+  fs.mkdirSync(path.join(wikis, "dims"), { recursive: true });
+  fs.mkdirSync(path.join(wikis, "rules"), { recursive: true });
+  fs.writeFileSync(path.join(wikis, "index.md"), "old-wikis\n");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), ["#!/bin/sh", "exit 9"].join("\n"), { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = fakeBin + ":" + (originalPath || "");
+    https.get = (_url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("encrypted wikis archive");
+      });
+      return request;
+    };
+
+    await assert.rejects(
+      installWikis(workspace, {
+        log: false,
+        _releaseArchivePassword: password,
+        _harnessRelease: {
+          source: "gitee",
+          tag: "v-wikis",
+          assets: {
+            wikis: {
+              name: "harness-data-wikis-v-wikis.zip",
+              downloadUrl: "https://gitee.test/harness-data-wikis-v-wikis.zip",
+              releaseSource: "gitee"
+            }
+          }
+        }
+      }),
+      (error) => {
+        assert.match(error.message, /unzip -P \*\*\*\*\*\*/);
+        assert.doesNotMatch(error.message, new RegExp(password));
+        return true;
+      }
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
+  assert.equal(fs.readFileSync(path.join(wikis, "index.md"), "utf8"), "old-wikis\n");
 });
 
 test("auto source does not switch away from Gitee after a ZIP extraction failure", { skip: process.platform === "win32" }, async () => {
@@ -2622,10 +2801,71 @@ test("tool update modes migrate legacy state while new state is independent of i
   assert.equal(toolInstallMode({ installMode: "local-path" }, "qdm-metric-cli"), "local-path");
   assert.equal(wikisInstallMode({ installMode: "github-token" }), "github");
   assert.equal(wikisInstallMode({ installMode: "local-path" }), "local-path");
+  assert.equal(wikisInstallMode({ wikisMode: "release" }), "release");
   assert.equal(toolInstallMode({
     installMode: "local-path",
     toolInstallModes: { "qdm-metric-cli": "release" }
   }, "qdm-metric-cli"), "release");
+});
+
+test("Wikis update migrates a legacy GitHub checkout to the versioned Release ZIP", { skip: process.platform === "win32" }, async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-wikis-update-"));
+  const fakeBin = path.join(workspace, "fake-bin");
+  const password = "wikis-update-password";
+  const wikis = path.join(workspace, "wikis");
+  for (const dir of ["metrics", "reports", "dims", "rules"]) fs.mkdirSync(path.join(wikis, dir), { recursive: true });
+  fs.writeFileSync(path.join(wikis, "index.md"), "old-wikis\n");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, "unzip"), [
+    "#!/bin/sh",
+    'if [ "$1" != "-P" ] || [ "$2" != "' + password + '" ]; then exit 9; fi',
+    'while [ "$#" -gt 0 ]; do',
+    '  if [ "$1" = "-d" ]; then shift; dir="$1"; fi',
+    "  shift",
+    "done",
+    'mkdir -p "$dir/metrics" "$dir/reports" "$dir/dims" "$dir/rules"',
+    'echo release-update > "$dir/index.md"'
+  ].join("\n"), { mode: 0o755 });
+
+  const originalPath = process.env.PATH;
+  const originalGet = https.get;
+  try {
+    process.env.PATH = fakeBin + ":" + (originalPath || "");
+    https.get = (_url, _options, callback) => {
+      const request = new EventEmitter();
+      process.nextTick(() => {
+        const response = new PassThrough();
+        response.statusCode = 200;
+        response.headers = {};
+        callback(response);
+        response.end("wikis release archive");
+      });
+      return request;
+    };
+    const release = {
+      source: "gitee",
+      tag: "v-wikis-new",
+      assets: {
+        wikis: {
+          name: "harness-data-wikis-v-wikis-new.zip",
+          downloadUrl: "https://gitee.test/harness-data-wikis-v-wikis-new.zip",
+          releaseSource: "gitee"
+        }
+      }
+    };
+    const result = await updateWikis(workspace, {
+      yes: true,
+      log: false,
+      _releaseArchivePassword: password
+    }, { installMode: "github-token" }, release);
+
+    assert.equal(result.mode, "release");
+    assert.equal(result.tag, "v-wikis-new");
+    assert.equal(fs.readFileSync(path.join(wikis, "index.md"), "utf8").trim(), "release-update");
+  } finally {
+    process.env.PATH = originalPath;
+    https.get = originalGet;
+  }
 });
 
 test("skip wikis check passes skip checks to build-index", { skip: process.platform === "win32" }, async () => {
@@ -2700,6 +2940,7 @@ esac
 
   await updateWikis(workspace, {
     githubToken: "secret-token",
+    useGitWikis: true,
     env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
   }, { installMode: "github-token" });
 
@@ -2740,6 +2981,7 @@ esac
   const result = await updateWikis(workspace, {
     githubToken: "secret-token",
     yes: true,
+    useGitWikis: true,
     env: { PATH: `${fakeBin}:${process.env.PATH || ""}` }
   }, { installMode: "github-token" });
 
@@ -2786,7 +3028,7 @@ test("update wikis discards local commits, tracked changes, and untracked files"
   git(["commit", "-m", "remote update"], seed);
   git(["push", "origin", "HEAD:master"], seed);
 
-  const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true }, { installMode: "github-token" });
+  const result = await updateWikis(workspace, { githubToken: "secret-token", yes: true, useGitWikis: true }, { installMode: "github-token" });
 
   assert.equal(fs.readFileSync(path.join(wikisDir, "index.md"), "utf8").replace(/\r\n/g, "\n"), "remote-v2\n");
   assert.equal(fs.existsSync(path.join(wikisDir, "local-only.md")), false);
@@ -2876,22 +3118,16 @@ test("install fails before writes when no-auth password is wrong", async () => {
   });
 });
 
-test("install fails before writes when GitHub auth and local wikis are both missing", async () => {
-  await withCleanAuthEnv(async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-    await assert.rejects(
-      installCommand({
-        yes: true,
-        dir: workspace,
-        agent: "codex",
-        authBlob: "qdm1enc.test",
-        authUserId: "user-1",
-        githubAuth: false
-      }),
-      /harness-data-wikis is required/
-    );
-    assert.deepEqual(harnessResidue(workspace), []);
-  });
+test("install access uses a Release Wikis bundle when GitHub auth and local Wikis are both absent", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
+  const access = await collectInstallAccess({
+    yes: true,
+    githubAuth: false,
+    releaseSource: "gitee"
+  }, workspace);
+  assert.equal(access.tokenMode, false);
+  assert.equal(access.remoteTools, true);
+  assert.equal(access.wikisSource, "");
 });
 
 test("collectInstallAccess accepts a local wikis source without GitHub", async () => {

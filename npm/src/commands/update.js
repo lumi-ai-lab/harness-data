@@ -8,10 +8,10 @@ import { packageVersion } from "../lib/package.js";
 import { platformKey } from "../lib/platform.js";
 import { collectReleaseArchivePassword } from "../lib/release-password.js";
 import { githubToken } from "../lib/github.js";
-import { resolveLatestRelease, resolveReleaseSource } from "../lib/release-source.js";
+import { resolveReleaseSource } from "../lib/release-source.js";
 import { resolveLatestTool } from "../lib/tool-release.js";
 import { forceSyncWikis, remoteDefaultRef, runWikisGit } from "../lib/wikis-git.js";
-import { buildAndCheck, installRuntimeBundle, printDoctorSummary } from "./install.js";
+import { buildAndCheck, installRuntimeBundle, installWikis, printDoctorSummary, resolveLatestHarnessRelease } from "./install.js";
 import { collectDoctor } from "./doctor.js";
 import { assertCodexAuthPlatform, hasAnyAgentHook, linkAgents, patchCodexHooksForWindows, readAuthzFromHarnessConfig, writeLocalConfig } from "../lib/config.js";
 import { action, blank, header, ok, shortSha, skip, step, warn } from "../lib/log.js";
@@ -67,7 +67,38 @@ async function maybeUpdateTool(runtimeDir, manifest, tool, options, state) {
   return result;
 }
 
-export async function updateWikis(runtimeDir, options, state) {
+export async function updateWikis(runtimeDir, options, state, harnessRelease) {
+  const wikisMode = wikisInstallMode(state);
+  if (wikisMode === "local-path") {
+    skip("harness-data-wikis 为本地路径模式，请手动检查");
+    return null;
+  }
+  if (options.useGitWikis) return updateGitWikis(runtimeDir, options, state);
+
+  const resolved = harnessRelease || await resolveLatestHarnessRelease(options);
+  const tag = resolved.tag;
+  if (wikisMode === "release" && state.wikisTag === tag) {
+    ok("harness-data-wikis 已是最新 " + tag);
+    return null;
+  }
+  if (fs.existsSync(path.join(runtimeDir, "wikis"))) {
+    warn("已有 Wikis 将以 Release 附件替换，本地修改不会保留");
+  }
+  action("发现更新：harness-data-wikis " + (state.wikisTag || "unknown") + " -> " + tag);
+  if (!(await confirm("是否更新 harness-data-wikis？", options))) {
+    skip("harness-data-wikis");
+    options.skippedUpdates?.push("harness-data-wikis " + tag);
+    return null;
+  }
+  const installed = await installWikis(runtimeDir, {
+    ...options,
+    _harnessRelease: resolved
+  });
+  ok("harness-data-wikis 已更新到 " + tag);
+  return installed;
+}
+
+async function updateGitWikis(runtimeDir, options, state) {
   const wikisDir = path.join(runtimeDir, "wikis");
   const wikisMode = wikisInstallMode(state);
   if (!githubToken(options) && wikisMode !== "github") {
@@ -118,6 +149,7 @@ function migratedInstallState(state, manifest, releaseSource) {
     installMode: undefined,
     releaseSource,
     wikisMode: wikisInstallMode(state),
+    ...(state.wikisTag ? { wikisTag: state.wikisTag } : {}),
     toolInstallModes: Object.fromEntries((manifest.tools || []).map((tool) => [
       tool.name,
       toolInstallMode(state, tool.name)
@@ -183,6 +215,7 @@ export async function updateCommand(options = {}) {
   let changed = false;
   let runtimeTag = state.runtimeTag || "";
   const nextTools = { ...(state.tools || {}) };
+  let nextWikis = {};
   const applied = [];
   const skipped = [];
   const trackingOptions = { ...options, _releaseArchivePassword: archivePassword, skippedUpdates: skipped };
@@ -198,10 +231,7 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(2, 7, "检查 runtime bundle");
-  const runtimeRelease = await resolveLatestRelease("lumi-ai-lab/harness-data", (tag) => [
-    `harness-data-runtime-${tag}.zip`,
-    `harness-data-runtime-${tag}.tar.gz`
-  ], options);
+  const runtimeRelease = await resolveLatestHarnessRelease(trackingOptions);
   const workBuddyPlugin = inspectWorkBuddyPlugin(runtimeDir);
   const workBuddyRepairNeeded = agentIncludesWorkBuddy(configuredAgent) &&
     (!workBuddyPlugin.prepared || !workBuddyPlugin.versionMatchesPackage);
@@ -212,7 +242,12 @@ export async function updateCommand(options = {}) {
       action(`发现更新：runtime bundle ${state.runtimeTag || "unknown"} -> ${runtimeRelease.tag}`);
     }
     if (await confirm(workBuddyRepairNeeded ? "是否修复 runtime bundle？" : "是否更新 runtime bundle？")) {
-      const bundle = await installRuntimeBundle(runtimeDir, { ...trackingOptions, force: true, requireWorkBuddy: agentIncludesWorkBuddy(configuredAgent) });
+      const bundle = await installRuntimeBundle(runtimeDir, {
+        ...trackingOptions,
+        _harnessRelease: runtimeRelease,
+        force: true,
+        requireWorkBuddy: agentIncludesWorkBuddy(configuredAgent)
+      });
       runtimeTag = bundle.tag || runtimeRelease.tag;
       changed = true;
       applied.push(`runtime bundle ${runtimeTag}`);
@@ -241,10 +276,14 @@ export async function updateCommand(options = {}) {
   blank();
 
   step(4, 7, "检查 Wikis 知识库");
-  const wikis = await updateWikis(runtimeDir, trackingOptions, state);
+  const wikis = await updateWikis(runtimeDir, trackingOptions, state, runtimeRelease);
   if (wikis) {
     changed = true;
-    applied.push(`harness-data-wikis ${shortSha(wikis.commit)}`);
+    nextWikis = {
+      wikisMode: wikis.mode,
+      ...(wikis.tag ? { wikisTag: wikis.tag } : {})
+    };
+    applied.push("harness-data-wikis " + (wikis.tag || "updated"));
   }
   blank();
 
@@ -270,6 +309,7 @@ export async function updateCommand(options = {}) {
     writeState(runtimeDir, {
       ...state,
       ...migratedState,
+      ...nextWikis,
       runtimeTag,
       tools: nextTools,
       manifestSha256: manifestDigest(manifest),
