@@ -84,6 +84,8 @@ const STAGE_GATE_SCRIPT = resolve(SCRIPT_DIR, "../../pi/skills/html-report/scrip
 const WRITER_MODEL = "custom-local:gpt-5.5";
 const WRITER_ROLE = "report-writer";
 const WRITER_TIMEOUT_MS = 120_000; // 对齐文档 §4.3：Writer 120s，Reviewer 150s
+const DEFAULT_WRITER_CONCURRENCY = 4;
+const MAX_WRITER_CONCURRENCY = 8;
 
 // B25 Editor Planner child（角色沿用 report-researcher，负责产出研究计划）。
 const EDITOR_MODEL = WRITER_MODEL;
@@ -430,14 +432,14 @@ export async function runWriterForCard(
 }
 
 /**
- * M1: B2_WRITER —— 串行处理每张未完成卡片，卡片隔离（单卡失败不污染后续卡）。
+ * M1: B2_WRITER —— 低并发处理每张未完成卡片，卡片隔离（单卡失败不污染后续卡）。
  * 全部成功 → finish B2_WRITER 并自动 start B2_MAIN（人工 Gate 停在 await）。
  * 有失败卡 → 不 finish，保持 running 供 retry，返回失败清单。
  */
 export async function runWriterStage(
   projectRoot,
   sessionId,
-  { runChild, fetchEntries } = {}
+  { runChild, fetchEntries, writerConcurrency } = {}
 ) {
   const result = readResult(projectRoot, sessionId);
   if (!result) {
@@ -454,10 +456,19 @@ export async function runWriterStage(
     return { ok: true, message: `全部 ${cardIds.length} 张卡已完成；B2_WRITER 已 finish，B2_MAIN 已开始。`, started };
   }
 
+  const concurrency = resolveWriterConcurrency(writerConcurrency);
+  const attempts = await mapWithConcurrency(pending, concurrency, async (cardId) => {
+    try {
+      return await runWriterForCard(projectRoot, sessionId, cardId, { runChild, fetchEntries });
+    } catch (error) {
+      return { cardId, status: "failed", error: error?.message || String(error) };
+    }
+  });
+
   const failed = [];
   const succeeded = [];
-  for (const cardId of pending) {
-    const attempt = await runWriterForCard(projectRoot, sessionId, cardId, { runChild, fetchEntries });
+  for (const attempt of attempts) {
+    const cardId = attempt.cardId;
     if (attempt.status === "committed") {
       succeeded.push(cardId);
     } else {
@@ -469,17 +480,40 @@ export async function runWriterStage(
     const detail = failed.map((item) => `  - ${item.cardId}: ${item.error}`).join("\n");
     return {
       ok: false,
-      message: `B2_WRITER 有 ${failed.length} 张卡失败（已成功 ${succeeded.length} 张）：\n${detail}\n修复后可 retry --task <cardId> 重试。`,
+      message: `B2_WRITER 有 ${failed.length} 张卡失败（并发 ${concurrency}，已成功 ${succeeded.length} 张）：\n${detail}\n修复后可 retry --task <cardId> 重试。`,
       failed,
       succeeded,
       pending,
+      writerConcurrency: concurrency,
     };
   }
 
   const finished = runStageGate(projectRoot, sessionId, "finish", ["--stage", "B2_WRITER"]);
   if (!finished.ok) return { ok: false, error: finished.error || "stage-gate finish B2_WRITER 失败" };
   const started = runStageGate(projectRoot, sessionId, "start", ["--stage", "B2_MAIN"]);
-  return { ok: true, message: `B2_WRITER 完成 ${succeeded.length} 张卡；B2_MAIN 已开始（人工 Gate，等待批准）。`, started, succeeded };
+  return { ok: true, message: `B2_WRITER 完成 ${succeeded.length} 张卡（并发 ${concurrency}）；B2_MAIN 已开始（人工 Gate，等待批准）。`, started, succeeded, writerConcurrency: concurrency };
+}
+
+function resolveWriterConcurrency(value = process.env.HTML_REPORT_WRITER_CONCURRENCY) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_WRITER_CONCURRENCY;
+  return Math.min(parsed, MAX_WRITER_CONCURRENCY);
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** M3-M5：阶段是否已由 Runner policy 显式启用。 */
@@ -1450,7 +1484,15 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       if (!finished.ok) return { ok: false, message: finished.error || "stage-gate finish B2_MAIN 失败" };
       const after = runStageGate(projectRoot, sessionId, "status");
       // B2_MAIN 是人工 Gate，step 模式下 finish 后停在 awaiting_approval；Runner 不自动 approve。
-      return { ok: true, message: `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，报告文件：${mainPath}，等待人工批准（不自动 approve）。`, state: after.payload?.state, composed };
+      return {
+        ok: true,
+        message: [
+          `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，报告文件：${mainPath}，等待人工批准（不自动 approve）。`,
+          gateActionHint(projectRoot, sessionId, after.payload?.state),
+        ].filter(Boolean).join("\n"),
+        state: after.payload?.state,
+        composed,
+      };
     }
     case "B25_EDITOR": {
       const outcome = await runEditorPlannerStage(projectRoot, sessionId, { runChild });
@@ -1480,6 +1522,59 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
   }
 }
 
+function currentStageRecord(state) {
+  if (!state?.currentStage) return null;
+  return state.stages?.[state.currentStage] || null;
+}
+
+function conciseFailureReason(reason) {
+  const text = String(reason || "").trim();
+  if (!text) return "未记录失败原因";
+  const cardMatch = text.match(/^([^:\s]+):/);
+  const unsupportedDim = text.match(/metric\s+([A-Za-z0-9_]+)\s+does not support filter dimension\s+([A-Za-z0-9_]+)/);
+  if (unsupportedDim) {
+    const card = cardMatch ? `卡片 ${cardMatch[1]}：` : "";
+    return `${card}指标 ${unsupportedDim[1]} 不支持筛选维度 ${unsupportedDim[2]}`;
+  }
+  const code = text.match(/"code"\s*:\s*"([^"]+)"/)?.[1];
+  const message = text.match(/"message"\s*:\s*"([^"]+)"/)?.[1];
+  if (code || message) return [code, message].filter(Boolean).join(" - ");
+  return text.split("\n").slice(0, 4).join(" ").slice(0, 500);
+}
+
+function gateActionHint(projectRoot, sessionId, state) {
+  if (!state) return "";
+  const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
+  const mainPath = join(sessionDir, "analysis", "main.md");
+  if (state.status === "failed") {
+    const stage = state.currentStage || "unknown";
+    const failure = conciseFailureReason(currentStageRecord(state)?.failureReason);
+    if (stage === "B0_PREFLIGHT") {
+      return [
+        "下一步：B0 预检失败，请直接把下面的错误摘要和修复步骤告诉用户，不要让用户再问状态。",
+        `错误摘要：${failure}`,
+        "请让用户回到配置 UI 修改对应卡片（例如移除不支持的筛选维度或更换指标），重新点击「保存」。",
+        `保存后运行：node .agents/pi/skills/html-report/scripts/stage-gate.mjs retry --session-dir ${JSON.stringify(sessionDir)} --phrase "重试当前阶段"`,
+        `然后运行：node .agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session ${sessionId}`,
+      ].join("\n");
+    }
+    return [
+      `下一步：${stage} 已失败，请直接告诉用户失败原因。`,
+      `错误摘要：${failure}`,
+      `修复后可运行 retry：node .agents/pi/skills/html-report/scripts/stage-gate.mjs retry --session-dir ${JSON.stringify(sessionDir)} --phrase "重试当前阶段"`,
+      `再运行：node .agents/workbuddy/scripts/html-report-workbuddy.mjs advance --session ${sessionId}`,
+    ].join("\n");
+  }
+  if (state.status === "awaiting_approval" && state.currentStage === "B2_MAIN" && existsSync(mainPath)) {
+    return [
+      "下一步：初版报告已生成，请直接把报告文件路径告诉用户，不要在后台继续推进。",
+      `报告文件：${mainPath}`,
+      "当前 WorkBuddy 流程止于 B2_MAIN；除非用户明确要求后续增强，否则不要运行 approve。",
+    ].join("\n");
+  }
+  return "";
+}
+
 /** advance：按当前 Gate 阶段分发；自动阶段（A_CONFIG→B0→B2_WRITER→B2_MAIN）级联推进。 */
 export async function advance(projectRoot, sessionId, { runChild, fetchEntries, fetchExplore } = {}) {
   let status = runStageGate(projectRoot, sessionId, "status");
@@ -1487,10 +1582,12 @@ export async function advance(projectRoot, sessionId, { runChild, fetchEntries, 
   let state = status.payload?.state;
   if (!state) return { ok: false, error: "stage-gate status 无 state；请先运行 start" };
   if (state.status === "failed") {
-    return { ok: false, error: `当前阶段 ${state.currentStage} 已失败，请用 retry --session <id> --task <cardId> 重试，或先 stage-gate retry。` };
+    const hint = gateActionHint(projectRoot, sessionId, state);
+    return { ok: false, error: [`当前阶段 ${state.currentStage} 已失败。`, hint].filter(Boolean).join("\n"), state };
   }
   if (state.status === "awaiting_approval") {
-    return { ok: true, message: `当前停在人工 Gate：${state.currentStage}，等待批准（不自动 approve）。`, state };
+    const hint = gateActionHint(projectRoot, sessionId, state);
+    return { ok: true, message: [`当前停在人工 Gate：${state.currentStage}，等待批准（不自动 approve）。`, hint].filter(Boolean).join("\n"), state };
   }
 
   const logs = [];
@@ -1556,6 +1653,7 @@ export function status(projectRoot, sessionId, { format = "text" } = {}) {
           const reason = stage.failureReason ? `（${stage.failureReason}）` : "";
           return `  ${id}: ${stage.status}${reason}`;
         }).filter(Boolean),
+        gateActionHint(projectRoot, sessionId, state),
       ].filter(Boolean).join("\n")
     : "（无 state）";
   return { ok: true, exists: true, state, message: format === "json" ? JSON.stringify(result.payload, null, 2) : summary };

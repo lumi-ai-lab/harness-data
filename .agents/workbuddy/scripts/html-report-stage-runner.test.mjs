@@ -894,6 +894,43 @@ test("M1 runWriterStage card isolation: one bad card does not block the next goo
   }
 });
 
+test("M1 runWriterStage uses bounded parallel writer children", async () => {
+  const cardIds = ["card-001", "card-002", "card-003", "card-004"];
+  const { root, sessionDir, sessionId } = makeSession({ cards: cardIds.map((id) => fixtureCard(id)) });
+  try {
+    driveGateToWriter(root, sessionId);
+    for (const cardId of cardIds) writeCardFixtures(sessionDir, cardId, rowsFixture());
+
+    const fetchEntries = async (resultPath, opts) => ({
+      producer: "fetch-entry.mjs",
+      cards: [{ cardId: opts.cardId, fetchStatus: "success", rowCount: 3, rowsSha256: "0".repeat(64) }],
+    });
+    let active = 0;
+    let maxActive = 0;
+    const runChild = async (opts) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+      active -= 1;
+      const cardId = opts.schema.properties.cardId.const;
+      return {
+        status: "completed",
+        code: "ok",
+        value: { role: "report-writer", taskId: cardId, cardId, paragraphs: ["销售额最高的是1月5日东部，120000元；最低是1月6日西部，40000元"] },
+        message: "ok",
+      };
+    };
+
+    const outcome = await runWriterStage(root, sessionId, { fetchEntries, runChild, writerConcurrency: 2 });
+    assert.equal(outcome.ok, true, outcome.message || outcome.error);
+    assert.equal(outcome.writerConcurrency, 2);
+    assert.equal(maxActive, 2, "writer children should run with bounded parallelism");
+    assert.deepEqual(outcome.succeeded, cardIds);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("M3 B25 fail-closed: invalid editor plan is rejected, no artifacts, gate stays on B25_EDITOR", async () => {
   const cardId = "card-001";
   const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
@@ -1732,6 +1769,70 @@ test("M6 thin entry status surfaces the Runner's human gate, approve forwards to
   }
 });
 
+test("M6 thin entry explains B0 failure with actionable UI retry steps", async () => {
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard("ui-card-1")] });
+  try {
+    const started = await start(root, sessionId);
+    assert.equal(started.ok, true, started.error);
+    assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "A_CONFIG"]).ok, true);
+    assert.equal(runStageGate(root, sessionId, "approve", ["--phrase", "继续"]).ok, true);
+    const reason = `ui-card-1: {
+  "code": "INVALID_REQUEST",
+  "message": "query request contains 1 validation errors",
+  "error": { "details": { "violations": [
+    { "code": "DIMENSION_NOT_SUPPORTED", "message": "metric activeMemberNum does not support filter dimension categoryLevel1Id", "path": "$.filters.categoryLevel1Id" }
+  ] } }
+}`;
+    assert.equal(runStageGate(root, sessionId, "fail", ["--stage", "B0_PREFLIGHT", "--reason", reason]).ok, true);
+
+    const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
+    assert.equal(s.ok, true, s.error);
+    assert.match(s.message, /下一步：B0 预检失败/);
+    assert.match(s.message, /卡片 ui-card-1：指标 activeMemberNum 不支持筛选维度 categoryLevel1Id/);
+    assert.match(s.message, /重新点击「保存」/);
+    assert.match(s.message, /stage-gate\.mjs retry/);
+
+    const advanced = await runWorkbuddy(["advance", "--session", sessionId, "--root", root]);
+    assert.equal(advanced.ok, false);
+    assert.match(advanced.error, /B0 预检失败/);
+    assert.match(advanced.error, new RegExp(sessionDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("M6 thin entry treats B2_MAIN as delivered instead of prompting background approve", async () => {
+  const cardId = "card-001";
+  const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
+  try {
+    driveGateToWriter(root, sessionId);
+    writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    const writer = await runWriterStage(root, sessionId, {
+      fetchEntries: async () => ({ producer: "fetch-entry.mjs", cards: [{ cardId, fetchStatus: "success", rowCount: rowsFixture().length, rowsSha256: rowsSha256(rowsFixture()) }] }),
+      runChild: async () => ({
+        status: "completed",
+        code: "ok",
+        value: { role: "report-writer", taskId: cardId, cardId, paragraphs: ["销售额最高的是1月5日东部，120000元；最低是1月6日西部，40000元"] },
+        message: "ok",
+      }),
+    });
+    assert.equal(writer.ok, true, writer.message || writer.error);
+    const main = await advance(root, sessionId);
+    assert.equal(main.ok, true, main.message);
+    assert.match(main.message, /初版报告已生成/);
+    assert.match(main.message, /不要在后台继续推进/);
+    assert.match(main.message, /不要运行 approve/);
+
+    const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
+    assert.equal(s.ok, true, s.error);
+    assert.match(s.message, /报告文件:/);
+    assert.match(s.message, /初版报告已生成/);
+    assert.doesNotMatch(s.message, /approve --session/);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("M6 thin entry CLI entry guard works end to end (spawn)", async () => {
   const { root, sessionId } = makeSession();
   try {
@@ -1768,6 +1869,9 @@ test("M6 thin entry start default phase-a ui persists question and writes UI mar
     assert.match(started.message, /qdm-metric-cli ui/);
     const marker = join(sessionDir, "debug", "metric-cli-ui.json");
     assert.equal(existsSync(marker), true, "默认 ui 模式应写 UI marker");
+    const markerJson = JSON.parse(readFileSync(marker, "utf8"));
+    assert.equal(markerJson.watchPid, 0);
+    assert.equal(markerJson.watchPidSource, "disabled");
     const question = JSON.parse(readFileSync(join(sessionDir, "debug", "a-config-question.json"), "utf8"));
     assert.equal(question.userQuestion, "销售额最近怎么样");
 
