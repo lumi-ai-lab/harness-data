@@ -527,7 +527,8 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 | 工具 | 职责 |
 |---|---|
 | `html_report_start` | 建 Session，打开 qdm-metric-cli ui（`--watch-pid` 绑 MCP 进程） |
-| `html_report_next` | B0 预检 → 逐卡 fetch-entry + evidence → compose-main.mjs |
+| `html_report_next` | B0 预检通过后关闭 UI → 逐卡 fetch-entry + evidence → compose-main.mjs |
+| `html_report_close_ui` | 显式关闭 qdm-metric-cli ui，保留 session 数据 |
 | `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md` |
 | `html_report_generate_html` | 用户明确确认后，把 `analysis/main.md` 导出为同级 `main.html` |
 | `html_report_status` | 返回当前 stage / cards 状态和只读 html 摘要 |
@@ -550,7 +551,7 @@ App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。
 用户 $html-report / @html-report
   → MCP start：建 Session，打开 qdm-metric-cli ui
   → 用户保存 result.json，回「继续」
-  → MCP B0（无 PI Agent 检查）
+  → MCP B0（无 PI Agent 检查；通过后关闭 UI，失败则保持 UI 打开）
   → MCP 逐卡 fetch-entry + prepare-card-caption-evidence
   → 宿主只返回 caption paragraphs + pointers → submit_writer
   → 所有卡完成后 compose-main.mjs

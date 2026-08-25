@@ -111,6 +111,37 @@ async function seedB2MainSession(t, sessionId, { main = "# 报告\n" } = {}) {
   return sessionDir;
 }
 
+async function installFakeMetricCli(dir) {
+  await mkdir(dir, { recursive: true });
+  const bin = join(dir, "qdm-metric-cli");
+  await writeFile(bin, "#!/usr/bin/env node\nprocess.exit(0);\n");
+  await chmod(bin, 0o755);
+  return bin;
+}
+
+async function seedAConfigSession(t, sessionId, result) {
+  const sessionDir = join(repoRoot, ".harness", "state", "html-report", sessionId);
+  t.after(async () => rm(sessionDir, { recursive: true, force: true }));
+  await mkdir(join(sessionDir, "debug"), { recursive: true });
+  await writeFile(join(sessionDir, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
+    version: 1,
+    sessionId,
+    stage: "a_config",
+    cards: [],
+    currentIndex: -1,
+    startedAt: "2026-08-25T00:00:00.000Z",
+  }, null, 2)}\n`);
+  await writeFile(join(sessionDir, "debug", "metric-cli-ui.json"), `${JSON.stringify({
+    version: 1,
+    sessionId,
+    url: "http://127.0.0.1:9876",
+    pid: 0,
+    cliPid: 0,
+  }, null, 2)}\n`);
+  await writeFile(join(sessionDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  return sessionDir;
+}
+
 test("MCP loader and server do not import PI agent directories", async () => {
   const files = [
     serverPath,
@@ -154,7 +185,7 @@ test("packaged B2 and research evidence modules load without PI source directori
   assert.equal(typeof researchEvidence.prepareSourceFieldInventory, "function");
 });
 
-test("self-test sees five tools including generate_html and export-main-html", async () => {
+test("self-test sees six tools including close_ui and generate_html", async () => {
   const child = spawn(process.execPath, [serverPath, "--self-test"], {
     cwd: repoRoot,
     stdio: ["ignore", "pipe", "pipe"],
@@ -182,6 +213,7 @@ test("B2_MAIN does not auto-export; generate_html works after explicit call", as
     [
       "html_report_start",
       "html_report_next",
+      "html_report_close_ui",
       "html_report_submit_writer",
       "html_report_generate_html",
       "html_report_status",
@@ -208,6 +240,47 @@ test("B2_MAIN does not auto-export; generate_html works after explicit call", as
   const statusAfter = await callTool("html_report_status", { sessionId });
   assert.equal(statusAfter.result.html.status, "generated");
   assert.equal(statusAfter.result.html.htmlPath, join(sessionDir, "analysis", "main.html"));
+});
+
+test("B0 pass closes the editor; B0 failure leaves it available for correction", async (t) => {
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-qdm-cli-"));
+  t.after(async () => rm(binDir, { recursive: true, force: true }));
+  const metricCli = await installFakeMetricCli(binDir);
+  const { rpc, callTool } = startServer(t, {
+    env: { ...process.env, QDM_METRIC_CLI: metricCli },
+  });
+  await rpc("initialize", {});
+
+  const passedSessionId = `mcp-b0-pass-${process.pid}-${Date.now()}`;
+  const passedSession = await seedAConfigSession(t, passedSessionId, {
+    status: "confirmed",
+    cards: [{ id: "card-1" }],
+  });
+  const passed = await callTool("html_report_next", { sessionId: passedSessionId });
+  assert.match(passed.error?.message || "", /fetch failed for card card-1/);
+  await assert.rejects(
+    readFile(join(passedSession, "debug", "metric-cli-ui.json")),
+    (error) => error.code === "ENOENT"
+  );
+  const passedStatus = await callTool("html_report_status", { sessionId: passedSessionId });
+  assert.equal(passedStatus.result.stage, "b2_writer");
+  assert.equal(passedStatus.result.ui.state, "closed");
+
+  const failedSessionId = `mcp-b0-fail-${process.pid}-${Date.now()}`;
+  const failedSession = await seedAConfigSession(t, failedSessionId, {
+    status: "draft",
+    cards: [{ id: "card-1" }],
+  });
+  const failed = await callTool("html_report_next", { sessionId: failedSessionId });
+  assert.match(failed.error?.message || "", /result\.status must be "confirmed"/);
+  await assert.doesNotReject(readFile(join(failedSession, "debug", "metric-cli-ui.json"), "utf8"));
+
+  const closed = await callTool("html_report_close_ui", { sessionId: failedSessionId });
+  assert.equal(closed.result.ui.state, "closed");
+  await assert.rejects(
+    readFile(join(failedSession, "debug", "metric-cli-ui.json")),
+    (error) => error.code === "ENOENT"
+  );
 });
 
 test("generate_html failure can be retried and rejects extra path arguments", async (t) => {

@@ -9,11 +9,12 @@ This skill drives the html-report pipeline through a local MCP server.
 It works on **both Codex CLI and ChatGPT Desktop App** — no `codex` binary
 required on the production path.
 
-The MCP server exposes five tools. Call them in order:
+The MCP server exposes six tools. Call them in order:
 
 ```
 html_report_start          → create session, open qdm-metric-cli ui
 html_report_next           → advance pipeline (B0 preflight → B2 per-card fetch)
+html_report_close_ui       → optionally close the editor without deleting session data
 html_report_submit_writer  → submit caption for the current card
 html_report_generate_html  → optional analysis/main.md → sibling main.html
 html_report_status         → query current state
@@ -25,7 +26,7 @@ html_report_status         → query current state
 A_CONFIG        user builds cards in qdm-metric-cli ui → saves result.json
   ↓ user replies "继续"
 B0_PREFLIGHT    validate result.json + metric CLI (no PI Agent check)
-  ↓ auto-advance on pass
+  ↓ on pass, close qdm-metric-cli ui and auto-advance
 B2_WRITER       per card: fetch-entry → prepare evidence → host writes caption
   ↓ submit_writer per card
 B2_MAIN         compose-main → analysis/main.md
@@ -63,8 +64,19 @@ After the user replies **继续**, call `html_report_next`:
 { "sessionId": "<the-id-from-start>" }
 ```
 
-The server validates `result.json` (B0), then fetches the first card's data
-and returns compact evidence views. You must now write a short caption.
+The server validates `result.json` (B0). On a successful preflight it closes
+`qdm-metric-cli ui`, then fetches the first card's data and returns compact
+evidence views. If B0 fails, the UI stays open so the user can correct it.
+The browser tab itself is not closed automatically.
+
+If the user explicitly cancels or asks to close the editor, call:
+
+```json
+{ "sessionId": "<the-id-from-start>" }
+```
+
+with `html_report_close_ui`. This stops the UI but keeps the report session
+data for later use.
 
 ### 3. Write caption
 

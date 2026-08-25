@@ -3,10 +3,11 @@
  * html-report MCP server for Codex CLI / ChatGPT App.
  *
  * Stdio JSON-RPC 2.0 server, no external dependencies.
- * Exposes five tools that drive the pipeline from A_CONFIG to B2_MAIN:
+ * Exposes six tools that drive the pipeline from A_CONFIG to B2_MAIN:
  *
  *   html_report_start          create session, open qdm-metric-cli ui
  *   html_report_next           advance pipeline (B0 → B2 per-card fetch)
+ *   html_report_close_ui       stop the qdm-metric-cli UI without deleting session data
  *   html_report_submit_writer  accept host caption, write caption.md
  *   html_report_generate_html  optional main.md → sibling main.html export
  *   html_report_status         query current state
@@ -47,6 +48,64 @@ function sessionDirFor(sessionId) {
   return join(workspace, ".harness", "state", "html-report", safe);
 }
 
+function uiMarkerPath(sessionDir) {
+  return join(sessionDir, "debug", "metric-cli-ui.json");
+}
+
+function pidAlive(pid) {
+  const numericPid = Number(pid) || 0;
+  if (numericPid <= 1) return false;
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function metricCliUiStatus(sessionDir) {
+  const markerPath = uiMarkerPath(sessionDir);
+  let marker;
+  try {
+    marker = JSON.parse(await readFile(markerPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { state: "closed", serverUrl: null };
+    }
+    return {
+      state: "unknown",
+      serverUrl: null,
+      warning: `Unable to read qdm-metric-cli UI status: ${error?.message || error}`,
+    };
+  }
+
+  const pids = [...new Set([marker?.pid, marker?.cliPid].map((pid) => Number(pid) || 0).filter((pid) => pid > 1))];
+  return {
+    state: pids.some(pidAlive) ? "open" : "stale",
+    serverUrl: typeof marker?.url === "string" ? marker.url : null,
+  };
+}
+
+async function closeMetricCliUi(sessionId) {
+  const sessionDir = sessionDirFor(sessionId);
+  try {
+    const { stopMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
+    const stopped = await stopMetricCliUi({ projectRoot: workspace, sessionId });
+    return {
+      ...(await metricCliUiStatus(sessionDir)),
+      closeRequested: true,
+      stopped: Boolean(stopped?.stopped),
+    };
+  } catch (error) {
+    const current = await metricCliUiStatus(sessionDir);
+    return {
+      ...current,
+      closeRequested: true,
+      warning: `Unable to stop qdm-metric-cli UI: ${error?.message || error}`,
+    };
+  }
+}
+
 // ── tool implementations ──────────────────────────────────────────────
 
 /**
@@ -84,6 +143,7 @@ async function htmlReportStart(args) {
     sessionDir,
     stage: "a_config",
     uiUrl: opened.serverUrl || null,
+    ui: { state: "open", serverUrl: opened.serverUrl || null },
     message: "qdm-metric-cli ui is open. Tell the user: build cards, click 保存, then reply 继续.",
   };
 }
@@ -128,13 +188,15 @@ async function htmlReportNext(args) {
       throw new Error("B0 failed: result.json must contain a non-empty cards[]");
     }
 
-    // B0 passed → start B2_WRITER: fetch first card
+    // B0 passed → configuration is locked; stop the editor before B2 fetches data.
     state.stage = "b2_writer";
     state.cards = result.cards.map((c) => ({ id: c.id, captioned: false }));
     state.currentIndex = 0;
     await writeState(sessionDir, state);
 
-    return await fetchCurrentCard(sessionDir, sessionId, result, state);
+    const ui = await closeMetricCliUi(sessionId);
+    const next = await fetchCurrentCard(sessionDir, sessionId, result, state);
+    return { ...next, ui };
   }
 
   // ── B2_WRITER: fetch next card or finish ──
@@ -294,6 +356,23 @@ async function htmlReportGenerateHtml(args) {
 }
 
 /**
+ * html_report_close_ui: explicitly close the UI without deleting report state.
+ */
+async function htmlReportCloseUi(args) {
+  rejectUnexpectedArgs(args, new Set(["sessionId"]), "html_report_close_ui");
+  const sessionId = String(args.sessionId || "").trim();
+  if (!sessionId) throw new Error("sessionId is required");
+  const ui = await closeMetricCliUi(sessionId);
+  return {
+    sessionId,
+    ui,
+    message: ui.warning
+      ? "UI close was requested, but cleanup could not be fully verified."
+      : "qdm-metric-cli UI close was requested. The report session data was kept.",
+  };
+}
+
+/**
  * html_report_status: return current session state.
  */
 async function htmlReportStatus(args) {
@@ -315,6 +394,7 @@ async function htmlReportStatus(args) {
     currentIndex: state.currentIndex,
     mainPath: state.mainPath || null,
     startedAt: state.startedAt || null,
+    ui: await metricCliUiStatus(sessionDir),
     html,
   };
 }
@@ -336,6 +416,17 @@ const TOOLS = [
   {
     name: "html_report_next",
     description: "Advance the pipeline: B0 preflight, per-card data fetch, or compose main.md when all cards are done.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session ID from html_report_start." },
+      },
+      required: ["sessionId"],
+    },
+  },
+  {
+    name: "html_report_close_ui",
+    description: "Close qdm-metric-cli ui for a session without deleting its report state. Use when the user explicitly cancels or asks to close the editor.",
     inputSchema: {
       type: "object",
       properties: {
@@ -385,6 +476,7 @@ const TOOLS = [
 const HANDLERS = {
   html_report_start: htmlReportStart,
   html_report_next: htmlReportNext,
+  html_report_close_ui: htmlReportCloseUi,
   html_report_submit_writer: htmlReportSubmitWriter,
   html_report_generate_html: htmlReportGenerateHtml,
   html_report_status: htmlReportStatus,
@@ -468,10 +560,11 @@ async function selfTest() {
   };
 
   // tool list
-  eq("tool count", TOOLS.length, 5);
+  eq("tool count", TOOLS.length, 6);
   eq("tool names", TOOLS.map((t) => t.name), [
     "html_report_start",
     "html_report_next",
+    "html_report_close_ui",
     "html_report_submit_writer",
     "html_report_generate_html",
     "html_report_status",
