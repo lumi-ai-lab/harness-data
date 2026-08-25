@@ -18,6 +18,9 @@ import {
 import { approvePipelineStage, finishPipelineStage, initPipeline, startPipelineStage } from "../scripts/stage-gate.mjs";
 
 const script = fileURLToPath(new URL("../scripts/open-metric-cli-ui.mjs", import.meta.url));
+const symlinkScript = fileURLToPath(
+  new URL("../../../../../.pi/skills/html-report/scripts/open-metric-cli-ui.mjs", import.meta.url)
+);
 
 async function writeFakeMetricCli(dir) {
   const cliPath = join(dir, "fake-qdm-metric-cli");
@@ -67,6 +70,44 @@ test("openMetricCliUi persists the question and does not write recommendations.j
   const question = JSON.parse(await readFile(opened.questionPath, "utf8"));
   assert.equal(question.userQuestion, "分析门店101001客流");
   await assert.rejects(readFile(join(opened.sessionDir, "recommendations.json")));
+});
+
+test("CLI wrapper runs through the project .pi symlink for start and stop", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "metric-cli-ui-symlink-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const launched = spawnSync(process.execPath, [
+    symlinkScript,
+    "--session-id",
+    "symlink-session",
+    "--question",
+    "验证软链接入口",
+    "--detach",
+    "--project-root",
+    root,
+    "--skip-spawn",
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(launched.status, 0, launched.stderr || launched.stdout);
+  const opened = JSON.parse(launched.stdout);
+  assert.equal(opened.preset, "metric-cli-ui");
+  assert.equal(opened.serverUrl, null);
+  assert.equal(
+    JSON.parse(await readFile(opened.questionPath, "utf8")).userQuestion,
+    "验证软链接入口"
+  );
+  assert.equal(JSON.parse(await readFile(opened.markerPath, "utf8")).sessionId, "symlink-session");
+
+  const stopped = spawnSync(process.execPath, [
+    symlinkScript,
+    "--stop",
+    "--session-id",
+    "symlink-session",
+    "--project-root",
+    root,
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(stopped.status, 0, stopped.stderr || stopped.stdout);
+  assert.equal(JSON.parse(stopped.stdout).stopped, false);
+  await assert.rejects(readFile(opened.markerPath), (error) => error.code === "ENOENT");
 });
 
 test("A_CONFIG approve injects userQuestion from the stored skill prompt", async (t) => {
