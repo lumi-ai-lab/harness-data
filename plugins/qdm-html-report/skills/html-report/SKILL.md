@@ -78,6 +78,30 @@ If the user explicitly cancels or asks to close the editor, call:
 with `html_report_close_ui`. This stops the UI but keeps the report session
 data for later use.
 
+### 2.1. Visible per-card progress
+
+`html_report_next`, `html_report_submit_writer`, and `html_report_status`
+return a `progress` object with `total`, `completed`, `active`, and `next`.
+`active` and `next` carry `{ number, id, title }`; use the returned `title`
+verbatim. It is the original `result.json` value (`card.title || card.id`),
+not a title to rewrite.
+
+Before every `html_report_next` that will fetch card data, send a visible
+progress narration first:
+
+- For the first card, send exactly: `正在校验配置，并读取第一张卡片的数据。`
+- For a later card, take `progress.next` from the previous successful tool
+  response and send exactly: `正在取数 · 第 <number>/<total> 张：<title>。`
+
+After every successful `html_report_submit_writer`, take `progress.active`
+and send exactly: `已完成第 <number>/<total> 张：<title>。`
+
+On session recovery, call `html_report_status` first. If `progress.next` is
+present, use it to restore the corresponding pre-fetch narration before the
+next card fetch. If `html_report_next` or `html_report_submit_writer` returns
+an error, tell the user the error and stop; never send a completion narration
+for that failed call.
+
 ### 3. Write caption
 
 Based on the evidence views returned by `html_report_next`:

@@ -3799,7 +3799,7 @@ function htmlReportSkillScript(fileName: string): string {
   return join(packageResourceRoot, "skills", "html-report", "scripts", fileName);
 }
 
-function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
+function stopHtmlReportUi(projectRoot: string, sid: string): void {
   if (!sid || sid === "unknown") return;
   const uiScript = htmlReportSkillScript("open-metric-cli-ui.mjs");
   try {
@@ -3809,8 +3809,13 @@ function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
       { cwd: projectRoot, encoding: "utf8", timeout: 5000 }
     );
   } catch {
-    // Session teardown must not throw back into Pi.
+    // UI cleanup must not throw back into Pi.
   }
+}
+
+function stopHtmlReportSidecars(projectRoot: string, sid: string): void {
+  if (!sid || sid === "unknown") return;
+  stopHtmlReportUi(projectRoot, sid);
   const recommendationsPath = join(htmlReportSessionDir(projectRoot, sid), "recommendations.json");
   if (!existsSync(recommendationsPath)) return;
   const serverScript = htmlReportSkillScript("server.mjs");
@@ -3870,6 +3875,7 @@ export function fixedAConfigBanner(seed: FixedRecommendationSeed): string {
     seed.serverUrl ? `- 本地编辑器：${seed.serverUrl}` : "- 本地编辑器已按当前设置启动；测试环境可能跳过真正拉起进程。",
     "- 请在该页面改卡后点击「保存」，写出 `$SESSION/result.json`。",
     "- 保存后回到 Pi 回复一次「继续」。",
+    "- 配置校验通过后，本地编辑器服务会自动关闭；浏览器标签页需自行关闭。",
   ]
     .filter(Boolean)
     .join("\n");
@@ -3879,7 +3885,7 @@ function fixedAConfigSystemBanner(seed: FixedRecommendationSeed): string {
   return [
     fixedAConfigBanner(seed),
     "- 本轮不做推荐生成，也不打开 public/local-report-builder.html。",
-    "- A_CONFIG 获批后自动执行 B0；B0 通过直接进入 B2 Writer，失败时才停在 Gate。",
+    "- A_CONFIG 获批后自动执行 B0；B0 通过会关闭本地编辑器并直接进入 B2 Writer，失败时才停在 Gate。",
     "- runtime agent list 已由扩展通过真实 pi-subagents 事件桥自动执行；模型无需也不得调用 subagent。",
     "- 不要写 recommendations.json，不要启动 server.mjs。",
   ].join("\n");
@@ -4468,6 +4474,11 @@ export default function qdmHarnessExtension(pi: {
         const auditError = persist("failed", reason);
         const terminalReason = auditError ? `${reason}; ${auditError}` : reason;
         return { isError: true, text: failRuntimeAgentListStage(sid, record, terminalReason) };
+      }
+      if (record.stageId === "B0_PREFLIGHT") {
+        // A successful B0 locks result.json for B2. Every failed B0 path above
+        // returns before this point, keeping the editor available for correction.
+        stopHtmlReportUi(projectRoot, sid);
       }
     }
 

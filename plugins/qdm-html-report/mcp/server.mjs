@@ -106,6 +106,60 @@ async function closeMetricCliUi(sessionId) {
   }
 }
 
+/** Read result cards opportunistically so progress never changes existing error semantics. */
+async function readResultCards(sessionDir) {
+  try {
+    const result = JSON.parse(await readFile(join(sessionDir, "result.json"), "utf8"));
+    return Array.isArray(result?.cards) ? result.cards : [];
+  } catch {
+    return [];
+  }
+}
+
+function progressCard(card, number) {
+  if (!card) return null;
+  return {
+    number,
+    id: card.id,
+    title: card.title || card.id,
+  };
+}
+
+function progressCardById(resultCards, cardId) {
+  const index = resultCards.findIndex((card) => card?.id === cardId);
+  return index < 0 ? null : progressCard(resultCards[index], index + 1);
+}
+
+/**
+ * Derive visible card progress from the confirmed input and persisted caption flags.
+ * State deliberately remains title-free so older sessions stay compatible.
+ */
+async function reportProgress(sessionDir, state) {
+  const resultCards = await readResultCards(sessionDir);
+  const stateCards = Array.isArray(state?.cards) ? state.cards : [];
+  const captioned = new Map(
+    stateCards
+      .filter((card) => card && typeof card === "object")
+      .map((card) => [card.id, card.captioned === true]),
+  );
+  const total = resultCards.length;
+  const completed = resultCards.filter((card) => captioned.get(card?.id) === true).length;
+  const allCompleted = total === 0 || completed === total;
+  const currentIndex = Number.isInteger(state?.currentIndex) ? state.currentIndex : -1;
+  const currentCard = stateCards[currentIndex];
+  const active = !allCompleted && state?.stage === "b2_writer"
+    ? progressCardById(resultCards, currentCard?.id)
+    : null;
+  const pendingStateCard = stateCards.find((card) => card?.captioned !== true);
+  let next = allCompleted ? null : progressCardById(resultCards, pendingStateCard?.id);
+  if (!next && !allCompleted) {
+    const nextIndex = resultCards.findIndex((card) => captioned.get(card?.id) !== true);
+    next = nextIndex < 0 ? null : progressCard(resultCards[nextIndex], nextIndex + 1);
+  }
+
+  return { total, completed, active, next };
+}
+
 // ── tool implementations ──────────────────────────────────────────────
 
 /**
@@ -164,7 +218,11 @@ async function htmlReportNext(args) {
   if (state.stage === "a_config") {
     const resultPath = join(sessionDir, "result.json");
     if (!existsSync(resultPath)) {
-      return { stage: "a_config", message: "result.json not found. User must click 保存 in qdm-metric-cli ui first." };
+      return {
+        stage: "a_config",
+        progress: await reportProgress(sessionDir, state),
+        message: "result.json not found. User must click 保存 in qdm-metric-cli ui first.",
+      };
     }
 
     // B0 preflight: validate result.json + metric CLI (no PI Agent check)
@@ -214,6 +272,7 @@ async function htmlReportNext(args) {
         stage: "b2_main",
         mainPath: state.mainPath,
         html: "awaiting_confirmation",
+        progress: await reportProgress(sessionDir, state),
         message: "analysis/main.md is ready. Ask the user whether to generate analysis/main.html. Call html_report_generate_html only after explicit confirmation.",
       };
     }
@@ -224,7 +283,11 @@ async function htmlReportNext(args) {
       // All done — shouldn't reach here, but handle gracefully
       state.stage = "b2_main";
       await writeState(sessionDir, state);
-      return { stage: "b2_main", message: "All cards captioned. Call html_report_next again to compose main.md." };
+      return {
+        stage: "b2_main",
+        progress: await reportProgress(sessionDir, state),
+        message: "All cards captioned. Call html_report_next again to compose main.md.",
+      };
     }
     state.currentIndex = nextIdx;
     await writeState(sessionDir, state);
@@ -243,6 +306,7 @@ async function htmlReportNext(args) {
       mainPath: state.mainPath || join(sessionDir, "analysis", "main.md"),
       html: html.status,
       htmlPath: html.htmlPath,
+      progress: await reportProgress(sessionDir, state),
       message: html.status === "awaiting_confirmation"
         ? "Pipeline already completed. analysis/main.md is ready. Ask the user whether to generate analysis/main.html."
         : "Pipeline already completed. analysis/main.md is ready.",
@@ -281,6 +345,7 @@ async function fetchCurrentCard(sessionDir, sessionId, result, state) {
       evidencePath: evidence.evidencePath,
       views: evidence.evidence.views,
     },
+    progress: await reportProgress(sessionDir, state),
     message: "Data fetched. Write 1-3 short caption paragraphs (who is high/low, what stands out). Every number must come from evidence views. Then call html_report_submit_writer.",
   };
 }
@@ -326,6 +391,7 @@ async function htmlReportSubmitWriter(args) {
     accepted: true,
     cardId,
     violations: result.violations || [],
+    progress: await reportProgress(sessionDir, state),
     message: `Caption accepted for card ${cardId}. Call html_report_next to proceed.`,
   };
 }
@@ -380,7 +446,14 @@ async function htmlReportStatus(args) {
   if (!sessionId) throw new Error("sessionId is required");
   const sessionDir = sessionDirFor(sessionId);
   const state = await readState(sessionDir);
-  if (!state) return { sessionId, stage: "none", message: "No active session. Call html_report_start first." };
+  if (!state) {
+    return {
+      sessionId,
+      stage: "none",
+      progress: await reportProgress(sessionDir, null),
+      message: "No active session. Call html_report_start first.",
+    };
+  }
 
   const { htmlExportSummary } = await loadKernel("artifacts/export-main-html.mjs");
   const html = state.stage === "b2_main"
@@ -396,6 +469,7 @@ async function htmlReportStatus(args) {
     startedAt: state.startedAt || null,
     ui: await metricCliUiStatus(sessionDir),
     html,
+    progress: await reportProgress(sessionDir, state),
   };
 }
 
@@ -415,7 +489,7 @@ const TOOLS = [
   },
   {
     name: "html_report_next",
-    description: "Advance the pipeline: B0 preflight, per-card data fetch, or compose main.md when all cards are done.",
+    description: "Advance the pipeline: B0 preflight, per-card data fetch, or compose main.md when all cards are done. Returns per-card progress and current/next card metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -437,7 +511,7 @@ const TOOLS = [
   },
   {
     name: "html_report_submit_writer",
-    description: "Submit caption paragraphs and evidence pointers for the current card.",
+    description: "Submit caption paragraphs and evidence pointers for the current card. Returns per-card progress and current/next card metadata.",
     inputSchema: {
       type: "object",
       properties: {
@@ -462,7 +536,7 @@ const TOOLS = [
   },
   {
     name: "html_report_status",
-    description: "Query the current pipeline state for a session.",
+    description: "Query the current pipeline state for a session, including per-card progress and card metadata.",
     inputSchema: {
       type: "object",
       properties: {

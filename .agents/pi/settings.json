@@ -1,12 +1,6 @@
 {
   "enableSkillCommands": true,
-  "extensions": [
-    ".pi/extensions/qdm-harness/index.ts"
-  ],
   "skills": [
     ".pi/skills"
-  ],
-  "packages": [
-    "../plugins/pi-html-report"
   ]
 }

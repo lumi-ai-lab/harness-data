@@ -10,7 +10,8 @@ The original user question appears after the closing `</skill>` tag in Pi's expa
 There are **two phases**. Phase A ends after the user clicks **保存** in
 `qdm-metric-cli ui` (writes `$SESSION/result.json`) **and** replies **「继续」**
 to pass the A_CONFIG Gate. The extension then runs B0 automatically; a passing
-B0 enters B2 Writer in the same turn, while a failure stops at the Gate.
+B0 closes `qdm-metric-cli ui` and enters B2 Writer in the same turn, while a
+failure leaves the UI open and stops at the Gate.
 
 Full architecture (P0–P5) is locked in:
 
@@ -28,6 +29,9 @@ qdm-metric-cli ui --session-local-dir $SESSION
 用户在该页面自己搭卡，点击 **保存** 写出 `$SESSION/result.json`。
 **保存不会自动进入阶段 B。** 用户必须回到 Pi 回复 **「继续」**，A_CONFIG
 Gate 确认 `result.json` 存在后才会批准进入 B0。
+
+B0 通过后，扩展会停止本地 `qdm-metric-cli ui` 服务并进入 B2；浏览器标签页不会
+自动关闭。B0 失败时 UI 保持可用，用户可以直接修正并重试。
 
 - A_CONFIG 的 UI 启动和 runtime agent list 都由扩展在模型开始前完成。
   runtime list 仍走真实 pi-subagents runtime discovery，并按 Session/Gate attempt 写入

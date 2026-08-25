@@ -5,9 +5,12 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { rowsSha256 } from "../../../packages/html-report-kernel/src/data/fetch-entry.mjs";
 
 const serverPath = fileURLToPath(new URL("./server.mjs", import.meta.url));
 const repoRoot = resolve(new URL("../../../", import.meta.url).pathname);
+const pluginSkillPath = join(repoRoot, "plugins", "qdm-html-report", "skills", "html-report", "SKILL.md");
+const localSkillPath = join(repoRoot, ".codex", "skills", "html-report", "SKILL.md");
 
 async function installFakeMd2html(dir, { fail = false } = {}) {
   await mkdir(dir, { recursive: true });
@@ -142,6 +145,36 @@ async function seedAConfigSession(t, sessionId, result) {
   return sessionDir;
 }
 
+async function seedCachedCard(sessionDir, cardId, rows, columnLabels = {}) {
+  const cardDir = join(sessionDir, "data", "cards", cardId);
+  await mkdir(cardDir, { recursive: true });
+  await Promise.all([
+    writeFile(join(cardDir, "entry.json"), `${JSON.stringify(rows, null, 2)}\n`),
+    writeFile(join(cardDir, "entry.meta.json"), `${JSON.stringify({
+      rowCount: rows.length,
+      rowsSha256: rowsSha256(rows),
+    }, null, 2)}\n`),
+    writeFile(join(cardDir, "entry.column-meta.json"), `${JSON.stringify(columnLabels, null, 2)}\n`),
+  ]);
+}
+
+function testCard(id, title) {
+  return {
+    id,
+    title,
+    query: {
+      request: {
+        metrics: ["saleAmt"],
+        statisticPolicy: "SUMMARY",
+        time: { startDate: "2026-08-01", endDate: "2026-08-02" },
+        dimensions: [],
+        filters: {},
+      },
+      comparisons: [],
+    },
+  };
+}
+
 test("MCP loader and server do not import PI agent directories", async () => {
   const files = [
     serverPath,
@@ -195,6 +228,153 @@ test("self-test sees six tools including close_ui and generate_html", async () =
   const code = await new Promise((resolveCode) => child.on("close", resolveCode));
   assert.equal(code, 0);
   assert.match(stdout, /passed/);
+});
+
+test("Codex html-report Skill exactly mirrors the plugin Skill", async () => {
+  const [pluginSkill, localSkill] = await Promise.all([
+    readFile(pluginSkillPath, "utf8"),
+    readFile(localSkillPath, "utf8"),
+  ]);
+  assert.equal(localSkill, pluginSkill);
+});
+
+test("MCP returns visible progress for each cached Writer card", async (t) => {
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-qdm-cli-progress-"));
+  t.after(async () => rm(binDir, { recursive: true, force: true }));
+  const metricCli = await installFakeMetricCli(binDir);
+  const { rpc, callTool } = startServer(t, {
+    env: { ...process.env, QDM_METRIC_CLI: metricCli },
+  });
+  await rpc("initialize", {});
+
+  const sessionId = `mcp-progress-${process.pid}-${Date.now()}`;
+  const inventory = testCard("inventory-turnover", "库存周转");
+  const stockout = testCard("stockout-rate", "缺货率");
+  const sessionDir = await seedAConfigSession(t, sessionId, {
+    status: "confirmed",
+    title: "逐卡进度测试",
+    cards: [inventory, stockout],
+  });
+  await seedCachedCard(sessionDir, inventory.id, [{ saleAmt: 100 }], { saleAmt: "销售额" });
+  await seedCachedCard(sessionDir, stockout.id, [{ saleAmt: 80 }], { saleAmt: "销售额" });
+
+  const firstCard = { number: 1, id: inventory.id, title: inventory.title };
+  const secondCard = { number: 2, id: stockout.id, title: stockout.title };
+
+  const first = await callTool("html_report_next", { sessionId });
+  assert.equal(first.error, undefined);
+  assert.equal(first.result.stage, "b2_writer");
+  assert.equal(first.result.cardId, inventory.id);
+  assert.equal(first.result.cardTitle, inventory.title);
+  assert.deepEqual(first.result.progress, {
+    total: 2,
+    completed: 0,
+    active: firstCard,
+    next: firstCard,
+  });
+
+  const firstSubmitted = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: inventory.id,
+    paragraphs: ["库存周转表现稳定。"],
+    pointers: [],
+  });
+  assert.equal(firstSubmitted.error, undefined);
+  assert.deepEqual(firstSubmitted.result.progress, {
+    total: 2,
+    completed: 1,
+    active: firstCard,
+    next: secondCard,
+  });
+
+  const afterFirst = await callTool("html_report_status", { sessionId });
+  assert.equal(afterFirst.error, undefined);
+  assert.deepEqual(afterFirst.result.progress, {
+    total: 2,
+    completed: 1,
+    active: firstCard,
+    next: secondCard,
+  });
+
+  const second = await callTool("html_report_next", { sessionId });
+  assert.equal(second.error, undefined);
+  assert.equal(second.result.stage, "b2_writer");
+  assert.equal(second.result.cardId, stockout.id);
+  assert.equal(second.result.cardTitle, stockout.title);
+  assert.deepEqual(second.result.progress, {
+    total: 2,
+    completed: 1,
+    active: secondCard,
+    next: secondCard,
+  });
+
+  const secondSubmitted = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: stockout.id,
+    paragraphs: ["缺货率表现稳定。"],
+    pointers: [],
+  });
+  assert.equal(secondSubmitted.error, undefined);
+  assert.deepEqual(secondSubmitted.result.progress, {
+    total: 2,
+    completed: 2,
+    active: null,
+    next: null,
+  });
+
+  const completed = await callTool("html_report_next", { sessionId });
+  assert.equal(completed.error, undefined);
+  assert.equal(completed.result.stage, "b2_main");
+  assert.equal(completed.result.html, "awaiting_confirmation");
+  assert.deepEqual(completed.result.progress, {
+    total: 2,
+    completed: 2,
+    active: null,
+    next: null,
+  });
+  const main = await readFile(join(sessionDir, "analysis", "main.md"), "utf8");
+  assert.match(main, /## 库存周转/);
+  assert.match(main, /## 缺货率/);
+  assert.match(main, /库存周转表现稳定。/);
+  assert.match(main, /缺货率表现稳定。/);
+
+  const finalStatus = await callTool("html_report_status", { sessionId });
+  assert.equal(finalStatus.error, undefined);
+  assert.deepEqual(finalStatus.result.progress, {
+    total: 2,
+    completed: 2,
+    active: null,
+    next: null,
+  });
+});
+
+test("progress derives original titles for legacy title-free card state", async (t) => {
+  const sessionId = `mcp-progress-legacy-${process.pid}-${Date.now()}`;
+  const card = testCard("legacy-card", "原始卡片标题");
+  const sessionDir = await seedAConfigSession(t, sessionId, {
+    status: "confirmed",
+    cards: [card],
+  });
+  await writeFile(join(sessionDir, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
+    version: 1,
+    sessionId,
+    stage: "b2_writer",
+    cards: [{ id: card.id, captioned: false }],
+    currentIndex: 0,
+    startedAt: "2026-08-25T00:00:00.000Z",
+  }, null, 2)}\n`);
+
+  const { rpc, callTool } = startServer(t);
+  await rpc("initialize", {});
+  const status = await callTool("html_report_status", { sessionId });
+  assert.equal(status.error, undefined);
+  assert.equal(Object.hasOwn(status.result.cards[0], "title"), false);
+  assert.deepEqual(status.result.progress, {
+    total: 1,
+    completed: 0,
+    active: { number: 1, id: card.id, title: card.title },
+    next: { number: 1, id: card.id, title: card.title },
+  });
 });
 
 test("B2_MAIN does not auto-export; generate_html works after explicit call", async (t) => {
