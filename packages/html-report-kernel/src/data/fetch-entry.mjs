@@ -58,6 +58,9 @@ export function buildColumnLabels(meta) {
   for (const d of (Array.isArray(meta?.dimensionMetas) ? meta.dimensionMetas : [])) {
     if (d?.code && d?.name) labels[d.code] = d.name;
   }
+  for (const column of (Array.isArray(meta?.metricColumns) ? meta.metricColumns : [])) {
+    if (column?.key) labels[column.key] = column.displayName || column.metric || column.key;
+  }
   for (const dc of (Array.isArray(meta?.derivedColumns) ? meta.derivedColumns : [])) {
     if (dc?.key && dc?.name) labels[dc.key] = dc.name;
   }

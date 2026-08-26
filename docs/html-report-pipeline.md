@@ -247,8 +247,12 @@ node .agents/pi/skills/html-report/scripts/check-session-layout.mjs \
   "query": {
     "request": {
       // 严格 qdm-metric-cli QueryRequest
-      "metrics": ["..."],
-      "statisticPolicy": "SUMMARY",
+      "metrics": ["..."],                 // 有 measures 时可省略，由 measures 推导
+      "statisticPolicy": "SUMMARY",       // SUMMARY | SALES_STORE_DAY_AVG | AUTO
+      "measures": [                       // 可选；一卡多口径
+        { "metric": "saleAmt", "statisticPolicy": "SUMMARY" },
+        { "metric": "saleAmt", "statisticPolicy": "SALES_STORE_DAY_AVG" }
+      ],
       "time": { "startDate": "...", "endDate": "..." },
       "dimensions": ["..."],
       "filters": {},
@@ -263,7 +267,10 @@ node .agents/pi/skills/html-report/scripts/check-session-layout.mjs \
 `query.request` 是唯一查询真源，结构必须与 qdm-metric-cli `QueryRequest`
 严格一致（`additionalProperties: false`）。`query.comparisons` 是 Harness 级
 执行选项，适配器在 CLI 进程边界映射为 `--yoy`/`--mom`，不进入 QueryRequest。
-卡片不再有 `requestBody`、`queryProof`、`cli` 或顶层查询镜像字段。
+`statisticPolicy: AUTO` 且无 `measures` 时不能带 comparisons（CLI 禁止 AUTO+YOY/MOM）。
+有 `measures` 且带 comparisons 时，取数走 `--measures-json`，不要把 AUTO 放进
+`--payload-json` 再加 `--yoy`。卡片不再有 `requestBody`、`queryProof`、`cli`
+或顶层查询镜像字段。
 
 **FETCH 全量模式忽略「只取一页」语义**，由 CLI 默认 **all-pages** 拉齐；适配层固定 `pageNo=1`，并将 `pageSize` 默认/封顶为 2000。
 
@@ -276,9 +283,18 @@ HTML / `buildRequest` 可能带 `pageNo` + `pageSize`（例如 500），确认�
 报告取数 **禁止** `--single-page`：
 
 ```bash
+# 单口径
 qdm-metric-cli analysis execute \
   --payload-json '<card.query.request>'
   # 默认 all-pages，直到拉完
+
+# 多口径（request.measures 非空；禁止 --statistic-policy AUTO + --yoy）
+qdm-metric-cli analysis execute \
+  --measures-json '<request.measures>' \
+  --start-date ... --end-date ... \
+  --agg-dim ... --filter ... \
+  --yoy \
+  --output envelope
 ```
 
 规范化建议：
@@ -287,7 +303,8 @@ qdm-metric-cli analysis execute \
 2. **不要**加 `--single-page`。
 3. `pageSize` 若缺失或过大，按 CLI 上限处理（默认/封顶 2000）。
 4. `pageNo` 固定为 1；不传 `--single-page`，CLI 自行拉完所有分页。
-5. CLI 默认 stdout 返回完整 rows 数组；适配脚本将其写为 `entry.json`，并本地计算 `rowCount` 与 RFC 8785/JCS `rowsSha256` 写入 `entry.meta.json`。不生成 profile/facts 或任何汇总。
+5. 有 `measures` 时走 `--measures-json`，不要 `--payload-json` 与 `--measures-json` 混用。
+6. CLI 默认 stdout 返回完整 rows 数组；适配脚本将其写为 `entry.json`，并本地计算 `rowCount` 与 RFC 8785/JCS `rowsSha256` 写入 `entry.meta.json`。不生成 profile/facts 或任何汇总。多口径列名是 `saleAmt__SUMMARY` 这类 `metric__policy`，不是裸 metric code。
 
 重试：只有明确的瞬时 CLI 错误且单次在 15 秒内返回时，才 sleep 5s 后重试，
 最多尝试 3 次；等待与全部 CLI 尝试共享 540 秒硬预算。超时、鉴权、参数、

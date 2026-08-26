@@ -42,7 +42,7 @@ const GAP_QUERY_KEYS = {
   missing_range: new Set(["time.startDate", "time.endDate"]),
   missing_scope: new Set(["filters", "scopes", "measureFilters"]),
   missing_comparison: new Set(["comparisons"]),
-  metric_definition: new Set(["metrics", "statisticPolicy"]),
+  metric_definition: new Set(["metrics", "statisticPolicy", "measures"]),
 };
 
 export function evidenceGapMatchesChangedKeys(gap, changedKeys) {

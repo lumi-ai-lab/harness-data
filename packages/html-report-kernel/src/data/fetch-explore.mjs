@@ -84,12 +84,14 @@ const MATERIAL_QUERY_KEYS = new Set([
   "filters",
   "scopes",
   "measureFilters",
+  "measures",
   "comparisons",
 ]);
 const SET_LIKE_QUERY_KEYS = new Set([
   "metrics",
   "dimensions",
   "comparisons",
+  "measures",
 ]);
 const RUNNABLE_TASK_STATUSES = new Set(["pending", "running"]);
 
@@ -313,6 +315,7 @@ function flattenMaterialQuery(query) {
     filters: query.filters,
     ...(query.scopes ? { scopes: query.scopes } : {}),
     ...(query.measureFilters ? { measureFilters: query.measureFilters } : {}),
+    ...(query.measures ? { measures: query.measures } : {}),
     comparisons: query.comparisons,
   };
 }
@@ -338,7 +341,7 @@ export function materialQueryDelta(originalPayload, candidatePayload) {
     .sort();
   const supportedTopLevel = new Set([
     "metrics", "statisticPolicy", "time", "dimensions", "filters", "scopes",
-    "measureFilters", "comparisons", ...NON_SEMANTIC_QUERY_KEYS,
+    "measureFilters", "measures", "comparisons", ...NON_SEMANTIC_QUERY_KEYS,
   ]);
   const unclassifiedKeys = [...new Set([...Object.keys(originalPayload || {}), ...Object.keys(candidatePayload || {})])]
     .filter((key) => !supportedTopLevel.has(key))

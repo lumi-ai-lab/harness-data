@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCaptionEvidence } from "../evidence/prepare-card-caption-evidence.mjs";
+import { buildCaptionEvidence, captionValueFields } from "../evidence/prepare-card-caption-evidence.mjs";
 import {
   captionPointerBudget,
   captionViewPointer,
@@ -142,4 +142,56 @@ test("invented number is still rejected", () => {
     pointers: ["/views/topN-saleAmt-manageAreaId"],
   }, evidence);
   assert.equal(detailed.violations.some((item) => item.rule === "NUMBER_NOT_IN_EVIDENCE"), true);
+});
+
+test("measures columns rank by policy keys and keep yoy suffixes", () => {
+  assert.deepEqual(
+    captionValueFields(
+      { metrics: ["saleAmt"], statisticPolicy: "AUTO" },
+      { saleAmt: "销售额", "saleAmt__SUMMARY": "销售额（Summary）", manageAreaId: "管理区域" },
+    ),
+    ["saleAmt__SUMMARY"],
+  );
+  const evidence = buildCaptionEvidence({
+    cardId: "overall_manage_area",
+    query: {
+      metrics: ["saleAmt"],
+      statisticPolicy: "AUTO",
+      measures: [
+        { metric: "saleAmt", statisticPolicy: "SUMMARY" },
+        { metric: "saleAmt", statisticPolicy: "SALES_STORE_DAY_AVG" },
+      ],
+      dimensions: ["manageAreaId"],
+      comparisons: ["YOY"],
+    },
+    columnLabels: {
+      saleAmt: "销售额",
+      "saleAmt__SUMMARY": "销售额（Summary）",
+      "saleAmt__SALES_STORE_DAY_AVG": "销售额（销售店日均）",
+      manageAreaId: "管理区域",
+      "saleAmt__SUMMARY同比增长率": "销售额同比增长率",
+    },
+    rows: [
+      {
+        manageAreaId: "粤东区",
+        saleAmt__SUMMARY: 28508297.83,
+        "saleAmt__SUMMARY同比增长率": 6.92,
+        saleAmt__SALES_STORE_DAY_AVG: 15944.2382,
+      },
+      {
+        manageAreaId: "粤西区",
+        saleAmt__SUMMARY: 100,
+        "saleAmt__SUMMARY同比增长率": 1.1,
+        saleAmt__SALES_STORE_DAY_AVG: 10,
+      },
+    ],
+  });
+  assert.ok(evidence.views["topN-saleAmt__SUMMARY-manageAreaId"]);
+  assert.ok(evidence.views["topN-saleAmt__SALES_STORE_DAY_AVG-manageAreaId"]);
+  assert.equal(evidence.views["topN-saleAmt-manageAreaId"], undefined);
+  assert.equal(evidence.views["topN-saleAmt__SUMMARY-manageAreaId"].rows[0].metricValue, 28508297.83);
+  assert.equal(
+    evidence.views["topN-saleAmt__SUMMARY-manageAreaId"].rows[0].row["销售额同比增长率"],
+    6.92,
+  );
 });

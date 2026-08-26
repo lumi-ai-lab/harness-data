@@ -7,6 +7,7 @@ const METRIC_QUERY_KEYS = new Set([
   "filters",
   "scopes",
   "measureFilters",
+  "measures",
   "orderBy",
   "pageNo",
   "pageSize",
@@ -29,8 +30,11 @@ const LEGACY_QUERY_KEYS = new Set([
 
 export const DEFAULT_METRIC_PAGE_SIZE = 2000;
 export const MAX_METRIC_PAGE_SIZE = 2000;
+export const MAX_METRIC_MEASURES = 49;
 export const METRIC_COMPARISONS = new Set(["YOY", "MOM"]);
-export const METRIC_STATISTIC_POLICIES = new Set(["SUMMARY", "SALES_STORE_DAY_AVG"]);
+export const METRIC_MEASURE_POLICIES = new Set(["SUMMARY", "SALES_STORE_DAY_AVG"]);
+export const METRIC_STATISTIC_POLICIES = new Set(["SUMMARY", "SALES_STORE_DAY_AVG", "AUTO"]);
+const MEASURE_SPEC_KEYS = new Set(["metric", "statisticPolicy", "filters"]);
 
 export function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -45,15 +49,49 @@ function uniqueStrings(value, label, { allowEmpty = true } = {}) {
   return normalized;
 }
 
-function normalizeFilters(value) {
-  if (!isPlainObject(value)) throw new Error("query.filters must be an object of string arrays");
+function normalizeFilters(value, label = "query.filters") {
+  if (!isPlainObject(value)) throw new Error(`${label} must be an object of string arrays`);
   const filters = {};
   for (const key of Object.keys(value).sort()) {
     const field = String(key || "").trim();
-    if (!field) throw new Error("query.filters contains an empty field");
-    filters[field] = uniqueStrings(value[key], `query.filters.${field}`).sort();
+    if (!field) throw new Error(`${label} contains an empty field`);
+    filters[field] = uniqueStrings(value[key], `${label}.${field}`).sort();
   }
   return filters;
+}
+
+function metricsFromMeasures(measures) {
+  const metrics = [];
+  const seen = new Set();
+  for (const item of measures) {
+    if (seen.has(item.metric)) continue;
+    seen.add(item.metric);
+    metrics.push(item.metric);
+  }
+  return metrics;
+}
+
+function normalizeMeasures(value) {
+  if (!Array.isArray(value)) throw new Error("query.measures must be an array");
+  if (value.length === 0) throw new Error("query.measures must not be empty");
+  if (value.length > MAX_METRIC_MEASURES) {
+    throw new Error(`query.measures must contain at most ${MAX_METRIC_MEASURES} items`);
+  }
+  return value.map((item, index) => {
+    const label = `query.measures[${index}]`;
+    if (!isPlainObject(item)) throw new Error(`${label} must be an object`);
+    const unknown = Object.keys(item).filter((key) => !MEASURE_SPEC_KEYS.has(key));
+    if (unknown.length) throw new Error(`${label} contains unsupported fields: ${unknown.sort().join(", ")}`);
+    const metric = String(item.metric || "").trim();
+    if (!metric) throw new Error(`${label}.metric must be a non-empty string`);
+    const statisticPolicy = String(item.statisticPolicy || "").trim().toUpperCase();
+    if (!METRIC_MEASURE_POLICIES.has(statisticPolicy)) {
+      throw new Error(`${label}.statisticPolicy only supports SUMMARY and SALES_STORE_DAY_AVG`);
+    }
+    const measure = { metric, statisticPolicy };
+    if (item.filters != null) measure.filters = normalizeFilters(item.filters, `${label}.filters`);
+    return measure;
+  });
 }
 
 function normalizeTime(value) {
@@ -119,15 +157,27 @@ export function normalizeMetricQuery(rawQuery, { defaultComparisons = [] } = {})
 
   const statisticPolicy = String(rawQuery.statisticPolicy || "").trim().toUpperCase();
   if (!METRIC_STATISTIC_POLICIES.has(statisticPolicy)) {
-    throw new Error("query.statisticPolicy only supports SUMMARY and SALES_STORE_DAY_AVG");
+    throw new Error("query.statisticPolicy only supports SUMMARY, SALES_STORE_DAY_AVG, and AUTO");
+  }
+  const measures = rawQuery.measures != null ? normalizeMeasures(rawQuery.measures) : undefined;
+  if (measures && rawQuery.measureFilters != null) {
+    throw new Error("query.measures cannot be combined with query.measureFilters");
   }
   const dimensions = uniqueStrings(rawQuery.dimensions, "query.dimensions");
   const comparisons = normalizeComparisons(rawQuery.comparisons ?? defaultComparisons);
   if (comparisons.length && dimensions.length === 0) {
     throw new Error("query.comparisons requires at least one dimension");
   }
+  if (statisticPolicy === "AUTO" && comparisons.length && !measures) {
+    throw new Error("query.statisticPolicy AUTO does not support comparisons unless query.measures is present");
+  }
+  const metrics = rawQuery.metrics != null
+    ? uniqueStrings(rawQuery.metrics, "query.metrics", { allowEmpty: false })
+    : measures
+      ? metricsFromMeasures(measures)
+      : uniqueStrings(rawQuery.metrics, "query.metrics", { allowEmpty: false });
   const query = {
-    metrics: uniqueStrings(rawQuery.metrics, "query.metrics", { allowEmpty: false }),
+    metrics,
     statisticPolicy,
     time: normalizeTime(rawQuery.time),
     dimensions,
@@ -141,6 +191,7 @@ export function normalizeMetricQuery(rawQuery, { defaultComparisons = [] } = {})
     ),
     comparisons,
   };
+  if (measures) query.measures = measures;
   if (rawQuery.requestId != null && String(rawQuery.requestId).trim()) {
     query.requestId = String(rawQuery.requestId).trim();
   }
@@ -233,4 +284,8 @@ export function metricComparisonArgs(query) {
 
 export function metricQueryKeys() {
   return new Set(METRIC_QUERY_KEYS);
+}
+
+export function queryHasMeasures(query) {
+  return Array.isArray(query?.measures) && query.measures.length > 0;
 }

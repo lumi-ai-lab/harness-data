@@ -10,6 +10,7 @@ import {
   metricCliPayload,
   metricComparisonArgs,
   normalizeMetricQuery,
+  queryHasMeasures,
 } from "../../html-report-kernel/src/query/metric-query-contract.mjs";
 import { isMetricTimeout } from "./metric-timeout.mjs";
 
@@ -60,19 +61,8 @@ export function metricAuthContext({ projectRoot, sessionId, environment = proces
   };
 }
 
-export function buildMetricExecuteArgs(query, { timeoutMs, authContext } = {}) {
-  const normalized = normalizeMetricQuery(query);
-  const args = [
-    "analysis",
-    "execute",
-    "--payload-json",
-    JSON.stringify(metricCliPayload(normalized)),
-    "--output",
-    "envelope",
-    "--dim-labels",
-    "only",
-    ...metricComparisonArgs(normalized),
-  ];
+function appendCommonExecuteArgs(args, normalized, { timeoutMs, authContext } = {}) {
+  args.push("--output", "envelope", "--dim-labels", "only", ...metricComparisonArgs(normalized));
   if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
     args.push("--timeout", `${Math.max(1, Math.floor(timeoutMs))}ms`);
   }
@@ -80,6 +70,48 @@ export function buildMetricExecuteArgs(query, { timeoutMs, authContext } = {}) {
     args.push("--data-auth", "--auth-blob", authContext.blob);
   }
   return args;
+}
+
+function buildMeasuresExecuteArgs(normalized, options = {}) {
+  const args = [
+    "analysis",
+    "execute",
+    "--measures-json",
+    JSON.stringify(normalized.measures),
+    "--start-date",
+    normalized.time.startDate,
+    "--end-date",
+    normalized.time.endDate,
+  ];
+  if (normalized.time.grain) args.push("--time-grain", normalized.time.grain);
+  for (const dimension of normalized.dimensions) args.push("--agg-dim", dimension);
+  for (const field of Object.keys(normalized.filters || {}).sort()) {
+    const values = normalized.filters[field];
+    if (Array.isArray(values) && values.length) args.push("--filter", `${field}=${values.join(",")}`);
+  }
+  if (normalized.scopes) args.push("--scope-json", JSON.stringify(normalized.scopes));
+  if (normalized.orderBy) {
+    args.push("--order-by", `${normalized.orderBy.field} ${normalized.orderBy.direction}`);
+  }
+  args.push("--page-size", String(normalized.pageSize));
+  return appendCommonExecuteArgs(args, normalized, options);
+}
+
+export function buildMetricExecuteArgs(query, { timeoutMs, authContext } = {}) {
+  const normalized = normalizeMetricQuery(query);
+  if (queryHasMeasures(normalized)) {
+    return buildMeasuresExecuteArgs(normalized, { timeoutMs, authContext });
+  }
+  return appendCommonExecuteArgs(
+    [
+      "analysis",
+      "execute",
+      "--payload-json",
+      JSON.stringify(metricCliPayload(normalized)),
+    ],
+    normalized,
+    { timeoutMs, authContext }
+  );
 }
 
 export function runMetricQuery(
