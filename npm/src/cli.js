@@ -2,8 +2,9 @@ import { installCommand } from "./commands/install.js";
 import { updateCommand } from "./commands/update.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { versionCommand } from "./commands/version.js";
+import { qwenpawCommand } from "./commands/qwenpaw.js";
 
-const commands = new Set(["install", "update", "doctor", "version"]);
+const commands = new Set(["install", "update", "doctor", "version", "qwenpaw"]);
 
 function parse(argv) {
   const args = argv.slice(2);
@@ -33,6 +34,7 @@ export async function main(argv) {
   if (command === "update") return updateCommand(options);
   if (command === "doctor") return doctorCommand(options);
   if (command === "version") return versionCommand(options);
+  if (command === "qwenpaw") return qwenpawCommand(options);
   console.log(`Usage: harness-data <install|update|doctor|version> [options]
 
 Commands:
@@ -40,6 +42,10 @@ Commands:
   update   Interactively check and apply runtime, CLI, and wikis updates
   doctor   Diagnose workspace CLI, config, index, and Agent hooks
   version  Print installer, repository, wikis, and manifest versions
+  qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
+
+QwenPaw:
+  harness-data qwenpaw <install|doctor|uninstall> [options]
 
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
