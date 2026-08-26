@@ -189,8 +189,8 @@ html_report_submit_writer({
     "未知损耗率方面，香港区 0.0863 偏高，合肥区 0.0058 较低。"
   ],
   "pointers": [
-    "/views/topN-bf19CustNum-manageAreaId/rows/0/value",
-    "/views/topN-bf19CustNum-manageAreaId/rows/1/value"
+    "/views/topN-bf19CustNum-manageAreaId/rows/0/metricValue",
+    "/views/topN-bf19CustNum-manageAreaId/rows/1/metricValue"
   ]
 })
 

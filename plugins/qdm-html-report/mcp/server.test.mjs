@@ -348,6 +348,73 @@ test("MCP returns visible progress for each cached Writer card", async (t) => {
   });
 });
 
+test("MCP rejects invalid caption evidence without writing or completing the card", async (t) => {
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-qdm-cli-caption-reject-"));
+  t.after(async () => rm(binDir, { recursive: true, force: true }));
+  const metricCli = await installFakeMetricCli(binDir);
+  const { rpc, callTool } = startServer(t, {
+    env: { ...process.env, QDM_METRIC_CLI: metricCli },
+  });
+  await rpc("initialize", {});
+
+  const sessionId = `mcp-caption-reject-${process.pid}-${Date.now()}`;
+  const card = testCard("sales", "销售额");
+  card.query.request.dimensions = ["bizDate"];
+  const sessionDir = await seedAConfigSession(t, sessionId, {
+    status: "confirmed",
+    title: "Caption 严格校验测试",
+    cards: [card],
+  });
+  await seedCachedCard(sessionDir, card.id, [{ bizDate: "2026-08-01", saleAmt: 100 }], {
+    bizDate: "日",
+    saleAmt: "销售额",
+  });
+
+  const fetched = await callTool("html_report_next", { sessionId });
+  assert.equal(fetched.error, undefined);
+  const validPointer = "/views/topN-saleAmt-bizDate/rows/0/metricValue";
+  const captionPath = join(sessionDir, "data", "cards", card.id, "caption.md");
+  const violationsPath = join(sessionDir, "data", "cards", card.id, "caption.md.violations.json");
+
+  const rejectedNumber = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: card.id,
+    paragraphs: ["销售额 9999。"],
+    pointers: [validPointer],
+  });
+  assert.match(rejectedNumber.error?.message || "", /caption rejected: number 9999/);
+
+  const rejectedPointer = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: card.id,
+    paragraphs: ["销售额 100。"],
+    pointers: ["/views/not-a-real-view"],
+  });
+  assert.match(rejectedPointer.error?.message || "", /does not resolve/);
+
+  await assert.rejects(readFile(captionPath), (error) => error.code === "ENOENT");
+  await assert.rejects(readFile(violationsPath), (error) => error.code === "ENOENT");
+  const statusAfterRejects = await callTool("html_report_status", { sessionId });
+  assert.equal(statusAfterRejects.error, undefined);
+  assert.deepEqual(statusAfterRejects.result.progress, {
+    total: 1,
+    completed: 0,
+    active: { number: 1, id: card.id, title: card.title },
+    next: { number: 1, id: card.id, title: card.title },
+  });
+  assert.equal(statusAfterRejects.result.cards[0].captioned, false);
+
+  const accepted = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: card.id,
+    paragraphs: ["2026-08-01 销售额 100。"],
+    pointers: [validPointer],
+  });
+  assert.equal(accepted.error, undefined);
+  assert.equal(accepted.result.accepted, true);
+  assert.match(await readFile(captionPath, "utf8"), /销售额 100/);
+});
+
 test("progress derives original titles for legacy title-free card state", async (t) => {
   const sessionId = `mcp-progress-legacy-${process.pid}-${Date.now()}`;
   const card = testCard("legacy-card", "原始卡片标题");

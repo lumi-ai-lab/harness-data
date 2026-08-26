@@ -376,10 +376,17 @@ async function htmlReportSubmitWriter(args) {
   const { writerReturnPaths } = await loadKernel("session/writer-return.mjs");
   const paths = writerReturnPaths({ sessionDir, cardId });
 
+  // Reject invalid evidence references before writing or completing the card.
+  // The shared writer intentionally supports soft violations for the PI caption
+  // gate, but the Codex MCP path must leave the card retryable on any violation.
+  const { loadCaptionEvidence, validateCaptionSubmission, writeCardCaption } = await loadKernel("captions/submit-card-caption.mjs");
+  const input = { paragraphs, pointers };
+  const evidence = await loadCaptionEvidence(paths.evidencePath);
+  validateCaptionSubmission(input, evidence);
+
   // submit-card-caption.mjs: input must contain ONLY paragraphs + pointers (no cardId)
-  const { writeCardCaption } = await loadKernel("captions/submit-card-caption.mjs");
   const result = await writeCardCaption({
-    input: { paragraphs, pointers },
+    input,
     evidencePath: paths.evidencePath,
     captionPath: paths.captionPath,
   });
@@ -518,7 +525,7 @@ const TOOLS = [
         sessionId: { type: "string" },
         cardId: { type: "string" },
         paragraphs: { type: "array", items: { type: "string" }, description: "1-3 short caption paragraphs." },
-        pointers: { type: "array", items: { type: "string" }, description: "JSON pointers into evidence views, e.g. /views/<id>/rows/0/value" },
+        pointers: { type: "array", items: { type: "string" }, description: "JSON pointers into evidence views, e.g. /views/<id>/rows/0/metricValue" },
       },
       required: ["sessionId", "cardId", "paragraphs", "pointers"],
     },
