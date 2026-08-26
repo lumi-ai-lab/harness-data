@@ -80,8 +80,10 @@ export {
   CAPTION_MAX_PARAGRAPH_CHARS,
   captionPointerBudget,
   canonicalizeCaptionPointer,
+  captionViewPointer,
   parseJsonArrayField,
   defaultCaptionPointers,
+  validateCaptionSubmission,
   writeCardCaption,
 } from "./captions/submit-card-caption.mjs";
 export {

@@ -415,6 +415,60 @@ test("MCP rejects invalid caption evidence without writing or completing the car
   assert.match(await readFile(captionPath, "utf8"), /销售额 100/);
 });
 
+test("MCP accepts more row-level pointers than evidence views after folding", async (t) => {
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-qdm-cli-caption-fold-"));
+  t.after(async () => rm(binDir, { recursive: true, force: true }));
+  const metricCli = await installFakeMetricCli(binDir);
+  const { rpc, callTool } = startServer(t, {
+    env: { ...process.env, QDM_METRIC_CLI: metricCli },
+  });
+  await rpc("initialize", {});
+
+  const sessionId = `mcp-caption-fold-${process.pid}-${Date.now()}`;
+  const card = testCard("sales", "销售额");
+  card.query.request.dimensions = ["manageAreaId"];
+  const sessionDir = await seedAConfigSession(t, sessionId, {
+    status: "confirmed",
+    title: "Caption view-fold 测试",
+    cards: [card],
+  });
+  await seedCachedCard(sessionDir, card.id, [
+    { manageAreaId: "香港区", saleAmt: 49845.44 },
+    { manageAreaId: "澳门区", saleAmt: 28598.99 },
+    { manageAreaId: "南京区", saleAmt: 14760.42 },
+    { manageAreaId: "武汉区", saleAmt: 12182.68 },
+  ], {
+    manageAreaId: "管理区域",
+    saleAmt: "销售额",
+  });
+
+  const fetched = await callTool("html_report_next", { sessionId });
+  assert.equal(fetched.error, undefined);
+  const views = fetched.result.evidence?.views || {};
+  const viewIds = Object.keys(views);
+  assert.ok(viewIds.length >= 2, `expected at least 2 views, got ${viewIds.join(",")}`);
+
+  const pointers = [];
+  for (const id of viewIds) {
+    const rows = views[id]?.rows || [];
+    for (let i = 0; i < rows.length; i++) {
+      pointers.push(`/views/${id}/rows/${i}/metricValue`);
+    }
+  }
+  assert.ok(pointers.length > viewIds.length);
+
+  const accepted = await callTool("html_report_submit_writer", {
+    sessionId,
+    cardId: card.id,
+    paragraphs: ["香港区销售额 49845.44。"],
+    pointers,
+  });
+  assert.equal(accepted.error, undefined, accepted.error?.message);
+  assert.equal(accepted.result.accepted, true);
+  const captionPath = join(sessionDir, "data", "cards", card.id, "caption.md");
+  assert.match(await readFile(captionPath, "utf8"), /49845.44/);
+});
+
 test("progress derives original titles for legacy title-free card state", async (t) => {
   const sessionId = `mcp-progress-legacy-${process.pid}-${Date.now()}`;
   const card = testCard("legacy-card", "原始卡片标题");

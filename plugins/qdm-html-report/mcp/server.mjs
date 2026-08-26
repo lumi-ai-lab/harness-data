@@ -525,9 +525,9 @@ const TOOLS = [
         sessionId: { type: "string" },
         cardId: { type: "string" },
         paragraphs: { type: "array", items: { type: "string" }, description: "1-3 short caption paragraphs." },
-        pointers: { type: "array", items: { type: "string" }, description: "JSON pointers into evidence views, e.g. /views/<id>/rows/0/metricValue" },
+        pointers: { type: "array", items: { type: "string" }, description: "JSON pointers to evidence views you used, e.g. /views/<id>. Row-level paths such as /views/<id>/rows/0/metricValue are folded to that view. Omit or pass [] to default to all views." },
       },
-      required: ["sessionId", "cardId", "paragraphs", "pointers"],
+      required: ["sessionId", "cardId", "paragraphs"],
     },
   },
   {

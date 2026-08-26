@@ -108,7 +108,8 @@ Based on the evidence views returned by `html_report_next`:
 
 - Write 1–3 short paragraphs answering: who is high, who is low, what stands out.
 - Every number must come from the evidence views — do not invent, estimate, or infer.
-- Include `pointers` — JSON pointers to the supporting evidence, such as `/views/<viewId>/rows/0/metricValue` — for each number you cite.
+- `pointers` are optional. Prefer one path per **view you used**, such as `/views/<viewId>`.
+- Row-level paths like `/views/<viewId>/rows/0/metricValue` are allowed; the kernel folds them to that view. Do **not** submit one pointer per cited number.
 
 Then call `html_report_submit_writer`:
 
@@ -117,7 +118,7 @@ Then call `html_report_submit_writer`:
   "sessionId": "<id>",
   "cardId": "<from-next>",
   "paragraphs": ["..."],
-  "pointers": ["/views/.../rows/0/metricValue"]
+  "pointers": ["/views/<viewId>"]
 }
 ```
 

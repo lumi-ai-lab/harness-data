@@ -189,8 +189,7 @@ html_report_submit_writer({
     "未知损耗率方面，香港区 0.0863 偏高，合肥区 0.0058 较低。"
   ],
   "pointers": [
-    "/views/topN-bf19CustNum-manageAreaId/rows/0/metricValue",
-    "/views/topN-bf19CustNum-manageAreaId/rows/1/metricValue"
+    "/views/topN-bf19CustNum-manageAreaId"
   ]
 })
 
@@ -201,6 +200,8 @@ html_report_submit_writer({
   "message": "Caption accepted. Call html_report_next to proceed."
 }
 ```
+
+`pointers` 按 **view** 计数：推荐 `/views/<viewId>`。格子级路径（如 `/views/<id>/rows/0/metricValue`）可以提交，内核会折成对应 view，同一 view 的多条只计一次。省略或传 `[]` 时默认引用全部 views。
 
 #### 第 6 步：逐卡重复
 
