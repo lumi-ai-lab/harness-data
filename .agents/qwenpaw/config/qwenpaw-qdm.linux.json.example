@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "runtime_dir": "/opt/qdm/harness-data-runtime",
+  "qdm_agent_id": "qdmDataAgent",
+  "user_id_display_mode": "off",
+  "context_limits": {
+    "base_context_bytes": null,
+    "wiki_file_bytes": null,
+    "wiki_total_bytes": null
+  },
+  "query_limits": {
+    "success_bytes": null,
+    "timeout_seconds": 120
+  },
+  "report_limits": {
+    "additional_context_bytes": null
+  }
+}
