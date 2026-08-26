@@ -72,7 +72,21 @@ function humanGateHint(state) {
   return `\n人工 Gate：${entry[0]} 等待批准 —— 运行 approve --session <id> 通过并继续推进。`;
 }
 
-export async function runWorkbuddy(argv = []) {
+function formatProgress(progress) {
+  const stage = progress?.stage || "html-report";
+  const total = Number(progress?.total || 0);
+  const completed = Number(progress?.completed || 0);
+  if (progress?.status === "failed") {
+    return `${stage} 卡片 ${progress.cardId || "unknown"} 失败（已处理 ${progress.processed || 0}/${total}）：${progress.error || "未知错误"}`;
+  }
+  if (progress?.status === "completed" && progress.cardId) {
+    return `${stage} 卡片 ${progress.cardId} 完成（已完成 ${completed}/${total}）`;
+  }
+  if (progress?.status === "completed") return `${stage} 全部完成（${completed}/${total}）`;
+  return `正在执行 ${stage}（已完成 ${completed}/${total}）`;
+}
+
+export async function runWorkbuddy(argv = [], { emit } = {}) {
   const command = argv[0];
   if (!command || command === "-h" || command === "--help") {
     return { ok: true, usage: USAGE };
@@ -129,7 +143,9 @@ export async function runWorkbuddy(argv = []) {
       output = status(projectRoot, sessionId, { format });
       break;
     case "advance":
-      output = await advance(projectRoot, sessionId);
+      output = await advance(projectRoot, sessionId, {
+        onProgress: typeof emit === "function" ? (progress) => emit(formatProgress(progress)) : undefined,
+      });
       break;
     case "approve":
       output = await approveGate(projectRoot, sessionId);
@@ -161,7 +177,9 @@ export async function runWorkbuddy(argv = []) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const result = await runWorkbuddy(process.argv.slice(2));
+  const result = await runWorkbuddy(process.argv.slice(2), {
+    emit: (line) => process.stdout.write(`${line}\n`),
+  });
   if (result.ok && result.usage) {
     process.stdout.write(`${result.usage}\n`);
   } else if (result.ok) {

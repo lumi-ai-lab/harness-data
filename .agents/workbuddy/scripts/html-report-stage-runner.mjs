@@ -439,7 +439,7 @@ export async function runWriterForCard(
 export async function runWriterStage(
   projectRoot,
   sessionId,
-  { runChild, fetchEntries, writerConcurrency } = {}
+  { runChild, fetchEntries, writerConcurrency, onProgress } = {}
 ) {
   const result = readResult(projectRoot, sessionId);
   if (!result) {
@@ -449,19 +449,47 @@ export async function runWriterStage(
   if (cardIds.length === 0) return { ok: false, error: "result.json 没有可用的 cards[]" };
 
   const pending = cardIds.filter((cardId) => !cardHasCaption(projectRoot, sessionId, cardId));
+  const progress = typeof onProgress === "function" ? onProgress : () => {};
+  let processed = cardIds.length - pending.length;
+  let completed = processed;
+  progress({ stage: "B2_WRITER", status: "running", total: cardIds.length, processed, completed });
   if (pending.length === 0) {
     const finished = runStageGate(projectRoot, sessionId, "finish", ["--stage", "B2_WRITER"]);
     if (!finished.ok) return { ok: false, error: finished.error || "stage-gate finish B2_WRITER 失败" };
     const started = runStageGate(projectRoot, sessionId, "start", ["--stage", "B2_MAIN"]);
+    progress({ stage: "B2_WRITER", status: "completed", total: cardIds.length, processed, completed });
     return { ok: true, message: `全部 ${cardIds.length} 张卡已完成；B2_WRITER 已 finish，B2_MAIN 已开始。`, started };
   }
 
   const concurrency = resolveWriterConcurrency(writerConcurrency);
   const attempts = await mapWithConcurrency(pending, concurrency, async (cardId) => {
     try {
-      return await runWriterForCard(projectRoot, sessionId, cardId, { runChild, fetchEntries });
+      const attempt = await runWriterForCard(projectRoot, sessionId, cardId, { runChild, fetchEntries });
+      processed += 1;
+      if (attempt.status === "committed") completed += 1;
+      progress({
+        stage: "B2_WRITER",
+        status: attempt.status === "committed" ? "completed" : "failed",
+        cardId,
+        total: cardIds.length,
+        processed,
+        completed,
+        error: attempt.error,
+      });
+      return attempt;
     } catch (error) {
-      return { cardId, status: "failed", error: error?.message || String(error) };
+      processed += 1;
+      const message = error?.message || String(error);
+      progress({
+        stage: "B2_WRITER",
+        status: "failed",
+        cardId,
+        total: cardIds.length,
+        processed,
+        completed,
+        error: message,
+      });
+      return { cardId, status: "failed", error: message };
     }
   });
 
@@ -491,6 +519,7 @@ export async function runWriterStage(
   const finished = runStageGate(projectRoot, sessionId, "finish", ["--stage", "B2_WRITER"]);
   if (!finished.ok) return { ok: false, error: finished.error || "stage-gate finish B2_WRITER 失败" };
   const started = runStageGate(projectRoot, sessionId, "start", ["--stage", "B2_MAIN"]);
+  progress({ stage: "B2_WRITER", status: "completed", total: cardIds.length, processed, completed });
   return { ok: true, message: `B2_WRITER 完成 ${succeeded.length} 张卡（并发 ${concurrency}）；B2_MAIN 已开始（人工 Gate，等待批准）。`, started, succeeded, writerConcurrency: concurrency };
 }
 
@@ -1414,7 +1443,7 @@ export async function runDesignStage(
 }
 
 /** Advance one stage; returns { ok, message, state?, stop? }. */
-async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore } = {}) {
+async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore, onProgress } = {}) {
   const stage = state.currentStage;
   // M3-M5 阶段默认关闭；仅当当前 state 的 policy 显式启用时才进入各 case。
   if (DISABLED_RUNNER_STAGES.has(stage) && !runnerPolicyEnabled(state, stage)) {
@@ -1466,7 +1495,7 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       return { ok: true, message: `B0_PREFLIGHT 通过（${cards.length} 张卡），进入 B2_WRITER。`, state: after.payload?.state, started };
     }
     case "B2_WRITER": {
-      const outcome = await runWriterStage(projectRoot, sessionId, { runChild, fetchEntries });
+      const outcome = await runWriterStage(projectRoot, sessionId, { runChild, fetchEntries, onProgress });
       if (!outcome.ok) return { ok: false, message: outcome.message || outcome.error, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
@@ -1576,7 +1605,7 @@ function gateActionHint(projectRoot, sessionId, state) {
 }
 
 /** advance：按当前 Gate 阶段分发；自动阶段（A_CONFIG→B0→B2_WRITER→B2_MAIN）级联推进。 */
-export async function advance(projectRoot, sessionId, { runChild, fetchEntries, fetchExplore } = {}) {
+export async function advance(projectRoot, sessionId, { runChild, fetchEntries, fetchExplore, onProgress } = {}) {
   let status = runStageGate(projectRoot, sessionId, "status");
   if (!status.ok) return { ok: false, error: status.error || "stage-gate status 失败" };
   let state = status.payload?.state;
@@ -1593,7 +1622,7 @@ export async function advance(projectRoot, sessionId, { runChild, fetchEntries, 
   const logs = [];
   let guard = 0;
   while (state && guard < RUNNER_STAGES.length) {
-    const outcome = await advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore });
+    const outcome = await advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore, onProgress });
     logs.push(outcome.message);
     if (!outcome.ok) return { ok: false, message: logs.join("\n"), error: outcome.message, code: outcome.code, state: outcome.state || state };
     const after = outcome.state || runStageGate(projectRoot, sessionId, "status").payload?.state;

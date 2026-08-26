@@ -931,6 +931,52 @@ test("M1 runWriterStage uses bounded parallel writer children", async () => {
   }
 });
 
+test("M1 runWriterStage emits per-card progress without changing persisted state", async () => {
+  const cardIds = ["progress-a", "progress-b"];
+  const { root, sessionDir, sessionId } = makeSession({ cards: cardIds.map((id) => fixtureCard(id)) });
+  const progress = [];
+  try {
+    for (const cardId of cardIds) writeCardFixturesReal(sessionDir, cardId, rowsFixture());
+    driveGateToWriter(root, sessionId);
+    const outcome = await runWriterStage(root, sessionId, {
+      writerConcurrency: 2,
+      onProgress: (event) => progress.push(event),
+      fetchEntries: async () => ({
+        producer: "fetch-entry.mjs",
+        cards: [{ cardId: "progress-a", fetchStatus: "success", rowCount: rowsFixture().length, rowsSha256: rowsSha256(rowsFixture()) }],
+      }),
+      runChild: async ({ sessionId: childSession }) => ({
+        status: "completed",
+        code: "ok",
+        value: {
+          role: "report-writer",
+          taskId: childSession.endsWith("progress-a") ? "progress-a" : "progress-b",
+          cardId: childSession.endsWith("progress-a") ? "progress-a" : "progress-b",
+          paragraphs: ["销售额最高的是1月5日东部，120000元；最低是1月6日西部，40000元"],
+        },
+      }),
+    });
+    assert.equal(outcome.ok, false, "progress-b should fail because the fetch fixture only returns progress-a");
+    assert.deepEqual(progress[0], {
+      stage: "B2_WRITER",
+      status: "running",
+      total: 2,
+      processed: 0,
+      completed: 0,
+    });
+    assert.deepEqual(
+      progress.slice(1).map(({ cardId, status }) => ({ cardId, status })).sort((a, b) => a.cardId.localeCompare(b.cardId)),
+      [
+        { cardId: "progress-a", status: "completed" },
+        { cardId: "progress-b", status: "failed" },
+      ],
+    );
+    assert.equal(progress.at(-1).completed, 1);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("M3 B25 fail-closed: invalid editor plan is rejected, no artifacts, gate stays on B25_EDITOR", async () => {
   const cardId = "card-001";
   const { root, sessionDir, sessionId } = makeSession({ cards: [fixtureCard(cardId)] });
