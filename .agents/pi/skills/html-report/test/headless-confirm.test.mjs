@@ -70,7 +70,7 @@ async function fixture(t, label) {
 test("pure builders create HTML-equivalent requestBody without bypass flags", () => {
   const card = {
     id: "c1", title: "销售额", analysisFocus: "分析", chartType: "table",
-    indicatorFieldList: ["saleAmt"], aggDimUniqueCodeList: ["incDate"],
+    indicatorFieldList: ["saleAmt"], aggDimUniqueCodeList: ["bizDate"],
     startDate: "2026-07-01", endDate: "2026-07-24", storeCollectType: 2,
     filters: [
       { type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] },
@@ -83,7 +83,8 @@ test("pure builders create HTML-equivalent requestBody without bypass flags", ()
     { type: "MEASURE", dimUniqueCode: "saleAmt", mathematicalOperator: { operator: ">", operatorValue: 100 } },
   ]);
   assert.equal(body.pageSize, 500);
-  const payload = buildConfirmPayload({ version: 1, mode: "free", cards: [card] });
+  const payload = buildConfirmPayload({ version: 1, mode: "free", userQuestion: "分析销售额", cards: [card] });
+  assert.equal(payload.userQuestion, "分析销售额");
   assert.equal(Object.hasOwn(payload, "already_validated"), false);
   assert.equal(Object.hasOwn(payload, "skip_validate"), false);
   assert.equal(buildServerArgs({ recommendationsPath: "/tmp/r.json", sessionId: "s", serverScript: "/tmp/server.mjs" }).includes("--open"), false);
@@ -92,14 +93,14 @@ test("pure builders create HTML-equivalent requestBody without bypass flags", ()
 test("page builder derives the same default orderBy from loaded metadata without changing HTTP semantics", () => {
   const card = {
     id: "c1", title: "销售额", analysisFocus: "分析", chartType: "table",
-    indicatorFieldList: ["saleAmt"], aggDimUniqueCodeList: ["incDate"],
+    indicatorFieldList: ["saleAmt"], aggDimUniqueCodeList: ["bizDate"],
     startDate: "2026-07-01", endDate: "2026-07-24", storeCollectType: 2,
     filters: [{ type: "DIMENSION", dimUniqueCode: "storeId", values: ["101001"] }],
     orderBy: "推荐文件中的值不应覆盖页面派生值 DESC",
   };
   const metadata = {
     dimensions: [
-      { dimUniqueCode: "incDate", dimName: "日维度", dimGroupCode: "dim_date_group" },
+      { dimUniqueCode: "bizDate", dimName: "日维度", dimGroupCode: "dim_date_group" },
       { dimUniqueCode: "storeId", dimName: "门店", dimGroupCode: "dim_store_group" },
     ],
     indicators: [{ indicatorsCodeEn: "saleAmt", indicatorsName: "销售额" }],
@@ -111,7 +112,8 @@ test("page builder derives the same default orderBy from loaded metadata without
   const nonDate = { ...card, aggDimUniqueCodeList: ["storeId"] };
   assert.equal(buildPageRequestBody(nonDate, metadata).orderBy, "销售额 DESC");
 
-  const payload = buildPageConfirmPayload({ version: 1, mode: "free", cards: [card] }, metadata);
+  const payload = buildPageConfirmPayload({ version: 1, mode: "free", userQuestion: "分析销售额", cards: [card] }, metadata);
+  assert.equal(payload.userQuestion, "分析销售额");
   assert.equal(payload.cards[0].requestBody.orderBy, "日维度 ASC");
 });
 

@@ -14,7 +14,7 @@
       "chartType": "table",
       "analysisFocus": "以门店101001为样本，按日分析来客数、客单价与门店毛利额的关系，寻找毛利额最优的客数-客单价平衡点。",
       "indicatorFieldList": ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
-      "aggDimUniqueCodeList": ["incDate"],
+      "aggDimUniqueCodeList": ["bizDate"],
       "filters": [
         {
           "type": "DIMENSION",

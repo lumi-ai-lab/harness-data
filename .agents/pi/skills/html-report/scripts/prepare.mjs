@@ -33,10 +33,11 @@ const contextPaths = (recall.contextFiles || [])
   .filter((p) => typeof p === "string" && p.trim());
 
 // Prefer physical contextFiles; fall back to logical selectedSpecs → wikis/…
-const specs = [
+const recalledSpecs = [
   ...contextPaths.filter((p) => /(?:^|\/)spec\.md$/.test(p) || /\/spec\//.test(p)),
   ...selectedSpecs.map((p) => (p.startsWith("wikis/") ? p : `wikis/${p}`)),
 ].filter((p, i, arr) => arr.indexOf(p) === i);
+const specs = recalledSpecs.filter((p) => mode !== "free" || p !== "wikis/rules/qdm-metric-cli/spec.md");
 
 // Audit-only: sibling playbooks derived from specs (not for Agent to execute).
 const playbooks = specs
@@ -61,7 +62,7 @@ async function isIndicatorsSpecOrSibling(specPath) {
     }
   }
   const head = text.slice(0, 8000);
-  const looksIndicators = /qdm-indicators-cli|Indicators|指标英文 code|indicators\.code\./i.test(head);
+  const looksIndicators = /qdm-indicators-cli|qdm-metric-cli|Metric(?:-native| CLI| Registry)?|Indicators|指标英文 code|indicators\.code\.|analysis execute/i.test(head);
   const looksNonIndicators = /qdm-cmr-cli|qdm-sql-cli|sql\s+execute|CMR/i.test(head) && !looksIndicators;
   if (looksNonIndicators) return false;
   // Metric specs under wikis/metrics are treated as Indicators unless clearly CMR/SQL.
@@ -102,8 +103,8 @@ const payload = {
   emptyRecall: specs.length === 0,
   next:
     specs.length === 0
-      ? "contextFiles empty: explore wikis/metrics/index.md and wikis/reports/index.md, open Spec files only, then write recommendations.json and start server --open"
-      : "read only specs, write recommendations.json, validate-config, start server --open (do not analysis execute)",
+      ? "contextFiles empty: explore wikis/metrics/index.md and wikis/reports/index.md, open Spec files only, then write recommendations.json and start server --detach without --open"
+      : "read only specs, write recommendations.json, validate-config, start server --detach without --open (do not analysis execute)",
 };
 
 process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
