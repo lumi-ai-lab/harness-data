@@ -1,9 +1,13 @@
 export {
   DEFAULT_METRIC_PAGE_SIZE,
+  MAX_METRIC_MEASURES,
+  METRIC_MEASURE_POLICIES,
+  METRIC_STATISTIC_POLICIES,
   normalizeMetricQuery,
   metricQueryFromCard,
   metricCliPayload,
   metricComparisonArgs,
+  queryHasMeasures,
 } from "./query/metric-query-contract.mjs";
 export {
   fetchAllEntries,
@@ -53,6 +57,7 @@ export {
   CAPTION_N,
   CAPTION_COMPARISON_SUFFIXES,
   captionNumber,
+  captionValueFields,
   buildCaptionEvidence,
   persistCaptionEvidence,
   prepareCardCaptionEvidence,
@@ -80,8 +85,10 @@ export {
   CAPTION_MAX_PARAGRAPH_CHARS,
   captionPointerBudget,
   canonicalizeCaptionPointer,
+  captionViewPointer,
   parseJsonArrayField,
   defaultCaptionPointers,
+  validateCaptionSubmission,
   writeCardCaption,
 } from "./captions/submit-card-caption.mjs";
 export {

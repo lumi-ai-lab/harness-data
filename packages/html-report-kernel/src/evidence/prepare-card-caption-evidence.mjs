@@ -76,6 +76,25 @@ function comparisonField(metric, suffix) {
   return `${metric}${suffix}`;
 }
 
+/** AUTO / measures output keys look like saleAmt__SUMMARY or saleAmt__SUMMARY__2. */
+function isPolicyColumnKey(key) {
+  return /__[A-Z][A-Z0-9_]*(?:__\d+)?$/.test(String(key || ""));
+}
+
+export function captionValueFields(query, columnLabels = {}) {
+  const fromLabels = Object.keys(columnLabels || {}).filter(isPolicyColumnKey);
+  if (fromLabels.length) return fromLabels;
+  const measures = Array.isArray(query?.measures) ? query.measures : [];
+  if (measures.length) {
+    return measures
+      .map((item) => `${String(item?.metric || "").trim()}__${String(item?.statisticPolicy || "").trim()}`)
+      .filter((key) => !key.startsWith("__") && !key.endsWith("__"));
+  }
+  return (Array.isArray(query?.metrics) ? query.metrics : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
 function rowSlice(row, metric, axis, columnLabels) {
   const sliced = {};
   for (const dim of axis) {
@@ -153,10 +172,11 @@ function viewRows(ranked, metric, prefix, axis, columnLabels) {
 
 export function buildCaptionEvidence({ cardId, query, rows, columnLabels = {} }) {
   const metrics = Array.isArray(query?.metrics) ? query.metrics.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const valueFields = captionValueFields(query, columnLabels);
   const { axis, droppedDimensions, groups } = buildCaptionAxis(query?.dimensions);
   const sourceRows = Array.isArray(rows) ? rows : [];
   const views = {};
-  for (const metric of metrics) {
+  for (const metric of valueFields) {
     for (const prefix of captionPrefixes(axis)) {
       const top = rankMetric(sourceRows, metric, prefix, "desc");
       const bottom = rankMetric(sourceRows, metric, prefix, "asc");
@@ -193,6 +213,7 @@ export function buildCaptionEvidence({ cardId, query, rows, columnLabels = {} })
     columnLabels,
     query: {
       metrics,
+      measures: Array.isArray(query?.measures) ? structuredClone(query.measures) : [],
       statisticPolicy: query?.statisticPolicy || null,
       dimensions: Array.isArray(query?.dimensions) ? [...query.dimensions] : [],
       time: query?.time && typeof query.time === "object" ? { ...query.time } : null,

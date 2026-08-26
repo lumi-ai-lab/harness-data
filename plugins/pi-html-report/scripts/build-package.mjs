@@ -80,9 +80,11 @@ function writeShim(destFile, targetFile, { cli = false, bindCli = false } = {}) 
   lines.push(`export * from "${rel}";`);
   if (bindCli) {
     lines.push(`import { bindCliScriptPath, runCli } from "${rel}";`);
+    lines.push(`import { realpathSync } from "node:fs";`);
     lines.push(`import { fileURLToPath } from "node:url";`);
-    lines.push(`bindCliScriptPath(fileURLToPath(import.meta.url));`);
-    lines.push(`if (process.argv[1] === fileURLToPath(import.meta.url)) {`);
+    lines.push(`const cliScriptPath = fileURLToPath(import.meta.url);`);
+    lines.push(`bindCliScriptPath(cliScriptPath);`);
+    lines.push(`if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(cliScriptPath)) {`);
     lines.push(`  runCli().catch((error) => {`);
     lines.push(`    process.stderr.write(\`\${error instanceof Error ? error.message : String(error)}\\n\`);`);
     lines.push(`    process.exit(1);`);

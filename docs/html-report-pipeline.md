@@ -22,7 +22,7 @@
   -> [A_CONFIG Gate 等待「继续」]
   -> 用户在 Pi 回复一次「继续」
   -> B0 自动预检
-     -> pass：直接进入 B2 Writer
+     -> pass：停止 qdm-metric-cli ui，直接进入 B2 Writer
      -> fail：停在 Gate，等待修复与重试
 ```
 
@@ -31,8 +31,9 @@
 
 `qdm-metric-cli ui` 由 `open-metric-cli-ui.mjs --detach` 拉起：短生命周期
 launcher 只回 JSON，长生命周期 worker 持有 CLI，并 watch `PI_AGENT_PID` /
-`--watch-pid`。Pi Session 退出（`session_shutdown`）或 Pi 进程退出时，UI 必须
-一起退出，不能留下 PPID=1 的孤儿端口。
+`--watch-pid`。B0 预检通过后会主动停止 UI；Pi Session 退出（`session_shutdown`）
+或 Pi 进程退出仍是兜底清理，不能留下 PPID=1 的孤儿端口。关闭的是本地服务进程，
+不会自动关闭浏览器标签页。
 
 ### 阶段 B — 报告生成（建设中）
 
@@ -246,8 +247,12 @@ node .agents/pi/skills/html-report/scripts/check-session-layout.mjs \
   "query": {
     "request": {
       // 严格 qdm-metric-cli QueryRequest
-      "metrics": ["..."],
-      "statisticPolicy": "SUMMARY",
+      "metrics": ["..."],                 // 有 measures 时可省略，由 measures 推导
+      "statisticPolicy": "SUMMARY",       // SUMMARY | SALES_STORE_DAY_AVG | AUTO
+      "measures": [                       // 可选；一卡多口径
+        { "metric": "saleAmt", "statisticPolicy": "SUMMARY" },
+        { "metric": "saleAmt", "statisticPolicy": "SALES_STORE_DAY_AVG" }
+      ],
       "time": { "startDate": "...", "endDate": "..." },
       "dimensions": ["..."],
       "filters": {},
@@ -262,7 +267,10 @@ node .agents/pi/skills/html-report/scripts/check-session-layout.mjs \
 `query.request` 是唯一查询真源，结构必须与 qdm-metric-cli `QueryRequest`
 严格一致（`additionalProperties: false`）。`query.comparisons` 是 Harness 级
 执行选项，适配器在 CLI 进程边界映射为 `--yoy`/`--mom`，不进入 QueryRequest。
-卡片不再有 `requestBody`、`queryProof`、`cli` 或顶层查询镜像字段。
+`statisticPolicy: AUTO` 且无 `measures` 时不能带 comparisons（CLI 禁止 AUTO+YOY/MOM）。
+有 `measures` 且带 comparisons 时，取数走 `--measures-json`，不要把 AUTO 放进
+`--payload-json` 再加 `--yoy`。卡片不再有 `requestBody`、`queryProof`、`cli`
+或顶层查询镜像字段。
 
 **FETCH 全量模式忽略「只取一页」语义**，由 CLI 默认 **all-pages** 拉齐；适配层固定 `pageNo=1`，并将 `pageSize` 默认/封顶为 2000。
 
@@ -275,9 +283,18 @@ HTML / `buildRequest` 可能带 `pageNo` + `pageSize`（例如 500），确认�
 报告取数 **禁止** `--single-page`：
 
 ```bash
+# 单口径
 qdm-metric-cli analysis execute \
   --payload-json '<card.query.request>'
   # 默认 all-pages，直到拉完
+
+# 多口径（request.measures 非空；禁止 --statistic-policy AUTO + --yoy）
+qdm-metric-cli analysis execute \
+  --measures-json '<request.measures>' \
+  --start-date ... --end-date ... \
+  --agg-dim ... --filter ... \
+  --yoy \
+  --output envelope
 ```
 
 规范化建议：
@@ -286,7 +303,8 @@ qdm-metric-cli analysis execute \
 2. **不要**加 `--single-page`。
 3. `pageSize` 若缺失或过大，按 CLI 上限处理（默认/封顶 2000）。
 4. `pageNo` 固定为 1；不传 `--single-page`，CLI 自行拉完所有分页。
-5. CLI 默认 stdout 返回完整 rows 数组；适配脚本将其写为 `entry.json`，并本地计算 `rowCount` 与 RFC 8785/JCS `rowsSha256` 写入 `entry.meta.json`。不生成 profile/facts 或任何汇总。
+5. 有 `measures` 时走 `--measures-json`，不要 `--payload-json` 与 `--measures-json` 混用。
+6. CLI 默认 stdout 返回完整 rows 数组；适配脚本将其写为 `entry.json`，并本地计算 `rowCount` 与 RFC 8785/JCS `rowsSha256` 写入 `entry.meta.json`。不生成 profile/facts 或任何汇总。多口径列名是 `saleAmt__SUMMARY` 这类 `metric__policy`，不是裸 metric code。
 
 重试：只有明确的瞬时 CLI 错误且单次在 15 秒内返回时，才 sleep 5s 后重试，
 最多尝试 3 次；等待与全部 CLI 尝试共享 540 秒硬预算。超时、鉴权、参数、
@@ -495,7 +513,7 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
         Session / fetch-entry / evidence / compose-main
                      │
               本地 Node MCP（无外部依赖）
-        html_report_start / next / submit_writer / generate_html / status
+        html_report_start / next / close_ui / submit_writer / generate_html / status
                      │
           官方 Plugin（唯一对外界面）
            Skill.md  +  .mcp.json  +  plugin.json
@@ -527,10 +545,11 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 | 工具 | 职责 |
 |---|---|
 | `html_report_start` | 建 Session，打开 qdm-metric-cli ui（`--watch-pid` 绑 MCP 进程） |
-| `html_report_next` | B0 预检 → 逐卡 fetch-entry + evidence → compose-main.mjs |
-| `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md` |
+| `html_report_next` | B0 预检通过后关闭 UI → 逐卡 fetch-entry + evidence → compose-main.mjs；返回逐卡 progress 与 active/next 卡片元数据 |
+| `html_report_close_ui` | 显式关闭 qdm-metric-cli ui，保留 session 数据 |
+| `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md`；返回逐卡 progress 与 active/next 卡片元数据 |
 | `html_report_generate_html` | 用户明确确认后，把 `analysis/main.md` 导出为同级 `main.html` |
-| `html_report_status` | 返回当前 stage / cards 状态和只读 html 摘要 |
+| `html_report_status` | 返回当前 stage / cards 状态、逐卡 progress 与只读 html 摘要 |
 
 ### 11.4 B0 差异（App/CLI vs PI）
 
@@ -550,7 +569,7 @@ App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。
 用户 $html-report / @html-report
   → MCP start：建 Session，打开 qdm-metric-cli ui
   → 用户保存 result.json，回「继续」
-  → MCP B0（无 PI Agent 检查）
+  → MCP B0（无 PI Agent 检查；通过后关闭 UI，失败则保持 UI 打开）
   → MCP 逐卡 fetch-entry + prepare-card-caption-evidence
   → 宿主只返回 caption paragraphs + pointers → submit_writer
   → 所有卡完成后 compose-main.mjs
@@ -560,7 +579,34 @@ App/CLI B0 不查四个 PI Agent，因为 App 侧没有 PI 运行时。
 
 父模型不得自己 finish Gate，不得手写 `entry.json` / `main.md`。
 
-### 11.6 对 PI 的影响
+### 11.6 逐卡可见进度
+
+App/CLI 首版不复用第 9 节的 PI Stage Runner TUI，也不新增 MCP 工具或流式
+通知。`html_report_next`、`html_report_submit_writer` 与
+`html_report_status` 都附加只读 `progress` 元数据：
+
+```json
+{
+  "total": 8,
+  "completed": 2,
+  "active": { "number": 2, "id": "card-2", "title": "库存周转" },
+  "next": { "number": 3, "id": "card-3", "title": "缺货率" }
+}
+```
+
+- `number` 从 1 开始，`title` 严格取 `result.json` 的 `card.title || card.id`。
+- `active` 是刚取数完成或刚提交完成的卡；`next` 是下一次
+  `html_report_next` 将处理的第一张未完成卡。全部完成时二者均为 `null`。
+- 元数据由 `result.json` 和持久化的 `state.cards[].captioned` 临时推导，
+  不改变现有 session state 格式，旧会话可继续读取。
+
+宿主负责把元数据变成聊天区旁白：首张取数前显示“正在校验配置，并读取第一张
+卡片的数据。”；后续取数前显示“正在取数 · 第 N/M 张：标题。”；提交成功后显示
+“已完成第 N/M 张：标题。”。恢复会话时先调用 `html_report_status`，再用
+`progress.next` 恢复对应取数提示。工具报错只告知错误并停止，不发送虚假的完成
+提示。
+
+### 11.7 对 PI 的影响
 
 本刀是**旁边加宿主**，不改 PI Skill / 扩展 / Agent。
 `open-metric-cli-ui.mjs` 的 `--watch-pid` 已向后兼容（无参仍走 PI 进程探测）。

@@ -88,6 +88,7 @@ test("A_CONFIG banner shows only the local UI instructions needed by the user", 
   const banner = fixedAConfigBanner({ serverUrl: "http://127.0.0.1:18080" });
   assert.match(banner, /本地编辑器：http:\/\/127\.0\.0\.1:18080/);
   assert.match(banner, /回复一次「继续」/);
+  assert.match(banner, /配置校验通过后，本地编辑器服务会自动关闭/);
   assert.doesNotMatch(banner, /local-report-builder|B0|runtime agent list|recommendations\.json|server\.mjs/);
 });
 
@@ -2183,14 +2184,14 @@ test("default A_CONFIG opens qdm-metric-cli ui and does not write recommendation
   assert.equal(gated.state.approvals.length, 1, "only A_CONFIG requires user approval");
   assert.equal(runtimeBridge.requests.length, 2, "fixed A_CONFIG and B0 each run one automatic list");
   assert.equal(sentMessages.length, 0, "successful B0 must not emit a stopping html-report-gate message");
+  await assert.rejects(
+    readFile(join(session, "debug", "metric-cli-ui.json")),
+    "successful B0 must stop the metric-cli UI for this session"
+  );
 
   const shutdown = handlers.get("session_shutdown")?.[0];
   assert.equal(typeof shutdown, "function");
   await shutdown({}, parentCtx);
-  await assert.rejects(
-    readFile(join(session, "debug", "metric-cli-ui.json")),
-    "session_shutdown must stop the metric-cli ui marker for this session"
-  );
 });
 
 test("fixed debug mode automatically completes B5 without dispatching Report Designer", async (t) => {
@@ -2336,6 +2337,10 @@ test("deterministic B0 input path emits a failed Gate and never starts B2", asyn
   assert.equal(sentMessages[0].message.details.pipelineStatus, "failed");
   assert.equal(sentMessages[0].message.details.stageStatus, "failed");
   assert.deepEqual(sentMessages[0].options, { triggerTurn: false });
+  await assert.doesNotReject(
+    readFile(join(session, "debug", "metric-cli-ui.json"), "utf8"),
+    "failed B0 must leave the metric-cli UI available for correction"
+  );
 });
 
 test("auto mode runs fixed A_CONFIG and B0 runtime lists in the same model-start hook", async (t) => {
@@ -2388,6 +2393,10 @@ test("auto mode runs fixed A_CONFIG and B0 runtime lists in the same model-start
   const auditFiles = await readdir(join(session, "debug", "runtime-agent-list"));
   assert.equal(auditFiles.filter((name) => name.startsWith("A_CONFIG-")).length, 1);
   assert.equal(auditFiles.filter((name) => name.startsWith("B0_PREFLIGHT-")).length, 1);
+  await assert.rejects(
+    readFile(join(session, "debug", "metric-cli-ui.json")),
+    "auto-mode successful B0 must stop the metric-cli UI for this session"
+  );
 });
 
 function writerCard(id, title) {

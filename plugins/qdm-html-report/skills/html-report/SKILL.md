@@ -9,11 +9,12 @@ This skill drives the html-report pipeline through a local MCP server.
 It works on **both Codex CLI and ChatGPT Desktop App** — no `codex` binary
 required on the production path.
 
-The MCP server exposes five tools. Call them in order:
+The MCP server exposes six tools. Call them in order:
 
 ```
 html_report_start          → create session, open qdm-metric-cli ui
 html_report_next           → advance pipeline (B0 preflight → B2 per-card fetch)
+html_report_close_ui       → optionally close the editor without deleting session data
 html_report_submit_writer  → submit caption for the current card
 html_report_generate_html  → optional analysis/main.md → sibling main.html
 html_report_status         → query current state
@@ -25,7 +26,7 @@ html_report_status         → query current state
 A_CONFIG        user builds cards in qdm-metric-cli ui → saves result.json
   ↓ user replies "继续"
 B0_PREFLIGHT    validate result.json + metric CLI (no PI Agent check)
-  ↓ auto-advance on pass
+  ↓ on pass, close qdm-metric-cli ui and auto-advance
 B2_WRITER       per card: fetch-entry → prepare evidence → host writes caption
   ↓ submit_writer per card
 B2_MAIN         compose-main → analysis/main.md
@@ -63,8 +64,43 @@ After the user replies **继续**, call `html_report_next`:
 { "sessionId": "<the-id-from-start>" }
 ```
 
-The server validates `result.json` (B0), then fetches the first card's data
-and returns compact evidence views. You must now write a short caption.
+The server validates `result.json` (B0). On a successful preflight it closes
+`qdm-metric-cli ui`, then fetches the first card's data and returns compact
+evidence views. If B0 fails, the UI stays open so the user can correct it.
+The browser tab itself is not closed automatically.
+
+If the user explicitly cancels or asks to close the editor, call:
+
+```json
+{ "sessionId": "<the-id-from-start>" }
+```
+
+with `html_report_close_ui`. This stops the UI but keeps the report session
+data for later use.
+
+### 2.1. Visible per-card progress
+
+`html_report_next`, `html_report_submit_writer`, and `html_report_status`
+return a `progress` object with `total`, `completed`, `active`, and `next`.
+`active` and `next` carry `{ number, id, title }`; use the returned `title`
+verbatim. It is the original `result.json` value (`card.title || card.id`),
+not a title to rewrite.
+
+Before every `html_report_next` that will fetch card data, send a visible
+progress narration first:
+
+- For the first card, send exactly: `正在校验配置，并读取第一张卡片的数据。`
+- For a later card, take `progress.next` from the previous successful tool
+  response and send exactly: `正在取数 · 第 <number>/<total> 张：<title>。`
+
+After every successful `html_report_submit_writer`, take `progress.active`
+and send exactly: `已完成第 <number>/<total> 张：<title>。`
+
+On session recovery, call `html_report_status` first. If `progress.next` is
+present, use it to restore the corresponding pre-fetch narration before the
+next card fetch. If `html_report_next` or `html_report_submit_writer` returns
+an error, tell the user the error and stop; never send a completion narration
+for that failed call.
 
 ### 3. Write caption
 
@@ -72,7 +108,8 @@ Based on the evidence views returned by `html_report_next`:
 
 - Write 1–3 short paragraphs answering: who is high, who is low, what stands out.
 - Every number must come from the evidence views — do not invent, estimate, or infer.
-- Include `pointers` — JSON pointers like `/views/<viewId>/rows/0/value` — for each number you cite.
+- `pointers` are optional. Prefer one path per **view you used**, such as `/views/<viewId>`.
+- Row-level paths like `/views/<viewId>/rows/0/metricValue` are allowed; the kernel folds them to that view. Do **not** submit one pointer per cited number.
 
 Then call `html_report_submit_writer`:
 
@@ -81,7 +118,7 @@ Then call `html_report_submit_writer`:
   "sessionId": "<id>",
   "cardId": "<from-next>",
   "paragraphs": ["..."],
-  "pointers": ["/views/.../rows/0/value"]
+  "pointers": ["/views/<viewId>"]
 }
 ```
 

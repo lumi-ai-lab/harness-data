@@ -189,8 +189,7 @@ html_report_submit_writer({
     "未知损耗率方面，香港区 0.0863 偏高，合肥区 0.0058 较低。"
   ],
   "pointers": [
-    "/views/topN-bf19CustNum-manageAreaId/rows/0/value",
-    "/views/topN-bf19CustNum-manageAreaId/rows/1/value"
+    "/views/topN-bf19CustNum-manageAreaId"
   ]
 })
 
@@ -201,6 +200,8 @@ html_report_submit_writer({
   "message": "Caption accepted. Call html_report_next to proceed."
 }
 ```
+
+`pointers` 按 **view** 计数：推荐 `/views/<viewId>`。格子级路径（如 `/views/<id>/rows/0/metricValue`）可以提交，内核会折成对应 view，同一 view 的多条只计一次。省略或传 `[]` 时默认引用全部 views。
 
 #### 第 6 步：逐卡重复
 
@@ -255,7 +256,7 @@ codex plugin add qdm-html-report@lumi-harness-data
 
 ```
 qdm-html-report Plugin
-  ├── .mcp.json          → 自动注册 5 个 MCP 工具（不需要手动 .codex/config.toml）
+  ├── .mcp.json          → 自动注册 6 个 MCP 工具（不需要手动 .codex/config.toml）
   └── skills/html-report/
         └── SKILL.md      → 自动加载流程指令（模型知道怎么走流水线）
 ```
@@ -273,7 +274,7 @@ codex plugin list | grep qdm-html
 ```
 
 在 Codex TUI 中：
-- 输入 `/mcp` 查看 html-report server 是否连上（5 个工具：`html_report_start`、`html_report_next`、`html_report_submit_writer`、`html_report_generate_html`、`html_report_status`）
+- 输入 `/mcp` 查看 html-report server 是否连上（6 个工具：`html_report_start`、`html_report_next`、`html_report_close_ui`、`html_report_submit_writer`、`html_report_generate_html`、`html_report_status`）
 - 输入 `/plugins` 查看插件是否已安装
 - 输入 `$html-report` 确认 Skill 可触发
 
@@ -294,7 +295,8 @@ $html-report 生成运营中心管理周例会报告，分析各区域经营表�
 | 工具 | 入参 | 用途 |
 |------|------|------|
 | `html_report_start` | `sessionId?`, `userQuestion` | 创建会话，打开 qdm-metric-cli ui |
-| `html_report_next` | `sessionId` | B0 预检 → 逐卡取数 + evidence → 所有卡完成后 compose-main.mjs |
+| `html_report_next` | `sessionId` | B0 预检成功后关闭 UI → 逐卡取数 + evidence → 所有卡完成后 compose-main.mjs |
+| `html_report_close_ui` | `sessionId` | 显式关闭 qdm-metric-cli ui，不删除报告 session 数据 |
 | `html_report_submit_writer` | `sessionId`, `cardId`, `paragraphs[]`, `pointers[]` | 提交 caption，验证并写 caption.md |
 | `html_report_generate_html` | `sessionId` | 用户明确确认后，将 `analysis/main.md` 导出为同级 `main.html` |
 | `html_report_status` | `sessionId` | 查询当前 stage / cards 状态和只读 html 摘要 |
@@ -307,7 +309,7 @@ A_CONFIG        用户在 qdm-metric-cli ui 搭卡 → 保存 result.json
      ↓ 用户回复「继续」
 B0_PREFLIGHT    验证 result.json + metric CLI（不查 PI Agent）
      │
-     ↓ 自动推进
+     ↓ 通过后关闭 qdm-metric-cli ui，再自动推进
 B2_WRITER       逐卡：fetch-entry → prepare evidence → 宿主写 caption → submit_writer
      │
      ↓ 所有卡完成
@@ -316,6 +318,9 @@ B2_MAIN         compose-main.mjs → analysis/main.md
      ↓ 用户明确同意后才调用 html_report_generate_html
 可选 HTML       export-main-html.mjs → analysis/main.html（同级，非 P5 Designer）
 ```
+
+`result.json` 保存本身不会关闭 UI。只有用户回复「继续」且 B0 通过后才会自动停止
+本地 UI；B0 失败时保持打开以便修正。关闭的是本地服务进程，不会自动关闭浏览器标签页。
 
 ### B0 差异：App/CLI vs PI
 

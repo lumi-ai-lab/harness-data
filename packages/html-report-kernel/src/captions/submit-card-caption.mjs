@@ -22,6 +22,16 @@ export function canonicalizeCaptionPointer(pointer) {
   return raw.startsWith("/evidence/views/") ? raw.slice("/evidence".length) : raw;
 }
 
+/**
+ * Fold a caption pointer to its view. Cell paths are the same citation unit:
+ * `/views/foo/rows/0/metricValue` → `/views/foo`.
+ */
+export function captionViewPointer(pointer) {
+  const canonical = canonicalizeCaptionPointer(pointer);
+  const match = /^\/views\/([^/]+)/.exec(canonical);
+  return match ? `/views/${match[1]}` : canonical;
+}
+
 /** Parse a real array or a JSON-encoded array string (`"[\"a\"]"`). */
 export function parseJsonArrayField(value) {
   if (Array.isArray(value)) return { ok: true, value };
@@ -388,22 +398,6 @@ function normalizeParagraphs(value) {
   return value.map((item) => item.trim());
 }
 
-function normalizePointers(value, maxPointers) {
-  if (!Array.isArray(value)) throw new Error("pointers must be an array");
-  if (value.length > maxPointers) {
-    throw new Error(`pointers must contain at most ${maxPointers} items`);
-  }
-  const pointers = value.map((item, index) => {
-    const pointer = canonicalizeCaptionPointer(item);
-    if (typeof item !== "string" || !CAPTION_POINTER_PATTERN.test(pointer)) {
-      throw new Error(`pointers[${index}] must be a /views/... JSON pointer`);
-    }
-    return pointer;
-  });
-  if (new Set(pointers).size !== pointers.length) throw new Error("pointers must be unique");
-  return pointers;
-}
-
 export function renderCaptionMarkdown(paragraphs) {
   return `${paragraphs.join("\n\n")}\n`;
 }
@@ -464,15 +458,10 @@ export function validateCaptionSubmissionDetailed(input, evidence) {
   const violations = [];
 
   // ── 指针校验（收集 violations，不 throw）──
+  // Citation unit is the view. Resolve the original (cell) path, then fold and
+  // silently dedupe so many row pointers in one view count as one.
   const maxPointers = captionPointerBudget(evidence);
   const rawPointers = Array.isArray(normalized.input.pointers) ? normalized.input.pointers : [];
-  if (rawPointers.length > maxPointers && maxPointers > 0) {
-    violations.push(buildViolation(
-      "POINTER_BUDGET_EXCEEDED", "引用数量超限",
-      `pointers must contain at most ${maxPointers} items`,
-      `${rawPointers.length}`, -1, paragraphs,
-    ));
-  }
   const pointers = [];
   const seen = new Set();
   for (let i = 0; i < rawPointers.length; i++) {
@@ -486,25 +475,27 @@ export function validateCaptionSubmissionDetailed(input, evidence) {
       ));
       continue;
     }
-    if (seen.has(pointer)) {
-      violations.push(buildViolation(
-        "POINTER_DUPLICATE", "引用路径重复",
-        `pointers[${i}] 与之前的引用重复`,
-        pointer, -1, paragraphs,
-      ));
-      continue;
-    }
-    seen.add(pointer);
     try {
       resolveJsonPointer(evidence, pointer);
-      pointers.push(pointer);
     } catch {
       violations.push(buildViolation(
         "POINTER_UNRESOLVED", "引用路径无法解析",
         `pointers[${i}] 在 evidence.views 中不存在`,
         pointer, -1, paragraphs,
       ));
+      continue;
     }
+    const folded = captionViewPointer(pointer);
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    pointers.push(folded);
+  }
+  if (seen.size > maxPointers && maxPointers > 0) {
+    violations.push(buildViolation(
+      "POINTER_BUDGET_EXCEEDED", "引用数量超限",
+      `pointers must contain at most ${maxPointers} items`,
+      `${seen.size}`, -1, paragraphs,
+    ));
   }
 
   // ── 构建允许集 ──
