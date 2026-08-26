@@ -23,6 +23,7 @@ import { collectReleaseArchivePassword, RELEASE_ARCHIVE_PASSWORD } from "../src/
 import { createInstallSession } from "../src/lib/install-session.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, toolInstallMode, updateWikis, wikisInstallMode } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
+import { qwenpawCommand } from "../src/commands/qwenpaw.js";
 import {
   AUTH_OFF_PASSWORD,
   agentChoices,
@@ -113,6 +114,18 @@ test("prints help", () => {
   assert.doesNotMatch(result.stdout, /--release-password/);
   assert.match(result.stdout, /HARNESS_RELEASE_SOURCE/);
   assert.doesNotMatch(result.stdout, /HARNESS_RELEASE_PASSWORD/);
+});
+
+test("qwenpaw command rejects invalid actions and missing runtime plugin source", async () => {
+  await assert.rejects(
+    qwenpawCommand({ _: ["enable"] }),
+    /usage: harness-data qwenpaw <install\|doctor\|uninstall>/
+  );
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-qwenpaw-"));
+  await assert.rejects(
+    qwenpawCommand({ _: ["doctor"], runtime }),
+    /QwenPaw plugin source is missing/
+  );
 });
 
 test("release source command-line value overrides the environment and rejects invalid values", () => {
