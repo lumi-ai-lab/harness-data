@@ -45,7 +45,39 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
-`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
+## QwenPaw（Windows 首期）
+
+QwenPaw 使用独立插件安装流程，不加入其他 Agent 的工作区软链接。先创建并配置好专用
+`qdmDataAgent`，再执行：
+
+```powershell
+harness-data qwenpaw install --runtime <runtime> --qwenpaw-python 'D:\Program Files\Python313\python.exe' --agent-id qdmDataAgent
+harness-data qwenpaw doctor  --runtime <runtime> --qwenpaw-python 'D:\Program Files\Python313\python.exe' --agent-id qdmDataAgent
+```
+
+安装器会按 QwenPaw 2.1 的实际规则定位工作目录：显式 `--qwenpaw-working-dir`、
+`QWENPAW_WORKING_DIR` / `COPAW_WORKING_DIR`、已存在的 `~/.copaw`、最后才是 `~/.qwenpaw`。
+如需运行 runtime 中的 Windows 调试安装脚本，请使用当前进程的 Bypass，不修改系统执行策略：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agents\qwenpaw\INSTALL-QWENPAW-COMMAND-DEBUG.ps1 `
+  -Runtime <runtime> -AgentId qdmDataAgent
+```
+
+也可双击或从 CMD 运行同目录的 `INSTALL-QWENPAW-COMMAND-DEBUG.cmd`。将实际
+`channel-auth.json` 与 `session-hmac.secret` 放入 runtime 后，先收紧其 ACL：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agents\qwenpaw\prepare-qwenpaw-materials.ps1 `
+  -Runtime <runtime>
+```
+
+插件只读取 `<runtime>\config\qwenpaw\channel-auth.json` 和独立的
+`<runtime>\config\qwenpaw\session-hmac.secret`；`C:\ProgramData\QDM\qwenpaw\plugin-config.json`
+仅保存 runtime 定位与非敏感插件配置。插件不会读取或修改既有 `auth.blob`。QwenPaw 工作目录默认
+由 QwenPaw 自身解析。`context_limits` 可选配置 Harness 上下文的基础文本、单个 Wiki 与 Wiki 总字节上限；字段缺失或值为 `null` 表示不限制，正整数才启用对应限制，其他值会使插件 fail-closed。企微群聊依赖 QwenPaw 企微渠道“仅路由已 @机器人消息”的宿主契约；飞书群聊仍必须由宿主提供可信 `bot_mentioned=true` 入站标记。原始 UserID 调试回显默认关闭。
+
+`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI。QwenPaw 普通 `qdm_query` 只执行受限指标查询：插件会在每次查询前重新读取渠道授权、执行 `auth describe` 权限预检，并将授权范围内的管理区域/商品分类显示名称解析为 ID；权限或范围校验失败时不会启动 `analysis execute`。普通查询不接受 `report_name`、`report_module`、playbook、template、Excel 等报告字段，也不会自动进入 `posttool` 报告生命周期；报告能力仅可由未来可信 Harness 上下文的独立入口启用。
 
 ## 常用命令
 
