@@ -121,8 +121,19 @@ func run() error {
 		}
 	case "posttool":
 		fs := flag.NewFlagSet("posttool", flag.ExitOnError)
-		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, agent-hook, or workbuddy-hook")
+		format := fs.String("format", "claude-hook", "output format: claude-hook, codex-hook, agent-hook, workbuddy-hook, or qwenpaw-hook")
 		_ = fs.Parse(os.Args[2:])
+		if *format == "qwenpaw-hook" {
+			input, err := posttool.ReadHookStdin()
+			if err != nil {
+				return err
+			}
+			output, err := posttool.RunQwenPawHook(root, input)
+			if err != nil {
+				return exitCodeError{Code: 2, Err: err}
+			}
+			return printCompactJSON(output)
+		}
 		if !isAgentHookFormat(*format) {
 			return fmt.Errorf("unsupported posttool --format: %s", *format)
 		}
