@@ -22,6 +22,11 @@ type Output struct {
 type HookSpecificOutput struct {
 	HookEventName     string `json:"hookEventName"`
 	AdditionalContext string `json:"additionalContext"`
+	// ContextFiles is a machine-readable companion to AdditionalContext.  Hook
+	// consumers which do not have a file-reading tool (for example QwenPaw's
+	// constrained QDM agent) can use this allow-list to embed the selected Wiki
+	// documents themselves.  Existing Claude/Codex hook consumers ignore it.
+	ContextFiles []harness.FileRef `json:"contextFiles,omitempty"`
 }
 
 type promptPayload struct {
@@ -71,6 +76,7 @@ func runPromptHook(root, prompt, sessionID string) (bool, Output, error) {
 		HookSpecificOutput: HookSpecificOutput{
 			HookEventName:     "UserPromptSubmit",
 			AdditionalContext: additionalContext,
+			ContextFiles:      append([]harness.FileRef(nil), response.ContextFiles...),
 		},
 	}, nil
 }
