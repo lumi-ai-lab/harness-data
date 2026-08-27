@@ -40,7 +40,7 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 - `UserPromptSubmit` 通过零依赖 `harness-hook.mjs` 调用 `context --format workbuddy-hook`
 - `PostToolUse` 匹配 `Bash|PowerShell|execute_command`，归一化为 `Bash` 后调用 `posttool --format workbuddy-hook`
 - 插件清单位于 `agents/workbuddy/.codebuddy-plugin/plugin.json`，本地 Marketplace 清单位于 `agents/.codebuddy-plugin/marketplace.json`；目录存在不等于插件已经安装或启用
-- 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
+- 使用 `authz.mode=on` 接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
 - WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
 
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
@@ -116,7 +116,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；macOS 和 Windows WorkBuddy 支持同一套 auth 参数，其他平台需使用 `--no-auth`。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；WorkBuddy auth 仅支持 macOS 和 Windows，其他平台请选择受支持的 Agent。
 
 更新工作目录：
 
@@ -297,9 +297,9 @@ cli:
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
 
 authz:
-  mode: off
+  mode: on
   # blob_file: config/dev-auth.blob          # local only
-  # dev_user_id: local-test-user             # required with blob_file; no code default
+  # dev_user_id: <user-id>                   # required with blob_file
   allow_local_blob: true                     # admin-distributed local blob requires true
 ```
 
@@ -309,7 +309,7 @@ authz:
 
 macOS 与 Windows WorkBuddy 共用本地 Blob auth 流程。WorkBuddy auth 要求 Desktop `5.3.11+`、内置 CodeBuddy CLI `2.115.0+`；Windows 的受控 QDM 命令使用 Bash，PowerShell 路径在读取凭据前 fail-closed。
 
-安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`；使用 `--no-auth` 并通过密码验证后才写入 `off`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
+安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`。开发环境可使用 `install --dev` 调用 `qdm-metric-cli dev` 注册管理员 Blob；该流程同样只写入 `mode: on`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
@@ -384,13 +384,13 @@ npx @lumi-ai-lab/harness-data install \
 HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
 npx @lumi-ai-lab/harness-data install --yes
 
-# ④ 关闭权限（需密码）
-npx @lumi-ai-lab/harness-data install --no-auth
-# 或非交互：
-npx @lumi-ai-lab/harness-data install --no-auth \
-  --auth-off-password 'qdmzt@2026' --yes
+# ④ 开发管理员注册（交互式密码）
+npx @lumi-ai-lab/harness-data install --dev
 
-# ⑤ 开发/测试快捷方式（用内置 fixture blob）
+# ⑤ 开发管理员注册（非交互）
+npx @lumi-ai-lab/harness-data install --dev --dev-password 'PASSWORD' --yes
+
+# ⑥ 开发/测试快捷方式（用内置 fixture blob）
 npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
@@ -418,7 +418,7 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-默认 install 为 `mode: on`；开发测试可用 `--data-auth` + 内置 fixture，关闭权限测试必须使用 `--no-auth` 并通过密码验证。管理员分发 Blob 的正式使用场景保持 `allow_local_blob: true`，并把 Blob 文件放在 workspace 外。
+默认 install 为 `mode: on`；开发管理员可用 `--dev` 注册隐藏 admin Blob，开发测试可用 `--data-auth` + 内置 fixture。管理员分发 Blob 的正式使用场景保持 `allow_local_blob: true`，并把 Blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 

@@ -6,14 +6,14 @@ paths:
 cli:
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
 
-# Optional data-auth for qdm-metric-cli (default: mode off).
+# Required data-auth for qdm-metric-cli.
 # Installer: `npx @lumi-ai-lab/harness-data install --data-auth` writes mode on +
 # copies config/fixtures/local-test-auth.blob → config/dev-auth.blob.
 # Local/production runtime supplies an encrypted blob via HARNESS_AUTH_BLOB_FILE +
 # HARNESS_AUTH_USER_ID; keep allow_local_blob enabled for this MVP.
 # Local-only file fallback (dev): blob_file + dev_user_id (dev_user_id has no code default).
 authz:
-  mode: off
+  mode: on
   # blob_file: config/dev-auth.blob
   # dev_user_id: local-test-user
   allow_local_blob: true

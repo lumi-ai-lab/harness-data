@@ -18,7 +18,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "dev"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -49,8 +49,8 @@ Install options:
   --auth-blob BLOB                   Auth blob string (qdm1enc...); default: interactive prompt
   --auth-user-id ID                  dev_user_id for authz; default: interactive prompt
   --data-auth                        Use built-in local-test fixture blob (dev/test shortcut)
-  --no-auth                          Install without authz (requires password)
-  --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)
+  --dev                              Register the local development administrator
+  --dev-password PASSWORD            Password for --dev (default: qdm-metric-cli prompt)
 
 Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github
