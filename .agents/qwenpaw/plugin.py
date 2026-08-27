@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 import logging
+import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 from agentscope.message import TextBlock, ToolResultState
@@ -11,12 +13,21 @@ from agentscope.tool import ToolChunk
 from qwenpaw.plugins.api import PluginApi
 
 from .qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
-from .qdm_cli import QdmCliError, QdmCliExecutor
+from .qdm_cli import QdmCliError, QdmCliExecutor, QueryScope
 from .qdm_config import ConfigError, load_config
-from .qdm_runtime_hooks import hook_factories, requester_context
+from .qdm_runtime_hooks import authorization_snapshot_context, hook_factories, requester_context
 
 
 logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
+
+
+@dataclass(frozen=True)
+class AuthorizationSnapshot:
+    requester: Any
+    blob: str
+    scope: QueryScope
+    credential_fingerprint: str
+    scope_fingerprint: str
 
 
 class QdmHarnessQwenPawPlugin:
@@ -82,15 +93,28 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
             "QDM_CHANNEL_IDENTITY_UNAVAILABLE",
             "当前会话不支持 QDM 数据查询。请通过已配置的企微或飞书机器人发起请求。",
         )
+    existing = authorization_snapshot_context.get()
+    if isinstance(existing, AuthorizationSnapshot):
+        if existing.requester != requester:
+            raise QdmCliError("QDM_CHANNEL_IDENTITY_MISMATCH", "当前请求身份与授权上下文不一致")
+        return None, None, existing  # type: ignore[return-value]
     try:
         config = load_config()
     except ConfigError as exc:
         raise QdmCliError("QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝") from exc
-    return ChannelAuthProvider(config.auth_file), QdmCliExecutor(
+    provider = ChannelAuthProvider(config.auth_file)
+    executor = QdmCliExecutor(
         config.qdm_metric_cli,
         success_bytes=config.query_limits.success_bytes,
         timeout_seconds=config.query_limits.timeout_seconds,
-    ), config
+    )
+    blob = provider.blob_for(requester)
+    scope = executor.preflight_query(blob)
+    snapshot = AuthorizationSnapshot(requester, blob, scope,
+                                     hashlib.sha256(blob.encode()).hexdigest()[:16],
+                                     hashlib.sha256(repr(scope.data_scope).encode()).hexdigest()[:16])
+    authorization_snapshot_context.set(snapshot)
+    return provider, executor, config
 
 
 def _query(**query: Any) -> ToolChunk:
@@ -98,7 +122,11 @@ def _query(**query: Any) -> ToolChunk:
         provider, executor, _config = _trusted_components()
         requester = requester_context.get()
         assert requester is not None
-        result = executor.query(blob=provider.blob_for(requester), **query)
+        snapshot = authorization_snapshot_context.get()
+        if isinstance(snapshot, AuthorizationSnapshot):
+            result = executor.query(blob=snapshot.blob, scope=snapshot.scope, **query)
+        else:
+            result = executor.query(blob=provider.blob_for(requester), **query)
         return _success(result)
     except (ChannelAuthorizationError, QdmCliError) as exc:
         error = _channel_auth_error(exc)
@@ -111,6 +139,12 @@ def _scope_summary() -> ToolChunk:
         provider, executor, _config = _trusted_components()
         requester = requester_context.get()
         assert requester is not None
+        snapshot = authorization_snapshot_context.get()
+        if isinstance(snapshot, AuthorizationSnapshot):
+            return _success({"enabled": True, "capabilities": sorted(snapshot.scope.capabilities),
+                             "dataScope": {k: [{"id": e.id, "name": e.name} for e in v] for k, v in snapshot.scope.data_scope.items()},
+                             "scopeFingerprint": snapshot.scope_fingerprint,
+                             "credentialFingerprint": snapshot.credential_fingerprint})
         return _success(executor.scope_summary(provider.blob_for(requester)))
     except (ChannelAuthorizationError, QdmCliError) as exc:
         error = _channel_auth_error(exc)

@@ -269,6 +269,42 @@ class ToolBoundaryTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, "QDM_AREA_OUTSIDE_DATA_SCOPE")
             self.assertEqual(run.call_count, 1)
 
+    def test_store_name_is_resolved_only_from_authorized_store_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
+            cli.parent.mkdir(); cli.write_bytes(b"placeholder")
+            executor = QdmCliExecutor(cli)
+            responses = [
+                types.SimpleNamespace(returncode=0, stdout=json.dumps({
+                    "enabled": True, "capabilities": ["qdm.metric.query"],
+                    "labelsResolved": True,
+                    "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "华南"}],
+                                   "storeId": [{"id": "S001", "name": "广州时代玫瑰"}]},
+                }), stderr=""),
+                types.SimpleNamespace(returncode=0, stdout="{}", stderr=""),
+            ]
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=responses) as run:
+                executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24",
+                               filters={"storeId": ["广州时代玫瑰"]}, blob="qdm1enc.trusted")
+            self.assertIn("storeId=S001", run.call_args_list[1].args[0])
+
+    def test_store_name_without_authorized_store_scope_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
+            cli.parent.mkdir(); cli.write_bytes(b"placeholder")
+            executor = QdmCliExecutor(cli)
+            response = types.SimpleNamespace(returncode=0, stdout=json.dumps({
+                "enabled": True, "capabilities": ["qdm.metric.query"],
+                "labelsResolved": True,
+                "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "华南"}]},
+            }), stderr="")
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=response) as run:
+                with self.assertRaises(QdmCliError) as raised:
+                    executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24",
+                                   filters={"storeId": ["广州时代玫瑰"]}, blob="qdm1enc.trusted")
+            self.assertEqual(raised.exception.code, "QDM_STORE_OUTSIDE_DATA_SCOPE")
+            self.assertEqual(run.call_count, 1)
+
     def test_cli_success_output_redacts_an_unexpected_blob_echo(self) -> None:
         self.assertEqual(_truncate_success("result qdm1enc.sensitive-value"), "result [REDACTED]")
 
@@ -539,6 +575,27 @@ class HarnessContextTests(unittest.TestCase):
 
 
 class ConsoleChannelTests(unittest.TestCase):
+    def test_plugin_manifest_version_is_incremented(self) -> None:
+        manifest = Path(__file__).parents[1] / "plugin.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], "0.1.2")
+
+    def test_pre_execute_rebinds_requester_from_current_channel_message(self) -> None:
+        config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent", session_secret_file=Path("missing.secret"))
+        ctx = _AgentContext("wecom", {"is_group": True, "wecom_sender_id": "user-1"})
+        with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
+            async def exercise():
+                await QdmRequesterContextHook().run(ctx)
+                first = requester_context.get()
+                token = ctx.extras.pop("qdm_harness_requester_token")
+                requester_context.reset(token)
+                ctx.request.channel_meta = {"is_group": True, "wecom_sender_id": "user-2"}
+                await QdmRequesterContextHook().run(ctx)
+                return first, requester_context.get()
+            first, second = asyncio.run(exercise())
+        self.assertEqual(first.user_id, "user-1")
+        self.assertEqual(second.user_id, "user-2")
+        self.assertEqual(ctx.request.request_context["qdm_requester"]["user_id"], "user-2")
     def test_console_allows_normal_reply_but_binds_no_qdm_requester(self) -> None:
         config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent")
         ctx = _AgentContext("console", {})

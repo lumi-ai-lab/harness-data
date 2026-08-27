@@ -50,6 +50,10 @@ SAFE_SCOPE_DIMENSIONS: dict[str, tuple[str, str]] = {
     "manageAreaIds": ("QDM_AREA_AUTH_SCOPE_EMPTY", "当前用户的管理区域授权范围为空或未配置完整"),
     "categoryLevel1Id": ("QDM_CATEGORY_OUTSIDE_DATA_SCOPE", "请求的商品分类不在当前用户授权范围内"),
     "categoryLevel1Ids": ("QDM_CATEGORY_AUTH_SCOPE_EMPTY", "当前用户的商品分类授权范围为空或未配置完整"),
+    # Store authorization is optional in auth describe responses.  When the
+    # upstream CLI exposes storeId entries, they are resolved exactly like
+    # area/category entries; otherwise a store name is rejected fail-closed.
+    "storeId": ("QDM_STORE_OUTSIDE_DATA_SCOPE", "请求的门店不在当前用户授权范围内"),
 }
 _SAFE_ERROR_TEXT = re.compile(
     r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, SAFE_CLI_ERROR_CODES)) + r")(?![A-Za-z0-9_])",
@@ -84,7 +88,7 @@ class QdmCliExecutor:
         self._success_bytes = success_bytes
         self._timeout_seconds = timeout_seconds
 
-    def query(self, *, metric: str, start_date: str, end_date: str, statistic_policy: str = "SUMMARY", agg_dims: Sequence[str] | None = None, filters: Mapping[str, Sequence[str]] | None = None, time_grain: str | None = None, order_by: str | None = None, page_size: int | None = None, curr_page: int | None = None, yoy: bool = False, mom: bool = False, blob: str) -> str:
+    def query(self, *, metric: str, start_date: str, end_date: str, statistic_policy: str = "SUMMARY", agg_dims: Sequence[str] | None = None, filters: Mapping[str, Sequence[str]] | None = None, time_grain: str | None = None, order_by: str | None = None, page_size: int | None = None, curr_page: int | None = None, yoy: bool = False, mom: bool = False, blob: str, scope: QueryScope | None = None) -> str:
         # Validate the business shape before touching the CLI, then perform the
         # mandatory authorization preflight before analysis execution.
         args = _query_args(
@@ -101,7 +105,8 @@ class QdmCliExecutor:
             yoy=yoy,
             mom=mom,
         )
-        scope = self.preflight_query(blob)
+        if scope is None:
+            scope = self.preflight_query(blob)
         normalized_filters = normalize_authorized_filters(filters, scope)
         args = _query_args(
             metric=metric,

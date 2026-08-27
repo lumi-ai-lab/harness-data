@@ -1,7 +1,7 @@
 {
   "id": "qdm-harness-qwenpaw",
   "name": "QDM Harness for QwenPaw",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "general",
   "description": "Provides trusted channel-user authorization and constrained QDM queries for QwenPaw.",
   "author": "QDM",

@@ -29,7 +29,11 @@ This is a QwenPaw channel session. For QDM permission or scope questions, call
 or any Shell/CLI command. Do not generate or request Blob, Secret, authorization
 file contents, CLI paths, or authentication flags. Use only `qdm_query`,
 `qdm_scope_summary`, and `get_current_time` for QDM work. The permission summary
-returned by `qdm_scope_summary` is authoritative for this session.
+returned by `qdm_scope_summary` is authoritative only for the current inbound
+request. Never reuse a prior summary, chat-history scope, Agent memory, session
+state, or another user's permissions. Area, store, and category filters must
+come from the current message; if no area is specified, do not inherit one from
+an earlier turn.
 """.strip()
 
 

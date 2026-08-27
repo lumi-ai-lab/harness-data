@@ -18,6 +18,7 @@ from .qdm_identity import CONTEXT_KEY, Requester, requester_from_context, resolv
 
 logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
 requester_context: ContextVar[Requester | None] = ContextVar("qdm_harness_requester", default=None)
+authorization_snapshot_context: ContextVar[Any | None] = ContextVar("qdm_harness_authorization_snapshot", default=None)
 session_key_context: ContextVar[str | None] = ContextVar("qdm_harness_session_key", default=None)
 _TOKEN_KEY = "qdm_harness_requester_token"
 _SESSION_TOKEN_KEY = "qdm_harness_session_token"
@@ -106,7 +107,20 @@ class QdmRequesterContextHook(HookBase):
     async def run(self, ctx: Any) -> HookResult:
         if _config_for_agent(ctx) is None:
             return HookResult()
-        requester = _requester(ctx)
+        # Re-resolve from the current inbound request on every execution.  A
+        # request_context may contain a value written by an earlier hook (or
+        # stale session state), so it is never an authority for PRE_EXECUTE.
+        request = getattr(ctx, "request", None)
+        requester = resolve_requester(
+            getattr(request, "channel", "") if request is not None else "",
+            getattr(request, "channel_meta", None) if request is not None else None,
+        )
+        if request is not None:
+            current = getattr(request, "request_context", None)
+            context = dict(current) if isinstance(current, dict) else {}
+            context[CONTEXT_KEY] = requester.to_context()
+            request.request_context = context
+        ctx.extras["qdm_harness_current_requester"] = requester
         ctx.extras[_TOKEN_KEY] = requester_context.set(
             requester if requester is not None and requester.status == "resolved" else None,
         )
@@ -137,6 +151,7 @@ class QdmRequesterCleanupHook(HookBase):
         session_token = ctx.extras.pop(_SESSION_TOKEN_KEY, None)
         if isinstance(session_token, Token):
             session_key_context.reset(session_token)
+        authorization_snapshot_context.set(None)
         return HookResult()
 
 
