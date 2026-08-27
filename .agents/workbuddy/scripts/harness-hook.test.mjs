@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -125,6 +126,27 @@ test("WorkBuddy context hook auto-starts once, then handles continuation", () =>
     });
     assert.equal(second.status, 0, second.stderr);
     assert.match(JSON.parse(second.stdout).hookSpecificOutput.additionalContext, /Stage Runner/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("failed html-report auto-start clears the retry marker", () => {
+  const { root, cleanup } = tempRoot();
+  try {
+    mkdirSync(join(root, "config"), { recursive: true });
+    writeFileSync(join(root, "config", "harness-config.yaml"), "paths:\n  knowledge: wikis\n");
+    const hook = fileURLToPath(new URL("./harness-hook.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [hook, "context"], {
+      cwd: root,
+      env: { ...process.env, CODEBUDDY_PROJECT_DIR: root },
+      input: JSON.stringify({ session_id: "failed-hook-session", prompt: "生成销售报告", cwd: root }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /Stage Runner is missing/);
+    const digest = createHash("sha256").update("failed-hook-session").digest("hex");
+    assert.equal(existsSync(join(root, ".harness", "state", "workbuddy-html-report", `${digest}.json`)), false);
   } finally {
     cleanup();
   }
