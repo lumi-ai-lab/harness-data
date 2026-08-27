@@ -69,8 +69,13 @@ node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>  
   and same-session continuation prompts such as `继续`. This mirrors PI html-report's
   default fixed A_CONFIG path: the model opens `qdm-metric-cli ui` and waits for the
   user to save `<session>/result.json` instead of reading report specs/playbooks first.
+- The first html-report prompt also starts the local Stage Runner and opens `qdm-metric-cli ui` automatically.
+  After the user saves the configuration, the continuation hook supplies the Stage Runner advance instruction;
+  raw child output is not returned to the parent session.
 - `stop` terminates the detached `qdm-metric-cli ui` for the session (idempotent; no-op
   when no marker exists) to avoid orphan processes.
+- `cancel` terminates registered report child process groups before pausing the current Gate;
+  `stop` also terminates registered report children and pauses the Gate when a child is active.
 - `status` shows the Runner's Gate state and highlights any human gate (`awaiting_approval`) that needs `approve`.
 - `B2_WRITER` processes card writers with bounded parallelism. Default concurrency is `4`; set
   `HTML_REPORT_WRITER_CONCURRENCY=<1-8>` before running `advance` when local resources or child capacity need tuning.

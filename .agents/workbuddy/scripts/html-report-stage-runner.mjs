@@ -27,7 +27,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,6 +86,7 @@ const WRITER_ROLE = "report-writer";
 const WRITER_TIMEOUT_MS = 120_000; // 对齐文档 §4.3：Writer 120s，Reviewer 150s
 const DEFAULT_WRITER_CONCURRENCY = 4;
 const MAX_WRITER_CONCURRENCY = 8;
+const RUNNER_CHILDREN_FILE = join("debug", "runner-children.json");
 
 // B25 Editor Planner child（角色沿用 report-researcher，负责产出研究计划）。
 const EDITOR_MODEL = WRITER_MODEL;
@@ -282,6 +283,86 @@ function cardHasCaption(projectRoot, sessionId, cardId) {
   }
 }
 
+function runnerChildrenPath(projectRoot, sessionId) {
+  return join(htmlReportSessionDir(projectRoot, sessionId), RUNNER_CHILDREN_FILE);
+}
+
+function readRunnerChildren(projectRoot, sessionId) {
+  try {
+    const value = JSON.parse(readFileSync(runnerChildrenPath(projectRoot, sessionId), "utf8"));
+    return Array.isArray(value) ? value.filter((item) => Number(item?.pid) > 1) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRunnerChildren(projectRoot, sessionId, children) {
+  const path = runnerChildrenPath(projectRoot, sessionId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(children, null, 2)}\n`);
+}
+
+function registerRunnerChild(projectRoot, sessionId, record) {
+  const children = readRunnerChildren(projectRoot, sessionId)
+    .filter((item) => item.pid !== record.pid);
+  writeRunnerChildren(projectRoot, sessionId, [...children, record]);
+}
+
+function unregisterRunnerChild(projectRoot, sessionId, pid) {
+  const children = readRunnerChildren(projectRoot, sessionId).filter((item) => item.pid !== pid);
+  if (children.length > 0) writeRunnerChildren(projectRoot, sessionId, children);
+  else rmSync(runnerChildrenPath(projectRoot, sessionId), { force: true });
+}
+
+function killRunnerProcess(pid, signal) {
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
+  try {
+    if (process.platform !== "win32") process.kill(-pid, signal);
+    else process.kill(pid, signal);
+    return true;
+  } catch {
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function stopRunnerChildren(projectRoot, sessionId, signal = "SIGTERM") {
+  const children = readRunnerChildren(projectRoot, sessionId);
+  let stopped = 0;
+  for (const child of children) if (killRunnerProcess(child.pid, signal)) stopped += 1;
+  if (signal === "SIGKILL" || stopped === children.length) {
+    rmSync(runnerChildrenPath(projectRoot, sessionId), { force: true });
+  }
+  return { stopped, children: children.length };
+}
+
+function registeredChildRunner(projectRoot, sessionId, stage, cardId, runChild) {
+  return (options) => {
+    let pid = 0;
+    return runChild({
+      ...options,
+      onSpawn: (child) => {
+        pid = Number(child?.pid || 0);
+        registerRunnerChild(projectRoot, sessionId, {
+          pid,
+          stage,
+          cardId,
+          startedAt: new Date().toISOString(),
+        });
+        options.onSpawn?.(child);
+      },
+      onClose: (outcome) => {
+        unregisterRunnerChild(projectRoot, sessionId, pid);
+        options.onClose?.(outcome);
+      },
+    });
+  };
+}
+
 /** Persist a per-card failure record under $SESSION/data/cards/<id>/caption.violations.json. */
 function writeCaptionViolations(resultPath, cardId, error, violations = []) {
   const paths = writerReturnPaths({ sessionDir: dirname(resolve(resultPath)), cardId });
@@ -319,6 +400,7 @@ export async function runWriterForCard(
   const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
   const resultPath = join(sessionDir, "result.json");
   const paths = writerReturnPaths({ sessionDir, cardId });
+  const childRunner = registeredChildRunner(projectRoot, sessionId, "B2_WRITER", cardId, runChild);
   const attempt = { cardId, status: "running", startedAt: new Date().toISOString() };
 
   // 1. 取数（复用 Pi fetch-entry；QDM CLI 缺失时 fail-closed）
@@ -360,7 +442,7 @@ export async function runWriterForCard(
   const schema = writerSchema(cardId);
   let child;
   try {
-    child = await runChild({
+    child = await childRunner({
       prompt: buildWriterPrompt({ cardId, evidence: prepared.evidence }),
       schema,
       sessionId: `${sanitizeSessionId(sessionId)}-writer-${cardId}`,
@@ -1445,6 +1527,13 @@ export async function runDesignStage(
 /** Advance one stage; returns { ok, message, state?, stop? }. */
 async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntries, fetchExplore, onProgress } = {}) {
   const stage = state.currentStage;
+  const trackedRunChild = registeredChildRunner(
+    projectRoot,
+    sessionId,
+    stage,
+    undefined,
+    runChild || runCodeBuddyChild,
+  );
   // M3-M5 阶段默认关闭；仅当当前 state 的 policy 显式启用时才进入各 case。
   if (DISABLED_RUNNER_STAGES.has(stage) && !runnerPolicyEnabled(state, stage)) {
     return { ok: true, message: `${stage} 未启用（对齐文档 §9 默认只到 B2_MAIN），不改变状态。`, state };
@@ -1524,24 +1613,24 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       };
     }
     case "B25_EDITOR": {
-      const outcome = await runEditorPlannerStage(projectRoot, sessionId, { runChild });
+      const outcome = await runEditorPlannerStage(projectRoot, sessionId, { runChild: trackedRunChild });
       if (!outcome.ok) return { ok: false, message: outcome.error, outcome };
       return { ok: true, message: outcome.message, state: outcome.state, outcome };
     }
     case "B3_RESEARCH": {
-      const outcome = await runResearchStage(projectRoot, sessionId, { runChild, fetchExplore });
+      const outcome = await runResearchStage(projectRoot, sessionId, { runChild: trackedRunChild, fetchExplore });
       if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
     }
     case "B4_REVIEW": {
-      const outcome = await runReviewStage(projectRoot, sessionId, { runChild });
+      const outcome = await runReviewStage(projectRoot, sessionId, { runChild: trackedRunChild });
       if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, state: outcome.state, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
     }
     case "B5_DESIGN": {
-      const outcome = await runDesignStage(projectRoot, sessionId, { runChild });
+      const outcome = await runDesignStage(projectRoot, sessionId, { runChild: trackedRunChild });
       if (!outcome.ok) return { ok: false, message: outcome.error, code: outcome.code, state: outcome.state, outcome };
       const after = runStageGate(projectRoot, sessionId, "status");
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
@@ -1690,9 +1779,17 @@ export function status(projectRoot, sessionId, { format = "text" } = {}) {
 
 /** cancel：暂停当前阶段。 */
 export function cancel(projectRoot, sessionId) {
+  const stopped = stopRunnerChildren(projectRoot, sessionId);
   const result = runStageGate(projectRoot, sessionId, "pause", ["--reason", "runner cancel"]);
   if (!result.ok) return { ok: false, error: result.error || "stage-gate pause 失败" };
-  return { ok: true, state: result.payload?.state, message: "当前阶段已暂停（cancel）。" };
+  return {
+    ok: true,
+    state: result.payload?.state,
+    message: stopped.stopped > 0
+      ? `当前阶段已暂停（cancel），已停止 ${stopped.stopped} 个子进程。`
+      : "当前阶段已暂停（cancel）。",
+    stoppedChildren: stopped.stopped,
+  };
 }
 
 /** approve：通过人工 Gate（awaiting_approval）并继续推进；其余状态拒绝。 */

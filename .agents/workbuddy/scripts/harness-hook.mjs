@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -339,6 +339,48 @@ function htmlReportSessionMarked(root, sessionID) {
   return existsSync(marker);
 }
 
+function htmlReportRunnerEntry(root) {
+  const candidates = [
+    join(root, "agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
+    join(root, ".agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
+  ];
+  const candidate = candidates.find((path) => existsSync(path));
+  if (!candidate) return "";
+  try { return realpathSync(candidate); } catch { return candidate; }
+}
+
+export function autoStartHtmlReport(root, sessionID, prompt, env = process.env) {
+  if (env.QDM_HARNESS_HTML_REPORT_AUTOSTART === "0") return { ok: true, skipped: true };
+  const entry = htmlReportRunnerEntry(root);
+  if (!entry) return { ok: false, error: "html-report WorkBuddy Stage Runner is missing" };
+  const result = spawnSync(process.execPath, [
+    entry,
+    "start",
+    "--session",
+    sessionID,
+    "--root",
+    root,
+    "--phase-a",
+    "ui",
+    "--question",
+    prompt,
+  ], {
+    cwd: root,
+    env: { ...env, CODEBUDDY_PROJECT_DIR: root },
+    encoding: "utf8",
+    timeout: hookTimeout(env),
+    maxBuffer: MAX_BUFFER_BYTES,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.code === "ETIMEDOUT"
+      ? "timed out"
+      : (result.stderr || result.error?.message || "failed").trim();
+    return { ok: false, error: `html-report 自动启动失败：${reason}` };
+  }
+  return { ok: true, message: (result.stdout || "html-report session 已启动").trim() };
+}
+
 function htmlReportSessionMarkerPath(root, sessionID) {
   if (!root || !sessionID) return "";
   const digest = createHash("sha256").update(sessionID).digest("hex");
@@ -393,8 +435,19 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       : {});
     return;
   }
+  const htmlReportWasMarked = mode === "context" && htmlReportSessionMarked(root, canonical.session_id);
   if (mode === "context" && shouldBypassHtmlReportContext(root, canonical)) {
-    emit({});
+    const firstTurn = isHtmlReportPrompt(canonical.prompt) && !htmlReportWasMarked;
+    if (firstTurn) {
+      const started = autoStartHtmlReport(root, canonical.session_id, canonical.prompt, env);
+      if (!started.ok) {
+        emit(safeOutput("context", `${started.error}\n请修复 WorkBuddy html-report runtime 后重试；本轮未执行取数。`));
+        return;
+      }
+      emit(safeOutput("context", `${started.message}\n请在 qdm-metric-cli UI 中配置卡片并点击“保存”；完成后回复“继续”。`));
+      return;
+    }
+    emit(safeOutput("context", "html-report 会话已就绪。请执行当前 WorkBuddy html-report Stage Runner 的 advance，完成后返回阶段摘要；不要读取或猜测模板。"));
     return;
   }
   const output = runCanonicalHook(mode, canonical, root, env);

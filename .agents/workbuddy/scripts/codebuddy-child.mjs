@@ -334,7 +334,7 @@ function turnBudgetExhaustedFromOutput(output) {
 export async function runCodeBuddyChild({
   prompt, schema, sessionId, cli, cwd, env = process.env,
   model = CODEBUDDY_CHILD_MODEL, tools = [], timeoutMs = DEFAULT_TIMEOUT_MS,
-  signal,
+  signal, onSpawn, onClose,
 } = {}) {
   const resolvedCli = cli || resolveCodeBuddyCli(env);
   const { command, args } = buildCodeBuddyChildArgs({ cli: resolvedCli, prompt, schema, sessionId, model, tools });
@@ -354,11 +354,18 @@ export async function runCodeBuddyChild({
     let providerFailure = null;
     let turnBudgetExhausted = false;
     let settled = false;
+    let lifecycleClosed = false;
+    const closeLifecycle = (result) => {
+      if (lifecycleClosed) return;
+      lifecycleClosed = true;
+      try { onClose?.(result); } catch { /* lifecycle reporting must not change child semantics */ }
+    };
     const finish = (outcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
+      closeLifecycle(outcome);
       resolvePromise(outcome);
     };
     const child = spawn(command, args, {
@@ -368,6 +375,7 @@ export async function runCodeBuddyChild({
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    try { onSpawn?.({ pid: child.pid, processGroup: process.platform === "win32" ? child.pid : -child.pid }); } catch { /* see closeLifecycle */ }
     const onAbort = () => {
       cancelled = true;
       stopProcessGroup(child);
