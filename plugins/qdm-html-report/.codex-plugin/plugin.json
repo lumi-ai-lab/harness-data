@@ -1,6 +1,6 @@
 {
   "name": "qdm-html-report",
-  "version": "0.0.49",
+  "version": "0.0.50",
   "description": "html-report pipeline for Codex CLI and ChatGPT App (stops at analysis/main.md).",
   "author": {
     "name": "Lumi AI Lab"

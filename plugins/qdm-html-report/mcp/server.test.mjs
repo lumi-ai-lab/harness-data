@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -35,9 +36,9 @@ writeFileSync(out, "<html>ok</html>\\n");
   return bin;
 }
 
-function startServer(t, { env = process.env } = {}) {
+function startServer(t, { env = process.env, cwd = repoRoot } = {}) {
   const child = spawn(process.execPath, [serverPath], {
-    cwd: repoRoot,
+    cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -230,7 +231,11 @@ test("self-test sees six tools including close_ui and generate_html", async () =
   assert.match(stdout, /passed/);
 });
 
-test("Codex html-report Skill exactly mirrors the plugin Skill", async () => {
+test("Codex html-report Skill exactly mirrors the plugin Skill", async (t) => {
+  if (!existsSync(localSkillPath)) {
+    t.skip("project .codex skill overlay is optional");
+    return;
+  }
   const [pluginSkill, localSkill] = await Promise.all([
     readFile(pluginSkillPath, "utf8"),
     readFile(localSkillPath, "utf8"),
@@ -619,4 +624,43 @@ test("generate_html failure can be retried and rejects extra path arguments", as
   const retried = await retrying.callTool("html_report_generate_html", { sessionId });
   assert.equal(retried.result.ok, true);
   assert.equal(retried.result.status, "generated");
+});
+
+test("plugin-cache cwd still reads sessions from HARNESS_WORKSPACE_ROOT", async (t) => {
+  const pluginCwd = await mkdtemp(join(tmpdir(), "mcp-plugin-cwd-"));
+  const harness = await mkdtemp(join(tmpdir(), "mcp-harness-ws-"));
+  t.after(async () => {
+    await rm(pluginCwd, { recursive: true, force: true });
+    await rm(harness, { recursive: true, force: true });
+  });
+  await mkdir(join(harness, "config"), { recursive: true });
+  await writeFile(join(harness, "config", "harness-config.yaml"), "cli:\n  qdm_metric_cli: /bin/true\n");
+
+  const sessionId = `mcp-ws-${process.pid}-${Date.now()}`;
+  const sessionDir = join(harness, ".harness", "state", "html-report", sessionId);
+  await mkdir(join(sessionDir, "debug"), { recursive: true });
+  await writeFile(join(sessionDir, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
+    version: 1,
+    sessionId,
+    stage: "a_config",
+    cards: [],
+    currentIndex: -1,
+    startedAt: "2026-08-27T00:00:00.000Z",
+  }, null, 2)}\n`);
+
+  const { rpc, callTool } = startServer(t, {
+    cwd: pluginCwd,
+    env: {
+      HOME: process.env.HOME,
+      PATH: process.env.PATH,
+      TMPDIR: process.env.TMPDIR || "/tmp",
+      PWD: harness,
+      HARNESS_WORKSPACE_ROOT: harness,
+    },
+  });
+  await rpc("initialize", {});
+  const status = await callTool("html_report_status", { sessionId });
+  assert.equal(status.error, undefined);
+  assert.equal(status.result.stage, "a_config");
+  assert.equal(status.result.sessionId, sessionId);
 });

@@ -51,7 +51,7 @@ Plugin 同时包含两个核心组件：
 |------|------|
 | `marketplace.json` | 声明 marketplace 名称 `lumi-harness-data` 和 plugin `qdm-html-report`，指向 `./plugins/qdm-html-report` |
 | `.codex-plugin/plugin.json` | Plugin 元数据：名称、版本、`skills` 路径、`mcp` 路径 |
-| `.mcp.json` | 声明 MCP server：`command = "node"`，`args = ["mcp/server.mjs"]` |
+| `.mcp.json` | 声明 MCP server：`command = "node"`，`args = ["mcp/server.mjs"]`，`cwd = "."`（plugin 根目录）。Codex 会把 plugin 拷到 cache，所以再转发 `PWD` / `HARNESS_WORKSPACE_ROOT` / `QDM_METRIC_CLI`，用来定位用户的 Harness workspace，而不是 cache 目录。 |
 | `skills/html-report/SKILL.md` | 模型流程指令：何时调哪个工具、规则、限制 |
 | `mcp/server.mjs` | stdio JSON-RPC 2.0 server，5 个工具，无外部依赖，原地复用 PI 脚本 |
 
@@ -256,7 +256,7 @@ codex plugin add qdm-html-report@lumi-harness-data
 
 ```
 qdm-html-report Plugin
-  ├── .mcp.json          → 自动注册 6 个 MCP 工具（不需要手动 .codex/config.toml）
+  ├── .mcp.json          → 自动注册 6 个 MCP 工具（cwd 是 plugin cache；workspace 从 PWD / HARNESS_WORKSPACE_ROOT 解析）
   └── skills/html-report/
         └── SKILL.md      → 自动加载流程指令（模型知道怎么走流水线）
 ```

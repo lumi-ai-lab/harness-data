@@ -21,7 +21,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadKernel, loadRuntime, resolveKernelPath, resolveRuntimePath, kernelSource } from "./kernel-loader.mjs";
-import { workspace } from "./runtime-resolver.mjs";
+import { getWorkspace, isHarnessWorkspaceRoot } from "./runtime-resolver.mjs";
+
+function requireWorkspace() {
+  const root = getWorkspace();
+  if (!isHarnessWorkspaceRoot(root)) {
+    throw new Error(
+      "HARNESS_WORKSPACE_NOT_FOUND: html-report needs a Harness Data workspace (config/harness-config.yaml). Open Codex in that workspace, or set HARNESS_WORKSPACE_ROOT.",
+    );
+  }
+  return root;
+}
 
 // ── pipeline state ────────────────────────────────────────────────────
 
@@ -45,7 +55,7 @@ async function writeState(sessionDir, state) {
 function sessionDirFor(sessionId) {
   const safe = String(sessionId || "").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
   if (!safe) throw new Error("sessionId is required");
-  return join(workspace, ".harness", "state", "html-report", safe);
+  return join(requireWorkspace(), ".harness", "state", "html-report", safe);
 }
 
 function uiMarkerPath(sessionDir) {
@@ -90,7 +100,7 @@ async function closeMetricCliUi(sessionId) {
   const sessionDir = sessionDirFor(sessionId);
   try {
     const { stopMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
-    const stopped = await stopMetricCliUi({ projectRoot: workspace, sessionId });
+    const stopped = await stopMetricCliUi({ projectRoot: requireWorkspace(), sessionId });
     return {
       ...(await metricCliUiStatus(sessionDir)),
       closeRequested: true,
@@ -174,7 +184,7 @@ async function htmlReportStart(args) {
   const { bindCliScriptPath, openMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
   bindCliScriptPath(resolveRuntimePath("open-metric-cli-ui.mjs"));
   const opened = await openMetricCliUi({
-    projectRoot: workspace,
+    projectRoot: requireWorkspace(),
     sessionId,
     userQuestion,
     open: true,
@@ -227,8 +237,9 @@ async function htmlReportNext(args) {
 
     // B0 preflight: validate result.json + metric CLI (no PI Agent check)
     const { loadAuthzConfig, resolveMetricCliPath } = await loadRuntime("authz-config.mjs");
-    const config = loadAuthzConfig(workspace);
-    const cliPath = resolveMetricCliPath(workspace, config);
+    const projectRoot = requireWorkspace();
+    const config = loadAuthzConfig(projectRoot);
+    const cliPath = resolveMetricCliPath(projectRoot, config);
     if (!existsSync(cliPath)) {
       throw new Error(`B0 failed: qdm-metric-cli not found at ${cliPath}`);
     }
@@ -326,7 +337,7 @@ async function fetchCurrentCard(sessionDir, sessionId, result, state) {
 
   // fetch-entry.mjs (CLI)
   const { fetchAllEntries } = await loadKernel("data/fetch-entry.mjs");
-  const fetchResult = await fetchAllEntries(resultPath, { cardId: card.id, projectRoot: workspace });
+  const fetchResult = await fetchAllEntries(resultPath, { cardId: card.id, projectRoot: requireWorkspace() });
   const cardResult = fetchResult.cards.find((c) => c.cardId === card.id || c.id === card.id);
   if (!cardResult || cardResult.fetchStatus === "failed") {
     throw new Error(`fetch failed for card ${card.id}: ${cardResult?.error || "unknown"}`);
@@ -580,7 +591,7 @@ async function handle(request) {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "html-report", version: "0.0.49" },
+            serverInfo: { name: "html-report", version: "0.0.50" },
           },
         });
         break;

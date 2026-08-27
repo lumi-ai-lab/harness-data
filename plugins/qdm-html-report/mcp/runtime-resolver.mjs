@@ -4,4 +4,7 @@ const { findWorkspaceRoot, isHarnessWorkspaceRoot } = await loadRuntime("workspa
 
 export { findWorkspaceRoot, isHarnessWorkspaceRoot };
 
-export const workspace = findWorkspaceRoot();
+/** Resolve at call time so Codex-forwarded PWD / HARNESS_WORKSPACE_ROOT are visible. */
+export function getWorkspace(env = process.env) {
+  return findWorkspaceRoot(undefined, env);
+}
