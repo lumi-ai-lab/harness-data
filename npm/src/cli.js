@@ -18,7 +18,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "dev", "help"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "dev"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -29,19 +29,10 @@ function parse(argv) {
 
 export async function main(argv) {
   const { command, options, unknown } = parse(argv);
-  if (options.help === true) {
-    printHelp();
-    return;
-  }
   if (command === "install") return installCommand(options);
   if (command === "update") return updateCommand(options);
   if (command === "doctor") return doctorCommand(options);
   if (command === "version") return versionCommand(options);
-  printHelp();
-  if (unknown) process.exitCode = 1;
-}
-
-function printHelp() {
   console.log(`Usage: harness-data <install|update|doctor|version> [options]
 
 Commands:
@@ -65,4 +56,5 @@ Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github
 
 Release ZIP password is built in; install and update need no password setup.`);
+  if (unknown) process.exitCode = 1;
 }

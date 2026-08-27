@@ -118,16 +118,6 @@ test("prints help", () => {
   assert.doesNotMatch(result.stdout, /HARNESS_RELEASE_PASSWORD/);
 });
 
-test("--help prints the same help without starting a command", () => {
-  for (const args of [["--help"], ["install", "--help"]]) {
-    const result = spawnSync(process.execPath, [bin, ...args], { encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Usage: harness-data <install\|update\|doctor\|version>/);
-    assert.match(result.stdout, /--dev-password/);
-    assert.equal(result.stderr, "");
-  }
-});
-
 test("release source command-line value overrides the environment and rejects invalid values", () => {
   const previous = process.env.HARNESS_RELEASE_SOURCE;
   process.env.HARNESS_RELEASE_SOURCE = "github";
