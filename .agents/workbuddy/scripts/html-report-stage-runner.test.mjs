@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 
@@ -723,6 +723,28 @@ test("start + status + cancel on a fresh session", async () => {
     const cancelled = cancel(root, sessionId);
     assert.equal(cancelled.ok, true, cancelled.error);
   } finally {
+    cleanup(root);
+  }
+});
+
+test("cancel stops registered child process groups before pausing the Gate", async () => {
+  const { root, sessionDir, sessionId } = makeSession();
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+    detached: process.platform !== "win32",
+    stdio: "ignore",
+  });
+  try {
+    driveGateToWriter(root, sessionId);
+    const childrenPath = join(sessionDir, "debug", "runner-children.json");
+    writeFileSync(childrenPath, JSON.stringify([{ pid: child.pid, stage: "B2_WRITER", cardId: "cancel-card" }]));
+    const cancelled = cancel(root, sessionId);
+    assert.equal(cancelled.ok, true, cancelled.error);
+    assert.equal(cancelled.stoppedChildren, 1);
+    assert.equal(JSON.parse(readFileSync(join(sessionDir, "debug", "pipeline-state.json"), "utf8")).status, "paused");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    assert.throws(() => process.kill(child.pid, 0), /ESRCH/);
+  } finally {
+    try { process.kill(child.pid, "SIGKILL"); } catch { /* already stopped */ }
     cleanup(root);
   }
 });

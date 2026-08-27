@@ -31,6 +31,7 @@ import {
   resolveProjectRoot,
   start,
   status,
+  stopRunnerChildren,
 } from "./html-report-stage-runner.mjs";
 import { openMetricCliUi, stopMetricCliUi } from "../../../packages/harness-runtime-node/src/open-metric-cli-ui.mjs";
 
@@ -157,12 +158,16 @@ export async function runWorkbuddy(argv = [], { emit } = {}) {
       output = cancel(projectRoot, sessionId);
       break;
     case "stop": {
+      const stoppedChildren = stopRunnerChildren(projectRoot, sessionId);
+      if (stoppedChildren.stopped > 0) cancel(projectRoot, sessionId);
       const stopped = await stopMetricCliUi({ projectRoot, sessionId });
       output = {
         ok: true,
         message: stopped.stopped
-          ? `已停止 qdm-metric-cli ui（pid=${stopped.pid || 0}，cliPid=${stopped.cliPid || 0}）。`
-          : `没有正在运行的 qdm-metric-cli ui（session ${sessionId} 无 marker）。`,
+          ? `已停止 qdm-metric-cli ui（pid=${stopped.pid || 0}，cliPid=${stopped.cliPid || 0}）${stoppedChildren.stopped ? `，并停止 ${stoppedChildren.stopped} 个报告子进程。` : "。"}`
+          : stoppedChildren.stopped
+            ? `没有正在运行的 qdm-metric-cli ui，并停止 ${stoppedChildren.stopped} 个报告子进程。`
+            : `没有正在运行的 qdm-metric-cli ui（session ${sessionId} 无 marker）。`,
       };
       break;
     }
