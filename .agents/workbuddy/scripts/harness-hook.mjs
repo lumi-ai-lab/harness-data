@@ -441,6 +441,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (firstTurn) {
       const started = autoStartHtmlReport(root, canonical.session_id, canonical.prompt, env);
       if (!started.ok) {
+        forgetHtmlReportSession(root, canonical.session_id);
         emit(safeOutput("context", `${started.error}\n请修复 WorkBuddy html-report runtime 后重试；本轮未执行取数。`));
         return;
       }
