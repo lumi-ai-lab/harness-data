@@ -80,6 +80,10 @@ def request_context(
         raise HarnessContextError("context_protocol_invalid") from exc
     if not isinstance(content, str) or not content.strip():
         raise HarnessContextError("context_empty")
+    # The generic Harness prompt historically told agents to read contextFiles
+    # with their host file tool. QwenPaw has no runtime Wiki mounted in its
+    # workspace; the plugin has already embedded and validated those files.
+    content = _sanitize_embedded_context_instruction(content)
     limits = context_limits or ContextLimits()
     if _exceeds_limit(len(content.encode("utf-8")), limits.base_context_bytes):
         raise HarnessContextError("context_base_too_large")
@@ -87,6 +91,18 @@ def request_context(
     # Append after selected manuals so this channel-specific policy wins over
     # legacy generic Harness instructions that may mention auth describe.
     return content + manuals + "\n\n" + QWENPAW_TOOL_POLICY + "\n"
+
+
+def _sanitize_embedded_context_instruction(content: str) -> str:
+    replacements = {
+        "必须先读取以下 contextFiles：": "以下 contextFiles 已由可信 Harness 读取并以内嵌 Markdown 提供；禁止再次使用 Read、Shell 或其他文件工具读取这些路径：",
+        "All modes: read all contextFiles before running data CLI.": "The trusted Harness has already read and embedded every contextFile below; do not call Read, Shell, or any file tool for those paths.",
+        "Read every selected playbook in contextFiles.": "Use the selected playbook content embedded below; do not read its path again.",
+        "Read the report index when present": "Use the report index content embedded below when present",
+    }
+    for old, new in replacements.items():
+        content = content.replace(old, new)
+    return content
 
 
 def _selected_wiki_manuals(
