@@ -23,7 +23,7 @@ if PACKAGE not in sys.modules:
 from qdm_harness_qwenpaw_test.qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query_args, _truncate_success
 from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result
-from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _selected_wiki_manuals, request_context, session_key
+from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _selected_wiki_manuals, _sanitize_embedded_context_instruction, request_context, session_key
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
 from qdm_harness_qwenpaw_test.qdm_config import ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config
 from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
@@ -474,6 +474,10 @@ class ToolBoundaryTests(unittest.TestCase):
 
 
 class HarnessContextTests(unittest.TestCase):
+    def test_qwenpaw_context_replaces_file_read_instructions(self) -> None:
+        sanitized = _sanitize_embedded_context_instruction("必须先读取以下 contextFiles：\nAll modes: read all contextFiles before running data CLI.")
+        self.assertIn("禁止再次使用 Read", sanitized)
+        self.assertIn("do not call Read", sanitized)
     def test_selected_wiki_manuals_reads_only_allowlisted_markdown_under_runtime_wikis(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
