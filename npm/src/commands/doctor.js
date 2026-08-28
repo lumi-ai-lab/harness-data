@@ -85,10 +85,6 @@ export async function collectDoctor(workspace, options = {}) {
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
 
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
-  {
-    const hasPlugins = fs.existsSync(path.join(workspace, "agents", "plugins", "marketplace.json"));
-    add("agents/plugins", true, hasPlugins ? undefined : "not found; html-report plugin unavailable for Codex CLI/ChatGPT App", hasPlugins ? "pass" : "warning");
-  }
   add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
   add("wikis/metrics", fs.existsSync(path.join(workspace, "wikis", "metrics")));
   add("wikis/reports", fs.existsSync(path.join(workspace, "wikis", "reports")));

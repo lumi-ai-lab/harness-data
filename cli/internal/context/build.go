@@ -141,6 +141,16 @@ func buildFromWikisRuntimeIndex(resolver harness.PathResolver, index wikis.Runti
 
 	// Always inject Metric CLI usage docs when present in the knowledge tree.
 	add("rules/qdm-metric-cli/spec.md", "default metric cli usage")
+	// Time interpretation is a required dependency for natural-language date
+	// queries. Include the resolved rule in contextFiles so constrained hosts
+	// (such as QwenPaw) can use the embedded Markdown without reading a path.
+	for _, timeRule := range []string{"rules/QDM 时间口径/spec.md", "rules/QDM 鏃堕棴鍙ｅ緞/spec.md", "rules/common/time-policy.md", "spec/common/time-policy.md"} {
+		before := len(refs)
+		add(timeRule, "required time policy")
+		if len(refs) > before {
+			break
+		}
+	}
 
 	addDefaultFreeFiles := func() {
 		add("index.md", "default knowledge index")

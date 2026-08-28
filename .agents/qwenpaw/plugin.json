@@ -1,0 +1,16 @@
+{
+  "id": "qdm-harness-qwenpaw",
+  "name": "QDM Harness for QwenPaw",
+  "version": "0.1.6",
+  "type": "general",
+  "description": "Provides trusted channel-user authorization and constrained QDM queries for QwenPaw.",
+  "author": "QDM",
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [],
+  "qwenpaw_version": {
+    "min": "2.1.0",
+    "max": "2.2.0"
+  }
+}

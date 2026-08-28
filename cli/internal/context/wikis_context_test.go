@@ -463,6 +463,14 @@ func TestRunClaudeHookWritesFreeSessionState(t *testing.T) {
 	if !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Harness mode: free") || !strings.Contains(output.HookSpecificOutput.AdditionalContext, "Do not run bin/data-harness-cli inject-template") {
 		t.Fatalf("unexpected context: %s", output.HookSpecificOutput.AdditionalContext)
 	}
+	if len(output.HookSpecificOutput.ContextFiles) == 0 {
+		t.Fatal("expected structured contextFiles allow-list")
+	}
+	for _, ref := range output.HookSpecificOutput.ContextFiles {
+		if !strings.HasPrefix(strings.ReplaceAll(ref.Path, "\\", "/"), "wikis/") {
+			t.Fatalf("expected runtime wiki path, got %q", ref.Path)
+		}
+	}
 	data, err := os.ReadFile(sessionstate.Path(root, sessionID))
 	if err != nil {
 		t.Fatal(err)

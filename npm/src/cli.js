@@ -2,8 +2,9 @@ import { installCommand } from "./commands/install.js";
 import { updateCommand } from "./commands/update.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { versionCommand } from "./commands/version.js";
+import { qwenpawCommand } from "./commands/qwenpaw.js";
 
-const commands = new Set(["install", "update", "doctor", "version"]);
+const commands = new Set(["install", "update", "doctor", "version", "qwenpaw"]);
 
 function parse(argv) {
   const args = argv.slice(2);
@@ -18,7 +19,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "dev"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -33,6 +34,7 @@ export async function main(argv) {
   if (command === "update") return updateCommand(options);
   if (command === "doctor") return doctorCommand(options);
   if (command === "version") return versionCommand(options);
+  if (command === "qwenpaw") return qwenpawCommand(options);
   console.log(`Usage: harness-data <install|update|doctor|version> [options]
 
 Commands:
@@ -40,6 +42,10 @@ Commands:
   update   Interactively check and apply runtime, CLI, and wikis updates
   doctor   Diagnose workspace CLI, config, index, and Agent hooks
   version  Print installer, repository, wikis, and manifest versions
+  qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
+
+QwenPaw:
+  harness-data qwenpaw <install|doctor|uninstall> [options]
 
 Install options:
   --dir PATH                         Runtime directory (default: current directory)
@@ -49,8 +55,8 @@ Install options:
   --auth-blob BLOB                   Auth blob string (qdm1enc...); default: interactive prompt
   --auth-user-id ID                  dev_user_id for authz; default: interactive prompt
   --data-auth                        Use built-in local-test fixture blob (dev/test shortcut)
-  --dev                              Register the local development administrator
-  --dev-password PASSWORD            Password for --dev (default: qdm-metric-cli prompt)
+  --no-auth                          Install without authz (requires password)
+  --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)
 
 Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github

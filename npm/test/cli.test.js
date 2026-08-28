@@ -17,13 +17,15 @@ import { download, installToolsFromManifest, readManifest } from "../src/lib/man
 import { downloadReleaseAsset } from "../src/lib/github.js";
 import { giteeReleaseRepo, resolveLatestRelease, resolveLatestReleaseAssets, resolveReleaseSource } from "../src/lib/release-source.js";
 import { resolveLatestTool, toolAssetName } from "../src/lib/tool-release.js";
-import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, installWikis, resolveLatestHarnessRelease, runDevRegistration, validateLocalWikisSource } from "../src/commands/install.js";
+import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBundle, installWikis, resolveLatestHarnessRelease, validateLocalWikisSource } from "../src/commands/install.js";
 import { collectInstallAuth } from "../src/lib/install-auth.js";
 import { collectReleaseArchivePassword, RELEASE_ARCHIVE_PASSWORD } from "../src/lib/release-password.js";
 import { createInstallSession } from "../src/lib/install-session.js";
 import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, toolInstallMode, updateWikis, wikisInstallMode } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
+import { qwenpawCommand } from "../src/commands/qwenpaw.js";
 import {
+  AUTH_OFF_PASSWORD,
   agentChoices,
   assertCodexAuthPlatform,
   ensureLocalAuthBlob,
@@ -33,8 +35,6 @@ import {
   localTestAuthBlobRel,
   localTestAuthFixtureRel,
   localTestAuthUserId,
-  devAdminAuthBlobRel,
-  devAdminUserId,
   patchCodexHooksForWindows,
   qdmCliBinaries,
   readAuthzFromHarnessConfig,
@@ -108,14 +108,24 @@ test("prints help", () => {
   assert.match(result.stdout, /--auth-blob/);
   assert.match(result.stdout, /--auth-user-id/);
   assert.match(result.stdout, /--data-auth/);
-  assert.match(result.stdout, /--dev/);
-  assert.match(result.stdout, /--dev-password/);
-  assert.doesNotMatch(result.stdout, /--no-auth/);
-  assert.doesNotMatch(result.stdout, /--auth-off-password/);
+  assert.match(result.stdout, /--no-auth/);
+  assert.match(result.stdout, /--auth-off-password/);
   assert.match(result.stdout, /--release-source/);
   assert.doesNotMatch(result.stdout, /--release-password/);
   assert.match(result.stdout, /HARNESS_RELEASE_SOURCE/);
   assert.doesNotMatch(result.stdout, /HARNESS_RELEASE_PASSWORD/);
+});
+
+test("qwenpaw command rejects invalid actions and missing runtime plugin source", async () => {
+  await assert.rejects(
+    qwenpawCommand({ _: ["enable"] }),
+    /usage: harness-data qwenpaw <install\|doctor\|uninstall>/
+  );
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-qwenpaw-"));
+  await assert.rejects(
+    qwenpawCommand({ _: ["doctor"], runtime }),
+    /QwenPaw plugin source is missing/
+  );
 });
 
 test("release source command-line value overrides the environment and rejects invalid values", () => {
@@ -2006,11 +2016,19 @@ printf '%s' '${binary.replaceAll("'", "'\\''")}' > "$dir/${binaryName("data-harn
   assert.equal(writes.filter((line) => line.includes(".sha256")).length, 0);
 });
 
-test("local config requires explicit authorization", () => {
+test("local config exports metric cli path only", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
 
-  assert.throws(() => writeLocalConfig(workspace, { overwrite: true }), /authorization is required/);
-  assert.equal(fs.existsSync(path.join(workspace, "config", "harness-config.yaml")), false);
+  writeLocalConfig(workspace, { overwrite: true });
+
+  const env = fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8");
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(env, /export QDM_METRIC_CLI=".*qdm-metric-cli(?:\.exe)?"/);
+  assert.doesNotMatch(env, /QDM_SQL_CLI|QDM_CAS_CLI|QDM_CAS_CONFIG_DIR|QDM_CMR_CLI|QDM_INDICATORS_CLI/);
+  assert.match(harnessConfig, /qdm_metric_cli: .*qdm-metric-cli(?:\.exe)?/);
+  assert.doesNotMatch(harnessConfig, /qdm_sql_cli|qdm_cas_cli|qdm_cmr_cli|qdm_indicators_cli/);
+  assert.match(harnessConfig, /authz:\n  mode: off/);
+  assert.match(harnessConfig, /allow_local_blob: true/);
 });
 
 test("local config dataAuth enables authz and local blob paths", () => {
@@ -2053,13 +2071,15 @@ test("resolveAuthzForWrite migrates allow_local_blob:false to true when mode=on"
   assert.equal(migrated.devUserId, "local-test-user");
 });
 
-test("resolveAuthzForWrite rejects legacy mode=off", () => {
-  assert.throws(() => resolveAuthzForWrite({}, {
+test("resolveAuthzForWrite preserves allow_local_blob:false when mode=off", () => {
+  const preserved = resolveAuthzForWrite({}, {
     mode: "off",
     blobFile: "",
     devUserId: "",
     allowLocalBlob: false,
-  }), /legacy authorization mode is not supported/);
+  });
+  assert.equal(preserved.mode, "off");
+  assert.equal(preserved.allowLocalBlob, false);
 });
 
 test("writeLocalConfig overwrites and migrates allow_local_blob:false to true", () => {
@@ -2380,39 +2400,6 @@ test("writeAuthBlob writes user blob to config/dev-auth.blob", () => {
   if (process.platform !== "win32") assert.equal(fs.statSync(target).mode & 0o777, 0o600);
 });
 
-test("dev auth config uses qdm-metric-cli hidden admin blob", () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const { authz } = writeLocalConfig(workspace, { overwrite: true, dev: true });
-  assert.equal(authz.mode, "on");
-  assert.equal(authz.blobFile, devAdminAuthBlobRel);
-  assert.equal(authz.devUserId, devAdminUserId);
-  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
-  assert.match(harnessConfig, /mode: on/);
-  assert.match(harnessConfig, /blob_file: bin\/\.qdm-auth\.blob/);
-});
-
-test("runDevRegistration feeds qdm-metric-cli dev password and validates blob", { skip: process.platform === "win32" }, async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const cli = path.join(workspace, "bin", "qdm-metric-cli");
-  fs.mkdirSync(path.dirname(cli), { recursive: true });
-  fs.writeFileSync(cli, `#!${process.execPath}\nimport fs from "node:fs"; import path from "node:path"; let input = ""; process.stdin.on("data", (chunk) => input += chunk); process.stdin.on("end", () => { if (input.trim() !== "secret") process.exit(64); fs.writeFileSync(path.join(path.dirname(process.argv[1]), ".qdm-auth.blob"), "qdm1enc.dev\\n", { mode: 0o600 }); });\n`, { mode: 0o755 });
-  await runDevRegistration(workspace, "secret");
-  assert.equal(fs.readFileSync(path.join(workspace, devAdminAuthBlobRel), "utf8").trim(), "qdm1enc.dev");
-});
-
-test("runDevRegistration failure leaves no admin blob", { skip: process.platform === "win32" }, async () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  const cli = path.join(workspace, "bin", "qdm-metric-cli");
-  fs.mkdirSync(path.dirname(cli), { recursive: true });
-  fs.writeFileSync(cli, `#!${process.execPath}\nprocess.stdin.resume(); process.stdin.on("end", () => { console.error("secret"); process.exit(17); });\n`, { mode: 0o755 });
-  await assert.rejects(runDevRegistration(workspace, "secret"), (error) => {
-    assert.match(error.message, /qdm-metric-cli .* failed/);
-    assert.doesNotMatch(error.message, /secret/);
-    return true;
-  });
-  assert.equal(fs.existsSync(path.join(workspace, devAdminAuthBlobRel)), false);
-});
-
 test("resolveAuthzForWrite with authBlob=true sets mode on with devUserId", () => {
   const authz = resolveAuthzForWrite({ authBlob: true, devUserId: "my-user" });
   assert.equal(authz.mode, "on");
@@ -2421,8 +2408,11 @@ test("resolveAuthzForWrite with authBlob=true sets mode on with devUserId", () =
   assert.equal(authz.allowLocalBlob, true);
 });
 
-test("resolveAuthzForWrite rejects removed noAuth", () => {
-  assert.throws(() => resolveAuthzForWrite({ noAuth: true }), /--no-auth has been removed/);
+test("resolveAuthzForWrite with noAuth=true sets mode off", () => {
+  const authz = resolveAuthzForWrite({ noAuth: true });
+  assert.equal(authz.mode, "off");
+  assert.equal(authz.blobFile, "");
+  assert.equal(authz.devUserId, "");
 });
 
 test("local config authBlob writes mode on with user-provided blob", () => {
@@ -2442,10 +2432,18 @@ test("local config authBlob writes mode on with user-provided blob", () => {
   );
 });
 
-test("local config rejects removed noAuth", () => {
+test("local config noAuth sets mode off", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  assert.throws(() => writeLocalConfig(workspace, { overwrite: true, noAuth: true }), /--no-auth has been removed/);
-  assert.equal(fs.existsSync(path.join(workspace, "config", "harness-config.yaml")), false);
+  const { authz } = writeLocalConfig(workspace, { overwrite: true, noAuth: true });
+  assert.equal(authz.mode, "off");
+  assert.equal(authz.blobFile, "");
+  assert.equal(authz.devUserId, "");
+  const harnessConfig = fs.readFileSync(path.join(workspace, "config", "harness-config.yaml"), "utf8");
+  assert.match(harnessConfig, /mode: off/);
+});
+
+test("AUTH_OFF_PASSWORD is hardcoded to expected value", () => {
+  assert.equal(AUTH_OFF_PASSWORD, "qdmzt@2026");
 });
 
 test("install --auth-blob + --auth-user-id writes mode on with user blob (regression for 0.0.44)", () => {
@@ -2468,8 +2466,10 @@ test("install --auth-blob + --auth-user-id writes mode on with user blob (regres
   );
 });
 
-test("resolveAuthzForWrite rejects dataAuth=false", () => {
-  assert.throws(() => resolveAuthzForWrite({ dataAuth: false }), /--data-auth cannot be disabled/);
+test("resolveAuthzForWrite with dataAuth=false sets mode off (WorkBuddy default)", () => {
+  const authz = resolveAuthzForWrite({ dataAuth: false });
+  assert.equal(authz.mode, "off");
+  assert.equal(authz.blobFile, "");
 });
 
 test("Windows Codex hook patch rewrites all required hooks and is idempotent", () => {
@@ -2724,7 +2724,7 @@ function createDoctorWorkspace(agent) {
   for (const binary of qdmCliBinaries) {
     fs.writeFileSync(path.join(workspace, "bin", binaryName(binary)), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
-  writeLocalConfig(workspace, { overwrite: true, dataAuth: true });
+  writeLocalConfig(workspace, { overwrite: true });
   linkAgents(workspace, agent);
   return workspace;
 }
@@ -3095,12 +3095,7 @@ test("collectInstallAuth rejects missing blob and invalid prefix", async () => {
     await assert.rejects(collectInstallAuth({ yes: true }), /auth blob is required/);
     await assert.rejects(collectInstallAuth({ yes: true, authBlob: "plain-text", authUserId: "u" }), /must start with qdm1enc/);
     await assert.rejects(collectInstallAuth({ yes: true, authBlob: "qdm1enc.ok", authUserId: "  " }), /dev_user_id is required/);
-    await assert.rejects(collectInstallAuth({ yes: true, noAuth: true }), /--no-auth has been removed/);
-    await assert.rejects(collectInstallAuth({ yes: true, authOffPassword: "wrong" }), /--auth-off-password has been removed/);
-    await assert.rejects(collectInstallAuth({ yes: true, admin: true }), /--admin is not supported/);
-    await assert.rejects(collectInstallAuth({ yes: true, dev: true }), /--dev-password is required/);
-    assert.deepEqual(await collectInstallAuth({ yes: true, dev: true, devPassword: "secret" }), { mode: "dev", password: "secret" });
-    assert.deepEqual(await collectInstallAuth({ dev: true, value: "prompted-secret" }), { mode: "dev", password: "prompted-secret" });
+    await assert.rejects(collectInstallAuth({ yes: true, noAuth: true, authOffPassword: "wrong" }), /关闭权限密码错误/);
     const auth = await collectInstallAuth({ yes: true, authBlob: "qdm1enc.ok", authUserId: "user-1" });
     assert.deepEqual(auth, { mode: "auth-blob", blobContent: "qdm1enc.ok", devUserId: "user-1" });
   });
@@ -3125,27 +3120,12 @@ test("install fails before writes when auth blob prefix is invalid", async () =>
   });
 });
 
-test("install rejects removed no-auth before writes", async () => {
+test("install fails before writes when no-auth password is wrong", async () => {
   await withCleanAuthEnv(async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
     await assert.rejects(
-      installCommand({ yes: true, dir: workspace, agent: "codex", noAuth: true }),
-      /--no-auth has been removed/
-    );
-    await assert.rejects(
-      installCommand({ yes: true, dir: workspace, agent: "codex", noAuth: false }),
-      /--no-auth has been removed/
-    );
-    assert.deepEqual(harnessResidue(workspace), []);
-  });
-});
-
-test("install rejects --admin before writes", async () => {
-  await withCleanAuthEnv(async () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-    await assert.rejects(
-      installCommand({ yes: true, dir: workspace, agent: "codex", admin: true }),
-      /--admin is not supported/
+      installCommand({ yes: true, dir: workspace, agent: "codex", noAuth: true, authOffPassword: "wrong" }),
+      /关闭权限密码错误/
     );
     assert.deepEqual(harnessResidue(workspace), []);
   });

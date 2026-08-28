@@ -100,6 +100,54 @@ func TestRunClaudeHookDoesNotRequireTemplateInFreeMode(t *testing.T) {
 	}
 }
 
+func TestRunQwenPawHookInjectsTemplateAfterSuccessfulQDMQuery(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "qwenpaw:" + strings.Repeat("a", 64)
+	writeInjectState(t, root, sessionID, sessionstate.File{
+		SessionID:        sessionID,
+		Mode:             sessionstate.ModeReport,
+		SelectedPlaybook: "playbooks/idx/business/r-business-analysis-report.md",
+		SelectedTemplate: "templates/idx/business/s-sale-amt.md",
+		Reports:          map[string]*sessionstate.Report{},
+	})
+	payload := map[string]any{
+		"session_id": sessionID,
+		"tool_name":  "qdm_query",
+		"status":     "success",
+		"safe_command_args": map[string]any{
+			"report_name":   "financial-overview",
+			"report_module": "indicators",
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := RunQwenPawHook(root, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !output.OK || output.DiagnosticCode != "template_injected" || !strings.Contains(output.AdditionalContext, "QDM_DELIVERY_MODE=chat") {
+		t.Fatalf("unexpected qwenpaw output: %+v", output)
+	}
+	state, err := sessionstate.Load(root, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.TemplateInjected || !contains(state.Reports["financial-overview"].RecordedModules, "indicators") {
+		t.Fatalf("qwenpaw completion did not persist report state: %+v", state)
+	}
+}
+
+func TestRunQwenPawHookRejectsUntrustedPayloadFields(t *testing.T) {
+	root := testInjectRoot(t)
+	sessionID := "qwenpaw:" + strings.Repeat("b", 64)
+	payload := []byte(`{"session_id":"` + sessionID + `","tool_name":"qdm_query","status":"success","safe_command_args":{},"command":"qdm-metric-cli --auth-blob secret"}`)
+	if _, err := RunQwenPawHook(root, payload); err == nil {
+		t.Fatal("expected unknown payload field to be rejected")
+	}
+}
+
 func TestInjectTemplateFreeAndMissingStateDoNotGuess(t *testing.T) {
 	root := testInjectRoot(t)
 	writeInjectState(t, root, "free", sessionstate.File{SessionID: "free", Mode: sessionstate.ModeFree, Reports: map[string]*sessionstate.Report{}})

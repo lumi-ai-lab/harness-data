@@ -40,12 +40,44 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 - `UserPromptSubmit` 通过零依赖 `harness-hook.mjs` 调用 `context --format workbuddy-hook`
 - `PostToolUse` 匹配 `Bash|PowerShell|execute_command`，归一化为 `Bash` 后调用 `posttool --format workbuddy-hook`
 - 插件清单位于 `agents/workbuddy/.codebuddy-plugin/plugin.json`，本地 Marketplace 清单位于 `agents/.codebuddy-plugin/marketplace.json`；目录存在不等于插件已经安装或启用
-- 使用 `authz.mode=on` 接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
+- 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
 - WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
 
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
-`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI、执行 `bin/data-harness-cli inject-template`。`posttool` 负责记录 Bash 取数模块状态，并在 inject-template 成功后只注入 session state 中 selected template 的正文。
+## QwenPaw（Windows 首期）
+
+QwenPaw 使用独立插件安装流程，不加入其他 Agent 的工作区软链接。先创建并配置好专用
+`qdmDataAgent`，再执行：
+
+```powershell
+harness-data qwenpaw install --runtime <runtime> --qwenpaw-python 'D:\Program Files\Python313\python.exe' --agent-id qdmDataAgent
+harness-data qwenpaw doctor  --runtime <runtime> --qwenpaw-python 'D:\Program Files\Python313\python.exe' --agent-id qdmDataAgent
+```
+
+安装器会按 QwenPaw 2.1 的实际规则定位工作目录：显式 `--qwenpaw-working-dir`、
+`QWENPAW_WORKING_DIR` / `COPAW_WORKING_DIR`、已存在的 `~/.copaw`、最后才是 `~/.qwenpaw`。
+如需运行 runtime 中的 Windows 调试安装脚本，请使用当前进程的 Bypass，不修改系统执行策略：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agents\qwenpaw\INSTALL-QWENPAW-COMMAND-DEBUG.ps1 `
+  -Runtime <runtime> -AgentId qdmDataAgent
+```
+
+也可双击或从 CMD 运行同目录的 `INSTALL-QWENPAW-COMMAND-DEBUG.cmd`。将实际
+`channel-auth.json` 与 `session-hmac.secret` 放入 runtime 后，先收紧其 ACL：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agents\qwenpaw\prepare-qwenpaw-materials.ps1 `
+  -Runtime <runtime>
+```
+
+插件只读取 `<runtime>\config\qwenpaw\channel-auth.json` 和独立的
+`<runtime>\config\qwenpaw\session-hmac.secret`；`C:\ProgramData\QDM\qwenpaw\plugin-config.json`
+仅保存 runtime 定位与非敏感插件配置。插件不会读取或修改既有 `auth.blob`。QwenPaw 工作目录默认
+由 QwenPaw 自身解析。`context_limits` 可选配置 Harness 上下文的基础文本、单个 Wiki 与 Wiki 总字节上限；字段缺失或值为 `null` 表示不限制，正整数才启用对应限制，其他值会使插件 fail-closed。企微群聊依赖 QwenPaw 企微渠道“仅路由已 @机器人消息”的宿主契约；飞书群聊仍必须由宿主提供可信 `bot_mentioned=true` 入站标记。原始 UserID 调试回显默认关闭。
+
+`context` 负责根据 `.harness/index/wikis-runtime-index.json` 召回相关 `wikis/metrics`、`wikis/reports`、`wikis/dims`、`wikis/rules` 文件清单；如果 runtime 索引尚未生成，会回退到 `.harness/index/wikis-index.json` 派生运行时索引。Agent 读取这些文件后判断取数路径、调用数据 CLI。QwenPaw 普通 `qdm_query` 只执行受限指标查询：插件会在每次查询前重新读取渠道授权、执行 `auth describe` 权限预检，并将授权范围内的管理区域/商品分类显示名称解析为 ID；权限或范围校验失败时不会启动 `analysis execute`。普通查询不接受 `report_name`、`report_module`、playbook、template、Excel 等报告字段，也不会自动进入 `posttool` 报告生命周期；报告能力仅可由未来可信 Harness 上下文的独立入口启用。
 
 ## 常用命令
 
@@ -55,13 +87,9 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 npx @lumi-ai-lab/harness-data install
 ```
 
-默认 `--release-source auto` 会优先从 Gitee Release 下载 runtime、Wikis 和 CLI，缺少对应附件时才回退 GitHub。若使用 GitHub，`--git-protocol auto` 会先用 SSH 访问仓库，不可用时回退 HTTPS；GitHub HTTPS 不支持账号密码登录，需要本机 Git Credential Manager、`gh auth login` 凭据或 token 环境变量。
+Wikis 仍通过 GitHub 访问：默认 `--git-protocol auto` 会先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，不可用时回退 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
 
-Release 下载与 GitHub 授权解耦。可用 `--release-source auto|gitee|github` 或环境变量
-`HARNESS_RELEASE_SOURCE` 指定来源，命令行优先级更高。`data-harness-cli` 与 runtime 映射到
-`git_pengmd/harness-release`，`qdm-metric-cli` 映射到 `git_pengmd/harness-metric-release`。
-使用 `auto` 或 `gitee` 时，完整的 Gitee 镜像不需要 GitHub token 或本地
-`harness-data-wikis`；只有强制 `github` 且没有 GitHub 授权时才需要本地 Wikis。
+Release 下载与 GitHub 授权解耦。安装器默认 `--release-source auto`，先从 Gitee 的同 Tag Release 查找精确同名的普通附件，缺少该附件、Release 不存在或接口失败时才回退 GitHub。可强制指定 `gitee` 或 `github`，环境变量为 `HARNESS_RELEASE_SOURCE`；命令行优先级更高。`data-harness-cli` 与 runtime 映射到 `git_pengmd/harness-release`，`qdm-metric-cli` 映射到 `git_pengmd/harness-metric-release`。Gitee 镜像完整时，即使没有 GitHub token 也能远程安装两个 CLI；但没有 GitHub 授权时仍需提供本地 `harness-data-wikis`。强制 GitHub 时，`qdm-metric-cli` 保持私有 Release 的 `gh auth login` / `GITHUB_TOKEN` / `--github-token` 限制。
 
 强制使用 SSH：
 
@@ -81,42 +109,6 @@ npx @lumi-ai-lab/harness-data install --git-protocol https
 npx @lumi-ai-lab/harness-data install --dir ~/harness-data
 ```
 
-推荐的最新版普通安装（Linux/macOS，使用 Gitee）：
-
-```bash
-npx -y @lumi-ai-lab/harness-data@latest install \
-  --release-source gitee \
-  --dir ~/qdm-harness-data/harness-data-runtime \
-  --agent codex \
-  --auth-blob 'qdm1enc...' \
-  --auth-user-id 'your-user-id' \
-  --yes
-```
-
-PowerShell：
-
-```powershell
-npx -y @lumi-ai-lab/harness-data@latest install `
-  --release-source gitee `
-  --dir "D:\qdm-harness-data\harness-data-runtime" `
-  --agent codex `
-  --auth-blob "qdm1enc..." `
-  --auth-user-id "your-user-id" `
-  --yes
-```
-
-开发管理员安装（`--dev` 不要再同时传 `--auth-blob` 或 `--auth-user-id`）：
-
-```bash
-npx -y @lumi-ai-lab/harness-data@latest install \
-  --release-source gitee \
-  --dir ~/qdm-harness-data/harness-data-runtime \
-  --agent codex \
-  --dev \
-  --dev-password 'PASSWORD' \
-  --yes
-```
-
 指定 Release 下载源：
 
 ```bash
@@ -124,7 +116,7 @@ npx @lumi-ai-lab/harness-data install --release-source gitee
 HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update --dir ~/harness-data
 ```
 
-非交互安装可以显式选择 Agent；未指定时 macOS/Linux 默认为 `all`，Windows 默认为 `codex`：
+非交互安装需要显式选择 Agent：
 
 ```bash
 npx @lumi-ai-lab/harness-data install \
@@ -156,7 +148,7 @@ GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install \
 
 `--agent` 支持 `claude`、`codex`、`pi`、`openclaw`、`hermes`、`workbuddy`、`both` 和 `all`。其中 `both` 表示 Claude + Codex；在项目自有 WorkBuddy E2E 矩阵完成前，`all` 继续保持 Claude + Codex + Pi + OpenClaw + Hermes 的既有语义，WorkBuddy 需要显式选择 `--agent workbuddy`。
 
-安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；WorkBuddy auth 仅支持 macOS 和 Windows，其他平台请选择受支持的 Agent。
+安装器会按步骤确认：clone 或复用仓库、按 `bootstrap/cli-manifest.json` 下载 CLI（`data-harness-cli` / `qdm-metric-cli`）、生成本地配置、构建索引，并把所选 `.agents/*` Agent 模板链接为本地 `.claude` / `.codex` / `.pi` / `.openclaw` / `.hermes`。选择 WorkBuddy 时，安装器只准备 `agents` Marketplace 与其中的 `agents/workbuddy` 插件包并打印 Add Marketplace/启用路径，不会自动修改 WorkBuddy settings 或 Marketplace 注册。metric-cli 数据权限默认开启；macOS 和 Windows WorkBuddy 支持同一套 auth 参数，其他平台需使用 `--no-auth`。
 
 更新工作目录：
 
@@ -337,9 +329,9 @@ cli:
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
 
 authz:
-  mode: on
+  mode: off
   # blob_file: config/dev-auth.blob          # local only
-  # dev_user_id: <user-id>                   # required with blob_file
+  # dev_user_id: local-test-user             # required with blob_file; no code default
   allow_local_blob: true                     # admin-distributed local blob requires true
 ```
 
@@ -349,7 +341,7 @@ authz:
 
 macOS 与 Windows WorkBuddy 共用本地 Blob auth 流程。WorkBuddy auth 要求 Desktop `5.3.11+`、内置 CodeBuddy CLI `2.115.0+`；Windows 的受控 QDM 命令使用 Bash，PowerShell 路径在读取凭据前 fail-closed。
 
-安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`。开发环境可使用 `install --dev` 调用 `qdm-metric-cli dev` 注册管理员 Blob；该流程同样只写入 `mode: on`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
+安装器默认写入 `authz.mode: on`，并要求 Blob 与 `dev_user_id`；使用 `--no-auth` 并通过密码验证后才写入 `off`。设为 `on` 后，Agent authz 适配器进入命令识别与授权流程，并保证：
 
 - 凡 `qdm-metric-cli analysis execute` 都会被强制加上 `--data-auth --auth-blob '<加密blob>'`
 - 凡 `qdm-metric-cli auth describe` 都会被强制加上 `--auth-blob '<加密blob>'`（用于回答「当前用户有哪些权限」）
@@ -424,13 +416,13 @@ npx @lumi-ai-lab/harness-data install \
 HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
 npx @lumi-ai-lab/harness-data install --yes
 
-# ④ 开发管理员注册（交互式密码）
-npx @lumi-ai-lab/harness-data install --dev
+# ④ 关闭权限（需密码）
+npx @lumi-ai-lab/harness-data install --no-auth
+# 或非交互：
+npx @lumi-ai-lab/harness-data install --no-auth \
+  --auth-off-password 'qdmzt@2026' --yes
 
-# ⑤ 开发管理员注册（非交互）
-npx @lumi-ai-lab/harness-data install --dev --dev-password 'PASSWORD' --yes
-
-# ⑥ 开发/测试快捷方式（用内置 fixture blob）
+# ⑤ 开发/测试快捷方式（用内置 fixture blob）
 npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
@@ -458,7 +450,7 @@ Agent 侧完整约定见 Wiki：`wikis/rules/qdm-metric-cli/spec.md`（Harness c
 
 解析优先级：`HARNESS_AUTH_BLOB` -> `HARNESS_AUTH_BLOB_FILE` -> `authz.blob_file`。MVP 只读取本机 Local Blob，不接收 Host `_auth`，不读取 Lumi Envelope。
 
-默认 install 为 `mode: on`；开发管理员可用 `--dev` 注册隐藏 admin Blob，开发测试可用 `--data-auth` + 内置 fixture。管理员分发 Blob 的正式使用场景保持 `allow_local_blob: true`，并把 Blob 文件放在 workspace 外。
+默认 install 为 `mode: on`；开发测试可用 `--data-auth` + 内置 fixture，关闭权限测试必须使用 `--no-auth` 并通过密码验证。管理员分发 Blob 的正式使用场景保持 `allow_local_blob: true`，并把 Blob 文件放在 workspace 外。
 
 `qdm-metric-cli` 与其它 QDM CLI 一样通过路径配置发现（**不要写死本机绝对路径进产品逻辑**）：
 

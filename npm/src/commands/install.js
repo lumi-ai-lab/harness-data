@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { commandExists, run } from "../lib/exec.js";
-import { assertCodexAuthPlatform, devAdminAuthBlobRel, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
+import { assertCodexAuthPlatform, localPathToolNames, writeLocalConfig, ensureLocalAuthBlob, writeAuthBlob, linkAgents, removeLegacyDataCLIs, patchCodexHooksForWindows } from "../lib/config.js";
 import { ask, chooseAgent } from "../lib/prompt.js";
 import { collectInstallAuth } from "../lib/install-auth.js";
 import { createInstallSession } from "../lib/install-session.js";
@@ -41,32 +41,21 @@ export async function resolveLatestHarnessRelease(options = {}) {
 }
 
 export function validateInstallAuthOptions(options = {}) {
-  const dev = options.dev === true;
+  const noAuth = options.noAuth === true;
   const dataAuth = options.dataAuth === true;
   const hasBlob = typeof options.authBlob === "string" && options.authBlob.trim() !== "";
   const hasUserID = typeof options.authUserId === "string" && options.authUserId.trim() !== "";
-  const hasDevPassword = Object.hasOwn(options, "devPassword");
+  const hasOffPassword = typeof options.authOffPassword === "string" && options.authOffPassword !== "";
 
-  if (Object.hasOwn(options, "noAuth")) {
-    throw new Error("--no-auth has been removed; install requires authorization");
-  }
-  if (Object.hasOwn(options, "authOffPassword")) {
-    throw new Error("--auth-off-password has been removed");
-  }
-  if (Object.hasOwn(options, "admin")) {
-    throw new Error("--admin is not supported; use --dev");
-  }
-  if (dev && (dataAuth || hasBlob || hasUserID)) {
-    throw new Error("--dev cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
-  }
-  if (hasDevPassword && !dev) {
-    throw new Error("--dev-password requires --dev");
+  if (noAuth && (dataAuth || hasBlob || hasUserID)) {
+    throw new Error("--no-auth cannot be combined with --data-auth, --auth-blob, or --auth-user-id");
   }
   if (dataAuth && (hasBlob || hasUserID)) {
     throw new Error("--data-auth cannot be combined with --auth-blob or --auth-user-id");
   }
-  if (options.dataAuth === false) throw new Error("--data-auth cannot be disabled; install requires authorization");
-  if (dev || dataAuth) return;
+  if (hasOffPassword && !noAuth) {
+    throw new Error("--auth-off-password requires --no-auth");
+  }
   if (hasBlob !== hasUserID) {
     throw new Error("--auth-blob and --auth-user-id must be provided together");
   }
@@ -324,11 +313,11 @@ export async function installWikis(runtimeDir, options = {}) {
 }
 
 function applyInstallAuth(runtimeDir, auth, selectedAgent) {
-  if (auth.mode === "dev") {
-    writeLocalConfig(runtimeDir, { overwrite: true, dev: true });
+  if (auth.mode === "no-auth") {
+    writeLocalConfig(runtimeDir, { overwrite: true, noAuth: true });
     ok("config/harness-config.yaml");
     ok("config/qdm-cli-paths.env");
-    ok("authz.mode: on + qdm development administrator");
+    ok("authz.mode: off (密码已验证)");
     return;
   }
   if (auth.mode === "data-auth") {
@@ -347,24 +336,6 @@ function applyInstallAuth(runtimeDir, auth, selectedAgent) {
   ok("authz.mode: on + user-provided blob");
   ok(`dev_user_id: ${auth.devUserId}`);
   if (agentIncludesWorkBuddy(selectedAgent)) ok("WorkBuddy PreToolUse auth enabled");
-}
-
-export async function runDevRegistration(runtimeDir, password = "") {
-  const cli = path.join(runtimeDir, "bin", binaryName("qdm-metric-cli"));
-  await run(cli, ["dev"], {
-    cwd: runtimeDir,
-    ...(password
-      ? { input: `${password}\n`, sensitiveValues: [password] }
-      : { stdio: ["inherit", "pipe", "inherit"] }),
-  });
-  const blobPath = path.join(runtimeDir, devAdminAuthBlobRel);
-  const stat = fs.lstatSync(blobPath);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("qdm-metric-cli dev did not create a regular admin auth blob");
-  if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) {
-    throw new Error("qdm-metric-cli dev did not create a private admin auth blob");
-  }
-  const blob = fs.readFileSync(blobPath, "utf8").trim();
-  if (!blob.startsWith("qdm1enc.")) throw new Error("qdm-metric-cli dev created an invalid admin auth blob");
 }
 
 export function validateLocalWikisSource(source) {
@@ -422,8 +393,8 @@ export async function installCommand(options = {}) {
   ]);
 
   const selectedAgent = await chooseAgent(options);
-  assertCodexAuthPlatform(selectedAgent, true, options.platform || process.platform);
-  assertWorkBuddyAuthPlatform(selectedAgent, true, options.platform || process.platform);
+  assertCodexAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
+  assertWorkBuddyAuthPlatform(selectedAgent, !options.noAuth, options.platform || process.platform);
 
   step(1, 7, "授权与访问预检");
   await requireCommands(["git", "tar", "unzip"]);
@@ -480,7 +451,6 @@ export async function installCommand(options = {}) {
     blank();
 
     step(5, 7, "生成本地配置");
-    if (auth.mode === "dev") await runDevRegistration(runtimeDir, auth.password);
     applyInstallAuth(runtimeDir, auth, selectedAgent);
     blank();
 

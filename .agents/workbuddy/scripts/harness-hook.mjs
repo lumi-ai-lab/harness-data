@@ -1,19 +1,99 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_TIMEOUT_MS = 8_500;
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const SHELL_TOOL_NAMES = new Set(["Bash", "PowerShell", "execute_command"]);
-const AUTHZ_SHELL_TOOL_NAMES = new Set(["Bash", "execute_command"]);
 export const WORKBUDDY_AUTH_MINIMUM_VERSION = "5.3.11";
 export const CODEBUDDY_AUTH_MINIMUM_VERSION = "2.115.0";
+
+class RawJSONNumber {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
+export function parseLosslessJSON(text) {
+  const source = String(text);
+  let markerPrefix = "__QDM_HARNESS_RAW_NUMBER_";
+  while (source.includes(markerPrefix)) markerPrefix = `_${markerPrefix}`;
+  const numbers = [];
+  let protectedJSON = "";
+  for (let index = 0; index < source.length;) {
+    if (source[index] === '"') {
+      const start = index++;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        if (source[index++] === '"') break;
+      }
+      protectedJSON += source.slice(start, index);
+      continue;
+    }
+    if (source[index] === "-" || /[0-9]/.test(source[index])) {
+      const match = source.slice(index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+      if (match) {
+        const marker = `${markerPrefix}${numbers.length}__`;
+        numbers.push(match[0]);
+        protectedJSON += JSON.stringify(marker);
+        index += match[0].length;
+        continue;
+      }
+    }
+    protectedJSON += source[index++];
+  }
+  return JSON.parse(protectedJSON, (_key, value) => {
+    if (typeof value !== "string" || !value.startsWith(markerPrefix) || !value.endsWith("__")) return value;
+    const numberIndex = Number.parseInt(value.slice(markerPrefix.length, -2), 10);
+    return Number.isInteger(numberIndex) && numbers[numberIndex] !== undefined
+      ? new RawJSONNumber(numbers[numberIndex])
+      : value;
+  });
+}
+
+export function stringifyLosslessJSON(value) {
+  const markerPrefix = `__QDM_HARNESS_RAW_NUMBER_${randomUUID()}_`;
+  const numbers = [];
+  let output = JSON.stringify(value, (_key, item) => {
+    if (!(item instanceof RawJSONNumber)) return item;
+    const marker = `${markerPrefix}${numbers.length}__`;
+    numbers.push(item.value);
+    return marker;
+  });
+  for (let index = 0; index < numbers.length; index += 1) {
+    output = output.replaceAll(JSON.stringify(`${markerPrefix}${index}__`), numbers[index]);
+  }
+  return output;
+}
+
+function isLosslessDeepEqual(left, right) {
+  if (left instanceof RawJSONNumber || right instanceof RawJSONNumber) {
+    const leftValue = left instanceof RawJSONNumber ? left.value : (typeof left === "number" ? JSON.stringify(left) : null);
+    const rightValue = right instanceof RawJSONNumber ? right.value : (typeof right === "number" ? JSON.stringify(right) : null);
+    return leftValue !== null && leftValue === rightValue;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+      left.every((value, index) => isLosslessDeepEqual(value, right[index]));
+  }
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return leftKeys.length === rightKeys.length && leftKeys.every((key) =>
+      Object.hasOwn(right, key) && isLosslessDeepEqual(left[key], right[key]));
+  }
+  return isDeepStrictEqual(left, right);
+}
 
 function expectedEvent(mode) {
   if (mode === "authz") return "PreToolUse";
@@ -23,6 +103,7 @@ function expectedEvent(mode) {
 export function safeOutput(mode, message) {
   if (mode === "authz") {
     return {
+      systemMessage: message,
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
@@ -68,18 +149,23 @@ export function normalizePayload(mode, payload) {
   }
 
   if (mode === "authz") {
-    if (payload.hook_event_name !== "PreToolUse") return null;
     const rawToolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
-    if (!AUTHZ_SHELL_TOOL_NAMES.has(rawToolName)) return null;
+    if (!SHELL_TOOL_NAMES.has(rawToolName)) return null;
+    const eventName = typeof payload.hook_event_name === "string" ? payload.hook_event_name.trim() : "";
+    if (eventName && eventName !== "PreToolUse") return null;
     const toolInput = payload.tool_input && typeof payload.tool_input === "object" && !Array.isArray(payload.tool_input)
       ? payload.tool_input
-      : null;
-    if (!toolInput || typeof toolInput.command !== "string" || !toolInput.command.trim()) return null;
-    return {
+      : {};
+    const command = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (!command.trim()) return null;
+    const canonical = {
+      session_id: sessionID,
       hook_event_name: "PreToolUse",
-      tool_name: "Bash",
+      tool_name: rawToolName,
       tool_input: { ...toolInput },
     };
+    if (typeof payload.cwd === "string") canonical.cwd = payload.cwd;
+    return canonical;
   }
 
   return null;
@@ -163,29 +249,50 @@ function versionAtLeast(actual, minimum) {
 }
 
 function normalizeWorkBuddyAppRoot(value) {
-  const candidate = resolve(value);
+  let candidate = resolve(value);
   const resources = dirname(candidate);
-  const contents = dirname(resources);
-  if (parse(candidate).base.toLowerCase() === "app.asar" &&
-      parse(resources).base.toLowerCase() === "resources" &&
-      parse(contents).base.toLowerCase() === "contents") {
-    return dirname(contents);
+  const parent = dirname(resources);
+  if (parse(candidate).base.toLowerCase() === "app.asar" && parse(resources).base.toLowerCase() === "resources") {
+    return parse(parent).base.toLowerCase() === "contents" ? dirname(parent) : parent;
+  }
+  try {
+    if (statSync(candidate).isFile()) candidate = dirname(candidate);
+  } catch {
+    // Missing candidates are ignored by the caller.
   }
   return candidate;
 }
 
 export function detectAuthRuntime(env = process.env, platform = process.platform) {
-  if (platform !== "darwin") return { supported: false, workBuddyVersion: "", codeBuddyVersion: "" };
-  const appRoot = typeof env.WORKBUDDY_APP_PATH === "string" && env.WORKBUDDY_APP_PATH.trim()
-    ? normalizeWorkBuddyAppRoot(env.WORKBUDDY_APP_PATH)
-    : "/Applications/WorkBuddy.app";
-  const cliRoot = join(appRoot, "Contents", "Resources", "app.asar.unpacked", "cli");
-  const product = readJSON(join(cliRoot, "product.json"));
-  const packageJSON = readJSON(join(cliRoot, "package.json"));
-  const workBuddyVersion = String(env.WORKBUDDY_VERSION || product?.genieVersion || "").trim();
-  const codeBuddyVersion = String(
-    env.CODEBUDDY_CLI_VERSION || packageJSON?.publishConfig?.customPackage?.version || "",
-  ).trim();
+  if (!["darwin", "win32"].includes(platform)) {
+    return { supported: false, workBuddyVersion: "", codeBuddyVersion: "" };
+  }
+  const declared = typeof env.WORKBUDDY_APP_PATH === "string" && env.WORKBUDDY_APP_PATH.trim()
+    ? [env.WORKBUDDY_APP_PATH]
+    : platform === "win32"
+      ? [
+          join(env.LOCALAPPDATA || "", "Programs", "WorkBuddy"),
+          join(env.LOCALAPPDATA || "", "WorkBuddy"),
+          join(env.PROGRAMFILES || "", "WorkBuddy"),
+        ]
+      : ["/Applications/WorkBuddy.app"];
+  let workBuddyVersion = String(env.WORKBUDDY_VERSION || "").trim();
+  let codeBuddyVersion = String(env.CODEBUDDY_CLI_VERSION || "").trim();
+  for (const declaredRoot of declared.filter(Boolean)) {
+    const appRoot = normalizeWorkBuddyAppRoot(declaredRoot);
+    const cliRoots = [
+      join(appRoot, "Contents", "Resources", "app.asar.unpacked", "cli"),
+      join(appRoot, "resources", "app.asar.unpacked", "cli"),
+      join(appRoot, "Resources", "app.asar.unpacked", "cli"),
+    ];
+    for (const cliRoot of cliRoots) {
+      const product = readJSON(join(cliRoot, "product.json"));
+      const packageJSON = readJSON(join(cliRoot, "package.json"));
+      workBuddyVersion ||= String(product?.genieVersion || "").trim();
+      codeBuddyVersion ||= String(packageJSON?.publishConfig?.customPackage?.version || "").trim();
+    }
+    if (workBuddyVersion && codeBuddyVersion) break;
+  }
   return {
     supported: Boolean(workBuddyVersion && codeBuddyVersion &&
       versionAtLeast(workBuddyVersion, WORKBUDDY_AUTH_MINIMUM_VERSION) &&
@@ -203,10 +310,10 @@ function hookTimeout(env = process.env) {
 
 export function validateHookOutput(mode, stdout, canonicalPayload = null) {
   const text = String(stdout || "").trim();
-  if (!text) return mode === "authz" ? null : {};
+  if (!text) return {};
   let output;
   try {
-    output = JSON.parse(text);
+    output = parseLosslessJSON(text);
   } catch {
     return null;
   }
@@ -214,19 +321,30 @@ export function validateHookOutput(mode, stdout, canonicalPayload = null) {
   if (Object.keys(output).length === 0) return {};
   if (mode === "authz") {
     const hook = output.hookSpecificOutput;
-    if (!hook || typeof hook !== "object" || hook.hookEventName !== "PreToolUse") return null;
+    if (!hook || typeof hook !== "object" || Array.isArray(hook)) return null;
+    if (hook.hookEventName !== "PreToolUse") return null;
     if (hook.permissionDecision !== "allow" && hook.permissionDecision !== "deny") return null;
+    if (output.systemMessage !== undefined && typeof output.systemMessage !== "string") return null;
     if (hook.permissionDecisionReason !== undefined && typeof hook.permissionDecisionReason !== "string") return null;
     if (hook.permissionDecision === "deny") {
-      return typeof hook.permissionDecisionReason === "string" && hook.permissionDecisionReason.trim() ? output : null;
+      if (!hook.permissionDecisionReason?.trim()) return null;
+      if (hook.updatedInput !== undefined) return null;
+      return output;
     }
-    const updatedInput = hook.updatedInput;
-    if (!updatedInput || typeof updatedInput !== "object" || Array.isArray(updatedInput) ||
-      typeof updatedInput.command !== "string" || !updatedInput.command.trim()) return null;
-    const originalInput = canonicalPayload?.tool_input || {};
-    for (const [key, value] of Object.entries(originalInput)) {
+    if (hook.updatedInput === undefined) return null;
+    if (!hook.updatedInput || typeof hook.updatedInput !== "object" || Array.isArray(hook.updatedInput)) return null;
+    if (typeof hook.updatedInput.command !== "string" || !hook.updatedInput.command.trim()) return null;
+    const originalCommand = canonicalPayload?.tool_input?.command;
+    const gatedCommand = typeof originalCommand === "string" &&
+      /(?:qdm-metric-cli(?:\.exe)?|%QDM_METRIC_CLI%|\$env:QDM_METRIC_CLI|\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?)/i.test(originalCommand) &&
+      /(?:analysis\s+execute|auth\s+describe)/i.test(originalCommand);
+    if (gatedCommand && hook.updatedInput.command === originalCommand) return null;
+    // Direct injection intentionally matches the merged macOS WorkBuddy
+    // contract. The encrypted Blob is required in updatedInput.command.
+    const original = canonicalPayload?.tool_input || {};
+    for (const [key, value] of Object.entries(original)) {
       if (key === "command") continue;
-      if (!(key in updatedInput) || JSON.stringify(updatedInput[key]) !== JSON.stringify(value)) return null;
+      if (!(key in hook.updatedInput) || !isLosslessDeepEqual(hook.updatedInput[key], value)) return null;
     }
     return output;
   }
@@ -238,22 +356,56 @@ export function validateHookOutput(mode, stdout, canonicalPayload = null) {
   return output;
 }
 
-export function runCanonicalHook(mode, canonicalPayload, root, env = process.env) {
+export function validateAuthzEnvelope(stdout, canonicalPayload = null) {
+  const text = String(stdout || "").trim();
+  if (!text) return null;
+  let envelope;
+  try {
+    envelope = parseLosslessJSON(text);
+  } catch {
+    return null;
+  }
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  if (!isLosslessDeepEqual(Object.keys(envelope).sort(), ["hookOutput", "schemaVersion", "status"])) return null;
+  if (!isLosslessDeepEqual(envelope.schemaVersion, 1)) return null;
+  if (!Object.hasOwn(envelope, "status") || !Object.hasOwn(envelope, "hookOutput")) return null;
+  if (!new Set(["disabled", "noop", "allow", "deny"]).has(envelope.status)) return null;
+  const hookOutput = envelope.hookOutput;
+  if (envelope.status === "disabled" || envelope.status === "noop") {
+    if (!hookOutput || typeof hookOutput !== "object" || Array.isArray(hookOutput) || Object.keys(hookOutput).length !== 0) {
+      return null;
+    }
+    return {};
+  }
+  const validated = validateHookOutput("authz", stringifyLosslessJSON(hookOutput), canonicalPayload);
+  if (!validated) return null;
+  const decision = validated.hookSpecificOutput.permissionDecision;
+  if (decision !== envelope.status) return null;
+  if (decision === "deny" && !validated.systemMessage) {
+    validated.systemMessage = validated.hookSpecificOutput.permissionDecisionReason;
+  }
+  return validated;
+}
+
+export function runCanonicalHook(mode, canonicalPayload, root, env = process.env, rawAuthzInput = "", spawn = spawnSync) {
   const cli = resolveHarnessCLI(root, env);
   if (!cli || !existsSync(cli)) {
+    const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
     return safeOutput(
       mode,
-      "QDM_HARNESS_UNAVAILABLE: data-harness-cli is missing or not executable for this WorkBuddy project. " +
+      `${code}: data-harness-cli is missing or not executable for this WorkBuddy project. ` +
         "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates until Harness is repaired.",
     );
   }
 
   const command = mode === "authz" ? "authz-hook" : (mode === "posttool" ? "posttool" : "context");
-  const args = mode === "authz" ? [command, "--agent", "workbuddy"] : [command, "--format", "workbuddy-hook"];
-  const result = spawnSync(cli, args, {
+  const args = mode === "authz"
+    ? [command, "--agent", "workbuddy", "--format", "adapter-envelope"]
+    : [command, "--format", "workbuddy-hook"];
+  const result = spawn(cli, args, {
     cwd: root,
     env: { ...env, CODEBUDDY_PROJECT_DIR: root },
-    input: `${JSON.stringify(canonicalPayload)}\n`,
+    input: mode === "authz" ? `${rawAuthzInput || stringifyLosslessJSON(canonicalPayload)}\n` : `${stringifyLosslessJSON(canonicalPayload)}\n`,
     encoding: "utf8",
     timeout: hookTimeout(env),
     maxBuffer: MAX_BUFFER_BYTES,
@@ -262,129 +414,26 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
 
   if (result.error || result.status !== 0) {
     const reason = result.error?.code === "ETIMEDOUT" ? "timed out" : "failed";
+    const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
     process.stderr.write(`[qdm-harness] data-harness-cli ${command} ${reason}\n`);
     return safeOutput(
       mode,
-      `QDM_HARNESS_UNAVAILABLE: WorkBuddy Harness ${command} ${reason}. ` +
+      `${code}: WorkBuddy Harness ${command} ${reason}. ` +
         "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
     );
   }
 
-  const output = validateHookOutput(mode, result.stdout, canonicalPayload);
+  const output = mode === "authz"
+    ? validateAuthzEnvelope(result.stdout, canonicalPayload)
+    : validateHookOutput(mode, result.stdout, canonicalPayload);
   if (output) return output;
   process.stderr.write(`[qdm-harness] data-harness-cli ${command} returned invalid JSON\n`);
+  const code = mode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE";
   return safeOutput(
     mode,
-    `QDM_HARNESS_UNAVAILABLE: WorkBuddy Harness ${command} returned an invalid response. ` +
+    `${code}: WorkBuddy Harness ${command} returned an invalid response. ` +
       "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
   );
-}
-
-const HTML_REPORT_SKILL_PATTERN = /(<skill\s+name=["']html-report["']|\/skill:\s*html-report\b|\bskill:\s*html-report\b)/i;
-const HTML_REPORT_TEXT_PATTERNS = [/html[- ]?report/i, /html\s*报告/i];
-const REPORT_TRIGGERS = ["生成", "做", "制作", "输出", "写", "创建", "出一份", "来一份", "周例会", "经营分析", "盈利情况", "销售情况", "分析报告"];
-const CONTINUATION_TRIGGERS = ["继续", "确认", "已保存", "保存好了", "保存完", "下一步", "往下", "推进", "开始生成", "开始取数", "advance"];
-
-export function shouldBypassHtmlReportContext(root, canonicalPayload) {
-  const sessionID = typeof canonicalPayload?.session_id === "string" ? canonicalPayload.session_id.trim() : "";
-  const prompt = typeof canonicalPayload?.prompt === "string" ? canonicalPayload.prompt : "";
-  if (!root || !sessionID || !prompt.trim()) return false;
-  if (isHtmlReportPrompt(prompt)) {
-    rememberHtmlReportSession(root, sessionID);
-    return true;
-  }
-  if (!htmlReportSessionMarked(root, sessionID)) return false;
-  if (isHtmlReportContinuation(prompt)) return true;
-  forgetHtmlReportSession(root, sessionID);
-  return false;
-}
-
-function isHtmlReportPrompt(prompt) {
-  const text = String(prompt || "").trim();
-  if (!text) return false;
-  if (HTML_REPORT_SKILL_PATTERN.test(text) || HTML_REPORT_TEXT_PATTERNS.some((pattern) => pattern.test(text))) return true;
-  if (!text.includes("报告")) return false;
-  return REPORT_TRIGGERS.some((trigger) => text.includes(trigger));
-}
-
-function isHtmlReportContinuation(prompt) {
-  const text = String(prompt || "").trim().replace(/^[，。,.!！?？；;：:"'“”‘’\s]+|[，。,.!！?？；;：:"'“”‘’\s]+$/g, "").toLowerCase();
-  return Boolean(text) && CONTINUATION_TRIGGERS.some((trigger) => text.includes(trigger));
-}
-
-function rememberHtmlReportSession(root, sessionID) {
-  const marker = htmlReportSessionMarkerPath(root, sessionID);
-  if (!marker) return;
-  try {
-    mkdirSync(dirname(marker), { recursive: true });
-    writeFileSync(marker, "{}\n", { mode: 0o644 });
-  } catch {
-    // A marker failure must not block WorkBuddy; the first html-report turn is still bypassed.
-  }
-}
-
-function forgetHtmlReportSession(root, sessionID) {
-  const marker = htmlReportSessionMarkerPath(root, sessionID);
-  if (!marker) return;
-  try {
-    rmSync(marker, { force: true });
-  } catch {
-    // Ignore stale marker cleanup failures.
-  }
-}
-
-function htmlReportSessionMarked(root, sessionID) {
-  const marker = htmlReportSessionMarkerPath(root, sessionID);
-  if (!marker) return false;
-  return existsSync(marker);
-}
-
-function htmlReportRunnerEntry(root) {
-  const candidates = [
-    join(root, "agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
-    join(root, ".agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
-  ];
-  const candidate = candidates.find((path) => existsSync(path));
-  if (!candidate) return "";
-  try { return realpathSync(candidate); } catch { return candidate; }
-}
-
-export function autoStartHtmlReport(root, sessionID, prompt, env = process.env) {
-  if (env.QDM_HARNESS_HTML_REPORT_AUTOSTART === "0") return { ok: true, skipped: true };
-  const entry = htmlReportRunnerEntry(root);
-  if (!entry) return { ok: false, error: "html-report WorkBuddy Stage Runner is missing" };
-  const result = spawnSync(process.execPath, [
-    entry,
-    "start",
-    "--session",
-    sessionID,
-    "--root",
-    root,
-    "--phase-a",
-    "ui",
-    "--question",
-    prompt,
-  ], {
-    cwd: root,
-    env: { ...env, CODEBUDDY_PROJECT_DIR: root },
-    encoding: "utf8",
-    timeout: hookTimeout(env),
-    maxBuffer: MAX_BUFFER_BYTES,
-    windowsHide: true,
-  });
-  if (result.error || result.status !== 0) {
-    const reason = result.error?.code === "ETIMEDOUT"
-      ? "timed out"
-      : (result.stderr || result.error?.message || "failed").trim();
-    return { ok: false, error: `html-report 自动启动失败：${reason}` };
-  }
-  return { ok: true, message: (result.stdout || "html-report session 已启动").trim() };
-}
-
-function htmlReportSessionMarkerPath(root, sessionID) {
-  if (!root || !sessionID) return "";
-  const digest = createHash("sha256").update(sessionID).digest("hex");
-  return join(root, ".harness", "state", "workbuddy-html-report", `${digest}.json`);
 }
 
 async function readStdin() {
@@ -395,11 +444,7 @@ async function readStdin() {
 }
 
 function emit(output) {
-  process.stdout.write(`${JSON.stringify(output)}\n`);
-  if (output?.hookSpecificOutput?.hookEventName === "PreToolUse" &&
-      output.hookSpecificOutput.permissionDecision === "deny") {
-    process.exitCode = 2;
-  }
+  process.stdout.write(`${stringifyLosslessJSON(output)}\n`);
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
@@ -409,53 +454,40 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return;
   }
 
+  let raw = "";
   let payload;
   try {
-    const raw = await readStdin();
-    payload = raw.trim() ? JSON.parse(raw) : {};
+    raw = await readStdin();
+    payload = raw.trim() ? parseLosslessJSON(raw) : {};
   } catch {
-    const root = resolveWorkspace({}, env);
-    emit(mode === "authz" && root
-      ? safeOutput(mode, "QDM_HARNESS_AUTHZ_DENIED: WorkBuddy provided invalid PreToolUse JSON; the command was blocked.")
-      : {});
-    return;
+    payload = {};
   }
 
-  const root = resolveWorkspace(payload, env);
+  let root = "";
+  if (mode === "authz") {
+    root = resolveWorkspace(payload, env);
+    if (!root) {
+      emit({});
+      return;
+    }
+  }
+  const canonical = normalizePayload(mode, payload);
+  if (!canonical && mode !== "authz") {
+    emit({});
+    return;
+  }
+  if (!root) root = resolveWorkspace(payload, env);
   if (!root) {
     // The plugin may be enabled globally; outside a Harness workspace it must
     // not change ordinary WorkBuddy behavior.
     emit({});
     return;
   }
-  const canonical = normalizePayload(mode, payload);
-  if (!canonical) {
-    emit(mode === "authz"
-      ? safeOutput(mode, "QDM_HARNESS_AUTHZ_DENIED: WorkBuddy provided an invalid PreToolUse payload; the command was blocked.")
-      : {});
-    return;
-  }
-  const htmlReportWasMarked = mode === "context" && htmlReportSessionMarked(root, canonical.session_id);
-  if (mode === "context" && shouldBypassHtmlReportContext(root, canonical)) {
-    const firstTurn = isHtmlReportPrompt(canonical.prompt) && !htmlReportWasMarked;
-    if (firstTurn) {
-      const started = autoStartHtmlReport(root, canonical.session_id, canonical.prompt, env);
-      if (!started.ok) {
-        forgetHtmlReportSession(root, canonical.session_id);
-        emit(safeOutput("context", `${started.error}\n请修复 WorkBuddy html-report runtime 后重试；本轮未执行取数。`));
-        return;
-      }
-      emit(safeOutput("context", `${started.message}\n请在 qdm-metric-cli UI 中配置卡片并点击“保存”；完成后回复“继续”。`));
-      return;
-    }
-    emit(safeOutput("context", "html-report 会话已就绪。请执行当前 WorkBuddy html-report Stage Runner 的 advance，完成后返回阶段摘要；不要读取或猜测模板。"));
-    return;
-  }
-  const output = runCanonicalHook(mode, canonical, root, env);
-  if (mode === "authz" && Object.keys(output).length > 0 && !detectAuthRuntime(env).supported) {
+  const output = runCanonicalHook(mode, canonical, root, env, raw);
+  if (mode === "authz" && output.hookSpecificOutput?.permissionDecision === "allow" && !detectAuthRuntime(env).supported) {
     emit(safeOutput(
       mode,
-      `QDM_HARNESS_AUTHZ_DENIED: WorkBuddy ${WORKBUDDY_AUTH_MINIMUM_VERSION}+ with CodeBuddy CLI ${CODEBUDDY_AUTH_MINIMUM_VERSION}+ is required for auth command rewriting.`,
+      `QDM_AUTHZ_RUNTIME_UNSUPPORTED: WorkBuddy ${WORKBUDDY_AUTH_MINIMUM_VERSION}+ with CodeBuddy CLI ${CODEBUDDY_AUTH_MINIMUM_VERSION}+ is required for auth command rewriting.`,
     ));
     return;
   }
@@ -464,9 +496,19 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
 const entry = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
 if (entry === import.meta.url) {
-  main().catch(() => emit(safeOutput(
-    process.argv[2] === "authz" ? "authz" : (process.argv[2] === "posttool" ? "posttool" : "context"),
-    "QDM_HARNESS_UNAVAILABLE: The WorkBuddy Harness adapter failed unexpectedly. " +
-      "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
-  )));
+  const failedMode = ["context", "posttool", "authz"].includes(process.argv[2]) ? process.argv[2] : "context";
+  main().catch(() => {
+    if (failedMode === "authz") {
+      const root = resolveWorkspace({}, process.env);
+      if (!root) {
+        emit({});
+        return;
+      }
+    }
+    emit(safeOutput(
+      failedMode,
+      `${failedMode === "authz" ? "QDM_AUTHZ_HOOK_UNAVAILABLE" : "QDM_HARNESS_UNAVAILABLE"}: The WorkBuddy Harness adapter failed unexpectedly. ` +
+        "Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
+    ));
+  });
 }
