@@ -154,7 +154,7 @@ jobs:
           RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p dist runtime/agents runtime/config runtime/bootstrap runtime/packages
+          mkdir -p dist runtime/agents runtime/config runtime/bootstrap
           cp -R /tmp/harness-release-dist/. dist/
           cp -R .agents/claude runtime/agents/claude
           cp -R .agents/codex runtime/agents/codex
@@ -164,6 +164,7 @@ jobs:
           cp -R .agents/workbuddy runtime/agents/workbuddy
           cp -R .agents/.codebuddy-plugin runtime/agents/.codebuddy-plugin
           cp -R .agents/plugins runtime/agents/plugins
+          node plugins/qdm-html-report/scripts/bundle-dist.mjs
           cp -R plugins runtime/plugins
           test -f runtime/agents/.codebuddy-plugin/marketplace.json
           test -f runtime/agents/plugins/marketplace.json
@@ -174,8 +175,6 @@ jobs:
           test -f runtime/agents/pi/skills/html-report/scripts/export-main-html.mjs
           test -f runtime/agents/pi/skills/html-report/scripts/compose-main.mjs
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml
-          cp -R packages/harness-runtime-node runtime/packages/harness-runtime-node
-          cp -R packages/html-report-kernel runtime/packages/html-report-kernel
           (cd runtime && node plugins/qdm-html-report/mcp/server.mjs --self-test)
           test -f runtime/agents/workbuddy/.codebuddy-plugin/plugin.json
           test -f runtime/agents/workbuddy/hooks/hooks.json
