@@ -19,6 +19,7 @@ from qdm_config import (
     parse_context_limits,
     parse_query_limits,
     parse_report_limits,
+    parse_timeout,
     sensitive_material_paths,
     TOOL_POLICIES,
 )
@@ -59,6 +60,8 @@ def install(args: argparse.Namespace) -> None:
         "user_id_display_mode": args.user_id_display_mode,
         "tool_policy": getattr(args, "tool_policy", "preserve"),
         "auth_file_max_bytes": None,
+        "context_cli_timeout_seconds": 60,
+        "report_hook_timeout_seconds": 60,
         "context_limits": {
             "base_context_bytes": None,
             "wiki_file_bytes": None,
@@ -415,7 +418,7 @@ def _verify_allowlist(agent: Path, policy: str = "preserve") -> None:
 def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
     config = _read_json(DEFAULT_PLUGIN_CONFIG_FILE)
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy"}
+    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
     if not required.issubset(config) or not set(config).issubset(allowed):
         raise RuntimeError("插件配置包含不支持字段")
     if config.get("schema_version") != 1:
@@ -435,6 +438,8 @@ def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
     try:
         parse_query_limits(config.get("query_limits"))
         parse_report_limits(config.get("report_limits"))
+        parse_timeout(config.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds")
+        parse_timeout(config.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds")
     except ConfigError as exc:
         raise RuntimeError("query_limits/report_limits 无效") from exc
 

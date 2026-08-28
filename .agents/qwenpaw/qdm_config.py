@@ -44,6 +44,8 @@ class PluginConfig:
     query_limits: QueryLimits
     report_limits: ReportLimits
     auth_file_max_bytes: int | None = None
+    context_cli_timeout_seconds: int = 60
+    report_hook_timeout_seconds: int = 60
     @property
     def sensitive_config_dir(self) -> Path:
         return _confined_sensitive_dir(self.runtime_dir) if os.name == "nt" else Path("/run/secrets")
@@ -73,7 +75,7 @@ def load_config(path: Path = DEFAULT_PLUGIN_CONFIG_FILE) -> PluginConfig:
     """Load only non-secret, operator-written plugin settings."""
     raw = _read_json(path)
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes"}
+    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
     if raw.get("schema_version") != 1:
@@ -93,7 +95,14 @@ def load_config(path: Path = DEFAULT_PLUGIN_CONFIG_FILE) -> PluginConfig:
     runtime_path = Path(runtime).expanduser()
     if not runtime_path.is_absolute() or runtime_path.is_symlink() or not runtime_path.is_dir():
         raise ConfigError("runtime_dir must be absolute")
-    return PluginConfig(runtime_path.resolve(), agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")))
+    return PluginConfig(runtime_path.resolve(), agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"))
+
+def parse_timeout(value: Any, field: str, default: int = 60, maximum: int = 300) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > maximum:
+        raise ConfigError(f"{field} is invalid")
+    return value
 
 def parse_auth_file_max_bytes(value: Any) -> int | None:
     if value is None:

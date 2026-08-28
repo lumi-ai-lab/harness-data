@@ -27,6 +27,7 @@ def complete_qdm_query(
     report_name: str | None,
     report_module: str | None,
     additional_context_bytes: int | None = None,
+    timeout_seconds: int = 60,
 ) -> LifecycleResult:
     """Call only the plugin-owned qwenpaw-hook protocol after a query."""
     if not session_key:
@@ -59,7 +60,7 @@ def complete_qdm_query(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=20,
+            timeout=timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired):
         return LifecycleResult(diagnostic_code="QDM_REPORT_LIFECYCLE_UNAVAILABLE")

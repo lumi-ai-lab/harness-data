@@ -605,7 +605,7 @@ class ConsoleChannelTests(unittest.TestCase):
     def test_plugin_manifest_version_is_incremented(self) -> None:
         manifest = Path(__file__).parents[1] / "plugin.json"
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        self.assertEqual(payload["version"], "0.1.4")
+        self.assertEqual(payload["version"], "0.1.6")
 
     def test_pre_execute_rebinds_requester_from_current_channel_message(self) -> None:
         config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent", session_secret_file=Path("missing.secret"))

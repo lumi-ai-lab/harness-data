@@ -56,7 +56,7 @@ def request_context(
     prompt: str,
     *,
     context_limits: ContextLimits | None = None,
-    timeout_seconds: int = 20,
+    timeout_seconds: int = 60,
 ) -> str:
     """Build Harness context and embed only CLI-selected Wiki Markdown files.
 
