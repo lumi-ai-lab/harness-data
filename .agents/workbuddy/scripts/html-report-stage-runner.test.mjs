@@ -171,7 +171,7 @@ function driveGateToWriter(root, sessionId) {
  * runStageGate 不启用 B25/B3/B4/B5），再 raw finish/approve 依次推进。
  */
 async function driveGateToEditor(root, sessionId) {
-  const started = await start(root, sessionId);
+  const started = await start(root, sessionId, { applyPolicy: true });
   assert.equal(started.ok, true, started.error);
   assert.equal(runStageGate(root, sessionId, "finish", ["--stage", "A_CONFIG"]).ok, true, "finish A_CONFIG");
   assert.equal(runStageGate(root, sessionId, "approve", ["--phrase", "继续"]).ok, true, "approve A_CONFIG");
@@ -710,12 +710,11 @@ test("start + status + cancel on a fresh session", async () => {
   try {
     const started = await start(root, sessionId);
     assert.equal(started.ok, true, started.error);
-    // start 会程序化启用 M3-M5 policy（B25/B3/B4/B5 enabled）
     const statePath = join(htmlReportSessionDir(root, sessionId), "debug", "pipeline-state.json");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
-    assert.equal(state.policy?.B25_EDITOR?.enabled, true, "policy must enable B25_EDITOR");
-    assert.equal(state.policy?.B3_RESEARCH?.enabled, true, "policy must enable B3_RESEARCH");
-    assert.equal(state.policy?.B5_DESIGN?.enabled, true, "policy must enable B5_DESIGN");
+    assert.notEqual(state.policy?.B25_EDITOR?.enabled, true, "B25_EDITOR is opt-in");
+    assert.notEqual(state.policy?.B3_RESEARCH?.enabled, true, "B3_RESEARCH is opt-in");
+    assert.notEqual(state.policy?.B5_DESIGN?.enabled, true, "B5_DESIGN is opt-in");
     const st = status(root, sessionId);
     assert.equal(st.ok, true);
     assert.equal(st.exists, true);

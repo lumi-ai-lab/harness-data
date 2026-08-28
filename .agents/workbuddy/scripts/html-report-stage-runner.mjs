@@ -1724,8 +1724,8 @@ export async function advance(projectRoot, sessionId, { runChild, fetchEntries, 
   return { ok: true, message: logs.join("\n"), state };
 }
 
-/** start：初始化 gate、启用 M3-M5 policy 并 start A_CONFIG。 */
-export async function start(projectRoot, sessionId, { applyPolicy = true } = {}) {
+/** start：初始化 gate 并 start A_CONFIG；增强阶段必须显式启用 policy。 */
+export async function start(projectRoot, sessionId, { applyPolicy = false } = {}) {
   const sessionDir = htmlReportSessionDir(projectRoot, sessionId);
   const init = runStageGate(projectRoot, sessionId, "init", ["--mode", "step", "--session-id", sanitizeSessionId(sessionId)]);
   if (!init.ok && !/already/i.test(String(init.error || ""))) {
