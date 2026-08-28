@@ -1,8 +1,5 @@
 {
   "enableSkillCommands": true,
-  "extensions": [
-    ".pi/extensions/qdm-harness/index.ts"
-  ],
   "skills": [
     ".pi/skills"
   ]

@@ -7,8 +7,8 @@
 - **tar** (on PATH; retained for historical `.tar.gz` Release fallback, and bundled with Git for Windows on Windows)
 - **unzip** (on PATH on every supported platform; not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.)
 - **Windows only** — additional requirements:
-  - **Codex Agent only** — Windows supports Codex exclusively; other agents (Claude, Pi, OpenClaw, Hermes, WorkBuddy) are not available on Windows.
-  - **No-auth mode** — Windows Codex authorization adaptation is tracked separately. Until it lands, install with `--no-auth`; the installer rejects an auth-enabled Windows install instead of creating a runtime whose authorization hook cannot execute safely.
+  - **Agent selection** — Windows defaults to Codex and also supports explicit WorkBuddy; other Agents are not available on Windows.
+  - **Authorization required** — Every install enables authorization. WorkBuddy auth is supported on macOS and Windows; use another Agent on unsupported platforms.
   - **Windows x64 + ARM64** are both supported.
 
 Install a Harness Data runtime in the current directory:
@@ -21,6 +21,42 @@ Install into an explicit runtime directory:
 
 ```bash
 npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
+```
+
+Recommended latest install from Gitee (Linux/macOS):
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --auth-blob 'qdm1enc...' \
+  --auth-user-id 'your-user-id' \
+  --yes
+```
+
+PowerShell:
+
+```powershell
+npx -y @lumi-ai-lab/harness-data@latest install `
+  --release-source gitee `
+  --dir "D:\qdm-harness-data\harness-data-runtime" `
+  --agent codex `
+  --auth-blob "qdm1enc..." `
+  --auth-user-id "your-user-id" `
+  --yes
+```
+
+Development administrator install (do not combine `--dev` with auth Blob flags):
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --dev \
+  --dev-password 'PASSWORD' \
+  --yes
 ```
 
 Release ZIP password is built into the installer. `install` and `update` do not prompt for it
@@ -74,12 +110,11 @@ HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
 npx @lumi-ai-lab/harness-data install --yes
 ```
 
-Install without auth only after password validation:
+Register the development administrator through `qdm-metric-cli dev`:
 
 ```bash
-npx @lumi-ai-lab/harness-data install --no-auth
-npx @lumi-ai-lab/harness-data install --no-auth \
-  --auth-off-password 'qdmzt@2026' --yes
+npx @lumi-ai-lab/harness-data install --dev
+npx @lumi-ai-lab/harness-data install --dev --dev-password 'PASSWORD' --yes
 ```
 
 Use the built-in fixture for development and testing:
@@ -88,7 +123,7 @@ Use the built-in fixture for development and testing:
 npx @lumi-ai-lab/harness-data install --data-auth
 ```
 
-The same auth parameters support `--agent workbuddy` on macOS. WorkBuddy auth is rejected on other platforms; use `--no-auth` there because M1/M2 command rewriting uses POSIX Shell syntax. User-provided Blobs and the fixture working copy are stored at `config/dev-auth.blob` with mode `0600`.
+The same auth parameters support `--agent workbuddy` on macOS and Windows. WorkBuddy auth is rejected on other platforms; use another Agent there. User-provided Blobs and the fixture working copy are stored at `config/dev-auth.blob` with mode `0600`.
 
 The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
 

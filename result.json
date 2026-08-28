@@ -1,0 +1,712 @@
+{
+  "status": "confirmed",
+  "submitted_at": "2026-08-11T07:09:15.785Z",
+  "title": "运营中心管理周例会（MTD 2026年8月1日—8月10日）",
+  "mode": "free",
+  "session_id": "mock-operation-center-management-weekly-report",
+  "result_path": "/Users/jhyan/qdm/harness-data/.harness/state/html-report/mock-operation-center-management-weekly-report/result.json",
+  "recommendations_path": "/Users/jhyan/qdm/harness-data/.harness/state/html-report/mock-operation-center-management-weekly-report/recommendations.json",
+  "already_validated": false,
+  "cards": [
+    {
+      "id": "section01-topic-three-one-summary",
+      "title": "01 经分会课题与三个一（全品类汇总）",
+      "headingLevel": 2,
+      "analysisFocus": "报告固定沿区域课题与三个一进展 -> 区域经营总览 -> 达成好坏区域识别 -> 好/差区域品类拆解 -> 风险预警 -> 行动建议展开。本卡作为第一段入口，按 Spec 的经分会课题和三个一查询键输出全品类汇总证据。三个一只保留 2026-08-01 至 2026-08-10 一次 MTD，严格按区域 + 一件事/一个动作/一个品类 + 品类 + 指标拆行；只输出查询键明确指定且有稳定 code 的指标，code=待补充、目标和事项文本不得冒充 CLI 结果。本卡与后续店日均、一级品类和二级品类卡共同回答重点区域、重点事项、重点品类及其 MTD 进展。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "bf19CustNum",
+            "openStores",
+            "contractStores",
+            "unknowLostRate"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01",
+              "CN04",
+              "CN05",
+              "CN07",
+              "CN12",
+              "CN15",
+              "CN18",
+              "CN20",
+              "CN21",
+              "CN22",
+              "CN23",
+              "CN24",
+              "CN25",
+              "CN26",
+              "CN27"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "section01-topic-three-one-store-day-avg",
+      "title": "01 经分会课题与三个一（全品类店日均）",
+      "headingLevel": 2,
+      "analysisFocus": "补充经分会课题和三个一中销售额、毛利额、客单价、件单数的 MTD 店日均证据。只按 Spec 查询键映射到对应区域和 groupType，禁止把同一区域的三个类型合并，禁止将店日均跨日累计或再次平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "profitAmt",
+            "perCustAmt",
+            "salePiece"
+          ],
+          "statisticPolicy": "SALES_STORE_DAY_AVG",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01",
+              "CN04",
+              "CN05",
+              "CN07",
+              "CN12",
+              "CN15",
+              "CN18",
+              "CN20",
+              "CN21",
+              "CN22",
+              "CN23",
+              "CN24",
+              "CN25",
+              "CN26",
+              "CN27"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "section01-topic-three-one-category-summary",
+      "title": "01 经分会课题与三个一（一级品类汇总）",
+      "headingLevel": 2,
+      "analysisFocus": "补充 Spec 查询键中蔬菜、水果、猪肉、肉禽蛋和预制菜的 MTD 指标。结果只允许映射到 Spec 明确维护的区域 + groupType + 品类 + 指标组合，不得把本卡的宽表或未维护组合直接输出；其中 storeOrderArticleNum 保留 categoryLevel1Id 维度。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "bf19CustNum",
+            "receiveWeight",
+            "receiveAmt",
+            "storeOrderAmt",
+            "storeOrderArticleNum"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId",
+            "categoryLevel1Id"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01",
+              "CN04",
+              "CN05",
+              "CN07",
+              "CN12",
+              "CN15",
+              "CN18",
+              "CN20",
+              "CN21",
+              "CN22",
+              "CN23",
+              "CN24",
+              "CN25",
+              "CN26",
+              "CN27"
+            ],
+            "categoryLevel1Id": [
+              "10",
+              "12",
+              "13",
+              "24",
+              "25"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "section01-three-one-category-store-day-avg",
+      "title": "01 三个一（一级品类店日均）",
+      "headingLevel": 2,
+      "analysisFocus": "补充三个一查询键中水果、蔬菜和预制菜的销售额或毛利额店日均证据。只映射到 Spec 明确维护的区域 + groupType + 品类 + 指标行，查询结果已经按完整 MTD 和区域品类计算，禁止跨日加总或再次平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "profitAmt"
+          ],
+          "statisticPolicy": "SALES_STORE_DAY_AVG",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId",
+            "categoryLevel1Id"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01",
+              "CN04",
+              "CN05",
+              "CN07",
+              "CN12",
+              "CN15",
+              "CN18",
+              "CN20",
+              "CN21",
+              "CN22",
+              "CN23",
+              "CN24",
+              "CN25",
+              "CN26",
+              "CN27"
+            ],
+            "categoryLevel1Id": [
+              "10",
+              "12",
+              "13",
+              "24",
+              "25"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "section01-topic-category-level2-summary",
+      "title": "01 经分会课题（粤西肉禽蛋二级品类）",
+      "headingLevel": 2,
+      "analysisFocus": "对应 Spec 中粤西区肉禽蛋类/蛋类、肉禽蛋类/鸡类的进货重量 MTD 查询键；只输出这两个二级品类，不扩展到其它区域或品类。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "receiveWeight"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId",
+            "categoryLevel2Id"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01"
+            ],
+            "categoryLevel2Id": [
+              "2401",
+              "2414"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "core-data-total-summary",
+      "title": "02 核心数据通晒：总额（销售额、供应链毛利额）",
+      "headingLevel": 2,
+      "analysisFocus": "对应 Spec 的总额预算 topic，独立展示 MTD 销售额和供应链毛利额汇总及同比/环比。预算和达成率仅在存在可追溯预算字段时计算；本卡只承载实际值，不把目标或预算描述为 CLI 返回结果。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "scmStoreProfitAmtNotax"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "core-data-store-day-avg",
+      "title": "02 核心数据通晒：店日均（销售额、补贴后毛利额）",
+      "headingLevel": 2,
+      "analysisFocus": "对应 Spec 的店日均 topic，与总额 topic 独立展示。直接使用 CLI 的 SALES_STORE_DAY_AVG 销售额和补贴后毛利额；预算缺失时只展示实际值与可用同比/环比，不补造预算达成率。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "allowanceProfitAmt"
+          ],
+          "statisticPolicy": "SALES_STORE_DAY_AVG",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-overview-summary",
+      "title": "区域全品类经营总览（汇总结果与规模）",
+      "headingLevel": 2,
+      "analysisFocus": "用于区域经营总览和好差区域初筛。销售额为核心结果，来客数、19点前销售额和进货额为支撑，营业中门店数和营业店日数用于识别规模因素；补贴前毛利额、门店毛利额和官方客单价补充结果质量。查询结果按完整 MTD 及区域直接聚合，不得再次跨日累计或平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "businessStores",
+            "saleAmt",
+            "custNum",
+            "bf19SaleAmt",
+            "preProfitAmt",
+            "profitAmt",
+            "receiveAmt",
+            "perCustAmt",
+            "saleDays"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-overview-rate-summary",
+      "title": "区域全品类经营总览（毛利率与折扣）",
+      "headingLevel": 2,
+      "analysisFocus": "补充区域经营总览的预期毛利率、定价毛利率、促销折扣率和时段折扣率。比率只能与同区域销售、客流、毛利等结果证据组合判断，不得跨区域求和、简单平均或仅凭单一比率归因。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "preProfitRate",
+            "prePriceProfitRate",
+            "promotionDiscountRate",
+            "hourDiscountRate"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-overview-store-day-avg",
+      "title": "区域全品类经营总览（店日均）",
+      "headingLevel": 2,
+      "analysisFocus": "用于区域 MTD 经营指标中的店日均销售、客流、19点前销售和毛利表现。查询结果已由 CLI 按完整 MTD 区间和区域直接计算店日均，Writer 不得跨日加总或平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "custNum",
+            "bf19SaleAmt",
+            "preProfitAmt",
+            "profitAmt"
+          ],
+          "statisticPolicy": "SALES_STORE_DAY_AVG",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-category-summary",
+      "title": "区域一级品类经营拆解（汇总结果与规模）",
+      "headingLevel": 2,
+      "analysisFocus": "对区域经营总览识别出的好差区域进行一级品类 MTD 结果与规模拆解。只输出被识别区域，并将销售、客流、19点前销售、毛利、进货、客单价和营业店日数与全国不含港澳同品类基准组合判断；不得再次跨日累计或平均，不得仅凭单一指标归因。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "custNum",
+            "bf19SaleAmt",
+            "preProfitAmt",
+            "profitAmt",
+            "receiveAmt",
+            "perCustAmt",
+            "saleDays"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id",
+            "categoryLevel1Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-category-rate-summary",
+      "title": "区域一级品类经营拆解（毛利率与折扣）",
+      "headingLevel": 2,
+      "analysisFocus": "补充好差区域一级品类的预期毛利率、定价毛利率、促销折扣率和时段折扣率。只对区域总览已识别出的区域使用，并与结果指标及全国不含港澳同品类证据联合判断；不得对比率求和或简单平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "preProfitRate",
+            "prePriceProfitRate",
+            "promotionDiscountRate",
+            "hourDiscountRate"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id",
+            "categoryLevel1Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "regional-category-store-day-avg",
+      "title": "区域一级品类经营拆解（店日均）",
+      "headingLevel": 2,
+      "analysisFocus": "为达成好区域复盘和达成差区域诊断提供一级品类 MTD 店日均结果。查询结果已由 CLI 按完整 MTD 区间、区域和一级品类直接计算，Writer 不得跨日加总或平均。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "custNum",
+            "bf19SaleAmt",
+            "preProfitAmt",
+            "profitAmt"
+          ],
+          "statisticPolicy": "SALES_STORE_DAY_AVG",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "sapArea2Id",
+            "categoryLevel1Id"
+          ],
+          "filters": {},
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    },
+    {
+      "id": "national-ex-hk-mo-category-summary",
+      "title": "全国不含港澳一级品类基准（汇总）",
+      "headingLevel": 2,
+      "analysisFocus": "作为好差区域品类拆解的全国不含港澳同品类 MTD 基准。查询结果已按完整 MTD 区间、管理区域和一级品类直接聚合。Writer 仅可跨管理区域加总 saleAmt、custNum、bf19SaleAmt、preProfitAmt、profitAmt、receiveAmt 和 saleDays；全国店日均用相应全国总量除以全国 saleDays。全国 perCustAmt 和各类比率没有明确业务分子、分母时留空。",
+      "chartType": "table",
+      "indicatorBizId": "operationCenterManagementWeeklyMeeting",
+      "query": {
+        "request": {
+          "metrics": [
+            "saleAmt",
+            "custNum",
+            "bf19SaleAmt",
+            "preProfitAmt",
+            "profitAmt",
+            "receiveAmt",
+            "saleDays"
+          ],
+          "statisticPolicy": "SUMMARY",
+          "time": {
+            "startDate": "2026-08-01",
+            "endDate": "2026-08-10"
+          },
+          "dimensions": [
+            "manageAreaId",
+            "categoryLevel1Id"
+          ],
+          "filters": {
+            "manageAreaId": [
+              "CN01",
+              "CN07",
+              "CN12",
+              "CN15",
+              "CN18",
+              "CN20",
+              "CN21",
+              "CN22",
+              "CN23",
+              "CN24",
+              "CN25",
+              "CN26",
+              "CN27",
+              "FH01"
+            ]
+          },
+          "pageNo": 1,
+          "pageSize": 500
+        },
+        "comparisons": [
+          "YOY",
+          "MOM"
+        ]
+      }
+    }
+  ],
+  "validation": [
+    {
+      "ok": true,
+      "cardId": "section01-topic-three-one-summary",
+      "title": "01 经分会课题与三个一（全品类汇总）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5381,
+      "stdoutBytes": 10124
+    },
+    {
+      "ok": true,
+      "cardId": "section01-topic-three-one-store-day-avg",
+      "title": "01 经分会课题与三个一（全品类店日均）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 4918,
+      "stdoutBytes": 9877
+    },
+    {
+      "ok": true,
+      "cardId": "section01-topic-three-one-category-summary",
+      "title": "01 经分会课题与三个一（一级品类汇总）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5325,
+      "stdoutBytes": 54399
+    },
+    {
+      "ok": true,
+      "cardId": "section01-three-one-category-store-day-avg",
+      "title": "01 三个一（一级品类店日均）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5732,
+      "stdoutBytes": 23217
+    },
+    {
+      "ok": true,
+      "cardId": "section01-topic-category-level2-summary",
+      "title": "01 经分会课题（粤西肉禽蛋二级品类）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 6349,
+      "stdoutBytes": 1677
+    },
+    {
+      "ok": true,
+      "cardId": "core-data-total-summary",
+      "title": "02 核心数据通晒：总额（销售额、供应链毛利额）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5648,
+      "stdoutBytes": 6373
+    },
+    {
+      "ok": true,
+      "cardId": "core-data-store-day-avg",
+      "title": "02 核心数据通晒：店日均（销售额、补贴后毛利额）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 4541,
+      "stdoutBytes": 6695
+    },
+    {
+      "ok": true,
+      "cardId": "regional-overview-summary",
+      "title": "区域全品类经营总览（汇总结果与规模）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5408,
+      "stdoutBytes": 21044
+    },
+    {
+      "ok": true,
+      "cardId": "regional-overview-rate-summary",
+      "title": "区域全品类经营总览（毛利率与折扣）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5331,
+      "stdoutBytes": 11695
+    },
+    {
+      "ok": true,
+      "cardId": "regional-overview-store-day-avg",
+      "title": "区域全品类经营总览（店日均）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5194,
+      "stdoutBytes": 12683
+    },
+    {
+      "ok": true,
+      "cardId": "regional-category-summary",
+      "title": "区域一级品类经营拆解（汇总结果与规模）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5076,
+      "stdoutBytes": 178341
+    },
+    {
+      "ok": true,
+      "cardId": "regional-category-rate-summary",
+      "title": "区域一级品类经营拆解（毛利率与折扣）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5077,
+      "stdoutBytes": 73965
+    },
+    {
+      "ok": true,
+      "cardId": "regional-category-store-day-avg",
+      "title": "区域一级品类经营拆解（店日均）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 5935,
+      "stdoutBytes": 116707
+    },
+    {
+      "ok": true,
+      "cardId": "national-ex-hk-mo-category-summary",
+      "title": "全国不含港澳一级品类基准（汇总）",
+      "command": "qdm-metric-cli analysis execute --payload-json '<requestBody>' --single-page --yoy --mom --output envelope",
+      "durationMs": 6383,
+      "stdoutBytes": 139283
+    }
+  ]
+}

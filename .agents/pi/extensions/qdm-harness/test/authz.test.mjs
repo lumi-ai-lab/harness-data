@@ -112,6 +112,25 @@ test("resolveAuthBlob fails when blob_file has no user id", (t) => {
   assert.match(resolved.error, /dev_user_id/i);
 });
 
+test("resolveAuthBlob never borrows dev_user_id for Host auth", (t) => {
+  const root = createProject(t, {
+    authzYaml: `authz:
+  mode: on
+  dev_user_id: local-test-user
+`,
+  });
+  const config = loadAuthzConfig(root, {});
+  const resolved = resolveAuthBlob({
+    projectRoot: root,
+    config,
+    hostAuth: `${SAMPLE_BLOB}host`,
+    hostUserId: "",
+    env: {},
+  });
+  assert.equal(resolved.ok, false);
+  assert.match(resolved.error, /host _auth_user_id/i);
+});
+
 test("AuthzStateStore isolates same session by userId", () => {
   const store = new AuthzStateStore();
   store.bind("S1", "user-a", `${SAMPLE_BLOB}a`, "file");
@@ -575,7 +594,7 @@ test("loadLumiHostAuth accepts valid envelope; rejects mismatch/expired/bad blob
     sessionId: "other-sess",
   });
   assert.equal(mismatch.ok, false);
-  assert.equal(mismatch.soft, true);
+  assert.equal(mismatch.soft, false);
   assert.match(mismatch.error, /sessionId mismatch/i);
 
   writeEnvelope(dir, {

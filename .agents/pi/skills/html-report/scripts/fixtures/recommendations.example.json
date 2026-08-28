@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "sessionId": "example-session-id",
+  "mode": "free",
+  "userQuestion": "生成客数(客流)和客单的平衡在哪个点最好? 用门店毛利额做评估, 以门店:101001为分析样本",
+  "warnings": [
+    "日期范围未指定时默认当月1日至昨日（≤31天）。",
+    "门店101001已通过 cards[].filters 限定。"
+  ],
+  "cards": [
+    {
+      "id": "balance-custNum-perCustAmt-001",
+      "title": "门店101001 客数与客单价平衡点分析（逐日趋势）",
+      "chartType": "table",
+      "analysisFocus": "以门店101001为样本，按日分析来客数、客单价与门店毛利额的关系，寻找毛利额最优的客数-客单价平衡点。",
+      "indicatorFieldList": ["custNum", "perCustAmt", "profitAmt", "profitLostRate"],
+      "aggDimUniqueCodeList": ["incDate"],
+      "filters": [
+        {
+          "type": "DIMENSION",
+          "dimUniqueCode": "storeId",
+          "values": ["101001"]
+        }
+      ],
+      "storeCollectType": 2,
+      "startDate": "2026-07-01",
+      "endDate": "2026-07-21"
+    }
+  ]
+}

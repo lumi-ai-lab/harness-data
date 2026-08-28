@@ -1,0 +1,37 @@
+{
+  "name": "@lumi-ai-lab/pi-html-report",
+  "version": "0.0.46",
+  "description": "PI plugin for the html-report pipeline: Extension, Skill, and report-* agents.",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-package.mjs",
+    "verify": "node scripts/verify-package.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/extensions/qdm-harness/index.ts"
+    ],
+    "skills": [
+      "./dist/skills"
+    ],
+    "subagents": {
+      "agents": [
+        "./dist/agents"
+      ]
+    }
+  },
+  "pi-subagents": {
+    "agents": [
+      "./dist/agents"
+    ]
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
