@@ -37,16 +37,15 @@ export const removedDataCliBinaries = [
   "cas-cli",
 ];
 
+/** Hardcoded password for --no-auth install (临时硬编码). */
+export const AUTH_OFF_PASSWORD = "qdmzt@2026";
+
 /** Relative path of the committed local-test encrypted auth blob fixture. */
 export const localTestAuthFixtureRel = "config/fixtures/local-test-auth.blob";
 /** Working copy path written by install --data-auth (gitignored). */
 export const localTestAuthBlobRel = "config/dev-auth.blob";
 /** Slot user id for the local-test fixture; must match blob userId. */
 export const localTestAuthUserId = "local-test-user";
-/** Auth blob written by qdm-metric-cli dev beside its managed binary. */
-export const devAdminAuthBlobRel = "bin/.qdm-auth.blob";
-/** Local slot key for the embedded qdm development administrator. */
-export const devAdminUserId = "dev-admin";
 
 export function assertCodexAuthPlatform(_agent, authEnabled, platform = process.platform) {
   // Codex authz is cross-platform. Windows uses the Node hook shim while
@@ -113,17 +112,15 @@ export function readAuthzFromHarnessConfig(harnessPath) {
 
 /**
  * Resolve authz block for writeLocalConfig.
- * Priority: explicit dev/dataAuth/authBlob → preserve an enabled runtime.
+ * Priority: explicit noAuth/dataAuth/authBlob → preserve existing → default off.
  */
 export function resolveAuthzForWrite(options = {}, existing = null) {
-  if (Object.hasOwn(options, "noAuth")) {
-    throw new Error("--no-auth has been removed; install requires authorization");
-  }
-  if (options.dev === true) {
+  // --no-auth: 关闭权限（密码由 install.js 验证）
+  if (options.noAuth === true) {
     return {
-      mode: "on",
-      blobFile: devAdminAuthBlobRel,
-      devUserId: devAdminUserId,
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
       allowLocalBlob: true,
     };
   }
@@ -137,7 +134,12 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
     };
   }
   if (options.dataAuth === false) {
-    throw new Error("--data-auth cannot be disabled; install requires authorization");
+    return {
+      mode: "off",
+      blobFile: "",
+      devUserId: "",
+      allowLocalBlob: true,
+    };
   }
   // 用户提供了 blob（默认 install 路径）
   if (options.authBlob === true) {
@@ -148,12 +150,9 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
       allowLocalBlob: true,
     };
   }
-  // 无显式 flag 时只允许沿用已有的授权 runtime。
+  // 无显式 flag 时：有 existing 则沿用，否则默认 off
   if (existing) {
-    if (existing.mode !== "on") {
-      throw new Error("legacy authorization mode is not supported; reinstall with --auth-blob and --auth-user-id");
-    }
-    const mode = "on";
+    const mode = existing.mode === "on" ? "on" : "off";
     let allowLocalBlob = existing.allowLocalBlob !== false;
     // MVP convergence: Host/Lumi auth fallback has been removed, so
     // allow_local_blob=false with mode=on is a dead-end config that can
@@ -168,7 +167,12 @@ export function resolveAuthzForWrite(options = {}, existing = null) {
       allowLocalBlob,
     };
   }
-  throw new Error("authorization is required; provide --auth-blob and --auth-user-id, --data-auth, or --dev");
+  return {
+    mode: "off",
+    blobFile: "",
+    devUserId: "",
+    allowLocalBlob: true,
+  };
 }
 
 function formatAuthzYaml(authz) {

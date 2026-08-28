@@ -206,9 +206,6 @@ export async function updateCommand(options = {}) {
   const state = readWorkspaceState(runtimeDir);
   const configuredAgent = options.agent || state.agent;
   const existingAuthz = readAuthzFromHarnessConfig(path.join(runtimeDir, "config", "harness-config.yaml"));
-  if (!existingAuthz || existingAuthz.mode !== "on") {
-    throw new Error("legacy authorization mode is not supported; reinstall with --auth-blob and --auth-user-id");
-  }
   assertCodexAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   assertWorkBuddyAuthPlatform(configuredAgent, existingAuthz?.mode === "on", options.platform || process.platform);
   const manifestPath = path.join(runtimeDir, "bootstrap", "cli-manifest.json");

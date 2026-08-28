@@ -19,7 +19,7 @@ export function agentIncludesWorkBuddy(agent) {
 
 export function assertWorkBuddyAuthPlatform(agent, authEnabled, platform = process.platform) {
   if (authEnabled && agentIncludesWorkBuddy(agent) && !["darwin", "win32"].includes(platform)) {
-    throw new Error("WorkBuddy auth currently supports macOS and Windows only; use a supported platform or another agent");
+    throw new Error("WorkBuddy auth currently supports macOS and Windows only; use --no-auth on this platform");
   }
 }
 
