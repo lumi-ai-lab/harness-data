@@ -4070,8 +4070,9 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
     "Authz mode is on. Runtime injects `--data-auth --auth-blob` for `qdm-metric-cli analysis execute`,",
     "and `--auth-blob` for `qdm-metric-cli auth describe`.",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
-    "After every successful `analysis execute`, disclose that results are scoped by 账号数据权限.",
-    "Obtain sapArea2Id, dcSapArea2Id, and categoryLevel1Id scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
+    "The runtime dynamically injects only scope dimensions applicable to the requested metric's supported dimensions and filters; it does not inject every scope dimension on every query.",
+    "After every successful `analysis execute`, disclose the applicable scope and that results are scoped by 账号数据权限.",
+    "Obtain applicable sapArea2Id, dcSapArea2Id, and/or categoryLevel1Id scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
   ].join("\n");
 }
 
