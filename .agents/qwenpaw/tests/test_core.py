@@ -270,6 +270,20 @@ class ToolBoundaryTests(unittest.TestCase):
             self.assertEqual(run.call_args_list[0].args[0][1:3], ["auth", "describe"])
             self.assertIn("manageAreaId=AREA_001", run.call_args_list[1].args[0])
 
+    def test_labels_unresolved_allows_id_only_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"; cli.parent.mkdir(); cli.write_bytes(b"x")
+            executor = QdmCliExecutor(cli)
+            response = types.SimpleNamespace(returncode=0, stdout=json.dumps({
+                "enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": False,
+                "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": ""}], "sapArea2Id": [{"id": "CN01", "name": ""}]},
+            }), stderr="")
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=response):
+                scope = executor.preflight_query("qdm1enc.test")
+            self.assertFalse(scope.labels_resolved)
+            self.assertEqual(scope.data_scope["manageAreaId"][0].id, "AREA_001")
+            self.assertEqual(scope.data_scope["manageAreaId"][0].name, "")
+
     def test_query_rejects_unauthorized_name_without_analysis_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
@@ -591,7 +605,7 @@ class ConsoleChannelTests(unittest.TestCase):
     def test_plugin_manifest_version_is_incremented(self) -> None:
         manifest = Path(__file__).parents[1] / "plugin.json"
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        self.assertEqual(payload["version"], "0.1.3")
+        self.assertEqual(payload["version"], "0.1.4")
 
     def test_pre_execute_rebinds_requester_from_current_channel_message(self) -> None:
         config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent", session_secret_file=Path("missing.secret"))

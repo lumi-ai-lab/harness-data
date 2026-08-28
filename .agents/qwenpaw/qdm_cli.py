@@ -50,6 +50,8 @@ SAFE_SCOPE_DIMENSIONS: dict[str, tuple[str, str]] = {
     "manageAreaIds": ("QDM_AREA_AUTH_SCOPE_EMPTY", "当前用户的管理区域授权范围为空或未配置完整"),
     "categoryLevel1Id": ("QDM_CATEGORY_OUTSIDE_DATA_SCOPE", "请求的商品分类不在当前用户授权范围内"),
     "categoryLevel1Ids": ("QDM_CATEGORY_AUTH_SCOPE_EMPTY", "当前用户的商品分类授权范围为空或未配置完整"),
+    "sapArea2Id": ("QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
+    "dcSapArea2Id": ("QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
     # Store authorization is optional in auth describe responses.  When the
     # upstream CLI exposes storeId entries, they are resolved exactly like
     # area/category entries; otherwise a store name is rejected fail-closed.
@@ -80,6 +82,7 @@ class QueryScope:
     enabled: bool
     capabilities: frozenset[str]
     data_scope: Mapping[str, tuple[ScopeEntry, ...]]
+    labels_resolved: bool = True
 
 
 class QdmCliExecutor:
@@ -139,12 +142,13 @@ class QdmCliExecutor:
             raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
         if "qdm.metric.query" not in capabilities:
             raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "褰撳墠鐢ㄦ埛娌℃湁 QDM 鏁版嵁鏌ヨ鏉冮檺")
-        if payload.get("labelsResolved") is not True:
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鏍囩鏈纭В鏋?")
+        labels_resolved = payload.get("labelsResolved")
+        if not isinstance(labels_resolved, bool):
+            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 权限标签状态无效")
         data_scope = _parse_data_scope(payload.get("dataScope"))
         if not data_scope:
             raise QdmCliError("QDM_EMPTY_DATA_SCOPE", "褰撳墠鐢ㄦ埛鐨勬暟鎹巿鏉冭寖鍥翠负绌烘垨鏈厤缃畬鏁?")
-        return QueryScope(True, frozenset(capabilities), data_scope)
+        return QueryScope(True, frozenset(capabilities), data_scope, labels_resolved)
 
     def scope_summary(self, blob: str) -> dict[str, Any]:
         raw = self._run(["auth", "describe", "--auth-blob", blob])
@@ -277,7 +281,7 @@ def _parse_data_scope(value: Any) -> dict[str, tuple[ScopeEntry, ...]]:
                 entry_id = name = raw
             else:
                 raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
-            if not isinstance(entry_id, str) or not entry_id.strip() or not isinstance(name, str) or not name.strip():
+            if not isinstance(entry_id, str) or not entry_id.strip() or not isinstance(name, str):
                 raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟涓嶅畬鏁?")
             entries.append(ScopeEntry(entry_id.strip(), name.strip()))
         if entries:
