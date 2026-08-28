@@ -1298,6 +1298,7 @@ export async function runReviewStage(
         sessionId: `${sanitizeSessionId(sessionId)}-reviewer-1`,
         cwd: resolve(projectRoot),
         model: REVIEWER_MODEL,
+        tools: ["Read"],
         timeoutMs: REVIEWER_TIMEOUT_MS,
       });
     } catch (error) {
@@ -1459,6 +1460,7 @@ export async function runDesignStage(
         sessionId: `${sanitizeSessionId(sessionId)}-designer-1`,
         cwd: resolve(projectRoot),
         model: DESIGNER_MODEL,
+        tools: ["Read", "Write", "Edit", "Bash"],
         timeoutMs: DESIGNER_TIMEOUT_MS,
       });
     } catch (error) {
