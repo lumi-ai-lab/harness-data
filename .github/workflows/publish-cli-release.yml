@@ -163,7 +163,18 @@ jobs:
           cp -R .agents/hermes runtime/agents/hermes
           cp -R .agents/workbuddy runtime/agents/workbuddy
           cp -R .agents/.codebuddy-plugin runtime/agents/.codebuddy-plugin
+          cp -R .agents/plugins runtime/agents/plugins
+          cp -R plugins runtime/plugins
           test -f runtime/agents/.codebuddy-plugin/marketplace.json
+          test -f runtime/agents/plugins/marketplace.json
+          test -f runtime/plugins/qdm-html-report/.codex-plugin/plugin.json
+          test -f runtime/plugins/qdm-html-report/.mcp.json
+          test -f runtime/plugins/qdm-html-report/mcp/server.mjs
+          test -f runtime/plugins/qdm-html-report/skills/html-report/SKILL.md
+          test -f runtime/agents/pi/skills/html-report/scripts/export-main-html.mjs
+          test -f runtime/agents/pi/skills/html-report/scripts/compose-main.mjs
+          cp runtime/config/harness-config.yaml.example runtime/config/harness-config.yaml
+          (cd runtime && node plugins/qdm-html-report/mcp/server.mjs --self-test)
           test -f runtime/agents/workbuddy/.codebuddy-plugin/plugin.json
           test -f runtime/agents/workbuddy/hooks/hooks.json
           test -f runtime/agents/workbuddy/scripts/harness-hook.mjs

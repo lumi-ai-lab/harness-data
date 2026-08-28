@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "producer": "html-report-self-test.config.json",
+  "pollIntervalMs": 500,
+  "rpc": {
+    "requestTimeoutMs": 30000
+  },
+  "close": {
+    "eofTimeoutMs": 5000,
+    "termTimeoutMs": 5000,
+    "killTimeoutMs": 5000
+  },
+  "performanceBudgets": {
+    "A_CONFIG": { "softMs": 30000, "hardMs": 60000 },
+    "A_CONFIRM": { "softMs": 90000, "hardMs": 180000 },
+    "B0_PREFLIGHT": { "softMs": 30000, "hardMs": 60000 },
+    "B2_WRITER": { "softMs": 60000, "hardMs": 120000 },
+    "B25_EDITOR": { "softMs": 60000, "hardMs": 120000 },
+    "B3_RESEARCH": { "softMs": 75000, "hardMs": 150000 },
+    "B4_REVIEW": { "softMs": 90000, "hardMs": 180000 },
+    "B5_DESIGN": { "softMs": 180000, "hardMs": 360000 }
+  }
+}

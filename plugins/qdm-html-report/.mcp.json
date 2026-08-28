@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "html-report": {
+      "cwd": ".",
+      "command": "node",
+      "args": ["./mcp/server.mjs"],
+      "env_vars": [
+        "PWD",
+        "HARNESS_WORKSPACE_ROOT",
+        "CODEX_WORKSPACE_ROOT",
+        "QDM_METRIC_CLI"
+      ]
+    }
+  }
+}

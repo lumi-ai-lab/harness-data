@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{HTML_REPORT_TITLE}}</title>
+  <style>
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; }
+    .report-shell { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div class="report-shell">
+    <header class="report-header">
+      <p class="report-status">{{HTML_REPORT_QUALITY_BADGE}}</p>
+      <h1>{{HTML_REPORT_TITLE}}</h1>
+      <p class="report-meta">Session {{HTML_REPORT_SESSION_ID}} · {{HTML_REPORT_GENERATED_AT}}</p>
+    </header>
+    <main class="report-main">
+      <!-- HTML_REPORT_CONTENT -->
+    </main>
+  </div>
+</body>
+</html>
