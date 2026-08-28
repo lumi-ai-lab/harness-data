@@ -12,7 +12,7 @@ Shared **local-only** metric data-auth materials for Harness data-auth injection
 - **`userId`**: always `local-test-user` (must match `authz.dev_user_id` / slot user)
 - **Do not** put personal CAS / WeCom userIds (e.g. real operator accounts) into this fixture
 - **Authorization claims** mirror the shape used by [qdm-metric-cli `test/auth.json`](https://github.com/lumi-ai-lab/qdm-metric-cli) (capability + `qdm.scope`), with a generic test principal instead of a real person
-- Scope sample: `manageAreaIds` / `dcManageAreaIds` = `CN01`, `categoryLevel1Ids` = `10`, `11`
+- Scope sample: `sapArea2Ids` / `dcSapArea2Ids` = `CN01`, `categoryLevel1Ids` = `10`, `11`
 - Capability: `qdm.metric.query`
 
 **Not a production identity.** Anyone with the blob can present as this test principal against backends that accept the shared metric-cli blob key.
