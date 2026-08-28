@@ -157,7 +157,7 @@ warn_missing_bins() {
     echo "warn: bin/qdm-metric-cli 不存在 — PI 跑 metric 会失败；可 ln -s <path> bin/qdm-metric-cli" >&2
   fi
   if [[ ! -e "$ROOT/bin/data-harness-cli" && ! -L "$ROOT/bin/data-harness-cli" ]]; then
-    echo "warn: bin/data-harness-cli 不存在 — PI context 会失败；go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli" >&2
+    echo "warn: bin/data-harness-cli 不存在 — PI context 会失败；chmod 755 bin/data-harness-cli" >&2
   fi
 }
 
@@ -181,7 +181,7 @@ doctor_harness_cli() {
   # context 可能因索引等问题非 0，但若报 unsupported 一定是二进制过旧
   if grep -q 'unsupported' <<<"$err"; then
     echo "doctor data-harness-cli: STALE — $err" >&2
-    echo "  fix: (cd cli && go build -o ../bin/data-harness-cli ./cmd/data-harness-cli)" >&2
+    echo "  fix: chmod 755 bin/data-harness-cli" >&2
     return 1
   fi
   # 其它错误也提示，但不一定是 switch 问题

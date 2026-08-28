@@ -175,11 +175,7 @@ npm install -g @lumi-ai-lab/harness-data
 harness-data doctor --dir ~/harness-data
 ```
 
-重新编译正式入口：
-
-```bash
-go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
-```
+仓库内正式入口是 `bin/data-harness-cli`（Node shebang，源码在 `packages/data-harness-cli`）。
 
 也可以直接使用 GHCR 上发布的 CLI 容器镜像：
 
@@ -197,12 +193,8 @@ docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-d
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-amd64`
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-arm64`
 
-GitHub Releases 同时提供可直接下载的 CLI 二进制包：
+GitHub Releases 提供 runtime 与 Wikis 包（`data-harness-cli` 已随 runtime zip 以 JS 源码分发，不再打四平台二进制）：
 
-- `data-harness-cli-v0.0.1-windows-amd64.zip`
-- `data-harness-cli-v0.0.1-windows-arm64.zip`
-- `data-harness-cli-v0.0.1-linux-amd64.zip`
-- `data-harness-cli-v0.0.1-darwin-arm64.zip`
 - `harness-data-runtime-v0.0.1.zip`
 - `harness-data-wikis-v0.0.1.zip`
 
@@ -227,8 +219,8 @@ GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`�
 指向的内容，不会修改提交、移动 Tag 或自动替换已存在的 Tag。
 
 总编排会 checkout Tag 中固定的 `wikis` submodule，执行 `npm test`、
-`npm pack --dry-run`、Wikis 索引构建和 `go test ./...`，随后发布
-`data-harness-cli` GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
+`npm pack --dry-run`、Wikis 索引构建和 JS CLI 测试，随后发布
+runtime / Wikis GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
 才发布 npm 包，最后检查 npm public 状态、`latest` dist-tag 和实际 `npx` 执行结果。
 
 先在 `qdm-metric-cli` 发布包含四个平台加密 ZIP 的新 Tag，再发布本仓库 Tag；本仓库
@@ -237,8 +229,8 @@ Tag 的 Release assets，不会删除或重建历史 Release，也不会同步 G
 源码归档。
 
 Gitee 镜像由发布者手动维护：每个 GitHub Tag 都必须在对应 Gitee 仓库创建同 Tag 的
-Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的四平台
-`data-harness-cli-*.zip`、`harness-data-runtime-<tag>.zip` 与
+Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的
+`harness-data-runtime-<tag>.zip` 与
 `harness-data-wikis-<tag>.zip`；
 `git_pengmd/harness-metric-release` 必须上传名称完全一致的四平台
 `qdm-metric-cli-*.zip`。安装器只选择这些普通附件，不使用源码归档；不要求额外上传

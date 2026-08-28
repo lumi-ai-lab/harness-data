@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
-import { binaryName, isExecutable } from "../lib/platform.js";
+import { binaryName, isExecutable, isHarnessCliPresent } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
 import {
@@ -91,6 +91,10 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   for (const binary of qdmCliBinaries) {
+    if (binary === "data-harness-cli") {
+      add("bin/data-harness-cli", isHarnessCliPresent(workspace));
+      continue;
+    }
     add(`bin/${binary}`, isExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));

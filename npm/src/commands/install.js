@@ -8,7 +8,7 @@ import { createInstallSession } from "../lib/install-session.js";
 import { readWorkspaceState, resolveWorkspaceDir, writeState } from "../lib/paths.js";
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { forceSyncWikis } from "../lib/wikis-git.js";
-import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
+import { binaryName, ensureHarnessCli, harnessCliMain, isExecutable, platformKey } from "../lib/platform.js";
 import { collectReleaseArchivePassword, releaseArchivePassword } from "../lib/release-password.js";
 import { resolveLatestManifest } from "../lib/tool-release.js";
 import { collectDoctor } from "./doctor.js";
@@ -86,7 +86,8 @@ export async function collectInstallAccess(options = {}, runtimeDir) {
 
 function replaceRuntimePath(runtimeDir, name, stagedRoot, backups) {
   const target = path.join(runtimeDir, name);
-  const backup = fs.mkdtempSync(path.join(runtimeDir, `.install-backup-${name}-`));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const backup = fs.mkdtempSync(path.join(runtimeDir, `.install-backup-${path.basename(name)}-`));
   fs.rmSync(backup, { recursive: true, force: true });
   if (fs.existsSync(target)) fs.renameSync(target, backup);
   backups.push({ name, target, backup });
@@ -160,8 +161,12 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     for (const dir of ["agents", "bootstrap"]) if (!fs.existsSync(path.join(extractDir, dir))) throw new Error(`runtime bundle missing ${dir}/`);
     const configSource = path.join(extractDir, "config");
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
+    const cliSource = path.join(extractDir, "packages", "data-harness-cli", "src", "main.js");
 
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
+    if (fs.existsSync(cliSource)) {
+      fs.cpSync(path.join(extractDir, "packages", "data-harness-cli"), path.join(stagedRoot, "packages", "data-harness-cli"), { recursive: true });
+    }
     // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
     fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
 
@@ -172,8 +177,12 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     }
 
     for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
+    if (fs.existsSync(path.join(stagedRoot, "packages", "data-harness-cli"))) {
+      replaceRuntimePath(runtimeDir, path.join("packages", "data-harness-cli"), stagedRoot, backups);
+    }
     mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
     cleanupRuntimeBackups(backups);
+    if (fs.existsSync(harnessCliMain(runtimeDir))) ensureHarnessCli(runtimeDir);
   } catch (error) {
     restoreRuntimeBackups(backups);
     throw error;
@@ -346,9 +355,11 @@ export function validateLocalWikisSource(source) {
 }
 
 export async function buildAndCheck(runtimeDir, options = {}) {
-  const cli = path.join(runtimeDir, "bin", binaryName("data-harness-cli"));
+  const main = harnessCliMain(runtimeDir);
   action("执行：data-harness-cli wikis build-index --skip-checks");
-  const result = await run(cli, ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
+  const result = fs.existsSync(main)
+    ? await run(process.execPath, [main, "wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true })
+    : await run(path.join(runtimeDir, "bin", binaryName("data-harness-cli")), ["wikis", "build-index", "--skip-checks"], { cwd: runtimeDir, allowFailure: true });
   if (result.code !== 0) {
     warn("wikis 索引构建失败，安装会继续；后续可手动执行 data-harness-cli wikis build-index --skip-checks");
     return { ok: false };
@@ -432,11 +443,10 @@ export async function installCommand(options = {}) {
       manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...installOptions, state: installState, manifestOverride: latestManifest });
     } else {
       manifest = readManifest(manifestPath);
-      const latestManifest = await resolveLatestManifest(manifest, key, { ...installOptions, tools: ["data-harness-cli"] });
-      manifest = await installToolsFromManifest(runtimeDir, manifestPath, { ...installOptions, state: installState, manifestOverride: latestManifest });
       localTools = await installLocalTools(runtimeDir, installOptions);
     }
-    ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length} 个 CLI 已安装到 bin/`);
+    if (fs.existsSync(harnessCliMain(runtimeDir))) ensureHarnessCli(runtimeDir);
+    ok(`${Object.keys(manifest.installedTools || {}).length + Object.keys(localTools).length + 1} 个 CLI 已安装到 bin/`);
     const removedLegacy = removeLegacyDataCLIs(runtimeDir);
     for (const name of removedLegacy) action(`移除遗留数据 CLI：bin/${name}`);
     blank();

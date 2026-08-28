@@ -26,7 +26,9 @@ __pycache__/
 
 # Generated harness data and local compiled binaries
 .harness/
-bin/
+bin/*
+!bin/data-harness-cli
+!bin/data-harness-cli.cmd
 dist/
 !npm/bin/
 !npm/bin/**
@@ -45,6 +47,9 @@ plan/*
 # Local/generated business data samples
 *-cmr-response.json
 scripts/*.json
+
+# Node dependencies
+node_modules/
 
 # Local logs and temp files
 *.log

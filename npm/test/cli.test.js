@@ -245,7 +245,7 @@ test("detects git protocol from remote URLs", () => {
 test("private qdm cli tools point at their own repositories", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
-  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli"]);
+  assert.deepEqual([...byName.keys()], ["qdm-metric-cli"]);
   assert.equal(byName.get("qdm-metric-cli").repo, "pengmide/qdm-metric-cli");
   assert.equal(byName.get("qdm-metric-cli").private, true);
   assert.equal(byName.has("qdm-cmr-cli"), false);
@@ -275,11 +275,11 @@ test("local wikis source requires root index", () => {
 test("tool manifest is a latest-release install catalog", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   assert.equal(manifest.schemaVersion, 2);
-  const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "data-harness-cli-v1.2.3-darwin-arm64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "data-harness-cli-v1.2.3-windows-arm64.zip");
+  const tool = manifest.tools.find((item) => item.name === "qdm-metric-cli");
+  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "qdm-metric-cli-v1.2.3-linux-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "qdm-metric-cli-v1.2.3-darwin-arm64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "qdm-metric-cli-v1.2.3-windows-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "qdm-metric-cli-v1.2.3-windows-arm64.zip");
   for (const item of manifest.tools) {
     assert.equal(item.platforms["windows-arm64"]?.archive, "zip", `${item.name} missing Windows ARM64 asset`);
     assert.equal(item.platforms["linux-amd64"]?.archive, "zip", `${item.name} missing Linux ZIP asset`);

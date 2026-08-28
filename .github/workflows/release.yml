@@ -101,21 +101,16 @@ jobs:
           npm test -- --test-concurrency=1
           npm pack --dry-run
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: cli/go.mod
+      - name: Test JS data-harness-cli
+        working-directory: packages/data-harness-cli
+        run: node --test
 
       - name: Build Wikis index from pinned submodule
-        working-directory: cli
         run: |
-          go run ./cmd/data-harness-cli wikis build-index --skip-checks
-          test -s ../.harness/index/wikis-index.json
-          test -s ../.harness/index/wikis-runtime-index.json
-
-      - name: Test Go CLI
-        working-directory: cli
-        run: go test ./...
+          chmod +x bin/data-harness-cli
+          ./bin/data-harness-cli wikis build-index --skip-checks
+          test -s .harness/index/wikis-index.json
+          test -s .harness/index/wikis-runtime-index.json
 
       - name: Verify external CLI assets
         env:
@@ -188,27 +183,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate.outputs.version_tag }}
-
-      - name: Verify data-harness-cli assets
-        env:
-          VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
-        run: |
-          set -euo pipefail
-          node <<'NODE' > /tmp/data-harness-assets.txt
-          const fs = require("fs");
-          const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
-          const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-          if (!tool) throw new Error("manifest missing data-harness-cli");
-          for (const platform of Object.keys(tool.platforms || {})) {
-            const name = `${tool.binary}-${process.env.VERSION_TAG}-${platform}.zip`;
-            const url = `https://github.com/${tool.repo}/releases/download/${process.env.VERSION_TAG}/${name}`;
-            console.log(url);
-          }
-          NODE
-          while IFS= read -r url; do
-            echo "checking $url"
-            curl -fsIL --retry 5 --retry-delay 3 "$url" >/dev/null
-          done < /tmp/data-harness-assets.txt
 
       - name: Verify runtime and Wikis bundle assets
         env:

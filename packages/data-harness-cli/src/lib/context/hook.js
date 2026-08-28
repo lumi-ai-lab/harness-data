@@ -1,0 +1,214 @@
+import { appendFileSync, mkdirSync, statSync } from "node:fs";
+import path from "node:path";
+
+import { loadConfig, newPathResolver } from "../harness.js";
+import { diagnosticsDir, load as loadState, MODE_FREE, MODE_MULTI, MODE_REPORT, MODE_SINGLE, safeSessionId, save as saveState } from "../sessionstate.js";
+import { buildWithPlan } from "./build.js";
+
+const WORKBUDDY_SESSION_PREFIX = "workbuddy:";
+
+export function runClaudeHook(root, input) {
+  const payload = parsePromptPayload(input);
+  if (!payload || !payload.prompt) return { ok: false, output: null };
+  return runPromptHook(root, payload.prompt, hookSessionID(payload));
+}
+
+export function runWorkBuddyHook(root, input) {
+  const payload = parsePromptPayload(input);
+  if (!payload || !String(payload.prompt || "").trim()) return { ok: false, output: null };
+  const sessionID = String(payload.session_id || "").trim();
+  if (!sessionID) {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput(
+        "QDM_HARNESS_BLOCKED: WorkBuddy did not provide a stable session_id. Do not run qdm-metric-cli, do not estimate data, and do not run template commands in this turn. Start a new WorkBuddy session or update WorkBuddy before retrying.",
+      ),
+    };
+  }
+  let cfg;
+  try {
+    cfg = loadConfig(root);
+  } catch {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput(
+        "QDM_HARNESS_UNAVAILABLE: Harness configuration could not be loaded. Do not run qdm-metric-cli or estimate data until the runtime configuration is repaired.",
+      ),
+    };
+  }
+  let result;
+  try {
+    result = runPromptHook(root, payload.prompt, WORKBUDDY_SESSION_PREFIX + sessionID);
+  } catch {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput(
+        "QDM_HARNESS_UNAVAILABLE: Harness context could not be built. Do not run qdm-metric-cli, estimate values, or guess playbooks/templates in this turn.",
+      ),
+    };
+  }
+  if (!result.ok) return { ok: false, output: null };
+  result.output.hookSpecificOutput.additionalContext =
+    `authzMode: ${cfg.authz.mode}\n\n${result.output.hookSpecificOutput.additionalContext}`;
+  return {
+    ok: true,
+    output: {
+      continue: true,
+      hookSpecificOutput: result.output.hookSpecificOutput,
+    },
+  };
+}
+
+function workBuddySafetyOutput(message) {
+  return {
+    continue: true,
+    systemMessage: message,
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: message,
+    },
+  };
+}
+
+function runPromptHook(root, prompt, sessionID) {
+  const resolver = newPathResolver(root);
+  const tc = buildTimeContext(prompt, resolver);
+  const { response, plan } = buildWithPlan(root, prompt);
+  const additionalContext = buildWikiAdditionalContext(tc, response, plan);
+  writeWikiPlanState(root, sessionID, prompt, plan);
+  if (process.env.QDM_HARNESS_DIAG === "1") {
+    recordDiagnostic(root, sessionID, prompt, additionalContext, tc, response);
+  }
+  return {
+    ok: true,
+    output: {
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext,
+        contextFiles: [...response.contextFiles],
+      },
+    },
+  };
+}
+
+function buildWikiAdditionalContext(tc, response, plan) {
+  let b = "# Data Harness Context\n\n";
+  b += `时间解析 JSON：\`${JSON.stringify(tc)}\`\n\n`;
+  b += `Harness mode: ${plan.mode}\n`;
+  if (plan.selectedPlaybook) b += `selectedPlaybook: ${plan.selectedPlaybook}\n`;
+  if (plan.selectedTemplate) b += `selectedTemplate: ${plan.selectedTemplate}\n`;
+  if (plan.templateSelection?.status) {
+    b += `templateSelection: ${plan.templateSelection.status}`;
+    if (plan.templateSelection.reason) b += ` (${plan.templateSelection.reason})`;
+    b += "\n";
+  }
+  if (plan.selectedPlaybooks?.length) {
+    b += "selectedPlaybooks:\n";
+    for (const playbook of plan.selectedPlaybooks) b += `- ${playbook.path}\n`;
+  }
+  if (plan.mode === MODE_FREE) b += `reason: ${plan.reason || ""}\n`;
+  b += "\n必须先读取以下 contextFiles：\n";
+  for (const ref of response.contextFiles) {
+    b += `- ${ref.path}`;
+    if (ref.reason) b += ` (${ref.reason})`;
+    b += "\n";
+  }
+  b += `\nInstruction: ${response.instruction}`;
+  b += "\n\nConstraints:\n";
+  for (const constraint of response.constraints) b += `- ${constraint}\n`;
+  return b;
+}
+
+function parsePromptPayload(input) {
+  try {
+    const text = Buffer.isBuffer(input) ? input.toString("utf8") : String(input || "");
+    const payload = JSON.parse(text);
+    if (!payload || typeof payload !== "object") return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function buildTimeContext(prompt, resolver) {
+  let current;
+  const currentDate = process.env.QDM_HARNESS_CURRENT_DATE || "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(currentDate)) current = currentDate;
+  else current = formatDate(new Date());
+  let timezone = process.env.QDM_HARNESS_TIMEZONE || process.env.TZ || "";
+  if (!timezone) timezone = "Asia/Shanghai";
+  let timePolicy = "spec/common/time-policy.md";
+  try {
+    const info = statSync(resolver.resolve("rules/QDM 时间口径/spec.md"));
+    if (!info.isDirectory()) timePolicy = "rules/QDM 时间口径/spec.md";
+  } catch {
+    // keep default
+  }
+  return {
+    current_date: current,
+    timezone,
+    time_policy: `Use ${resolver.resolveRel(timePolicy)} to infer --date, --week, or --month. Do not use date ranges.`,
+    prompt,
+  };
+}
+
+function formatDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function hookSessionID(payload) {
+  if (payload.session_id) return payload.session_id;
+  return process.env.CLAUDE_SESSION_ID || "unknown";
+}
+
+function writeWikiPlanState(root, sessionID, prompt, plan) {
+  const state = loadState(root, sessionID);
+  state.mode = plan.mode;
+  state.prompt = prompt;
+  state.started_at = new Date().toISOString();
+  state.playbook_candidates = plan.candidates || [];
+  state.selected_playbook = "";
+  state.selected_template = "";
+  state.selected_playbooks = undefined;
+  state.composite = undefined;
+  state.reason = "";
+  state.template_injected = false;
+  state.reports = {};
+  switch (plan.mode) {
+    case MODE_SINGLE:
+      state.selected_playbook = plan.selectedPlaybook;
+      state.selected_template = plan.selectedTemplate;
+      break;
+    case MODE_MULTI:
+      state.selected_playbooks = [...(plan.selectedPlaybooks || [])];
+      break;
+    case MODE_REPORT:
+      state.selected_playbook = plan.selectedPlaybook;
+      state.selected_template = plan.selectedTemplate;
+      break;
+    case MODE_FREE:
+      state.reason = plan.reason;
+      break;
+    default:
+      break;
+  }
+  saveState(root, sessionID, state);
+}
+
+function recordDiagnostic(root, sessionID, prompt, context, tc, response) {
+  const event = {
+    ts: new Date().toISOString(),
+    session_id: sessionID,
+    event: "user_prompt_context",
+    context_files: response.contextFiles,
+    prompt_bytes: Buffer.byteLength(prompt),
+    context_bytes: Buffer.byteLength(context),
+    time_context: tc,
+  };
+  const dir = diagnosticsDir(root);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(path.join(dir, `${safeSessionId(sessionID)}.jsonl`), `${JSON.stringify(event)}\n`);
+}
