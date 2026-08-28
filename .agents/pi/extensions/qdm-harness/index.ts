@@ -4071,7 +4071,7 @@ function authzGuidance(mode: "off" | "on", bound: boolean): string {
     "and `--auth-blob` for `qdm-metric-cli auth describe`.",
     "Do not invent, omit, or override auth flags; the hook replaces them.",
     "After every successful `analysis execute`, disclose that results are scoped by 账号数据权限.",
-    "Obtain scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
+    "Obtain sapArea2Id, dcSapArea2Id, and categoryLevel1Id scope with `qdm-metric-cli auth describe`; do not guess scope IDs or labels.",
   ].join("\n");
 }
 

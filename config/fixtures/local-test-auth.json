@@ -12,10 +12,10 @@
         "claims": {
           "qdm.scope": {
             "schemaVersion": 1,
-            "manageAreaIds": [
+            "sapArea2Ids": [
               "CN01"
             ],
-            "dcManageAreaIds": [
+            "dcSapArea2Ids": [
               "CN01"
             ],
             "categoryLevel1Ids": [
