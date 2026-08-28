@@ -91,7 +91,8 @@ test("html-report hook auto-starts a real Runner session", () => {
     });
     assert.equal(result.ok, true, result.error);
     assert.match(result.message, /html-report session 已启动/);
-    assert.equal(existsSync(join(root, ".harness", "state", "html-report", "real-hook-session", "debug", "pipeline-state.json")), true);
+    const sessionKey = createHash("sha256").update("workbuddy:real-hook-session").digest("hex");
+    assert.equal(existsSync(join(root, ".harness", "state", "html-report", sessionKey, "debug", "pipeline-state.json")), true);
   } finally {
     cleanup();
   }

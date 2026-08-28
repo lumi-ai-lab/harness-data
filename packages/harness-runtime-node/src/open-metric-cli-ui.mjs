@@ -12,6 +12,7 @@
  * - session_shutdown in qdm-harness also calls --stop for this session
  */
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -36,7 +37,8 @@ export function sanitizeSessionId(value) {
 }
 
 export function sessionDirFor(projectRoot, sessionId) {
-  return join(resolve(projectRoot), ".harness", "state", "html-report", sanitizeSessionId(sessionId));
+  const key = createHash("sha256").update(`workbuddy:${String(sessionId || "")}`).digest("hex");
+  return join(resolve(projectRoot), ".harness", "state", "html-report", key);
 }
 
 export function shouldSpawnMetricCliUi(env = process.env) {
@@ -417,7 +419,7 @@ export async function openMetricCliUi({
 } = {}) {
   const safeSessionId = sanitizeSessionId(sessionId);
   if (!safeSessionId) throw new Error("--session-id is required");
-  const sessionDir = sessionDirFor(projectRoot, safeSessionId);
+  const sessionDir = sessionDirFor(projectRoot, sessionId);
   const markerPath = join(sessionDir, ...METRIC_CLI_UI_MARKER_RELATIVE_PATH);
   await mkdir(join(sessionDir, "debug"), { recursive: true });
   const questionPath = await persistAConfigQuestion({
@@ -517,7 +519,7 @@ export async function openMetricCliUi({
 }
 
 export async function stopMetricCliUi({ projectRoot = root, sessionId } = {}) {
-  const sessionDir = sessionDirFor(projectRoot, sanitizeSessionId(sessionId));
+  const sessionDir = sessionDirFor(projectRoot, sessionId);
   const markerPath = join(sessionDir, ...METRIC_CLI_UI_MARKER_RELATIVE_PATH);
   const result = await stopExisting(markerPath);
   try {

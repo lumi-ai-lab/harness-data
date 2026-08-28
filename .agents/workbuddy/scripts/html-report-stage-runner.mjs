@@ -17,7 +17,7 @@
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs retry   --session <id> --task <taskId>
  *   node agents/workbuddy/scripts/html-report-stage-runner.mjs cancel  --session <id>
  *
- * session 目录 = <projectRoot>/.harness/state/html-report/<sanitized-id>，
+ * session 目录 = <projectRoot>/.harness/state/html-report/<session-key>，
  * 状态沿用 Pi 既有 stage-gate 契约（$SESSION/debug/pipeline-state.json），
  * 不创建第二份业务状态源。
  *
@@ -143,8 +143,12 @@ export function sanitizeSessionId(raw) {
   return String(raw || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function sessionStorageKey(raw) {
+  return createHash("sha256").update(`workbuddy:${String(raw || "")}`).digest("hex");
+}
+
 export function htmlReportSessionDir(projectRoot, sessionId) {
-  return join(resolve(projectRoot), ".harness", "state", "html-report", sanitizeSessionId(sessionId));
+  return join(resolve(projectRoot), ".harness", "state", "html-report", sessionStorageKey(sessionId));
 }
 
 function findHarnessRoot(start = process.cwd()) {

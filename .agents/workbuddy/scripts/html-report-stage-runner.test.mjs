@@ -550,7 +550,7 @@ test("sanitizeSessionId strips unsafe chars", () => {
 
 test("htmlReportSessionDir nests under .harness/state/html-report", () => {
   const dir = htmlReportSessionDir("/repo", "sid-1");
-  assert.equal(dir, join("/repo", ".harness", "state", "html-report", "sid-1"));
+  assert.match(dir, /^\/repo\/\.harness\/state\/html-report\/[0-9a-f]{64}$/);
 });
 
 test("writerSchema pins role and cardId", () => {
