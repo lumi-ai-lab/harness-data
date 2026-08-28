@@ -1,25 +1,32 @@
-import { AUTH_OFF_PASSWORD } from "./config.js";
 import { ask, askSecret } from "./prompt.js";
 
 export function assertAuthBlobFormat(blob) {
   const value = String(blob || "").trim();
-  if (!value) throw new Error("auth blob is required; use --no-auth to skip");
+  if (!value) throw new Error("auth blob is required");
   if (!value.startsWith("qdm1enc.")) throw new Error("auth blob must start with qdm1enc.");
   return value;
 }
 
 export function assertAuthUserId(userId) {
   const value = String(userId || "").trim();
-  if (!value) throw new Error("dev_user_id is required; use --no-auth to skip");
+  if (!value) throw new Error("dev_user_id is required");
   return value;
 }
 
 export async function collectInstallAuth(options = {}) {
-  if (options.noAuth) {
-    const password = options.authOffPassword
-      || (options.yes ? "" : await askSecret("请输入关闭权限密码：", options));
-    if (password !== AUTH_OFF_PASSWORD) throw new Error("关闭权限密码错误，安装中止");
-    return { mode: "no-auth" };
+  if (Object.hasOwn(options, "noAuth")) {
+    throw new Error("--no-auth has been removed; install requires authorization");
+  }
+  if (Object.hasOwn(options, "authOffPassword")) {
+    throw new Error("--auth-off-password has been removed");
+  }
+  if (Object.hasOwn(options, "admin")) {
+    throw new Error("--admin is not supported; use --dev");
+  }
+  if (options.dev) {
+    const password = String(options.devPassword || "").trim();
+    if (!password && options.yes) throw new Error("--dev-password is required when --yes is set");
+    return { mode: "dev", password: password || await askSecret("请输入 qdm-metric-cli dev 密码：", options) };
   }
 
   if (options.dataAuth) return { mode: "data-auth" };

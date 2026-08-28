@@ -16,6 +16,7 @@ export function run(command, args = [], options = {}) {
       shell: options.shell || false,
       stdio: options.stdio || "pipe"
     });
+    if (options.input !== undefined && child.stdin) child.stdin.end(options.input);
     let stdout = "";
     let stderr = "";
     if (child.stdout) child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -28,7 +29,10 @@ export function run(command, args = [], options = {}) {
         return;
       }
       const sensitiveArgs = new Set(options.sensitiveArgs || []);
-      const sensitiveValues = args.filter((_, index) => sensitiveArgs.has(index));
+      const sensitiveValues = [
+        ...args.filter((_, index) => sensitiveArgs.has(index)),
+        ...(options.sensitiveValues || []),
+      ];
       const detail = redactSensitiveValues(stderr.trim() || stdout.trim(), sensitiveValues);
       const displayArgs = args.map((arg, index) => sensitiveArgs.has(index) ? "******" : arg);
       reject(new Error(`${command} ${displayArgs.join(" ")} failed${detail ? `: ${detail}` : ""}`));
