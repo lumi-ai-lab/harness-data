@@ -144,6 +144,19 @@ class AuthorizationTests(unittest.TestCase):
             self.assertEqual(loaded.context_limits, ContextLimits())
             self.assertEqual(loaded.query_limits, QueryLimits())
             self.assertEqual(loaded.report_limits, ReportLimits())
+            self.assertIsNone(loaded.auth_file_max_bytes)
+
+    def test_auth_file_max_bytes_is_optional_and_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp) / "runtime"; runtime.mkdir()
+            config = Path(temp) / "plugin-config.json"
+            base = {"schema_version": 1, "runtime_dir": str(runtime), "qdm_agent_id": "qdmDataAgent", "user_id_display_mode": "off"}
+            config.write_text(json.dumps(base | {"auth_file_max_bytes": 8388608}), encoding="utf-8")
+            self.assertEqual(load_config(config).auth_file_max_bytes, 8388608)
+            for value in (0, -1, True, "8388608"):
+                config.write_text(json.dumps(base | {"auth_file_max_bytes": value}), encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    load_config(config)
 
     def test_query_and_report_limits_are_strict_and_optional(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -578,7 +591,7 @@ class ConsoleChannelTests(unittest.TestCase):
     def test_plugin_manifest_version_is_incremented(self) -> None:
         manifest = Path(__file__).parents[1] / "plugin.json"
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        self.assertEqual(payload["version"], "0.1.2")
+        self.assertEqual(payload["version"], "0.1.3")
 
     def test_pre_execute_rebinds_requester_from_current_channel_message(self) -> None:
         config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent", session_secret_file=Path("missing.secret"))

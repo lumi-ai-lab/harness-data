@@ -9,16 +9,14 @@ from typing import Any
 from .qdm_identity import Requester
 
 
-MAX_AUTH_FILE_BYTES = 1024 * 1024
-
-
 class ChannelAuthorizationError(RuntimeError):
     """A deliberately non-sensitive, fail-closed authorization failure."""
 
 
 class ChannelAuthProvider:
-    def __init__(self, auth_file: Path) -> None:
+    def __init__(self, auth_file: Path, max_bytes: int | None = None) -> None:
         self._auth_file = auth_file
+        self._max_bytes = max_bytes
 
     def blob_for(self, requester: Requester) -> str:
         if requester.status != "resolved":
@@ -39,7 +37,7 @@ class ChannelAuthProvider:
         try:
             if self._auth_file.is_symlink() or not self._auth_file.is_file():
                 raise ChannelAuthorizationError("QDM 渠道授权不可用或被拒绝")
-            if self._auth_file.stat().st_size > MAX_AUTH_FILE_BYTES:
+            if self._max_bytes is not None and self._auth_file.stat().st_size > self._max_bytes:
                 raise ChannelAuthorizationError("QDM 渠道授权不可用或被拒绝")
             document = json.loads(self._auth_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

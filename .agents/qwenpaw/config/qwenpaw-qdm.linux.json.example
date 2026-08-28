@@ -3,6 +3,7 @@
   "runtime_dir": "/opt/qdm/harness-data-runtime",
   "qdm_agent_id": "qdmDataAgent",
   "user_id_display_mode": "off",
+  "auth_file_max_bytes": null,
   "context_limits": {
     "base_context_bytes": null,
     "wiki_file_bytes": null,

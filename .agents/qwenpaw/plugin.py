@@ -102,7 +102,7 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
         config = load_config()
     except ConfigError as exc:
         raise QdmCliError("QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝") from exc
-    provider = ChannelAuthProvider(config.auth_file)
+    provider = ChannelAuthProvider(config.auth_file, max_bytes=config.auth_file_max_bytes)
     executor = QdmCliExecutor(
         config.qdm_metric_cli,
         success_bytes=config.query_limits.success_bytes,

@@ -58,6 +58,7 @@ def install(args: argparse.Namespace) -> None:
         "qdm_agent_id": args.agent_id,
         "user_id_display_mode": args.user_id_display_mode,
         "tool_policy": getattr(args, "tool_policy", "preserve"),
+        "auth_file_max_bytes": None,
         "context_limits": {
             "base_context_bytes": None,
             "wiki_file_bytes": None,
