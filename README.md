@@ -55,9 +55,13 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 npx @lumi-ai-lab/harness-data install
 ```
 
-Wikis 仍通过 GitHub 访问：默认 `--git-protocol auto` 会先用 SSH 访问 `harness-data` 和 `harness-data-wikis`，不可用时回退 HTTPS。GitHub HTTPS 不支持账号密码登录；HTTPS 需要本机 Git Credential Manager、`gh auth login` 已配置的凭据，或通过 token 环境变量提供访问权限。
+默认 `--release-source auto` 会优先从 Gitee Release 下载 runtime、Wikis 和 CLI，缺少对应附件时才回退 GitHub。若使用 GitHub，`--git-protocol auto` 会先用 SSH 访问仓库，不可用时回退 HTTPS；GitHub HTTPS 不支持账号密码登录，需要本机 Git Credential Manager、`gh auth login` 凭据或 token 环境变量。
 
-Release 下载与 GitHub 授权解耦。安装器默认 `--release-source auto`，先从 Gitee 的同 Tag Release 查找精确同名的普通附件，缺少该附件、Release 不存在或接口失败时才回退 GitHub。可强制指定 `gitee` 或 `github`，环境变量为 `HARNESS_RELEASE_SOURCE`；命令行优先级更高。`data-harness-cli` 与 runtime 映射到 `git_pengmd/harness-release`，`qdm-metric-cli` 映射到 `git_pengmd/harness-metric-release`。Gitee 镜像完整时，即使没有 GitHub token 也能远程安装两个 CLI；但没有 GitHub 授权时仍需提供本地 `harness-data-wikis`。强制 GitHub 时，`qdm-metric-cli` 保持私有 Release 的 `gh auth login` / `GITHUB_TOKEN` / `--github-token` 限制。
+Release 下载与 GitHub 授权解耦。可用 `--release-source auto|gitee|github` 或环境变量
+`HARNESS_RELEASE_SOURCE` 指定来源，命令行优先级更高。`data-harness-cli` 与 runtime 映射到
+`git_pengmd/harness-release`，`qdm-metric-cli` 映射到 `git_pengmd/harness-metric-release`。
+使用 `auto` 或 `gitee` 时，完整的 Gitee 镜像不需要 GitHub token 或本地
+`harness-data-wikis`；只有强制 `github` 且没有 GitHub 授权时才需要本地 Wikis。
 
 强制使用 SSH：
 
@@ -77,6 +81,42 @@ npx @lumi-ai-lab/harness-data install --git-protocol https
 npx @lumi-ai-lab/harness-data install --dir ~/harness-data
 ```
 
+推荐的最新版普通安装（Linux/macOS，使用 Gitee）：
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --auth-blob 'qdm1enc...' \
+  --auth-user-id 'your-user-id' \
+  --yes
+```
+
+PowerShell：
+
+```powershell
+npx -y @lumi-ai-lab/harness-data@latest install `
+  --release-source gitee `
+  --dir "D:\qdm-harness-data\harness-data-runtime" `
+  --agent codex `
+  --auth-blob "qdm1enc..." `
+  --auth-user-id "your-user-id" `
+  --yes
+```
+
+开发管理员安装（`--dev` 不要再同时传 `--auth-blob` 或 `--auth-user-id`）：
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --dev \
+  --dev-password 'PASSWORD' \
+  --yes
+```
+
 指定 Release 下载源：
 
 ```bash
@@ -84,7 +124,7 @@ npx @lumi-ai-lab/harness-data install --release-source gitee
 HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update --dir ~/harness-data
 ```
 
-非交互安装需要显式选择 Agent：
+非交互安装可以显式选择 Agent；未指定时 macOS/Linux 默认为 `all`，Windows 默认为 `codex`：
 
 ```bash
 npx @lumi-ai-lab/harness-data install \

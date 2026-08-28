@@ -7,7 +7,7 @@
 - **tar** (on PATH; retained for historical `.tar.gz` Release fallback, and bundled with Git for Windows on Windows)
 - **unzip** (on PATH on every supported platform; not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.)
 - **Windows only** — additional requirements:
-  - **Codex Agent only** — Windows supports Codex exclusively; other agents (Claude, Pi, OpenClaw, Hermes, WorkBuddy) are not available on Windows.
+  - **Agent selection** — Windows defaults to Codex and also supports explicit WorkBuddy; other Agents are not available on Windows.
   - **Authorization required** — Every install enables authorization. WorkBuddy auth is supported on macOS and Windows; use another Agent on unsupported platforms.
   - **Windows x64 + ARM64** are both supported.
 
@@ -21,6 +21,42 @@ Install into an explicit runtime directory:
 
 ```bash
 npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
+```
+
+Recommended latest install from Gitee (Linux/macOS):
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --auth-blob 'qdm1enc...' \
+  --auth-user-id 'your-user-id' \
+  --yes
+```
+
+PowerShell:
+
+```powershell
+npx -y @lumi-ai-lab/harness-data@latest install `
+  --release-source gitee `
+  --dir "D:\qdm-harness-data\harness-data-runtime" `
+  --agent codex `
+  --auth-blob "qdm1enc..." `
+  --auth-user-id "your-user-id" `
+  --yes
+```
+
+Development administrator install (do not combine `--dev` with auth Blob flags):
+
+```bash
+npx -y @lumi-ai-lab/harness-data@latest install \
+  --release-source gitee \
+  --dir ~/qdm-harness-data/harness-data-runtime \
+  --agent codex \
+  --dev \
+  --dev-password 'PASSWORD' \
+  --yes
 ```
 
 Release ZIP password is built into the installer. `install` and `update` do not prompt for it
