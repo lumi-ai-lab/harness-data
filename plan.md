@@ -998,8 +998,10 @@ doctor --json 至少输出：
 - Codex CLI TUI 实机 smoke 已完成：真实 remove/add 重装后，在新会话中确认 `qdm-html-report` 已安装启用、`html-report` MCP 为 connected（6 tools），且 `$html-report` skill 可被发现；缓存 MCP self-test 为 10/10。证据见 `docs/codex-golden-path.md`。
 - 合并状态（2026-08-29）：`harness-data-wikis#14` 已以 merge commit `c2ad38426885e1936c09f10036584ea5a779c17e` 合并，固定 revision `b76aef3cea6d6d99a8411f2afe5bc41929aed8f5` 已确认可从 Wikis `master` 获取；`harness-data#74` 已以 merge commit `402371182214eb9e60247e5c2c8d69ea916de57e` 合并。
 - master 验证（2026-08-29）：Verify Host Artifacts run `33268426737`、Wikis Compatibility run `33268426731`、Publish CLI Container run `33268426718` 均通过；普通 master push 上 Publish CLI Release 按条件跳过，未冒充正式发布证据。
-- 当前仍未完成：P3-EXIT-04 仍需 `v0.0.54` 正式 release 流程证明发布内容与 installer 解包一致；Codex 的升级/回滚、生产 secret provider 和桌面客户端 reload 仍需后续实机验收。
-- 下一步按依赖顺序：合并 `v0.0.54` 发布元数据，创建并推送 `v0.0.54` 标签，归档 Release workflow、GitHub Release、容器和 npm smoke 证据；随后补 Codex 升级/回滚与桌面客户端人工 smoke，再进入其余宿主的 Phase 5 验证。
+- `v0.0.54` 正式发布完成：Release run `33269615760` attempt 2 全部通过，GitHub Release runtime/Wikis 资产、multi-arch GHCR、public npm `latest: 0.0.54` 和 npx smoke 均已复核。证据见 `docs/release-validation-v0.0.54.md`。
+- 发布门槛发现并修复上游未加密附件：`qdm-metric-cli#59` 修复 stale 版本测试，`v0.1.17` run `33269491106` 重新生成四个平台 encrypted ZIP；主仓没有放宽错误密码拒绝策略。
+- 当前仍未完成：Codex 的升级/回滚、生产 secret provider 和桌面客户端 reload，以及其余宿主的 Phase 5/6 实机验收。
+- 下一步按依赖顺序：补 Codex 升级/回滚与桌面客户端人工 smoke，再依次完成 Claude、WorkBuddy、Pi、OpenClaw、Hermes、QwenPaw 的 Phase 5 证据，最后执行 Phase 6 清理和稳定化。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1096,7 +1098,7 @@ doctor --json 至少输出：
 - [x] P3-EXIT-01：artifact 复制到随机目录后仍可完成 context/show/recall。
 - [x] P3-EXIT-02：资源 hash/version 不匹配时 fail-closed 或给出明确重装提示。
 - [x] P3-EXIT-03：每个宿主 artifact 自包含，release 产物不含 auth、state、`.git` 和绝对路径；PR 证据为 `#74` / run `33266302354`，master 证据为 merge commit `4023711` / run `33268426737`。
-- [ ] P3-EXIT-04：CI 发布内容与安装器实际解包内容一致。
+- [x] P3-EXIT-04：CI 发布内容与安装器实际解包内容一致；证据为 `v0.0.54` Release run `33269615760`、GitHub Release 资产下载验证、npm public/latest+npx smoke 和 GHCR 双架构 manifest。
 
 最小验证：`node scripts/verify-pinned-wikis.mjs`、`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index`、`node scripts/verify-wikis-relocation.mjs`；运行 `scripts/build-runtime-artifact.sh`；Pi 执行 `npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`；npm 执行 `npm run verify:artifact`。
 
@@ -1207,6 +1209,6 @@ doctor --json 至少输出：
 - Runtime artifact：`scripts/build-runtime-artifact.sh --output-dir <dir> --version <tag>`。
 - Host artifact matrix：`node scripts/host-artifact.mjs build --host all --output-dir <dir> --version <tag>`，随后执行同一脚本的 `verify` 与 `self-test` 子命令。
 - npm artifact：`cd npm && npm run verify:artifact`。
-- 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行；真实 CI 发布仍待运行周期证据。
+- 发布链路：`v0.0.54` 已按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 完成 clean-room、版本、资源、安装器、GitHub Release、容器、npm 和发布后 smoke；证据见 `docs/release-validation-v0.0.54.md`。
 
-以上命令只证明对应实现已通过本地验证。P3-EXIT-03、P4-10 与 P4-12 已分别补远端 CI、真实平台 runner 和真实旧 runtime 证据；P3-EXIT-04 以及 Phase 5/6 仍需正式发布或独立宿主证据，不能用模拟 fixture 替代。
+以上命令只证明对应实现已通过本地验证。P3-EXIT-03、P3-EXIT-04、P4-10 与 P4-12 已分别补远端 CI、正式发布、真实平台 runner 和真实旧 runtime 证据；Phase 5/6 仍需独立宿主证据，不能用模拟 fixture 替代。
