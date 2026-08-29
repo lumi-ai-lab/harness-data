@@ -1,6 +1,7 @@
 # Harness Data 全宿主插件化与双根架构实施方案
 
-状态：Proposed  
+状态：In Progress
+最近更新：2026-08-29
 评审结论：批准“插件化 + 双根 + 通用核心/宿主适配层”方向；退回“插件目录作为可写产品根”的原方案。  
 适用范围：Claude Code、Codex、WorkBuddy、Pi、QwenPaw、Hermes、OpenClaw。  
 依据：当前分支代码、现有发布链路、测试结果，以及 handoff-plugin-first-directory-layout-2026-08-29.md 的调研内容。
@@ -983,9 +984,11 @@ doctor --json 至少输出：
 - 本轮完成 Phase 3 的 cross-host manifest/核心包版本绑定、runtime/PI artifact 审计、安装器对新 manifest archive 的严格校验，以及 ZIP 解压后的二次 CI artifact 校验；PI agent extension 路径保持相对可搬迁。
 - 本轮完成 Phase 3 release ZIP clean-room smoke：随机安装目录、只读 pluginRoot、可写 dataRoot、MCP self-test、setup/doctor/report 全链路均由自动化覆盖。
 - 本轮完成 Phase 4 migration MVP：只读 `migrate --check`、copy+hash/tree 校验+pointer、版本化 metric runtime、workspace state/session 映射、secretRef/0600、doctor gate、幂等/损坏/源变更/软链/权限/回滚失败防护。
-- 本轮可复核验证：`cd npm && npm test -- --test-concurrency=1` 为 170 pass；`npm pack --dry-run` 通过；`packages/data-harness-cli` 为 82 pass + 2 skip；`packages/harness-runtime-node` 为 17 pass；Pi artifact 为 4 pass；artifact manifest/verifier 为 5 pass。
-- 当前仍未完成：固定 wiki revision/checks、全宿主 build/verify/self-test、真实 Codex UI reload、旧 runtime 自动发现后的 migrate 提示、旧 hook 保活与三平台迁移 fixture。
-- 下一步按依赖顺序：补齐 P3-01/P3-02/P3-06 和 P3 exit 证据；再补 Phase 4 的旧 hook/跨平台验证，之后进入多宿主 Phase 5。
+- 本轮可复核验证：`cd npm && npm test -- --test-concurrency=1` 为 175 pass；`npm pack --dry-run` 与 `npm run verify:artifact` 均通过；`packages/data-harness-cli` 为 82 pass + 2 skip；`packages/harness-runtime-node` 为 17 pass；Pi artifact 为 4 pass；新增 artifact/pinned-Wiki/relocation 脚本测试为 5 pass。
+- 本轮新增证据：`config/wikis-revision.json` 固定 Wiki commit `95a19b5c4e7e2999862e7d55f52b04a2ef869d23`，`wikis check-all` 六项检查通过；relocation smoke 在随机目录完成 context/show/recall；runtime ZIP 构建、自检和 npm tarball 审计通过；旧 runtime 支持显式路径/环境变量发现并只给出 migrate 提示；迁移成功/失败均验证旧 hook 可继续运行，并覆盖三平台命名契约 fixture。
+- 最后复核（2026-08-29）：`git diff --check`、pinned-Wiki 校验、relocation smoke、artifact 脚本测试及四组核心回归均通过；当前没有新增失败或未归因回归。
+- 当前仍未完成：为全部七宿主建立独立 build/verify/self-test 并获得真实 CI 发布证据、真实 Codex UI reload、真实 macOS/Linux/Windows 运行，以及旧报告/session 在真实旧 runtime 上的现场验证。
+- 下一步按依赖顺序：补齐全宿主 artifact 与 CI 证据；随后补真实跨平台/旧 runtime 现场验证，完成 Phase 4 后再进入多宿主 Phase 5。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1065,8 +1068,8 @@ doctor --json 至少输出：
 
 目标：产出可重定位、自包含、可验证且与安装器一致的宿主 artifact。
 
-- [ ] P3-01（资源）固定 wiki revision，运行 wiki checks。
-- [ ] P3-02（资源）构建可重定位的 `wikis-index.json` 和 `wikis-runtime-index.json`。
+- [x] P3-01（资源）固定 wiki revision，运行 wiki checks。
+- [x] P3-02（资源）构建可重定位的 `wikis-index.json` 和 `wikis-runtime-index.json`。
 - [x] P3-03（资源）删除 index 中的构建机绝对路径，改用 resource ID、相对路径和 `resourceRoot`。
 - [x] P3-04（资源）生成 `resource-manifest.json`，记录内容版本、schema 版本和 SHA-256。
 - [x] P3-05（核心）构建通用 core 与 html-report kernel，并显式记录版本字段。
@@ -1079,33 +1082,33 @@ doctor --json 至少输出：
 
 退出条件：
 
-- [ ] P3-EXIT-01：artifact 复制到随机目录后仍可完成 context/show/recall。
-- [ ] P3-EXIT-02：资源 hash/version 不匹配时 fail-closed 或给出明确重装提示。
+- [x] P3-EXIT-01：artifact 复制到随机目录后仍可完成 context/show/recall。
+- [x] P3-EXIT-02：资源 hash/version 不匹配时 fail-closed 或给出明确重装提示。
 - [ ] P3-EXIT-03：每个宿主 artifact 自包含，release 产物不含 auth、state、`.git` 和绝对路径。
 - [ ] P3-EXIT-04：CI 发布内容与安装器实际解包内容一致。
 
-最小验证：`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index --skip-checks`；Pi 运行 `npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`；按发布 workflow 执行 runtime/plugin self-test。
+最小验证：`node scripts/verify-pinned-wikis.mjs`、`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index`、`node scripts/verify-wikis-relocation.mjs`；运行 `scripts/build-runtime-artifact.sh`；Pi 执行 `npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`；npm 执行 `npm run verify:artifact`。
 
 ### 20.6 Phase 4：迁移和兼容
 
 目标：在不破坏旧 runtime 的前提下，把旧数据安全迁移到四根模型。
 
-- [ ] P4-01（兼容）保留至少一个小版本的旧 `install --dir` 兼容窗口，新插件发现旧 runtime 时只提示 migrate。
+- [x] P4-01（兼容）保留至少一个小版本的旧 `install --dir` 兼容窗口；通过显式路径或环境变量发现旧 runtime 时只提示 migrate，不自动迁移。
 - [x] P4-02（CLI）实现只读 `qdm-harness migrate --check --from <old-runtime>`。
 - [x] P4-03（CLI）实现 `qdm-harness migrate --from <old-runtime> --to <data-root>`。
 - [x] P4-04（迁移）校验旧 runtime identity、版本和 manifest，再执行迁移。
 - [x] P4-05（迁移）迁移/登记 wiki content version、index 和 metric-cli 校验摘要。
 - [x] P4-06（安全）将旧 auth 转为 secret reference，禁止复制到 plugin package；迁移日志不得包含 blob 或完整 prompt。
 - [x] P4-07（状态）将旧 `.harness/state` 映射到 workspace identity 对应的 stateRoot，并迁移 html-report session/job。
-- [ ] P4-08（回滚）使用 copy + 校验 + pointer 实现迁移，保留旧数据和旧 hook 可回滚路径。
+- [x] P4-08（回滚）使用 copy + 校验 + pointer 实现迁移，保留旧数据和旧 hook 可回滚路径。
 - [x] P4-09（诊断）生成兼容报告和非敏感 diagnostics，doctor 通过后才允许切换。
 - [ ] P4-10（跨平台）为 macOS、Linux、Windows 各准备至少一条迁移 fixture/验证路径。
 - [x] P4-11（幂等）验证成功迁移、坏版本、权限失败和重复 migrate 的行为。
 
 退出条件：
 
-- [ ] P4-EXIT-01：迁移失败不修改或破坏旧 runtime，旧 hook 仍可使用。
-- [ ] P4-EXIT-02：迁移成功后旧报告、session 和 runtime 状态可继续使用。
+- [x] P4-EXIT-01：迁移失败不修改或破坏旧 runtime，旧 hook 仍可使用。
+- [x] P4-EXIT-02：迁移成功后旧报告、session 和 runtime 状态可继续使用。
 - [x] P4-EXIT-03：同一输入连续执行两次 migrate，结果一致且日志不泄露敏感内容。
 
 ### 20.7 Phase 5：扩展到其他宿主
@@ -1186,9 +1189,11 @@ doctor --json 至少输出：
 - Installer 回归：`cd npm && npm test -- --test-concurrency=1 && npm pack --dry-run`。
 - CLI 回归：`cd packages/data-harness-cli && node --test`。
 - Runtime 回归：`cd packages/harness-runtime-node && node --test`。
-- Wiki 资源：`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index --skip-checks`。
+- Wiki 资源：`node scripts/verify-pinned-wikis.mjs`、`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index`、`node scripts/verify-wikis-relocation.mjs`。
 - html-report self-test：`node plugins/qdm-html-report/mcp/server.mjs --self-test`。
 - Pi artifact：`npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`。
-- 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行。
+- Runtime artifact：`scripts/build-runtime-artifact.sh --output-dir <dir> --version <tag>`。
+- npm artifact：`cd npm && npm run verify:artifact`。
+- 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行；真实 CI 发布仍待运行周期证据。
 
-以上命令只证明对应实现已通过验证；Phase 0/1/4 的新 schema、双根和迁移命令在实现前应先补齐专用 fixture 与测试，不得用旧测试替代。
+以上命令只证明对应实现已通过验证；P3-06/P3-EXIT-03/04、P4-10 以及 Phase 5/6 仍需独立宿主、真实平台和 CI 证据，不能用模拟 fixture 替代。

@@ -5,6 +5,7 @@ import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
 import { binaryName, isExecutable, isHarnessCliPresent } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
+import { inspectLegacyRuntime } from "../lib/legacy-runtime.js";
 import { hasStructuredRootContext, publicRootContext, resolveRootContext } from "../lib/root-context.js";
 import { inspectSecretReference, readInstallManifest } from "./setup.js";
 import {
@@ -86,6 +87,8 @@ function selectedAgent(workspace, options = {}) {
 export async function collectDoctor(workspace, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
+  const legacyMigration = inspectLegacyRuntime(workspace);
+  if (legacyMigration.detected) add("legacy runtime migration", true, legacyMigration.hint, "warning");
 
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
   add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
@@ -197,13 +200,18 @@ export async function collectDoctor(workspace, options = {}) {
 
   return {
     workspace,
-    checks
+    checks,
+    migration: legacyMigration.detected
+      ? { status: "available", sourceRoot: legacyMigration.root, hint: legacyMigration.hint }
+      : { status: "none" },
   };
 }
 
 export async function collectRootDoctor(context, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
+  const legacyMigration = inspectLegacyRuntime(options.legacyRuntime || options.legacyDir || options.env?.HARNESS_LEGACY_RUNTIME || process.env.HARNESS_LEGACY_RUNTIME || "");
+  if (legacyMigration.detected) add("legacy runtime migration", true, legacyMigration.hint, "warning");
   const directory = (value) => Boolean(value && isDirectory(value));
   const dataWritable = directory(context.dataRoot)
     ? canAccess(context.dataRoot, fs.constants.W_OK)
@@ -278,6 +286,9 @@ export async function collectRootDoctor(context, options = {}) {
     resourceVersion,
     secretSourceType: secret.type,
     secret: { type: secret.type, status: secret.status },
+    migration: legacyMigration.detected
+      ? { status: "available", sourceRoot: legacyMigration.root, hint: legacyMigration.hint }
+      : { status: "none" },
     capabilities: {
       ...context.capabilities,
       canWriteData: dataWritable,
@@ -292,7 +303,7 @@ export async function doctorCommand(options = {}, io = process) {
   const env = io.env || process.env;
   if (hasStructuredRootContext(options, env)) {
     const context = resolveRootContext(options, { env, requirePluginRoot: true });
-    const report = await collectRootDoctor(context, options);
+    const report = await collectRootDoctor(context, { ...options, env });
     if (options.json) {
       (io.stdout || process.stdout).write(`${JSON.stringify(report, null, 2)}\n`);
     } else {

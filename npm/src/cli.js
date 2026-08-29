@@ -99,12 +99,14 @@ Migration options:
   --workspace-root PATH              Explicit project workspace for state identity
   --plugin-root PATH                 Current plugin/runtime root; never inferred from the legacy runtime
   --secret-root PATH                 Required when legacy authz is enabled
+  --legacy-runtime PATH              Optional old install --dir path to inspect; never migrated automatically
 
 Compatibility:
   harness-data <install|update|doctor|migrate|version> [options]
 
 Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github
+  HARNESS_LEGACY_RUNTIME              Optional old install --dir path for migration hint discovery
 
 Release ZIP password is built in; install and update need no password setup.`);
   if (unknown) process.exitCode = 1;

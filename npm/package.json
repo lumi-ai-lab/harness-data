@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "test": "node --test",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "npm pack --dry-run",
+    "verify:artifact": "node ../scripts/verify-npm-artifact.mjs"
   },
   "engines": {
     "node": ">=18"

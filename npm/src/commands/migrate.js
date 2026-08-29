@@ -45,13 +45,15 @@ export function planMigration(options = {}) {
   try {
     const sourceRoot = canonicalExistingDirectory(options.from, "--from");
     const host = String(options.host || "codex").trim() || "codex";
+    const targetPlatform = platformKey(options.platform || process.platform, options.architecture || process.arch);
+    const targetOS = platformFromKey(targetPlatform);
     const dataRoot = options.to ? canonicalFutureDirectory(options.to, "--to") : "";
     const workspaceRoot = options.workspaceRoot ? canonicalExistingDirectory(options.workspaceRoot, "--workspace-root") : "";
     const secretRoot = options.secretRoot ? canonicalFutureDirectory(options.secretRoot, "--secret-root") : "";
     const pluginRoot = options.pluginRoot ? canonicalExistingDirectory(options.pluginRoot, "--plugin-root") : "";
     if (pluginRoot) validateMigrationPluginRoot(pluginRoot);
     const legacy = inspectLegacyRuntime(sourceRoot);
-    const metricCli = inspectMetricCli(sourceRoot);
+    const metricCli = inspectMetricCli(sourceRoot, targetOS);
     const resource = inspectResources(sourceRoot);
     const sourceAuth = inspectLegacyAuth(sourceRoot, legacy.authz);
     const sourceFingerprint = migrationSourceFingerprint({ legacy, metricCli, resource, auth: sourceAuth });
@@ -74,6 +76,7 @@ export function planMigration(options = {}) {
       runtimeTag: String(legacy.installerState.runtimeTag || legacy.manifest.releaseTag || legacy.manifest.version || ""),
       runtimeVersion,
       wikiContentVersion: resource.ok ? resource.wikisSha256 : "",
+      platform: targetPlatform,
     };
     report.target = {
       dataRoot,
@@ -82,6 +85,7 @@ export function planMigration(options = {}) {
       workspaceRoot,
       stateRoot,
       host,
+      platform: targetPlatform,
     };
 
     if (!dataRoot) {
@@ -111,7 +115,7 @@ export function planMigration(options = {}) {
         item("legacy-config", path.join(sourceRoot, "config", "harness-config.yaml"), path.join(dataRoot, "config", "settings.json"), "rewrite", {
           sourceSha256: legacy.configSha256,
         }),
-        item("metric-cli", metricCli.path || "", path.join(dataRoot, "runtimes", platformKey(), runtimeVersion, binaryName("qdm-metric-cli")), "copy", {
+        item("metric-cli", metricCli.path || "", path.join(dataRoot, "runtimes", targetPlatform, runtimeVersion, binaryName("qdm-metric-cli", targetOS)), "copy", {
           sourceSha256: metricCli.sha256,
           bytes: metricCli.bytes,
         }),
@@ -467,10 +471,10 @@ function inspectLegacyRuntime(sourceRoot) {
   };
 }
 
-function inspectMetricCli(sourceRoot) {
-  const filePath = path.join(sourceRoot, "bin", binaryName("qdm-metric-cli"));
+function inspectMetricCli(sourceRoot, platform = process.platform) {
+  const filePath = path.join(sourceRoot, "bin", binaryName("qdm-metric-cli", platform));
   assertNoSymlinkPath(sourceRoot, filePath, "legacy qdm-metric-cli");
-  if (!isExecutable(filePath)) {
+  if (!isExecutable(filePath, platform)) {
     return { ok: false, blocker: blocker("QDM_SETUP_REQUIRED", `legacy qdm-metric-cli is unavailable: ${filePath}`) };
   }
   assertRegularFile(filePath, "legacy qdm-metric-cli");
@@ -828,7 +832,7 @@ function verifyMigrationRecord(record, expected, dataRoot, auth) {
 
 function verifyMigrationSourceUnchanged(plan) {
   const legacy = inspectLegacyRuntime(plan.source.root);
-  const metricCli = inspectMetricCli(plan.source.root);
+  const metricCli = inspectMetricCli(plan.source.root, platformFromKey(plan.target.platform));
   const resource = inspectResources(plan.source.root);
   const auth = inspectLegacyAuth(plan.source.root, legacy.authz);
   if (!metricCli.ok) throw new MigrationError(metricCli.blocker.code, metricCli.blocker.message);
@@ -857,6 +861,14 @@ function safeRuntimeVersion(value) {
   const candidate = String(value || "legacy").trim();
   if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(candidate)) return candidate;
   return `legacy-${sha256(candidate || "legacy").slice(0, 12)}`;
+}
+
+function platformFromKey(value) {
+  const os = String(value || "").split("-", 1)[0];
+  if (os === "darwin") return "darwin";
+  if (os === "linux") return "linux";
+  if (os === "windows") return "win32";
+  throw new MigrationError("QDM_CONTEXT_INVALID", `unsupported migration platform: ${value}`);
 }
 
 function publicInstallerState(value) {

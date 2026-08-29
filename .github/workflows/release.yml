@@ -108,10 +108,13 @@ jobs:
       - name: Build Wikis index from pinned submodule
         run: |
           chmod +x bin/data-harness-cli
-          ./bin/data-harness-cli wikis build-index --skip-checks
+          node scripts/verify-pinned-wikis.mjs
+          ./bin/data-harness-cli wikis check-all
+          ./bin/data-harness-cli wikis build-index
           test -s .harness/index/wikis-index.json
           test -s .harness/index/wikis-runtime-index.json
           test -s resource-manifest.json
+          node scripts/verify-wikis-relocation.mjs
 
       - name: Verify external CLI assets
         env:

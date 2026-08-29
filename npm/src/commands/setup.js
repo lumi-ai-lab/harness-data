@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { installToolsFromManifest, manifestDigest, readManifest } from "../lib/manifest.js";
 import { packageVersion } from "../lib/package.js";
+import { inspectLegacyRuntime } from "../lib/legacy-runtime.js";
 import { binaryName, isExecutable, platformKey } from "../lib/platform.js";
 import {
   ROOT_CONTEXT_ERROR_CODES,
@@ -34,7 +35,7 @@ export function readInstallManifest(context) {
 
 export async function setupCommand(options = {}, io = process) {
   const context = resolveRootContext(options, { env: io.env || process.env, requirePluginRoot: true });
-  const report = await setupRootContext(context, options);
+  const report = await setupRootContext(context, { ...options, env: io.env || process.env });
   writeOutput(report, options, io);
   return report;
 }
@@ -52,6 +53,7 @@ export async function setupRootContext(context, options = {}) {
   }
 
   const prior = readInstallManifest(context) || {};
+  const legacyMigration = inspectLegacyRuntime(options.legacyRuntime || options.legacyDir || options.env?.HARNESS_LEGACY_RUNTIME || process.env.HARNESS_LEGACY_RUNTIME || "");
   const now = new Date().toISOString();
   const manifest = {
     ...prior,
@@ -95,6 +97,9 @@ export async function setupRootContext(context, options = {}) {
     manifestPath: installManifestPath(context),
     configPath: context.configPath,
     workspaceStatePath: context.workspaceRoot ? path.join(context.workspaceRoot, ".harness") : "",
+    migration: legacyMigration.detected
+      ? { status: "available", sourceRoot: legacyMigration.root, hint: legacyMigration.hint }
+      : { status: "none" },
   };
 }
 
@@ -221,6 +226,7 @@ function writeOutput(report, options, io) {
       `metric-cli: ${report.metricCli.status}${report.metricCli.path ? ` (${report.metricCli.path})` : ""}`,
       `secret: ${report.secret.type} (${report.secret.status})`,
       `install manifest: ${report.manifestPath}`,
+      ...(report.migration?.status === "available" ? [`migration: ${report.migration.hint}`] : []),
     ].join("\n") + "\n";
   (io.stdout || process.stdout).write(text);
 }

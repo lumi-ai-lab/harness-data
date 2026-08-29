@@ -11,9 +11,9 @@ export function platformKey(platform = process.platform, architecture = process.
   return key;
 }
 
-export function binaryName(name) {
+export function binaryName(name, platform = process.platform) {
   if (name === "data-harness-cli") return name;
-  return process.platform === "win32" ? `${name}.exe` : name;
+  return platform === "win32" ? `${name}.exe` : name;
 }
 
 export function harnessCliMain(runtimeDir) {
@@ -59,9 +59,9 @@ export function ensureHarnessCli(runtimeDir) {
  * from binaryName() is what makes a binary runnable, not the executable bit).
  * On POSIX, use the standard X_OK access check.
  */
-export function isExecutable(file) {
+export function isExecutable(file, platform = process.platform) {
   try {
-    if (process.platform === "win32") {
+    if (platform === "win32") {
       fs.accessSync(file, fs.constants.F_OK);
     } else {
       fs.accessSync(file, fs.constants.X_OK);

@@ -107,16 +107,24 @@ else
   log "skipping PI HTML Report plugin build; install the plugin after Runtime initialization"
 fi
 
-log "building Wikis index"
-./bin/data-harness-cli wikis build-index --skip-checks
+log "validating pinned Wikis revision"
+if ! node scripts/verify-pinned-wikis.mjs; then
+  if [[ "$STRICT_WIKIS" == "1" ]]; then
+    die "pinned Wikis revision validation failed"
+  fi
+  log "warning: pinned Wikis revision differs from config; Runtime initialization continues"
+fi
 
-log "validating local runtime"
+log "validating local Wikis"
 if ! ./bin/data-harness-cli wikis check-all; then
   if [[ "$STRICT_WIKIS" == "1" ]]; then
     die "Wikis validation failed"
   fi
   log "warning: Wikis validation reported content issues; Runtime initialization continues"
 fi
+
+log "building Wikis index"
+./bin/data-harness-cli wikis build-index
 ./bin/data-harness-cli context --question "生成运营中心管理周例会报告" --json >/dev/null
 
 log "initialization complete"
