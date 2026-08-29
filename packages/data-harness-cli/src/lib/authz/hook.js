@@ -1,7 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 
-import { authzEnabled, loadConfig } from "../harness.js";
+import { authzEnabled, loadConfig, normalizeResolverOwners } from "../harness.js";
 import { resolveAuthBlob } from "./auth-blob.js";
 import {
   ADAPTER_ALLOW,
@@ -30,20 +30,22 @@ import {
   powerShellMetricInvocationCount,
 } from "./powershell-command.js";
 
-export function run(root, agent, input) {
-  const cfg = loadConfig(root);
+export function run(rootOrContext, agent, input) {
+  const cfg = loadConfig(rootOrContext);
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!authzEnabled(cfg.authz)) {
     return { ok: false, output: emptyHookOutput() };
   }
-  return runEnabled(cfg, root, agent, input, false);
+  return runEnabled(cfg, resourceRoot, agent, input, false, rootOrContext);
 }
 
-export function runAdapterEnvelope(root, agent, input) {
-  const cfg = loadConfig(root);
+export function runAdapterEnvelope(rootOrContext, agent, input) {
+  const cfg = loadConfig(rootOrContext);
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!authzEnabled(cfg.authz)) {
     return adapterEnvelope(ADAPTER_DISABLED, {});
   }
-  const { ok, output } = runEnabled(cfg, root, agent, input, true);
+  const { ok, output } = runEnabled(cfg, resourceRoot, agent, input, true, rootOrContext);
   if (!ok) return adapterEnvelope(ADAPTER_NOOP, {});
   const decision = output.hookSpecificOutput.permissionDecision;
   if (decision === "allow") return adapterEnvelope(ADAPTER_ALLOW, output);
@@ -59,7 +61,7 @@ function emptyHookOutput() {
   return { hookSpecificOutput: { hookEventName: "", permissionDecision: "" } };
 }
 
-function runEnabled(cfg, root, agent, input, strictInput) {
+function runEnabled(cfg, root, agent, input, strictInput, rootContext = null) {
   const parsed = parseHookPayload(input);
   if (!parsed.ok) {
     if (!strictInput) return { ok: false, output: emptyHookOutput() };
@@ -139,7 +141,7 @@ function runEnabled(cfg, root, agent, input, strictInput) {
 
   let resolved;
   try {
-    resolved = resolveAuthBlob({ projectRoot: root, config: cfg.authz });
+    resolved = resolveAuthBlob({ projectRoot: root, config: cfg.authz, secretRef: rootContext?.secretRef });
   } catch (error) {
     return { ok: true, output: denyOutput(missingAuthReason(dialect, command, cfg.authz, error)) };
   }
@@ -156,7 +158,8 @@ function runEnabled(cfg, root, agent, input, strictInput) {
 
   let rewritten;
   try {
-    rewritten = rewriteGatedMetricCommands(command, resolved.blob, metricCliPath, dialect);
+    const authArgument = process.platform === "win32" || !resolved.sourcePath ? resolved.blob : resolved.sourcePath;
+    rewritten = rewriteGatedMetricCommands(command, authArgument, metricCliPath, dialect);
   } catch {
     rewritten = "";
   }

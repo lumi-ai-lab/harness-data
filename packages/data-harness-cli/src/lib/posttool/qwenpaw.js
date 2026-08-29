@@ -4,7 +4,8 @@ import { addModule, getReportState, injectTemplate, REPORT_CONFIGS } from "./hoo
 const SESSION_ID = /^qwenpaw:[0-9a-f]{64}$/;
 const PAYLOAD_KEYS = new Set(["session_id", "tool_name", "status", "safe_command_args"]);
 
-export function runQwenPawHook(root, input) {
+export function runQwenPawHook(root, input, context = null) {
+  const rootOrContext = context || root;
   const payload = parseQwenPawPayload(input);
   if (!SESSION_ID.test(String(payload.session_id || "").trim()) || payload.tool_name !== "qdm_query") {
     throw new Error("invalid qwenpaw-hook identity");
@@ -18,7 +19,7 @@ export function runQwenPawHook(root, input) {
   }
   let state;
   try {
-    state = loadState(root, payload.session_id);
+    state = loadState(rootOrContext, payload.session_id);
   } catch {
     return { ok: false, diagnostic_code: "session_state_unavailable" };
   }
@@ -30,14 +31,14 @@ export function runQwenPawHook(root, input) {
   if (reportName && module) {
     try {
       recordQwenPawModule(state, reportName, module);
-      saveState(root, payload.session_id, state);
+      saveState(rootOrContext, payload.session_id, state);
     } catch {
       return { ok: false, mode: state.mode, diagnostic_code: "safe_args_invalid" };
     }
   }
   let injected;
   try {
-    injected = injectTemplate(root, payload.session_id);
+    injected = injectTemplate(rootOrContext, payload.session_id);
   } catch {
     return { ok: false, mode: state.mode, diagnostic_code: "template_injection_failed" };
   }

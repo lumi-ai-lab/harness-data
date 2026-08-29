@@ -25,7 +25,6 @@ export const A_CONFIG_QUESTION_RELATIVE_PATH = ["debug", "a-config-question.json
 export const METRIC_CLI_UI_PRODUCER = "open-metric-cli-ui.mjs";
 export const METRIC_CLI_UI_WORKER_ENV = "HTML_REPORT_METRIC_CLI_UI_WORKER";
 
-const root = findWorkspaceRoot(fileURLToPath(new URL(".", import.meta.url)));
 let cliScriptPath = fileURLToPath(import.meta.url);
 
 export function bindCliScriptPath(path) {
@@ -36,9 +35,10 @@ export function sanitizeSessionId(value) {
   return String(value || "").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-export function sessionDirFor(projectRoot, sessionId) {
+export function sessionDirFor(projectRoot, sessionId, stateRoot = "") {
   const key = createHash("sha256").update(`workbuddy:${String(sessionId || "")}`).digest("hex");
-  return join(resolve(projectRoot), ".harness", "state", "html-report", key);
+  const base = stateRoot ? resolve(stateRoot) : join(resolve(projectRoot), ".harness", "state");
+  return join(base, "html-report", key);
 }
 
 export function shouldSpawnMetricCliUi(env = process.env) {
@@ -385,6 +385,9 @@ function waitForWorkerReady(child) {
 
 async function launchDetachedWorker({
   projectRoot,
+  workspaceRoot,
+  stateRoot,
+  dataRoot,
   sessionId,
   userQuestion,
   open,
@@ -393,12 +396,15 @@ async function launchDetachedWorker({
 }) {
   const watch = resolveWatchPid({ env, explicitWatchPid: watchPid, isWorker: false });
   const args = [cliScriptPath, "--session-id", sessionId, "--project-root", projectRoot];
+  if (workspaceRoot) args.push("--workspace-root", workspaceRoot);
+  if (stateRoot) args.push("--state-root", stateRoot);
+  if (dataRoot) args.push("--data-root", dataRoot);
   if (userQuestion) args.push("--question", userQuestion);
   args.push(open ? "--open" : "--no-open");
   if (watch.source === "disabled") args.push("--watch-pid", "none");
   if (watch.pid > 1) args.push("--watch-pid", String(watch.pid));
   const child = spawn(process.execPath, args, {
-    cwd: projectRoot,
+    cwd: workspaceRoot || projectRoot,
     env: { ...env, [METRIC_CLI_UI_WORKER_ENV]: "1" },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -407,7 +413,11 @@ async function launchDetachedWorker({
 }
 
 export async function openMetricCliUi({
-  projectRoot = root,
+  projectRoot = "",
+  workspaceRoot = "",
+  stateRoot = "",
+  dataRoot = "",
+  context = null,
   sessionId,
   userQuestion = "",
   open = true,
@@ -417,9 +427,14 @@ export async function openMetricCliUi({
   env = process.env,
   now = new Date(),
 } = {}) {
+  const roots = resolveUiRoots({ projectRoot, workspaceRoot, stateRoot, dataRoot, context, env });
+  projectRoot = roots.projectRoot;
+  workspaceRoot = roots.workspaceRoot;
+  stateRoot = roots.stateRoot;
+  dataRoot = roots.dataRoot;
   const safeSessionId = sanitizeSessionId(sessionId);
   if (!safeSessionId) throw new Error("--session-id is required");
-  const sessionDir = sessionDirFor(projectRoot, sessionId);
+  const sessionDir = sessionDirFor(projectRoot, sessionId, stateRoot);
   const markerPath = join(sessionDir, ...METRIC_CLI_UI_MARKER_RELATIVE_PATH);
   await mkdir(join(sessionDir, "debug"), { recursive: true });
   const questionPath = await persistAConfigQuestion({
@@ -438,6 +453,9 @@ export async function openMetricCliUi({
   if (shouldDetach) {
     const opened = await launchDetachedWorker({
       projectRoot,
+      workspaceRoot,
+      stateRoot,
+      dataRoot,
       sessionId: safeSessionId,
       userQuestion,
       open,
@@ -467,7 +485,7 @@ export async function openMetricCliUi({
     ];
     if (!open) args.push("--no-open");
     child = spawn(cliPath, args, {
-      cwd: projectRoot,
+      cwd: workspaceRoot || projectRoot,
       env,
       detached: false,
       stdio: ["ignore", "pipe", "pipe"],
@@ -493,6 +511,8 @@ export async function openMetricCliUi({
     ui: "qdm-metric-cli",
     b5Design: "skip",
     cliPath,
+    workspaceRoot: workspaceRoot || null,
+    dataRoot: dataRoot || null,
     url: url || null,
     pid: ownerPid,
     cliPid,
@@ -518,8 +538,9 @@ export async function openMetricCliUi({
   };
 }
 
-export async function stopMetricCliUi({ projectRoot = root, sessionId } = {}) {
-  const sessionDir = sessionDirFor(projectRoot, sessionId);
+export async function stopMetricCliUi({ projectRoot = "", workspaceRoot = "", stateRoot = "", dataRoot = "", context = null, env = process.env, sessionId } = {}) {
+  const roots = resolveUiRoots({ projectRoot, workspaceRoot, stateRoot, dataRoot, context, env });
+  const sessionDir = sessionDirFor(roots.projectRoot, sessionId, roots.stateRoot);
   const markerPath = join(sessionDir, ...METRIC_CLI_UI_MARKER_RELATIVE_PATH);
   const result = await stopExisting(markerPath);
   try {
@@ -570,10 +591,16 @@ async function runWorkerLifetime(opened) {
 
 export async function runCli() {
   const { values, flags } = readArgs(process.argv.slice(2));
-  const projectRoot = values["project-root"] || root;
+  const projectRoot = values["project-root"] || "";
+  const workspaceRoot = values["workspace-root"] || "";
+  const stateRoot = values["state-root"] || "";
+  const dataRoot = values["data-root"] || "";
   if (flags.has("stop")) {
     const stopped = await stopMetricCliUi({
       projectRoot,
+      workspaceRoot,
+      stateRoot,
+      dataRoot,
       sessionId: values["session-id"],
     });
     process.stdout.write(`${JSON.stringify(stopped)}\n`);
@@ -581,6 +608,9 @@ export async function runCli() {
   }
   const opened = await openMetricCliUi({
     projectRoot,
+    workspaceRoot,
+    stateRoot,
+    dataRoot,
     sessionId: values["session-id"],
     userQuestion: values.question || "",
     open: flags.has("open") || !flags.has("no-open"),
@@ -592,6 +622,29 @@ export async function runCli() {
   if (isMetricCliUiWorker()) {
     await runWorkerLifetime(opened);
   }
+}
+
+function resolveUiRoots({ projectRoot = "", workspaceRoot = "", stateRoot = "", dataRoot = "", context = null, env = process.env } = {}) {
+  if (context) {
+    if (!context.workspaceRoot || context.capabilities?.canWriteWorkspace === false || !context.stateRoot) {
+      throw new Error("QDM_WORKSPACE_REQUIRED: workspaceRoot and stateRoot are required for metric-cli UI");
+    }
+    return {
+      projectRoot: context.pluginRoot,
+      workspaceRoot: context.workspaceRoot || "",
+      stateRoot: context.stateRoot || "",
+      dataRoot: context.dataRoot || "",
+    };
+  }
+  if (workspaceRoot || stateRoot || dataRoot) {
+    const resolvedProjectRoot = projectRoot || env.HARNESS_PLUGIN_ROOT || "";
+    if (!resolvedProjectRoot) throw new Error("QDM_PLUGIN_ROOT_UNAVAILABLE: projectRoot is required with explicit UI roots");
+    if (workspaceRoot && !stateRoot) throw new Error("QDM_WORKSPACE_REQUIRED: stateRoot is required with an explicit workspaceRoot");
+    return { projectRoot: resolve(resolvedProjectRoot), workspaceRoot: workspaceRoot ? resolve(workspaceRoot) : "", stateRoot: stateRoot ? resolve(stateRoot) : "", dataRoot: dataRoot ? resolve(dataRoot) : "" };
+  }
+  const legacy = projectRoot || findWorkspaceRoot(undefined, env, { failClosed: true });
+  if (!legacy) throw new Error("QDM_WORKSPACE_REQUIRED: workspaceRoot is required to start metric-cli UI");
+  return { projectRoot: resolve(legacy), workspaceRoot: resolve(legacy), stateRoot: join(resolve(legacy), ".harness", "state"), dataRoot: "" };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

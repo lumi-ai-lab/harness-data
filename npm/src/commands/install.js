@@ -124,6 +124,7 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
       fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json")) &&
+      fs.existsSync(path.join(runtimeDir, "plugins")) &&
       (!options.requireWorkBuddy || (
         fs.existsSync(path.join(runtimeDir, "agents", "workbuddy", ".codebuddy-plugin", "plugin.json")) &&
         fs.existsSync(path.join(runtimeDir, "agents", ".codebuddy-plugin", "marketplace.json"))
@@ -142,7 +143,11 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
   action(`下载 harness-data-runtime ${tag}`);
-  await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
+  if (typeof options.downloadAsset === "function") {
+    await options.downloadAsset(asset, archive, { ...options, progressLabel: assetName });
+  } else {
+    await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
+  }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
   const stagedRoot = fs.mkdtempSync(path.join(runtimeDir, ".install-new-runtime-"));
@@ -162,10 +167,16 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     const configSource = path.join(extractDir, "config");
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
     const cliSource = path.join(extractDir, "packages", "data-harness-cli", "src", "main.js");
+    const pluginsSource = path.join(extractDir, "plugins");
 
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
     if (fs.existsSync(cliSource)) {
       fs.cpSync(path.join(extractDir, "packages", "data-harness-cli"), path.join(stagedRoot, "packages", "data-harness-cli"), { recursive: true });
+    }
+    // Top-level host plugins are part of the release runtime when present.
+    // Keep this optional so legacy archives remain installable.
+    if (fs.existsSync(pluginsSource)) {
+      fs.cpSync(pluginsSource, path.join(stagedRoot, "plugins"), { recursive: true });
     }
     // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
     fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
@@ -179,6 +190,9 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
     if (fs.existsSync(path.join(stagedRoot, "packages", "data-harness-cli"))) {
       replaceRuntimePath(runtimeDir, path.join("packages", "data-harness-cli"), stagedRoot, backups);
+    }
+    if (fs.existsSync(path.join(stagedRoot, "plugins"))) {
+      replaceRuntimePath(runtimeDir, "plugins", stagedRoot, backups);
     }
     mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
     cleanupRuntimeBackups(backups);

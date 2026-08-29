@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { loadLumiHostAuth } from "./lumi-envelope.mjs";
@@ -146,6 +146,7 @@ export function parseCliMetricPath(raw) {
  *   hostAuth?: string | null,
  *   hostUserId?: string | null,
  *   sessionId?: string | null,
+ *   secretRef?: { kind: string, path?: string } | null,
  *   env?: NodeJS.ProcessEnv,
  *   now?: number,
  * }} options
@@ -189,6 +190,17 @@ export function resolveAuthBlob(options) {
     return { ok: false, error: fromLumi.error };
   }
 
+  if (options.secretRef) {
+    if (options.secretRef.kind !== "file") {
+      return { ok: false, error: `secret reference kind is not supported by the Node adapter: ${options.secretRef.kind}` };
+    }
+    const loaded = readBlobFile(options.secretRef.path, options.projectRoot);
+    if (!loaded.ok) return loaded;
+    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
+    if (!userId) return { ok: false, error: "secretRef file requires HARNESS_AUTH_USER_ID or authz.dev_user_id" };
+    return { ok: true, blob: loaded.blob, sourcePath: loaded.path, userId, source: "secret_ref_file" };
+  }
+
   if (!config.allowLocalBlob) {
     return {
       ok: false,
@@ -222,7 +234,7 @@ export function resolveAuthBlob(options) {
         error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
       };
     }
-    return { ok: true, blob: loaded.blob, userId, source: "env_file" };
+    return { ok: true, blob: loaded.blob, sourcePath: loaded.path, userId, source: "env_file" };
   }
 
   if (config.blobFile) {
@@ -235,7 +247,7 @@ export function resolveAuthBlob(options) {
         error: "authz.blob_file requires authz.dev_user_id (no default principal)",
       };
     }
-    return { ok: true, blob: loaded.blob, userId, source: "file" };
+    return { ok: true, blob: loaded.blob, sourcePath: loaded.path, userId, source: "file" };
   }
 
   return {
@@ -258,6 +270,18 @@ function readBlobFile(pathValue, projectRoot) {
   if (!existsSync(absolute)) {
     return { ok: false, error: `auth blob file not found: ${absolute}` };
   }
+  let info;
+  try {
+    info = lstatSync(absolute);
+  } catch {
+    return { ok: false, error: `auth blob file not found: ${absolute}` };
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    return { ok: false, error: `auth blob file must be a regular file: ${absolute}` };
+  }
+  if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600) {
+    return { ok: false, error: `auth blob file permissions must be 0600: ${absolute}` };
+  }
   const blob = readFileSync(absolute, "utf8").trim();
   if (!blob) {
     return { ok: false, error: `auth blob file is empty: ${absolute}` };
@@ -265,7 +289,7 @@ function readBlobFile(pathValue, projectRoot) {
   if (!isEncryptedBlob(blob)) {
     return { ok: false, error: `auth blob file must contain a qdm1enc blob: ${absolute}` };
   }
-  return { ok: true, blob };
+  return { ok: true, blob, path: realpathSync(absolute) };
 }
 
 /**

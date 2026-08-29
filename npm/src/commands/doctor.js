@@ -1,9 +1,12 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
 import { binaryName, isExecutable, isHarnessCliPresent } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
+import { hasStructuredRootContext, publicRootContext, resolveRootContext } from "../lib/root-context.js";
+import { inspectSecretReference, readInstallManifest } from "./setup.js";
 import {
   codeBuddyMinimumVersion,
   detectCodeBuddyVersion,
@@ -198,18 +201,190 @@ export async function collectDoctor(workspace, options = {}) {
   };
 }
 
-export async function doctorCommand(options = {}) {
+export async function collectRootDoctor(context, options = {}) {
+  const checks = [];
+  const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
+  const directory = (value) => Boolean(value && isDirectory(value));
+  const dataWritable = directory(context.dataRoot)
+    ? canAccess(context.dataRoot, fs.constants.W_OK)
+    : canAccessExistingParent(context.dataRoot, fs.constants.W_OK);
+
+  add("pluginRoot", directory(context.pluginRoot), context.pluginRoot || "missing");
+  add("dataRoot", directory(context.dataRoot), context.dataRoot || "missing");
+  add("dataRoot writable", dataWritable, context.dataRoot || "missing");
+  add("secretRoot", !context.secretRoot || directory(context.secretRoot), context.secretRoot || "unconfigured", context.secretRoot && !directory(context.secretRoot) ? "fail" : "pass");
+  add(
+    "workspaceRoot",
+    Boolean(context.workspaceRoot && directory(context.workspaceRoot)),
+    context.workspaceRoot || "missing; read-only operations only",
+    context.workspaceRoot && directory(context.workspaceRoot) ? "pass" : "warning",
+  );
+  add(
+    "stateRoot",
+    Boolean(context.stateRoot && (directory(context.stateRoot) || canAccessExistingParent(context.stateRoot, fs.constants.W_OK))),
+    context.stateRoot || "missing",
+    context.stateRoot && (directory(context.stateRoot) || canAccessExistingParent(context.stateRoot, fs.constants.W_OK)) ? "pass" : "fail",
+  );
+
+  const installManifest = readInstallManifest(context);
+  add("install manifest", Boolean(installManifest), installManifest ? "" : "run qdm-harness setup first");
+  add("config", Boolean(context.configPath && fs.existsSync(context.configPath)), context.configPath || "missing");
+
+  const metricPath = installManifest?.metricCli?.path || path.join(context.dataRoot, "runtimes", platformKeyForDoctor(), binaryName("qdm-metric-cli"));
+  add("qdm-metric-cli", isExecutable(metricPath), metricPath);
+
+  const runtimeManifestPath = path.join(context.pluginRoot || "", "bootstrap", "cli-manifest.json");
+  const runtimeHash = fs.existsSync(runtimeManifestPath) ? fileSha256(runtimeManifestPath) : "";
+  add("runtime manifest", Boolean(runtimeHash), runtimeManifestPath || "missing");
+  const pluginVersion = installManifest?.pluginVersion || discoverPluginVersion(context.pluginRoot);
+  const resourceVersion = installManifest?.resourceVersion || discoverResourceVersion(context.pluginRoot);
+
+  const secret = inspectSecretReference(context);
+  add(
+    "secret reference",
+    secret.status !== "invalid",
+    secret.type,
+    secret.status === "invalid" ? "fail" : (secret.status === "unconfigured" ? "warning" : "pass"),
+  );
+  add(
+    "pluginRoot write policy",
+    true,
+    canAccess(context.pluginRoot, fs.constants.W_OK) ? "writable; keep pluginRoot read-only in production" : "read-only",
+    canAccess(context.pluginRoot, fs.constants.W_OK) ? "warning" : "pass",
+  );
+
+  const publicContext = publicRootContext(context);
+  const failures = checks.filter((check) => !check.ok && check.status !== "warning");
+  return {
+    schemaVersion: context.schemaVersion,
+    host: context.host,
+    roots: {
+      pluginRoot: context.pluginRoot,
+      dataRoot: context.dataRoot,
+      secretRoot: context.secretRoot,
+      workspaceRoot: context.workspaceRoot,
+      stateRoot: context.stateRoot,
+    },
+    context: publicContext,
+    versions: {
+      installer: packageVersion(),
+      runtimeHash,
+      runtimeTag: installManifest?.runtimeTag || "",
+      pluginVersion,
+      resourceVersion,
+    },
+    runtimeHash,
+    pluginVersion,
+    resourceVersion,
+    secretSourceType: secret.type,
+    secret: { type: secret.type, status: secret.status },
+    capabilities: {
+      ...context.capabilities,
+      canWriteData: dataWritable,
+      canWriteWorkspace: Boolean(context.workspaceRoot && canAccess(context.workspaceRoot, fs.constants.W_OK)),
+    },
+    checks,
+    ok: failures.length === 0,
+  };
+}
+
+export async function doctorCommand(options = {}, io = process) {
+  const env = io.env || process.env;
+  if (hasStructuredRootContext(options, env)) {
+    const context = resolveRootContext(options, { env, requirePluginRoot: true });
+    const report = await collectRootDoctor(context, options);
+    if (options.json) {
+      (io.stdout || process.stdout).write(`${JSON.stringify(report, null, 2)}\n`);
+    } else {
+      (io.stdout || process.stdout).write(`Harness Data root doctor: ${context.host}\n`);
+      for (const check of report.checks) {
+        const label = check.status === "warning" ? "WARN" : (check.ok ? "PASS" : "FAIL");
+        (io.stdout || process.stdout).write(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}\n`);
+      }
+    }
+    if (!report.ok && io === process) process.exitCode = 1;
+    return report;
+  }
   const workspace = findWorkspaceDir(options.dir);
   const report = await collectDoctor(workspace, options);
   if (options.json) {
-    console.log(JSON.stringify(report, null, 2));
+    (io.stdout || process.stdout).write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    console.log(`Harness Data runtime doctor: ${report.workspace}`);
+    (io.stdout || process.stdout).write(`Harness Data runtime doctor: ${report.workspace}\n`);
     for (const check of report.checks) {
       const label = check.status === "warning" ? "WARN" : (check.ok ? "PASS" : "FAIL");
-      console.log(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}`);
+      (io.stdout || process.stdout).write(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}\n`);
     }
   }
-  if (report.checks.some((check) => !check.ok)) process.exitCode = 1;
+  if (report.checks.some((check) => !check.ok) && io === process) process.exitCode = 1;
   return report;
+}
+
+function isDirectory(filePath) {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function canAccess(filePath, mode) {
+  try {
+    fs.accessSync(filePath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canAccessExistingParent(filePath, mode) {
+  let current = path.resolve(filePath || ".");
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+  return canAccess(current, mode);
+}
+
+function fileSha256(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function platformKeyForDoctor() {
+  if (process.platform === "darwin") return `darwin-${process.arch === "x64" ? "amd64" : process.arch}`;
+  if (process.platform === "win32") return `windows-${process.arch === "x64" ? "amd64" : process.arch}`;
+  return `linux-${process.arch === "x64" ? "amd64" : process.arch}`;
+}
+
+function discoverPluginVersion(pluginRoot) {
+  for (const candidate of [
+    path.join(pluginRoot || "", ".codex-plugin", "plugin.json"),
+    path.join(pluginRoot || "", "agents", "codex", ".codex-plugin", "plugin.json"),
+    path.join(pluginRoot || "", "agents", "workbuddy", ".codebuddy-plugin", "plugin.json"),
+  ]) {
+    try {
+      const value = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (value?.version) return String(value.version);
+    } catch {
+      // try the next known host manifest
+    }
+  }
+  return "";
+}
+
+function discoverResourceVersion(pluginRoot) {
+  for (const candidate of [
+    path.join(pluginRoot || "", ".harness", "index", "wikis-runtime-index.json"),
+    path.join(pluginRoot || "", ".harness", "index", "wikis-index.json"),
+  ]) {
+    try {
+      const value = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      const version = value?.meta?.resourceVersion || value?.meta?.contentVersion || value?.meta?.version;
+      if (version) return String(version);
+    } catch {
+      // optional resource metadata
+    }
+  }
+  return "";
 }

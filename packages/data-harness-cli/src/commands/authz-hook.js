@@ -3,7 +3,8 @@ import { parseFlags } from "../lib/flags.js";
 import { printCompactJSON } from "../lib/json-out.js";
 import { run, runAdapterEnvelope, toGoEnvelopeJSON, toGoHookJSON } from "../lib/authz/hook.js";
 
-export async function runAuthzHook(root, args, io = process) {
+export async function runAuthzHook(root, args, io = process, context = null) {
+  const rootOrContext = context || root;
   let parsed;
   try {
     parsed = parseFlags(args, {
@@ -25,14 +26,14 @@ export async function runAuthzHook(root, args, io = process) {
     if (agent.trim().toLowerCase() !== "workbuddy") {
       throw new ExitError("adapter-envelope format requires --agent workbuddy", { code: 2 });
     }
-    const envelope = runAdapterEnvelope(root, agent, input);
+    const envelope = runAdapterEnvelope(rootOrContext, agent, input);
     printCompactJSON(toGoEnvelopeJSON(envelope), io.stdout);
     return;
   }
   if (format !== "hook") {
     throw new ExitError(`unsupported authz-hook format ${JSON.stringify(format)}`, { code: 2 });
   }
-  const { ok, output } = run(root, agent, input);
+  const { ok, output } = run(rootOrContext, agent, input);
   if (ok) {
     printCompactJSON(toGoHookJSON(output), io.stdout);
     return;

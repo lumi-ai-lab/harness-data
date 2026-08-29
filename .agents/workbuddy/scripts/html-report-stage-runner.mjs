@@ -147,8 +147,9 @@ function sessionStorageKey(raw) {
   return createHash("sha256").update(`workbuddy:${String(raw || "")}`).digest("hex");
 }
 
-export function htmlReportSessionDir(projectRoot, sessionId) {
-  return join(resolve(projectRoot), ".harness", "state", "html-report", sessionStorageKey(sessionId));
+export function htmlReportSessionDir(projectRoot, sessionId, stateRoot = process.env.HARNESS_STATE_ROOT || "") {
+  const base = stateRoot ? resolve(stateRoot) : join(resolve(projectRoot), ".harness", "state");
+  return join(base, "html-report", sessionStorageKey(sessionId));
 }
 
 function findHarnessRoot(start = process.cwd()) {

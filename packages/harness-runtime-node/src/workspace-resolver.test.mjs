@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findWorkspaceRoot, isHarnessWorkspaceRoot } from "./workspace-resolver.mjs";
+import { findWorkspaceRoot, isHarnessWorkspaceRoot, resolveWorkspaceRoot } from "./workspace-resolver.mjs";
 
 async function makeHarness(t) {
   const root = await mkdtemp(join(tmpdir(), "harness-ws-"));
@@ -43,4 +44,33 @@ test("PWD locates the workspace when start is omitted", async (t) => {
   const root = await makeHarness(t);
   const found = findWorkspaceRoot(undefined, { PWD: root }, { parentCwd: false });
   assert.equal(found, root);
+});
+
+test("structured Root Context takes precedence over plugin-cache cwd", async (t) => {
+  const workspace = await makeHarness(t);
+  const plugin = await mkdtemp(join(tmpdir(), "plugin-cache-"));
+  const data = await mkdtemp(join(tmpdir(), "harness-data-"));
+  t.after(async () => {
+    await rm(plugin, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  });
+  const found = findWorkspaceRoot(plugin, {
+    HARNESS_PLUGIN_ROOT: plugin,
+    HARNESS_DATA_ROOT: data,
+    HARNESS_WORKSPACE_ROOT: workspace,
+    PWD: plugin,
+  }, { parentCwd: false });
+  assert.equal(found, realpathSync(workspace));
+});
+
+test("structured resolution fails closed without a workspace", async (t) => {
+  const plugin = await mkdtemp(join(tmpdir(), "plugin-cache-"));
+  const data = await mkdtemp(join(tmpdir(), "harness-data-"));
+  t.after(async () => {
+    await rm(plugin, { recursive: true, force: true });
+    await rm(data, { recursive: true, force: true });
+  });
+  const env = { HARNESS_PLUGIN_ROOT: plugin, HARNESS_DATA_ROOT: data };
+  assert.throws(() => resolveWorkspaceRoot({ env }), /workspaceRoot is required/);
+  assert.equal(resolveWorkspaceRoot({ env, failClosed: true }), "");
 });

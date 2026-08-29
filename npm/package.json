@@ -4,7 +4,8 @@
   "description": "Installer and updater for Harness Data",
   "type": "module",
   "bin": {
-    "harness-data": "bin/harness-data.js"
+    "harness-data": "bin/harness-data.js",
+    "qdm-harness": "bin/harness-data.js"
   },
   "files": [
     "bin",

@@ -1,21 +1,63 @@
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { loadConfig, newPathResolver } from "../harness.js";
+import { contextFromHookPayload, RootContextError } from "../root-context.js";
 import { diagnosticsDir, load as loadState, MODE_FREE, MODE_MULTI, MODE_REPORT, MODE_SINGLE, safeSessionId, save as saveState } from "../sessionstate.js";
 import { buildWithPlan } from "./build.js";
 
 const WORKBUDDY_SESSION_PREFIX = "workbuddy:";
 
-export function runClaudeHook(root, input) {
+export function runClaudeHook(root, input, context = null, options = {}) {
   const payload = parsePromptPayload(input);
   if (!payload || !payload.prompt) return { ok: false, output: null };
-  return runPromptHook(root, payload.prompt, hookSessionID(payload));
+  let effectiveContext = context;
+  try {
+    effectiveContext = contextFromHookPayload(payload, {
+      root,
+      env: options.env || process.env,
+      baseContext: context,
+    }) || effectiveContext;
+  } catch (error) {
+    if (error instanceof RootContextError) {
+      return {
+        ok: true,
+        output: workspaceRequiredOutput(`${error.code}: ${error.message}`),
+      };
+    }
+    throw error;
+  }
+  const sessionID = hookSessionID(payload);
+  if (isOnDemandContext(effectiveContext, payload.prompt, sessionID, root)) return { ok: false, output: null };
+  if (effectiveContext && (!effectiveContext.workspaceRoot || effectiveContext.capabilities?.canWriteWorkspace === false)) {
+    return {
+      ok: true,
+      output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: explicit context/report operations require workspaceRoot; read-only context is still available."),
+    };
+  }
+  return runPromptHook(root, payload.prompt, sessionID, effectiveContext);
 }
 
-export function runWorkBuddyHook(root, input) {
+export function runWorkBuddyHook(root, input, context = null, options = {}) {
   const payload = parsePromptPayload(input);
   if (!payload || !String(payload.prompt || "").trim()) return { ok: false, output: null };
+  let effectiveContext = context;
+  try {
+    effectiveContext = contextFromHookPayload(payload, {
+      root,
+      env: options.env || process.env,
+      baseContext: context,
+    }) || effectiveContext;
+  } catch (error) {
+    if (error instanceof RootContextError) {
+      return {
+        ok: true,
+        output: workBuddySafetyOutput(`${error.code}: ${error.message}`),
+      };
+    }
+    throw error;
+  }
   const sessionID = String(payload.session_id || "").trim();
   if (!sessionID) {
     return {
@@ -25,9 +67,18 @@ export function runWorkBuddyHook(root, input) {
       ),
     };
   }
+  if (isOnDemandContext(effectiveContext, payload.prompt, WORKBUDDY_SESSION_PREFIX + sessionID, root)) {
+    return { ok: false, output: null };
+  }
+  if (effectiveContext && (!effectiveContext.workspaceRoot || effectiveContext.capabilities?.canWriteWorkspace === false)) {
+    return {
+      ok: true,
+      output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: explicit context/report operations require workspaceRoot; read-only context is still available."),
+    };
+  }
   let cfg;
   try {
-    cfg = loadConfig(root);
+    cfg = loadConfig(effectiveContext || root);
   } catch {
     return {
       ok: true,
@@ -38,7 +89,7 @@ export function runWorkBuddyHook(root, input) {
   }
   let result;
   try {
-    result = runPromptHook(root, payload.prompt, WORKBUDDY_SESSION_PREFIX + sessionID);
+    result = runPromptHook(root, payload.prompt, WORKBUDDY_SESSION_PREFIX + sessionID, effectiveContext);
   } catch {
     return {
       ok: true,
@@ -70,14 +121,24 @@ function workBuddySafetyOutput(message) {
   };
 }
 
-function runPromptHook(root, prompt, sessionID) {
-  const resolver = newPathResolver(root);
-  const tc = buildTimeContext(prompt, resolver);
-  const { response, plan } = buildWithPlan(root, prompt);
+function workspaceRequiredOutput(message) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: message,
+    },
+  };
+}
+
+function runPromptHook(root, prompt, sessionID, context = null) {
+  const rootOrContext = context || root;
+  const resolver = newPathResolver(rootOrContext);
+  const tc = buildTimeContext(prompt, resolver, !context);
+  const { response, plan } = buildWithPlan(rootOrContext, prompt);
   const additionalContext = buildWikiAdditionalContext(tc, response, plan);
-  writeWikiPlanState(root, sessionID, prompt, plan);
-  if (process.env.QDM_HARNESS_DIAG === "1") {
-    recordDiagnostic(root, sessionID, prompt, additionalContext, tc, response);
+  writeWikiPlanState(rootOrContext, sessionID, prompt, plan, context);
+  if (process.env.QDM_HARNESS_DIAG === "1" && (!context || context.capabilities?.hasStableSessionId)) {
+    recordDiagnostic(rootOrContext, sessionID, prompt, additionalContext, tc, response);
   }
   return {
     ok: true,
@@ -130,7 +191,7 @@ function parsePromptPayload(input) {
   }
 }
 
-function buildTimeContext(prompt, resolver) {
+function buildTimeContext(prompt, resolver, includePrompt = true) {
   let current;
   const currentDate = process.env.QDM_HARNESS_CURRENT_DATE || "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(currentDate)) current = currentDate;
@@ -144,12 +205,13 @@ function buildTimeContext(prompt, resolver) {
   } catch {
     // keep default
   }
-  return {
+  const context = {
     current_date: current,
     timezone,
     time_policy: `Use ${resolver.resolveRel(timePolicy)} to infer --date, --week, or --month. Do not use date ranges.`,
-    prompt,
   };
+  if (includePrompt) context.prompt = prompt;
+  return context;
 }
 
 function formatDate(d) {
@@ -164,10 +226,16 @@ function hookSessionID(payload) {
   return process.env.CLAUDE_SESSION_ID || "unknown";
 }
 
-function writeWikiPlanState(root, sessionID, prompt, plan) {
+function writeWikiPlanState(root, sessionID, prompt, plan, context = null) {
+  if (context && (!context.capabilities?.hasStableSessionId || !context.stateRoot)) return;
   const state = loadState(root, sessionID);
   state.mode = plan.mode;
-  state.prompt = prompt;
+  if (context) {
+    delete state.prompt;
+    state.prompt_sha256 = createHash("sha256").update(prompt).digest("hex");
+  } else {
+    state.prompt = prompt;
+  }
   state.started_at = new Date().toISOString();
   state.playbook_candidates = plan.candidates || [];
   state.selected_playbook = "";
@@ -211,4 +279,37 @@ function recordDiagnostic(root, sessionID, prompt, context, tc, response) {
   const dir = diagnosticsDir(root);
   mkdirSync(dir, { recursive: true });
   appendFileSync(path.join(dir, `${safeSessionId(sessionID)}.jsonl`), `${JSON.stringify(event)}\n`);
+}
+
+/**
+ * Structured plugin hooks default to on-demand context. Legacy string-root
+ * callers retain the historical auto-context behavior during migration.
+ */
+function isOnDemandContext(context, prompt, sessionID, root) {
+  if (!context) return false;
+  const mode = String(process.env.QDM_HARNESS_HOOK_MODE || "on-demand").trim().toLowerCase();
+  if (mode === "auto-context") return false;
+  if (isExplicitContextPrompt(prompt)) return false;
+  if (isContinuationPrompt(prompt)) {
+    try {
+      const prior = loadState(context || root, sessionID);
+      if (prior?.mode) return false;
+    } catch {
+      // If state cannot be read, fail closed and do not inject context.
+    }
+  }
+  return true;
+}
+
+export function isExplicitContextPrompt(prompt) {
+  const text = String(prompt || "").trim();
+  if (!text) return false;
+  if (/<skill\b[^>]*name\s*=\s*["'](?:qdm-harness|html-report)["']/i.test(text)) return true;
+  if (/(?:^|[\s/])skill\s*:\s*(?:qdm-harness|html-report)\b/i.test(text)) return true;
+  if (/\b(?:qdm-harness|html-report)\b/i.test(text)) return true;
+  return text.includes("报告") && /生成|做|制作|输出|写|创建|来一份|周例会|经营分析|盈利情况|销售情况|分析报告/.test(text);
+}
+
+export function isContinuationPrompt(prompt) {
+  return /继续|确认|已保存|保存好了|保存完|下一步|往下|推进|开始生成|开始取数|\badvance\b/i.test(String(prompt || ""));
 }

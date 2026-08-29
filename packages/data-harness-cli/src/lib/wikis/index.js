@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { loadPathsConfig, newPathResolverWithPaths } from "../harness.js";
+import { loadPathsConfig, newPathResolverWithPaths, normalizeResolverOwners } from "../harness.js";
 import { runAllChecks, runCheck } from "./checks.js";
 import { KIND_PLAYBOOK, KIND_SPEC, SPEC_TYPE_METRIC } from "./paths.js";
 import { loadCorpus } from "./parse.js";
@@ -10,18 +10,20 @@ import { loadTemplateSelectionPolicy, validateTemplateSelectionPolicy } from "./
 export const INDEX_REL = ".harness/index/wikis-index.json";
 export const RUNTIME_INDEX_REL = ".harness/index/wikis-runtime-index.json";
 
-export function loadIndex(root) {
-  const data = readFileSync(path.join(root, INDEX_REL), "utf8");
+export function loadIndex(rootOrContext) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
+  const data = readFileSync(path.join(resourceRoot, INDEX_REL), "utf8");
   return JSON.parse(data);
 }
 
-export function loadRuntimeIndex(root) {
+export function loadRuntimeIndex(rootOrContext) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   try {
-    const data = readFileSync(path.join(root, RUNTIME_INDEX_REL), "utf8");
+    const data = readFileSync(path.join(resourceRoot, RUNTIME_INDEX_REL), "utf8");
     return JSON.parse(data);
   } catch (error) {
     if (error && error.code === "ENOENT") {
-      return buildRuntimeIndex(loadIndex(root));
+      return buildRuntimeIndex(loadIndex(rootOrContext));
     }
     throw error;
   }
@@ -71,7 +73,8 @@ export class CheckFailedError extends Error {
   }
 }
 
-export function buildIndex(root, skipChecks = false) {
+export function buildIndex(rootOrContext, skipChecks = false) {
+  const root = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!skipChecks) {
     const results = runAllChecks(root, { maxErrors: 500 });
     const total = results.reduce((sum, result) => sum + result.totalErrors, 0);
@@ -90,7 +93,10 @@ export function buildIndex(root, skipChecks = false) {
     meta: {
       version: 1,
       generatedAt: new Date().toISOString(),
-      root,
+      resourceId: "qdm-harness-wiki",
+      // Kept as a relative compatibility marker; never persist the build
+      // machine's absolute resource root in a relocatable index.
+      root: ".",
       checksSkipped: skipChecks,
       paths: indexPaths(root, cfg),
     },
@@ -99,8 +105,8 @@ export function buildIndex(root, skipChecks = false) {
   };
   const runtime = buildRuntimeIndex(idx);
   runtime.templateSelection = [...(templatePolicy.templates || [])];
-  writeJSONAtomic(root, INDEX_REL, idx);
-  writeJSONAtomic(root, RUNTIME_INDEX_REL, runtime);
+  writeJSONAtomic(rootOrContext, INDEX_REL, idx);
+  writeJSONAtomic(rootOrContext, RUNTIME_INDEX_REL, runtime);
   return {
     path: INDEX_REL,
     runtimePath: RUNTIME_INDEX_REL,
@@ -201,8 +207,9 @@ function recallValues(doc) {
   return out;
 }
 
-function writeJSONAtomic(root, rel, value) {
-  const full = path.join(root, rel);
+function writeJSONAtomic(rootOrContext, rel, value) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
+  const full = path.join(resourceRoot, rel);
   mkdirSync(path.dirname(full), { recursive: true });
   const data = `${JSON.stringify(value, null, 2)}\n`;
   const tmp = path.join(path.dirname(full), `${path.basename(rel)}.tmp.${process.pid}`);

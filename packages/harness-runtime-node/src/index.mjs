@@ -45,4 +45,17 @@ export {
   bindCliScriptPath,
   runCli as runOpenMetricCliUiCli,
 } from "./open-metric-cli-ui.mjs";
-export { findWorkspaceRoot, isHarnessWorkspaceRoot } from "./workspace-resolver.mjs";
+export { findWorkspaceRoot, resolveWorkspaceRoot, isHarnessWorkspaceRoot } from "./workspace-resolver.mjs";
+export {
+  ROOT_CONTEXT_SCHEMA_VERSION,
+  ROOT_CONTEXT_ERROR_CODES,
+  RootContextError,
+  parseRootContextArgs,
+  loadRootContextFile,
+  resolveRootContext,
+  contextFromHookPayload,
+  publicRootContext,
+  normalizeRootContext,
+  workspaceIdentity,
+  isPathWithin,
+} from "./root-context.mjs";

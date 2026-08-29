@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -12,6 +12,10 @@ const PLUGIN_ROOT = resolve(SCRIPT_DIR, "..");
 const DEFAULT_TIMEOUT_MS = 8_500;
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const SHELL_TOOL_NAMES = new Set(["Bash", "PowerShell", "execute_command"]);
+const HTML_REPORT_SKILL_PATTERN = /(<skill\s+name=["']html-report["']|\/skill:\s*html-report\b|\bskill:\s*html-report\b)/i;
+const HTML_REPORT_TEXT_PATTERNS = [/html[- ]?report/i, /html\s*报告/i];
+const REPORT_TRIGGERS = ["生成", "做", "制作", "输出", "写", "创建", "出一份", "来一份", "周例会", "经营分析", "盈利情况", "销售情况", "分析报告"];
+const CONTINUATION_TRIGGERS = ["继续", "确认", "已保存", "保存好了", "保存完", "下一步", "往下", "推进", "开始生成", "开始取数", "advance"];
 export const WORKBUDDY_AUTH_MINIMUM_VERSION = "5.3.11";
 export const CODEBUDDY_AUTH_MINIMUM_VERSION = "2.115.0";
 
@@ -436,6 +440,111 @@ export function runCanonicalHook(mode, canonicalPayload, root, env = process.env
   );
 }
 
+export function shouldBypassHtmlReportContext(root, canonicalPayload) {
+  const sessionID = typeof canonicalPayload?.session_id === "string" ? canonicalPayload.session_id.trim() : "";
+  const prompt = typeof canonicalPayload?.prompt === "string" ? canonicalPayload.prompt : "";
+  if (!root || !sessionID || !prompt.trim()) return false;
+  if (isHtmlReportPrompt(prompt)) {
+    rememberHtmlReportSession(root, sessionID);
+    return true;
+  }
+  if (!htmlReportSessionMarked(root, sessionID)) return false;
+  if (isHtmlReportContinuation(prompt)) return true;
+  forgetHtmlReportSession(root, sessionID);
+  return false;
+}
+
+function isHtmlReportPrompt(prompt) {
+  const text = String(prompt || "").trim();
+  if (!text) return false;
+  if (HTML_REPORT_SKILL_PATTERN.test(text) || HTML_REPORT_TEXT_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (!text.includes("报告")) return false;
+  return REPORT_TRIGGERS.some((trigger) => text.includes(trigger));
+}
+
+function isHtmlReportContinuation(prompt) {
+  const text = String(prompt || "").trim().replace(/^[，。,.!！?？；;：:"'“”‘’\s]+|[，。,.!！?？；;：:"'“”‘’\s]+$/g, "").toLowerCase();
+  return Boolean(text) && CONTINUATION_TRIGGERS.some((trigger) => text.includes(trigger));
+}
+
+function rememberHtmlReportSession(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  if (!marker) return;
+  try {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "{}\n", { mode: 0o600 });
+  } catch {
+    // Marker failure must not block the host hook.
+  }
+}
+
+function forgetHtmlReportSession(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  if (!marker) return;
+  try {
+    rmSync(marker, { force: true });
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+function htmlReportSessionMarked(root, sessionID) {
+  const marker = htmlReportSessionMarkerPath(root, sessionID);
+  return Boolean(marker && existsSync(marker));
+}
+
+function htmlReportRunnerEntry(root) {
+  const candidates = [
+    join(root, "agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
+    join(root, ".agents", "workbuddy", "scripts", "html-report-workbuddy.mjs"),
+  ];
+  const candidate = candidates.find((pathname) => existsSync(pathname));
+  if (!candidate) return "";
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return candidate;
+  }
+}
+
+export function autoStartHtmlReport(root, sessionID, prompt, env = process.env) {
+  if (env.QDM_HARNESS_HTML_REPORT_AUTOSTART === "0") return { ok: true, skipped: true };
+  const entry = htmlReportRunnerEntry(root);
+  if (!entry) return { ok: false, error: "html-report WorkBuddy Stage Runner is missing" };
+  const result = spawnSync(process.execPath, [
+    entry,
+    "start",
+    "--session",
+    sessionID,
+    "--root",
+    root,
+    "--phase-a",
+    "ui",
+    "--question",
+    prompt,
+  ], {
+    cwd: root,
+    env: { ...env, CODEBUDDY_PROJECT_DIR: root },
+    encoding: "utf8",
+    timeout: hookTimeout(env),
+    maxBuffer: MAX_BUFFER_BYTES,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.code === "ETIMEDOUT"
+      ? "timed out"
+      : (result.stderr || result.error?.message || "failed").trim();
+    return { ok: false, error: `html-report 自动启动失败：${reason}` };
+  }
+  return { ok: true, message: (result.stdout || "html-report session 已启动").trim() };
+}
+
+function htmlReportSessionMarkerPath(root, sessionID) {
+  if (!root || !sessionID) return "";
+  const digest = createHash("sha256").update(sessionID).digest("hex");
+  return join(root, ".harness", "state", "workbuddy-html-report", `${digest}.json`);
+}
+
 async function readStdin() {
   let data = "";
   process.stdin.setEncoding("utf8");
@@ -481,6 +590,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     // The plugin may be enabled globally; outside a Harness workspace it must
     // not change ordinary WorkBuddy behavior.
     emit({});
+    return;
+  }
+  const htmlReportWasMarked = mode === "context" && htmlReportSessionMarked(root, canonical.session_id);
+  if (mode === "context" && shouldBypassHtmlReportContext(root, canonical)) {
+    const firstTurn = isHtmlReportPrompt(canonical.prompt) && !htmlReportWasMarked;
+    if (firstTurn) {
+      const started = autoStartHtmlReport(root, canonical.session_id, canonical.prompt, env);
+      if (!started.ok) {
+        forgetHtmlReportSession(root, canonical.session_id);
+        emit(safeOutput("context", `${started.error}\n请修复 WorkBuddy html-report runtime 后重试；本轮未执行取数。`));
+        return;
+      }
+      emit(safeOutput("context", `${started.message}\n请在 qdm-metric-cli UI 中配置卡片并点击“保存”；完成后回复“继续”。`));
+      return;
+    }
+    emit(safeOutput("context", "html-report 会话已就绪。请执行当前 WorkBuddy html-report Stage Runner 的 advance，完成后返回阶段摘要；不要读取或猜测模板。"));
     return;
   }
   const output = runCanonicalHook(mode, canonical, root, env, raw);

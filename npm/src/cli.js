@@ -1,10 +1,13 @@
 import { installCommand } from "./commands/install.js";
 import { updateCommand } from "./commands/update.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { pathsCommand } from "./commands/paths.js";
+import { reportCommand } from "./commands/report.js";
+import { setupCommand } from "./commands/setup.js";
 import { versionCommand } from "./commands/version.js";
 import { qwenpawCommand } from "./commands/qwenpaw.js";
 
-const commands = new Set(["install", "update", "doctor", "version", "qwenpaw"]);
+const commands = new Set(["install", "update", "setup", "doctor", "paths", "report", "version", "qwenpaw"]);
 
 function parse(argv) {
   const args = argv.slice(2);
@@ -19,7 +22,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       options[key] = inline ?? args[++i];
@@ -32,15 +35,21 @@ export async function main(argv) {
   const { command, options, unknown } = parse(argv);
   if (command === "install") return installCommand(options);
   if (command === "update") return updateCommand(options);
+  if (command === "setup") return setupCommand(options);
   if (command === "doctor") return doctorCommand(options);
+  if (command === "paths") return pathsCommand(options);
+  if (command === "report") return reportCommand(options);
   if (command === "version") return versionCommand(options);
   if (command === "qwenpaw") return qwenpawCommand(options);
-  console.log(`Usage: harness-data <install|update|doctor|version> [options]
+  console.log(`Usage: harness-data <install|update|setup|doctor|paths|report|version> [options]
 
 Commands:
   install  Install a Harness Data runtime in the current directory
   update   Interactively check and apply runtime, CLI, and wikis updates
-  doctor   Diagnose workspace CLI, config, index, and Agent hooks
+  setup    Configure dataRoot, metric-cli, secret reference, and install manifest
+  doctor   Diagnose runtime or structured Root Context
+  paths    Print structured Root Context roots (use --json for machine output)
+  report   Run the explicit html-report lifecycle for a host session
   version  Print installer, repository, wikis, and manifest versions
   qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
 
@@ -57,6 +66,30 @@ Install options:
   --data-auth                        Use built-in local-test fixture blob (dev/test shortcut)
   --no-auth                          Install without authz (requires password)
   --auth-off-password PASSWORD       Password for --no-auth (default: interactive prompt)
+
+Root Context options (setup/doctor/paths/report):
+  --context-file PATH                Structured Root Context JSON
+  --plugin-root PATH                 Read-only plugin/runtime root
+  --data-root PATH                   Persistent non-secret data root
+  --secret-root PATH                 Secret reference root
+  --workspace-root PATH              Current project root (optional for read-only commands)
+  --state-root PATH                  Explicit state root (default: dataRoot/state)
+  --secret-ref VALUE                 file path or {kind, ...} reference
+  --session-id ID                    Stable host session identifier
+  --metric-cli PATH                  Existing qdm-metric-cli executable for setup
+  --skip-metric-cli                  Record setup without installing metric-cli
+  --download-metric-cli              Download metric-cli from the plugin manifest
+
+Report options:
+  report <start|status|advance|approve|retry|cancel|stop> --session ID
+  --runner PATH                      html-report runner override
+  --phase-a ui|agent                 Phase A mode for report start
+  --question TEXT                    Original report question
+  --task ID                          Card/task id for retry
+  --format text|json                 Runner output format
+
+Compatibility:
+  harness-data <install|update|doctor|version> [options]
 
 Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CONFIG_REL, findRoot, loadConfig, newPathResolver } from "../src/lib/harness.js";
+import { CONFIG_REL, findRoot, loadConfig, newPathResolver, normalizeResolverOwners } from "../src/lib/harness.js";
 import { safeSessionId } from "../src/lib/sessionstate.js";
 import { isAgentHookFormat, rootStart } from "../src/main.js";
 
@@ -92,6 +92,30 @@ test("PathResolver maps logical knowledge paths", () => {
   assert.equal(resolver.resolveRel(".harness/index/spec-index.json"), ".harness/index/spec-index.json");
 });
 
+test("PathResolver keeps legacy string roots and exposes explicit owner roots", () => {
+  const root = writeConfig("paths:\n  spec: wikis/spec\n  routing: wikis/routing\n  playbooks: wikis/playbooks\n  templates: wikis/templates\n");
+  const legacy = newPathResolver(root);
+  assert.equal(legacy.root, root);
+  assert.equal(legacy.resourceRoot, root);
+  assert.equal(legacy.resolveOwned("state", "session.json"), path.join(root, ".harness", "state", "session.json"));
+
+  const base = mkdtempSync(path.join(tmpdir(), "harness-owners-"));
+  const owners = {
+    pluginRoot: root,
+    dataRoot: path.join(base, "data"),
+    workspaceRoot: path.join(base, "workspace"),
+    stateRoot: path.join(base, "data", "state"),
+    secretRoot: path.join(base, "secrets"),
+  };
+  for (const dir of [owners.dataRoot, owners.workspaceRoot, owners.stateRoot, owners.secretRoot]) mkdirSync(dir, { recursive: true });
+  const resolver = newPathResolver({ ...owners, schemaVersion: 1 });
+  assert.equal(resolver.root, root);
+  assert.equal(resolver.resolveOwned("data", "config/settings.json"), path.join(owners.dataRoot, "config", "settings.json"));
+  assert.equal(resolver.resolveOwned("workspace", "analysis/main.md"), path.join(owners.workspaceRoot, "analysis", "main.md"));
+  assert.throws(() => resolver.resolveOwned("workspace", "../outside.txt"), /escapes its root/);
+  assert.deepEqual(normalizeResolverOwners(root).legacy, true);
+});
+
 test("safeSessionId preserves common IDs and hashes unsafe ones", () => {
   for (const id of ["550e8400-e29b-41d4-a716-446655440000", "session_01.example", "unknown"]) {
     assert.equal(safeSessionId(id), id);
@@ -107,7 +131,9 @@ test("safeSessionId preserves common IDs and hashes unsafe ones", () => {
   assert.notEqual(safeSessionId(hashed), hashed);
 });
 
-test("rootStart prefers CODEBUDDY_PROJECT_DIR", () => {
+test("rootStart preserves legacy hosts while preferring explicit host workspace roots", () => {
+  assert.equal(rootStart({ HARNESS_WORKSPACE_ROOT: "/harness/project", CODEX_WORKSPACE_ROOT: "/codex/project" }), "/harness/project");
+  assert.equal(rootStart({ CODEX_WORKSPACE_ROOT: "/codex/project", CODEBUDDY_PROJECT_DIR: "/workbuddy/project" }), "/codex/project");
   assert.equal(rootStart({ CODEBUDDY_PROJECT_DIR: "/workbuddy/project", CLAUDE_PROJECT_DIR: "/claude/project" }), "/workbuddy/project");
   assert.equal(rootStart({ CODEBUDDY_PROJECT_DIR: "", CLAUDE_PROJECT_DIR: "/claude/project" }), "/claude/project");
 });

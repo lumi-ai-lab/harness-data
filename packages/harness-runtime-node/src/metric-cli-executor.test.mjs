@@ -53,3 +53,20 @@ test("single-policy query still uses --payload-json", () => {
   assert.equal("comparisons" in payload, false);
   assert.ok(args.includes("--yoy"));
 });
+
+test("metric auth arguments can carry a file path without exposing the blob", () => {
+  const args = buildMetricExecuteArgs(
+    {
+      metrics: ["saleAmt"],
+      statisticPolicy: "SUMMARY",
+      time: TIME,
+      dimensions: [],
+      filters: {},
+    },
+    { authContext: { mode: "on", blob: "qdm1enc.secret", authArg: "/private/data/auth.blob" } },
+  );
+  const authIndex = args.indexOf("--auth-blob");
+  assert.ok(authIndex >= 0);
+  assert.equal(args[authIndex + 1], "/private/data/auth.blob");
+  assert.equal(args.includes("qdm1enc.secret"), false);
+});

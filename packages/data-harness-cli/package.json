@@ -4,7 +4,8 @@
   "description": "Data Harness CLI for QDM runtime constraint data",
   "type": "module",
   "exports": {
-    ".": "./src/main.js"
+    ".": "./src/main.js",
+    "./root-context": "./src/lib/root-context.js"
   },
   "files": [
     "src"

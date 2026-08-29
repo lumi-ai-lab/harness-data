@@ -43,6 +43,25 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 - 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
 - WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
 
+## 双根 Root Context（v1）
+
+新宿主插件应通过结构化 Root Context 运行，不依赖插件 cache 或当前工作目录猜测：
+
+```bash
+data-harness-cli --context-file /absolute/path/context.json paths --json
+```
+
+Context 至少声明 `pluginRoot`、`dataRoot`，并可声明 `secretRoot`、`workspaceRoot`、
+`stateRoot`、`secretRef` 和 `sessionId`。显式 CLI 参数优先于 context 文件，context
+文件优先于兼容环境变量；校验失败会返回 `QDM_CONTEXT_INVALID` 等稳定错误码。
+
+结构化 hook 默认按需触发：普通 prompt 不注入 QDM wiki，也不创建 durable state；显式
+`qdm-harness`/`html-report` skill 或已有 session 的继续指令才会构建上下文。旧的
+字符串 root 调用仍保留为迁移兼容路径。
+
+详细契约见 [`docs/root-context-v1.md`](docs/root-context-v1.md)，安全边界见
+[`docs/root-context-threat-model.md`](docs/root-context-threat-model.md)。
+
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
 ## QwenPaw（Windows 首期）
@@ -167,6 +186,32 @@ npx @lumi-ai-lab/harness-data update --check --dir ~/harness-data
 ```bash
 npx @lumi-ai-lab/harness-data doctor --dir ~/harness-data
 ```
+
+Codex golden path 可将插件目录与持久数据目录分离。`qdm-harness` 是同一安装器的别名：
+
+```bash
+qdm-harness setup \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --secret-root ~/.config/qdm-harness/secrets \
+  --secret-ref ~/.config/qdm-harness/secrets/codex.blob
+
+qdm-harness paths \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --workspace-root "$PWD" \
+  --json
+
+qdm-harness doctor \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --workspace-root "$PWD" \
+  --json
+```
+
+`setup` 会在 `dataRoot` 下生成 `config/settings.json` 和 `install-manifest.json`，并复用或安装
+`qdm-metric-cli`；它不会创建项目 `.harness`。普通 prompt 的 Codex hook 默认不注入 wiki，
+显式 report 可通过 `qdm-harness report start|status|advance ...` 进入生命周期。
 
 全局安装作为可选方式：
 

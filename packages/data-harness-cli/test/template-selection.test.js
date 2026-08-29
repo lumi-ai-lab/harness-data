@@ -259,6 +259,10 @@ templates:
   );
   buildIndex(root, true);
   const runtime = loadRuntimeIndex(root);
+  const index = JSON.parse(readFileSync(path.join(root, ".harness", "index", "wikis-index.json"), "utf8"));
+  assert.equal(index.meta.root, ".");
+  assert.equal(index.meta.resourceId, "qdm-harness-wiki");
+  assert.equal(path.isAbsolute(index.meta.root), false);
   assert.equal(runtime.templateSelection.length, 1);
   assert.equal(runtime.templateSelection[0].id, "business_report");
   assert.equal(runtime.templateSelection[0].template, "reports/经营综合分析报告/template.md");

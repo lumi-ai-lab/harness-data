@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { loadConfig, newPathResolver } from "../harness.js";
+import { loadConfig, newPathResolver, normalizeResolverOwners } from "../harness.js";
 import { diagnosticsDir, load as loadState, MODE_FREE, safeSessionId, save as saveState } from "../sessionstate.js";
 import { isAllowedTemplateSelectionPath } from "../wikis/template-selection.js";
 
@@ -15,16 +15,22 @@ export const REPORT_CONFIGS = {
   "financial-overview": { report: "company", requiredModules: ["indicators", "tree", "table"] },
 };
 
-export function runClaudeHook(root, input) {
+export function runClaudeHook(root, input, context = null) {
   const payload = parsePayload(input);
   if (!payload || payload.tool_name !== "Bash" || !String(payload.tool_input?.command || "").trim()) {
     return { ok: false, output: null };
   }
   let sessionID = payload.session_id || process.env.CLAUDE_SESSION_ID || "unknown";
-  return runTemplateHook(root, payload.tool_input.command, sessionID);
+  if (context && (!context.workspaceRoot || context.capabilities?.canWriteWorkspace === false) && (isTemplateStageCommand(payload.tool_input.command) || isTemplateInjectionCommand(payload.tool_input.command))) {
+    return {
+      ok: true,
+      output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: template/report operations require workspaceRoot; no project state was written."),
+    };
+  }
+  return runTemplateHook(context || root, payload.tool_input.command, sessionID);
 }
 
-export function runWorkBuddyHook(root, input) {
+export function runWorkBuddyHook(root, input, context = null) {
   const payload = parsePayload(input);
   const command = String(payload?.tool_input?.command || "").trim();
   if (!payload || payload.tool_name !== "Bash" || !command) {
@@ -34,6 +40,12 @@ export function runWorkBuddyHook(root, input) {
   const metricCommand = isQDMMetricCommand(command);
   if (!templateCommand && !metricCommand) return { ok: false, output: null };
   if (metricCommand && !templateCommand) return { ok: false, output: null };
+  if (context && (!context.workspaceRoot || context.capabilities?.canWriteWorkspace === false) && templateCommand) {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput("QDM_WORKSPACE_REQUIRED: template/report operations require workspaceRoot; no project state was written."),
+    };
+  }
 
   const sessionID = String(payload.session_id || "").trim();
   if (!sessionID) {
@@ -55,7 +67,7 @@ export function runWorkBuddyHook(root, input) {
     };
   }
   try {
-    const result = runTemplateHook(root, command, WORKBUDDY_SESSION_PREFIX + sessionID);
+    const result = runTemplateHook(context || root, command, WORKBUDDY_SESSION_PREFIX + sessionID);
     if (!result.ok) return { ok: false, output: null };
     return {
       ok: true,
@@ -78,6 +90,15 @@ function workBuddySafetyOutput(message) {
   return {
     continue: true,
     systemMessage: message,
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: message,
+    },
+  };
+}
+
+function workspaceRequiredOutput(message) {
+  return {
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       additionalContext: message,
@@ -461,7 +482,8 @@ function recordTemplateDiagnostic(root, sessionID, session, reportState, outcome
   try {
     resolver = newPathResolver(root);
   } catch {
-    resolver = { resolve: (rel) => path.join(root, rel) };
+    const resourceRoot = normalizeResolverOwners(root).resourceRoot;
+    resolver = { resolve: (rel) => path.join(resourceRoot, rel) };
   }
   const event = {
     ts: new Date().toISOString(),
@@ -477,7 +499,7 @@ function recordTemplateDiagnostic(root, sessionID, session, reportState, outcome
     outcome,
   };
   try {
-    const dir = diagnosticsDir(root);
+  const dir = diagnosticsDir(root);
     mkdirSync(dir, { recursive: true });
     appendFileSync(path.join(dir, `${safeSessionId(sessionID)}.jsonl`), `${JSON.stringify(event)}\n`);
   } catch {
