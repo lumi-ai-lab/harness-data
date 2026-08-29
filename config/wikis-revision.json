@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/lumi-ai-lab/harness-data-wikis",
-  "revision": "95a19b5c4e7e2999862e7d55f52b04a2ef869d23",
+  "revision": "b76aef3cea6d6d99a8411f2afe5bc41929aed8f5",
   "checkedAt": "2026-08-29",
   "checks": [
     "check-all"
