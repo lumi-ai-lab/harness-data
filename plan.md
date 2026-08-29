@@ -989,8 +989,12 @@ doctor --json 至少输出：
 - 本轮补充验证：宿主 artifact/build-manifest/verifier 矩阵为 8 pass；Pi artifact 测试为 5 pass，并与宿主矩阵并发运行通过；Codex runtime golden-path 为 15 pass，MCP self-test 为 10/10；新增 CI workflow 与 release workflow 的 YAML 解析、相关 Node 语法检查及 `git diff --check` 均通过。
 - 本轮新增证据：`config/wikis-revision.json` 固定 Wiki commit `95a19b5c4e7e2999862e7d55f52b04a2ef869d23`，`wikis check-all` 六项检查通过；relocation smoke 在随机目录完成 context/show/recall；runtime ZIP 构建、自检和 npm tarball 审计通过；旧 runtime 支持显式路径/环境变量发现并只给出 migrate 提示；迁移成功/失败均验证旧 hook 可继续运行，并覆盖三平台命名契约 fixture。
 - 最后本地复核（2026-08-29）：七宿主 artifact 可在隔离输出目录完成 build/verify/self-test，Pi 的独立输出目录回归通过；当前没有新增失败或未归因回归。
-- 当前仍未完成：当前工作树尚未提交，因而尚无 host-artifact CI 或 release workflow 的远端运行证据；此外仍缺真实 Codex UI reload、真实 macOS/Linux/Windows 运行，以及旧报告/session 在真实旧 runtime 上的现场验证。
-- 下一步按依赖顺序：审核并提交当前改动以触发 host-artifact CI/release validation，归档远端运行证据；随后补真实跨平台与旧 runtime 现场验证，完成 Phase 4 后再进入多宿主 Phase 5。
+- 远端 PR 验证（2026-08-29）：`harness-data#74` 的 Verify Host Artifacts run `33266302354` 全部通过；七宿主 artifact build/verify/self-test 通过，Linux、macOS、Windows migration job 均通过并上传 TAP 证据。
+- 三平台迁移证据：Linux X64 为 19 pass；macOS ARM64 为 19 pass；Windows X64 为 16 pass、3 项目录 symlink 能力测试明确 skip、0 fail。三个 evidence artifact 均绑定提交 `d44b64799d78ba4d548673fa20f15f2ca042c1ab`。
+- 发布相关远端证据：Wikis Compatibility run `33266302360` 通过；Publish CLI Container run `33266302347` 的 multi-arch build 通过。期间修复了不可达的 Wikis gitlink、私有子模块 checkout token 和 `.dockerignore` 排除 CLI 入口的问题。
+- Wikis 修复已基于最新远端 master 重放为 revision `b76aef3cea6d6d99a8411f2afe5bc41929aed8f5`，并提交到 `harness-data-wikis#14`；主仓 gitlink 与 `config/wikis-revision.json` 已同步。
+- 当前仍未完成：P3-EXIT-04 仍需合并后由 master/release 流程证明正式发布内容与 installer 解包一致；仍缺真实旧 `0.0.53` runtime 样本的现场迁移，以及真实 Codex UI reload/new-session 验收。
+- 下一步按依赖顺序：先合并 `harness-data-wikis#14`，再评审合并 `harness-data#74`；归档 master/release validation 证据后，用真实旧 runtime 样本完成 P4-12，再进入 Phase 5 的宿主实机验证。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1086,7 +1090,7 @@ doctor --json 至少输出：
 
 - [x] P3-EXIT-01：artifact 复制到随机目录后仍可完成 context/show/recall。
 - [x] P3-EXIT-02：资源 hash/version 不匹配时 fail-closed 或给出明确重装提示。
-- [ ] P3-EXIT-03：每个宿主 artifact 自包含，release 产物不含 auth、state、`.git` 和绝对路径。
+- [x] P3-EXIT-03：每个宿主 artifact 自包含，release 产物不含 auth、state、`.git` 和绝对路径；远端证据为 PR `#74` / run `33266302354`。
 - [ ] P3-EXIT-04：CI 发布内容与安装器实际解包内容一致。
 
 最小验证：`node scripts/verify-pinned-wikis.mjs`、`./bin/data-harness-cli wikis check-all`、`./bin/data-harness-cli wikis build-index`、`node scripts/verify-wikis-relocation.mjs`；运行 `scripts/build-runtime-artifact.sh`；Pi 执行 `npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`；npm 执行 `npm run verify:artifact`。
@@ -1104,8 +1108,9 @@ doctor --json 至少输出：
 - [x] P4-07（状态）将旧 `.harness/state` 映射到 workspace identity 对应的 stateRoot，并迁移 html-report session/job。
 - [x] P4-08（回滚）使用 copy + 校验 + pointer 实现迁移，保留旧数据和旧 hook 可回滚路径。
 - [x] P4-09（诊断）生成兼容报告和非敏感 diagnostics，doctor 通过后才允许切换。
-- [ ] P4-10（跨平台）为 macOS、Linux、Windows 各准备至少一条迁移 fixture/验证路径。
+- [x] P4-10（跨平台）为 macOS、Linux、Windows 各准备至少一条迁移 fixture/验证路径；远端三平台 runner 证据为 run `33266302354`。
 - [x] P4-11（幂等）验证成功迁移、坏版本、权限失败和重复 migrate 的行为。
+- [ ] P4-12（现场）使用至少一份真实旧 `0.0.53` runtime 验证 business-report/html-report session 可重新打开、继续运行，且旧 hook/runtime 保持可回滚。
 
 退出条件：
 
@@ -1199,4 +1204,4 @@ doctor --json 至少输出：
 - npm artifact：`cd npm && npm run verify:artifact`。
 - 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行；真实 CI 发布仍待运行周期证据。
 
-以上命令只证明对应实现已通过本地验证；P3-EXIT-03/04、P4-10 以及 Phase 5/6 仍需独立宿主、真实平台和 CI 证据，不能用模拟 fixture 替代。
+以上命令只证明对应实现已通过本地验证。P3-EXIT-03 与 P4-10 已补远端 CI/真实平台 runner 证据；P3-EXIT-04、P4-12 以及 Phase 5/6 仍需正式发布、真实旧 runtime 或独立宿主证据，不能用模拟 fixture 替代。
