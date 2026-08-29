@@ -42,7 +42,7 @@ export function trustedMetricCli(projectRoot, environment = process.env) {
   return { path, config };
 }
 
-export function metricAuthContext({ projectRoot, sessionId, environment = process.env }) {
+export function metricAuthContext({ projectRoot, sessionId, environment = process.env, secretRef = null }) {
   const { path, config } = trustedMetricCli(projectRoot, environment);
   if (config.mode !== "on") return { mode: "off", metricCli: path };
   const resolved = resolveAuthBlob({
@@ -50,12 +50,14 @@ export function metricAuthContext({ projectRoot, sessionId, environment = proces
     config,
     sessionId,
     env: environment,
+    secretRef,
   });
   if (!resolved.ok) throw new Error(`METRIC_AUTH_CONTEXT_REQUIRED: ${resolved.error}`);
   return {
     mode: "on",
     metricCli: path,
     blob: resolved.blob,
+    authArg: process.platform === "win32" || !resolved.sourcePath ? resolved.blob : resolved.sourcePath,
     userId: resolved.userId,
     source: resolved.source,
   };
@@ -67,7 +69,7 @@ function appendCommonExecuteArgs(args, normalized, { timeoutMs, authContext } = 
     args.push("--timeout", `${Math.max(1, Math.floor(timeoutMs))}ms`);
   }
   if (authContext?.mode === "on") {
-    args.push("--data-auth", "--auth-blob", authContext.blob);
+    args.push("--data-auth", "--auth-blob", authContext.authArg || authContext.blob);
   }
   return args;
 }
@@ -116,9 +118,9 @@ export function buildMetricExecuteArgs(query, { timeoutMs, authContext } = {}) {
 
 export function runMetricQuery(
   query,
-  { projectRoot, sessionId, timeoutMs = 600_000, environment = process.env, spawn = spawnSync } = {}
+  { projectRoot, sessionId, timeoutMs = 600_000, environment = process.env, secretRef = null, spawn = spawnSync } = {}
 ) {
-  const authContext = metricAuthContext({ projectRoot, sessionId, environment });
+  const authContext = metricAuthContext({ projectRoot, sessionId, environment, secretRef });
   const args = buildMetricExecuteArgs(query, { timeoutMs, authContext });
   const childEnv = { ...environment };
   for (const key of AUTH_SOURCE_ENV) delete childEnv[key];
@@ -159,9 +161,9 @@ export function runMetricQuery(
  */
 export function runMetricQueryAsync(
   query,
-  { projectRoot, sessionId, timeoutMs = 600_000, environment = process.env } = {}
+  { projectRoot, sessionId, timeoutMs = 600_000, environment = process.env, secretRef = null } = {}
 ) {
-  const authContext = metricAuthContext({ projectRoot, sessionId, environment });
+  const authContext = metricAuthContext({ projectRoot, sessionId, environment, secretRef });
   const args = buildMetricExecuteArgs(query, { timeoutMs, authContext });
   const childEnv = { ...environment };
   for (const key of AUTH_SOURCE_ENV) delete childEnv[key];

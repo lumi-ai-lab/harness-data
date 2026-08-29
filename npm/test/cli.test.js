@@ -103,7 +103,7 @@ function reusableToolManifest(key) {
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+  assert.match(result.stdout, /harness-data <install\|update\|setup\|doctor\|paths\|report\|migrate\|version>/);
   assert.doesNotMatch(result.stdout, /\bauth\b.*CAS/);
   assert.match(result.stdout, /--auth-blob/);
   assert.match(result.stdout, /--auth-user-id/);
@@ -245,7 +245,7 @@ test("detects git protocol from remote URLs", () => {
 test("private qdm cli tools point at their own repositories", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
-  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli"]);
+  assert.deepEqual([...byName.keys()], ["qdm-metric-cli"]);
   assert.equal(byName.get("qdm-metric-cli").repo, "pengmide/qdm-metric-cli");
   assert.equal(byName.get("qdm-metric-cli").private, true);
   assert.equal(byName.has("qdm-cmr-cli"), false);
@@ -275,11 +275,11 @@ test("local wikis source requires root index", () => {
 test("tool manifest is a latest-release install catalog", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   assert.equal(manifest.schemaVersion, 2);
-  const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "data-harness-cli-v1.2.3-darwin-arm64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "data-harness-cli-v1.2.3-windows-arm64.zip");
+  const tool = manifest.tools.find((item) => item.name === "qdm-metric-cli");
+  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "qdm-metric-cli-v1.2.3-linux-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "qdm-metric-cli-v1.2.3-darwin-arm64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "qdm-metric-cli-v1.2.3-windows-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "qdm-metric-cli-v1.2.3-windows-arm64.zip");
   for (const item of manifest.tools) {
     assert.equal(item.platforms["windows-arm64"]?.archive, "zip", `${item.name} missing Windows ARM64 asset`);
     assert.equal(item.platforms["linux-amd64"]?.archive, "zip", `${item.name} missing Linux ZIP asset`);
@@ -1524,6 +1524,7 @@ test("runtime bundle tar failure does not replace existing runtime files", { ski
     ["agents/old.txt", "old agents\n"],
     ["bootstrap/cli-manifest.json", "{\"old\":true}\n"],
     ["config/qdm-cli-paths.env", "old config\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1589,6 +1590,7 @@ test("runtime bundle replace failure restores previous runtime files", { skip: p
     ["agents/old.txt", "old agents\n"],
     ["bootstrap/cli-manifest.json", "{\"old\":true}\n"],
     ["config/qdm-cli-paths.env", "old config\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1601,10 +1603,11 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
-printf 'new agents\\n' > "$dir/agents/new.txt"
-printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
-printf 'new config\\n' > "$dir/config/qdm-cli-paths.env"
+  mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config" "$dir/plugins/qdm-html-report"
+  printf 'new agents\\n' > "$dir/agents/new.txt"
+  printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
+  printf 'new config\\n' > "$dir/config/qdm-cli-paths.env"
+  printf 'new plugin\\n' > "$dir/plugins/qdm-html-report/fixture.txt"
 exit 0
 `, { mode: 0o755 });
 
@@ -1652,6 +1655,8 @@ exit 0
   assert.equal(fs.existsSync(path.join(workspace, "agents", "new.txt")), false);
   assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), "{\"old\":true}\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old config\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "plugins", "old.txt"), "utf8"), "old plugin\n");
+  assert.equal(fs.existsSync(path.join(workspace, "plugins", "qdm-html-report", "fixture.txt")), false);
 });
 
 test("runtime bundle update preserves local config while refreshing examples", { skip: process.platform === "win32" }, async () => {
@@ -1665,6 +1670,7 @@ test("runtime bundle update preserves local config while refreshing examples", {
     ["config/harness-config.yaml", "old harness config\n"],
     ["config/qdm-cli-paths.env", "old cli paths\n"],
     ["config/qdm-cli-paths.env.example", "old example\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1677,12 +1683,13 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
+mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config" "$dir/plugins/qdm-html-report"
 printf 'new agents\\n' > "$dir/agents/new.txt"
 printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
 printf 'new harness example\\n' > "$dir/config/harness-config.yaml.example"
 printf 'new cli paths example\\n' > "$dir/config/qdm-cli-paths.env.example"
 printf 'should not replace local cli paths\\n' > "$dir/config/qdm-cli-paths.env"
+printf 'new plugin\\n' > "$dir/plugins/qdm-html-report/fixture.txt"
 exit 0
 `, { mode: 0o755 });
 
@@ -1722,6 +1729,8 @@ exit 0
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old cli paths\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml.example"), "utf8"), "new harness example\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env.example"), "utf8"), "new cli paths example\n");
+  assert.equal(fs.existsSync(path.join(workspace, "plugins", "old.txt")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "plugins", "qdm-html-report", "fixture.txt"), "utf8"), "new plugin\n");
 });
 
 test("release asset download uses browser URL without token", async () => {

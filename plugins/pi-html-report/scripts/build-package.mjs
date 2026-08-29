@@ -1,13 +1,31 @@
 #!/usr/bin/env node
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { writePluginManifest } from "../../../scripts/build-plugin-manifest.mjs";
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(pluginRoot));
-const dist = join(pluginRoot, "dist");
+const dist = resolveDist();
 const piRoot = join(repoRoot, ".agents", "pi");
-const localExtensionRoot = process.env.PI_HTML_REPORT_LOCAL_EXTENSION_ROOT?.trim() || "";
+const pluginPackage = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8"));
+
+function resolveDist() {
+  const configured = String(process.env.PI_HTML_REPORT_OUTPUT_DIR || "").trim();
+  if (!configured) return join(pluginRoot, "dist");
+  if (!isAbsolute(configured)) throw new Error("PI_HTML_REPORT_OUTPUT_DIR must be an absolute path");
+  const target = resolve(configured);
+  const relativeToRepo = relative(repoRoot, target);
+  const outsideRepo = /^\.\.(?:[\\/]|$)/.test(relativeToRepo) || isAbsolute(relativeToRepo);
+  if (
+    !relativeToRepo ||
+    (!outsideRepo && [".agents", "packages", "plugins", "scripts", "npm", "config", "bootstrap", "wikis"].includes(relativeToRepo.split(/[\\/]/)[0]))
+  ) {
+    throw new Error(`PI_HTML_REPORT_OUTPUT_DIR must not replace a source directory: ${target}`);
+  }
+  return target;
+}
 
 const KERNEL_SHIMS = {
   "metric-query-contract.mjs": "html-report-kernel/src/query/metric-query-contract.mjs",
@@ -69,6 +87,10 @@ function copyDir(src, dest, { skip } = {}) {
   }
 }
 
+function skipArtifactTestEntry(name) {
+  return name === "test" || /\.(?:test|spec)\.(?:[cm]?[jt]s|ts)$/i.test(name);
+}
+
 function posixRel(fromDir, toFile) {
   const rel = relative(fromDir, toFile).split("\\").join("/");
   return rel.startsWith(".") ? rel : `./${rel}`;
@@ -114,11 +136,11 @@ function rewriteAgent(sourceText, destFile, extensionRel) {
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-copyDir(join(repoRoot, "packages", "html-report-kernel"), join(dist, "vendor", "html-report-kernel"));
-copyDir(join(repoRoot, "packages", "harness-runtime-node"), join(dist, "vendor", "harness-runtime-node"));
+copyDir(join(repoRoot, "packages", "html-report-kernel"), join(dist, "vendor", "html-report-kernel"), { skip: skipArtifactTestEntry });
+copyDir(join(repoRoot, "packages", "harness-runtime-node"), join(dist, "vendor", "harness-runtime-node"), { skip: skipArtifactTestEntry });
 
 copyDir(join(piRoot, "extensions"), join(dist, "extensions"), {
-  skip: (name) => name === "test",
+  skip: skipArtifactTestEntry,
 });
 writeShim(
   join(dist, "extensions", "qdm-harness", "authz-config.mjs"),
@@ -130,9 +152,9 @@ writeShim(
 );
 
 copyDir(join(piRoot, "skills", "html-report"), join(dist, "skills", "html-report"), {
-  skip: (name) => name === "test",
+  skip: skipArtifactTestEntry,
 });
-copyDir(join(piRoot, "skills", "html-report-design"), join(dist, "skills", "html-report-design"));
+copyDir(join(piRoot, "skills", "html-report-design"), join(dist, "skills", "html-report-design"), { skip: skipArtifactTestEntry });
 
 const scriptsDir = join(dist, "skills", "html-report", "scripts");
 for (const [name, vendorRel] of Object.entries(KERNEL_SHIMS)) {
@@ -168,9 +190,7 @@ mkdirSync(join(dist, "agents"), { recursive: true });
 for (const agent of AGENTS) {
   const source = readFileSync(join(piRoot, "agents", agent.file), "utf8");
   const dest = join(dist, "agents", agent.file);
-  const extensionPath = localExtensionRoot
-    ? join(localExtensionRoot, "extensions", agent.extension)
-    : posixRel(join(dist, "agents"), join(dist, "extensions", agent.extension));
+  const extensionPath = posixRel(join(dist, "agents"), join(dist, "extensions", agent.extension));
   rewriteAgent(
     source,
     dest,
@@ -186,5 +206,13 @@ writeFileSync(
     agents: AGENTS.map((agent) => agent.file.replace(/\.md$/, "")),
   }, null, 2)}\n`
 );
+
+writePluginManifest({
+  artifactRoot: dist,
+  host: "pi",
+  pluginName: pluginPackage.name,
+  pluginVersion: pluginPackage.version,
+  resourceMode: "external",
+});
 
 console.log(`built ${relative(repoRoot, dist)}`);

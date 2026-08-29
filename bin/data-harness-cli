@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+
+import { main } from "../packages/data-harness-cli/src/main.js";
+
+await main();

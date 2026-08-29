@@ -44,7 +44,7 @@ fi
 cd "$ROOT_DIR"
 
 [[ -f .gitmodules ]] || die "not a Git worktree with .gitmodules: $ROOT_DIR"
-[[ -f cli/cmd/data-harness-cli/main.go ]] || die "missing Data Harness CLI source"
+[[ -f packages/data-harness-cli/src/main.js ]] || die "missing Data Harness CLI source"
 [[ -x "$QDM_METRIC_CLI_SOURCE" ]] || die "qdm-metric-cli is missing or not executable: $QDM_METRIC_CLI_SOURCE"
 if [[ "$RUN_TESTS" == "1" && "$BUILD_PI_PLUGIN" != "1" ]]; then
   die "INIT_DEV_WORKTREE_RUN_TESTS=1 requires INIT_DEV_WORKTREE_BUILD_PI_PLUGIN=1"
@@ -56,10 +56,10 @@ log "qdm-metric-cli: $QDM_METRIC_CLI_SOURCE"
 log "initializing Git submodules"
 git submodule update --init --recursive
 
-log "building bin/data-harness-cli"
+log "installing bin/data-harness-cli"
 mkdir -p bin
-go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
 chmod 755 bin/data-harness-cli
+test -x bin/data-harness-cli || die "missing executable bin/data-harness-cli"
 
 log "writing local CLI configuration"
 mkdir -p config
@@ -107,16 +107,24 @@ else
   log "skipping PI HTML Report plugin build; install the plugin after Runtime initialization"
 fi
 
-log "building Wikis index"
-./bin/data-harness-cli wikis build-index --skip-checks
+log "validating pinned Wikis revision"
+if ! node scripts/verify-pinned-wikis.mjs; then
+  if [[ "$STRICT_WIKIS" == "1" ]]; then
+    die "pinned Wikis revision validation failed"
+  fi
+  log "warning: pinned Wikis revision differs from config; Runtime initialization continues"
+fi
 
-log "validating local runtime"
+log "validating local Wikis"
 if ! ./bin/data-harness-cli wikis check-all; then
   if [[ "$STRICT_WIKIS" == "1" ]]; then
     die "Wikis validation failed"
   fi
   log "warning: Wikis validation reported content issues; Runtime initialization continues"
 fi
+
+log "building Wikis index"
+./bin/data-harness-cli wikis build-index
 ./bin/data-harness-cli context --question "生成运营中心管理周例会报告" --json >/dev/null
 
 log "initialization complete"

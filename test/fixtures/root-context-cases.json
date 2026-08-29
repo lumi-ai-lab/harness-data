@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "errorCodes": {
+    "invalid": "QDM_CONTEXT_INVALID",
+    "pluginRootUnavailable": "QDM_PLUGIN_ROOT_UNAVAILABLE",
+    "dataRootUnavailable": "QDM_DATA_ROOT_UNAVAILABLE",
+    "workspaceRequired": "QDM_WORKSPACE_REQUIRED"
+  },
+  "valid": {
+    "schemaVersion": 1,
+    "host": "codex",
+    "pluginRoot": "${PLUGIN_ROOT}",
+    "dataRoot": "${DATA_ROOT}",
+    "secretRoot": "${SECRET_ROOT}",
+    "workspaceRoot": "${WORKSPACE_ROOT}",
+    "configPath": "${CONFIG_PATH}",
+    "secretRef": {
+      "kind": "file",
+      "path": "${SECRET_PATH}"
+    },
+    "sessionId": "fixture-session-01",
+    "capabilities": {
+      "canWriteWorkspace": true,
+      "canWriteData": true,
+      "hasStableSessionId": true,
+      "supportsSecretReference": true
+    }
+  }
+}

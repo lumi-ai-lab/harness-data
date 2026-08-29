@@ -1,28 +1,26 @@
 /**
- * cli-shim.mjs — Codex hook entry point that directly spawns data-harness-cli
- * without going through any Windows shell (PowerShell/CMD).
+ * cli-shim.mjs — Codex hook entry that launches data-harness-cli
+ * without going through a Windows shell (PowerShell/CMD).
  *
- * Codex hooks pass a command string through the host shell. On Windows,
- * quoting rules differ across shells and break bash-style commands. This
- * shim is invoked as `node "cli-shim.mjs" <args>` — `node` is a bare
- * executable name that all shells recognize — and uses spawnSync with
- * shell:false to launch the Go CLI binary directly via CreateProcess.
- *
- * The shim is cross-platform but only referenced on Windows (non-Windows
- * hooks.json keeps the original `bash -c '...'` form).
+ * Prefer the JS CLI via the current Node executable. Fall back to a
+ * workspace bin wrapper when the package is not present (tests / older runtimes).
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ext = process.platform === "win32" ? ".exe" : "";
-const cliPath = join(__dirname, "..", "..", "..", "bin", `data-harness-cli${ext}`);
+const runtimeRoot = join(__dirname, "..", "..", "..");
+const main = join(runtimeRoot, "packages", "data-harness-cli", "src", "main.js");
+const args = process.argv.slice(2);
 
-const result = spawnSync(cliPath, process.argv.slice(2), {
-  stdio: "inherit",
-  shell: false,
-  windowsHide: true,
-});
+const result = existsSync(main)
+  ? spawnSync(process.execPath, [main, ...args], { stdio: "inherit", shell: false, windowsHide: true })
+  : spawnSync(
+      join(runtimeRoot, "bin", process.platform === "win32" ? "data-harness-cli.exe" : "data-harness-cli"),
+      args,
+      { stdio: "inherit", shell: false, windowsHide: true },
+    );
 
 process.exit(result.status ?? 1);

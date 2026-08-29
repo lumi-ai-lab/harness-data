@@ -19,7 +19,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { loadKernel, loadRuntime, resolveKernelPath, resolveRuntimePath, kernelSource } from "./kernel-loader.mjs";
 import { getWorkspace, isHarnessWorkspaceRoot } from "./runtime-resolver.mjs";
 
@@ -52,10 +52,55 @@ async function writeState(sessionDir, state) {
   await writeFile(statePath(sessionDir), `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
-function sessionDirFor(sessionId) {
+function normalizedSessionId(sessionId) {
   const safe = String(sessionId || "").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
   if (!safe) throw new Error("sessionId is required");
-  return join(requireWorkspace(), ".harness", "state", "html-report", safe);
+  return safe;
+}
+
+/**
+ * The qdm-metric-cli UI owns the canonical session directory convention.
+ * Keep the MCP side byte-for-byte compatible with its workbuddy hash so that
+ * the UI's result.json and the pipeline state always share one directory.
+ */
+function sessionDirFor(sessionId) {
+  const safe = normalizedSessionId(sessionId);
+  const key = createHash("sha256").update(`workbuddy:${safe}`).digest("hex");
+  return join(requireWorkspace(), ".harness", "state", "html-report", key);
+}
+
+/** The pre-0.0.50 MCP convention; retained only to recover split sessions. */
+function legacySessionDirFor(sessionId) {
+  return join(requireWorkspace(), ".harness", "state", "html-report", normalizedSessionId(sessionId));
+}
+
+/**
+ * Versions before this fix put MCP state in the readable session-id directory
+ * while qdm-metric-cli saved result.json in the canonical hashed directory.
+ * Prefer canonical directories for all new work, but adopt only the missing
+ * state file when an older split session is encountered so saved UI input can
+ * continue without asking the user to configure cards again.
+ */
+async function resolveSessionDir(sessionId) {
+  const canonical = sessionDirFor(sessionId);
+  if (existsSync(statePath(canonical))) return canonical;
+
+  const legacy = legacySessionDirFor(sessionId);
+  const legacyStatePath = statePath(legacy);
+  if (!existsSync(legacyStatePath)) return canonical;
+
+  const canonicalHasSessionData = [
+    join(canonical, "result.json"),
+    uiMarkerPath(canonical),
+    join(canonical, "debug", "a-config-question.json"),
+  ].some(existsSync);
+  if (!canonicalHasSessionData) return legacy;
+
+  await mkdir(dirname(statePath(canonical)), { recursive: true });
+  if (!existsSync(statePath(canonical))) {
+    await writeFile(statePath(canonical), await readFile(legacyStatePath, "utf8"), "utf8");
+  }
+  return canonical;
 }
 
 function uiMarkerPath(sessionDir) {
@@ -97,7 +142,7 @@ async function metricCliUiStatus(sessionDir) {
 }
 
 async function closeMetricCliUi(sessionId) {
-  const sessionDir = sessionDirFor(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId);
   try {
     const { stopMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
     const stopped = await stopMetricCliUi({ projectRoot: requireWorkspace(), sessionId });
@@ -220,7 +265,7 @@ async function htmlReportStart(args) {
 async function htmlReportNext(args) {
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const sessionDir = sessionDirFor(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
 
@@ -372,7 +417,7 @@ async function htmlReportSubmitWriter(args) {
   const paragraphs = Array.isArray(args.paragraphs) ? args.paragraphs : [];
   const pointers = Array.isArray(args.pointers) ? args.pointers : [];
 
-  const sessionDir = sessionDirFor(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
   if (state.stage !== "b2_writer") {
@@ -429,7 +474,7 @@ async function htmlReportGenerateHtml(args) {
   rejectUnexpectedArgs(args, new Set(["sessionId"]), "html_report_generate_html");
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const sessionDir = sessionDirFor(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
   if (state.stage !== "b2_main") {
@@ -462,7 +507,7 @@ async function htmlReportCloseUi(args) {
 async function htmlReportStatus(args) {
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const sessionDir = sessionDirFor(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId);
   const state = await readState(sessionDir);
   if (!state) {
     return {

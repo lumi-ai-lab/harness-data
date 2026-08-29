@@ -43,6 +43,25 @@ WorkBuddy 5.3.5+ 使用 `.agents/workbuddy` 中的原生插件包：
 - 当前仅支持 `authz.mode=off`，尚不接入 data-auth/auth blob；不兼容配置和 Hook 运行错误会同时通过 `additionalContext` 与 `systemMessage` 显式提示
 - WorkBuddy 必须提供稳定 `session_id`；状态使用 Agent 命名空间和抗碰撞 SHA-256 文件名，不回退到共享 `unknown`
 
+## 双根 Root Context（v1）
+
+新宿主插件应通过结构化 Root Context 运行，不依赖插件 cache 或当前工作目录猜测：
+
+```bash
+data-harness-cli --context-file /absolute/path/context.json paths --json
+```
+
+Context 至少声明 `pluginRoot`、`dataRoot`，并可声明 `secretRoot`、`workspaceRoot`、
+`stateRoot`、`secretRef` 和 `sessionId`。显式 CLI 参数优先于 context 文件，context
+文件优先于兼容环境变量；校验失败会返回 `QDM_CONTEXT_INVALID` 等稳定错误码。
+
+结构化 hook 默认按需触发：普通 prompt 不注入 QDM wiki，也不创建 durable state；显式
+`qdm-harness`/`html-report` skill 或已有 session 的继续指令才会构建上下文。旧的
+字符串 root 调用仍保留为迁移兼容路径。
+
+详细契约见 [`docs/root-context-v1.md`](docs/root-context-v1.md)，安全边界见
+[`docs/root-context-threat-model.md`](docs/root-context-threat-model.md)。
+
 本仓库的 `.agents/claude`、`.agents/codex`、`.agents/pi`、`.agents/openclaw`、`.agents/hermes` 可分别链接为项目级 `.claude`、`.codex`、`.pi`、`.openclaw`、`.hermes` 配置；WorkBuddy 使用插件包，不创建误导性的 `.workbuddy` symlink。Codex 首次运行项目 hook 时可能要求在 `/hooks` 中信任配置。
 
 ## QwenPaw（Windows 首期）
@@ -168,6 +187,32 @@ npx @lumi-ai-lab/harness-data update --check --dir ~/harness-data
 npx @lumi-ai-lab/harness-data doctor --dir ~/harness-data
 ```
 
+Codex golden path 可将插件目录与持久数据目录分离。`qdm-harness` 是同一安装器的别名：
+
+```bash
+qdm-harness setup \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --secret-root ~/.config/qdm-harness/secrets \
+  --secret-ref ~/.config/qdm-harness/secrets/codex.blob
+
+qdm-harness paths \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --workspace-root "$PWD" \
+  --json
+
+qdm-harness doctor \
+  --plugin-root ~/harness-data-runtime \
+  --data-root "$CODEX_HOME" \
+  --workspace-root "$PWD" \
+  --json
+```
+
+`setup` 会在 `dataRoot` 下生成 `config/settings.json` 和 `install-manifest.json`，并复用或安装
+`qdm-metric-cli`；它不会创建项目 `.harness`。普通 prompt 的 Codex hook 默认不注入 wiki，
+显式 report 可通过 `qdm-harness report start|status|advance ...` 进入生命周期。
+
 全局安装作为可选方式：
 
 ```bash
@@ -175,11 +220,7 @@ npm install -g @lumi-ai-lab/harness-data
 harness-data doctor --dir ~/harness-data
 ```
 
-重新编译正式入口：
-
-```bash
-go build -o bin/data-harness-cli ./cli/cmd/data-harness-cli
-```
+仓库内正式入口是 `bin/data-harness-cli`（Node shebang，源码在 `packages/data-harness-cli`）。
 
 也可以直接使用 GHCR 上发布的 CLI 容器镜像：
 
@@ -197,12 +238,8 @@ docker run --rm -v "$PWD:/workspace" -w /workspace ghcr.io/lumi-ai-lab/harness-d
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-amd64`
 - `ghcr.io/lumi-ai-lab/harness-data-cli:v0.0.1-linux-arm64`
 
-GitHub Releases 同时提供可直接下载的 CLI 二进制包：
+GitHub Releases 提供 runtime 与 Wikis 包（`data-harness-cli` 已随 runtime zip 以 JS 源码分发，不再打四平台二进制）：
 
-- `data-harness-cli-v0.0.1-windows-amd64.zip`
-- `data-harness-cli-v0.0.1-windows-arm64.zip`
-- `data-harness-cli-v0.0.1-linux-amd64.zip`
-- `data-harness-cli-v0.0.1-darwin-arm64.zip`
 - `harness-data-runtime-v0.0.1.zip`
 - `harness-data-wikis-v0.0.1.zip`
 
@@ -227,8 +264,8 @@ GitHub Actions 的 `Release` workflow 会校验 Tag 符合 `vMAJOR.MINOR.PATCH`�
 指向的内容，不会修改提交、移动 Tag 或自动替换已存在的 Tag。
 
 总编排会 checkout Tag 中固定的 `wikis` submodule，执行 `npm test`、
-`npm pack --dry-run`、Wikis 索引构建和 `go test ./...`，随后发布
-`data-harness-cli` GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
+`npm pack --dry-run`、Wikis 索引构建和 JS CLI 测试，随后发布
+runtime / Wikis GitHub Release assets 与 GHCR 镜像。Release assets 验证通过后
 才发布 npm 包，最后检查 npm public 状态、`latest` dist-tag 和实际 `npx` 执行结果。
 
 先在 `qdm-metric-cli` 发布包含四个平台加密 ZIP 的新 Tag，再发布本仓库 Tag；本仓库
@@ -237,8 +274,8 @@ Tag 的 Release assets，不会删除或重建历史 Release，也不会同步 G
 源码归档。
 
 Gitee 镜像由发布者手动维护：每个 GitHub Tag 都必须在对应 Gitee 仓库创建同 Tag 的
-Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的四平台
-`data-harness-cli-*.zip`、`harness-data-runtime-<tag>.zip` 与
+Release，而不只是同步 Tag。`git_pengmd/harness-release` 必须上传名称完全一致的
+`harness-data-runtime-<tag>.zip` 与
 `harness-data-wikis-<tag>.zip`；
 `git_pengmd/harness-metric-release` 必须上传名称完全一致的四平台
 `qdm-metric-cli-*.zip`。安装器只选择这些普通附件，不使用源码归档；不要求额外上传

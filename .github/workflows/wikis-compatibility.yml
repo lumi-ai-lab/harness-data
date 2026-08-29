@@ -51,26 +51,25 @@ jobs:
           test -n "$expected"
           test "$actual" = "$expected"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: cli/go.mod
-
-      - name: Build Wikis indexes
-        working-directory: cli
-        run: |
-          go run ./cmd/data-harness-cli wikis build-index --skip-checks
-          test -s ../.harness/index/wikis-index.json
-          test -s ../.harness/index/wikis-runtime-index.json
-
-      - name: Test Go CLI
-        working-directory: cli
-        run: go test ./...
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Test JS data-harness-cli
+        working-directory: packages/data-harness-cli
+        run: node --test
+
+      - name: Build Wikis indexes
+        run: |
+          chmod +x bin/data-harness-cli
+          node scripts/verify-pinned-wikis.mjs
+          ./bin/data-harness-cli wikis check-all
+          ./bin/data-harness-cli wikis build-index
+          test -s .harness/index/wikis-index.json
+          test -s .harness/index/wikis-runtime-index.json
+          test -s resource-manifest.json
+          node scripts/verify-wikis-relocation.mjs
 
       - name: Test npm installer and Agent adapters
         working-directory: npm
