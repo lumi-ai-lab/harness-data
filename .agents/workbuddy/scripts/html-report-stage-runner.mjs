@@ -149,7 +149,15 @@ function sessionStorageKey(raw) {
 
 export function htmlReportSessionDir(projectRoot, sessionId, stateRoot = process.env.HARNESS_STATE_ROOT || "") {
   const base = stateRoot ? resolve(stateRoot) : join(resolve(projectRoot), ".harness", "state");
-  return join(base, "html-report", sessionStorageKey(sessionId));
+  const canonical = join(base, "html-report", sessionStorageKey(sessionId));
+  const legacy = join(base, "html-report", sanitizeSessionId(sessionId));
+  if (
+    !existsSync(canonical)
+    && (existsSync(join(legacy, "result.json")) || existsSync(join(legacy, "debug", "pipeline-state.json")))
+  ) {
+    return legacy;
+  }
+  return canonical;
 }
 
 /**

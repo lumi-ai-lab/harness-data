@@ -315,7 +315,7 @@ async function executeMigration(plan) {
       metricCli: {
         path: findItem(plan, "metric-cli").target,
         source: findItem(plan, "metric-cli").source,
-        platform: platformKey(),
+        platform: target.platform,
         sha256: findItem(plan, "metric-cli").sourceSha256,
         status: "ready",
       },
@@ -768,7 +768,8 @@ function verifyCompletedMigration({ source, target, items, auth, pointer }) {
       || install.legacyPluginRoot !== source.root
       || install.migratedFrom?.sourceId !== source.id
       || install.resourceVersion !== source.wikiContentVersion
-      || install.metricCli?.path !== findItem({ items }, "metric-cli").target) {
+      || install.metricCli?.path !== findItem({ items }, "metric-cli").target
+      || install.metricCli?.platform !== target.platform) {
       throw new MigrationError("QDM_MIGRATION_REQUIRED", "migrated install manifest does not match the completed migration");
     }
     if (auth.secret && install.secret?.status !== "configured") {

@@ -10,6 +10,12 @@ import test from "node:test";
 import { migrateCommand, planMigration } from "../src/commands/migrate.js";
 import { binaryName, platformKey } from "../src/lib/platform.js";
 import { workspaceIdentity } from "../src/lib/root-context.js";
+import { load as loadBusinessReportState } from "../../packages/data-harness-cli/src/lib/sessionstate.js";
+import {
+  htmlReportSessionDir,
+  start as startHtmlReport,
+  status as htmlReportStatus,
+} from "../../.agents/workbuddy/scripts/html-report-stage-runner.mjs";
 
 const npmRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(npmRoot, "bin", "harness-data.js");
@@ -87,9 +93,16 @@ function legacyFixture({ auth = true, platform = process.platform } = {}) {
     packageVersion: "0.0.53",
     tools: { "qdm-metric-cli": { version: "v-test", sha256: "fixture" } },
   }, null, 2));
-  const metricCli = write(legacyRoot, `bin/${binaryName("qdm-metric-cli", platform)}`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const metricCli = path.join(legacyRoot, "bin", binaryName("qdm-metric-cli", platform));
+  if (platform === "win32" && process.platform === "win32") {
+    fs.copyFileSync(process.execPath, metricCli);
+  } else {
+    write(legacyRoot, `bin/${binaryName("qdm-metric-cli", platform)}`, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
   if (process.platform !== "win32") fs.chmodSync(metricCli, 0o755);
-  const legacyHook = write(legacyRoot, "agents/codex/hooks/legacy-hook.sh", "#!/bin/sh\nprintf 'legacy-hook-ok\\n'\n", { mode: 0o755 });
+  const legacyHook = process.platform === "win32"
+    ? write(legacyRoot, "agents/codex/hooks/legacy-hook.cmd", "@echo off\r\necho legacy-hook-ok\r\n")
+    : write(legacyRoot, "agents/codex/hooks/legacy-hook.sh", "#!/bin/sh\nprintf 'legacy-hook-ok\\n'\n", { mode: 0o755 });
   if (process.platform !== "win32") fs.chmodSync(legacyHook, 0o755);
   if (auth) {
     const blob = write(legacyRoot, "config/dev-auth.blob", "qdm1enc.legacy-secret-material\n", { mode: 0o600 });
@@ -109,6 +122,10 @@ function legacyFixture({ auth = true, platform = process.platform } = {}) {
     write(legacyRoot, "config/harness-config.yaml", "paths:\n  knowledge: wikis\n\nauthz:\n  mode: off\n");
   }
   return { root, legacyRoot, dataRoot, secretRoot, workspaceRoot, metricCli, legacyHook };
+}
+
+function runFixtureCommand(command) {
+  return spawnSync(command, { encoding: "utf8", shell: process.platform === "win32" && command.endsWith(".cmd") });
 }
 
 test("migrate --check is read-only and does not expose the auth blob", async (t) => {
@@ -152,15 +169,16 @@ test("migrate copies verified legacy data to roots, preserves source, and is ide
   assert.equal(first.ok, true, io.stdoutText);
   assert.equal(first.migrated, true);
   assert.equal(first.doctor.ok, true);
-  const legacyHook = spawnSync(f.legacyHook, { encoding: "utf8" });
+  const legacyHook = runFixtureCommand(f.legacyHook);
   assert.equal(legacyHook.status, 0, legacyHook.stderr);
-  assert.equal(legacyHook.stdout, "legacy-hook-ok\n");
+  assert.equal(legacyHook.stdout.trim(), "legacy-hook-ok");
   assert.deepEqual(snapshotTree(f.legacyRoot), before);
   assert.equal(fs.existsSync(path.join(f.dataRoot, "plugins")), false);
   assert.equal(fs.existsSync(path.join(f.dataRoot, "migration.json")), true);
   assert.equal(fs.existsSync(path.join(f.dataRoot, "config", "settings.json")), true);
   const installManifest = JSON.parse(fs.readFileSync(path.join(f.dataRoot, "install-manifest.json"), "utf8"));
   assert.equal(installManifest.resourceVersion, first.source.wikiContentVersion);
+  assert.equal(installManifest.metricCli.platform, platformKey());
   assert.equal(fs.existsSync(path.join(f.dataRoot, "resources", "legacy", first.source.id, "wikis", "index.md")), true);
   assert.equal(fs.existsSync(path.join(f.dataRoot, "resources", "legacy", first.source.id, "index", "wikis-index.json")), true);
   const migratedMetric = path.join(f.dataRoot, "runtimes", platformKey(), first.source.runtimeVersion, binaryName("qdm-metric-cli"));
@@ -171,9 +189,20 @@ test("migrate copies verified legacy data to roots, preserves source, and is ide
   assert.equal(fs.existsSync(path.join(stateRoot, "business-report", "legacy-session.json")), true);
   assert.equal(fs.existsSync(path.join(stateRoot, "html-report", "legacy-report", "result.json")), true);
   assert.equal(fs.existsSync(path.join(stateRoot, "should-skip.lock")), false);
+  const businessSession = loadBusinessReportState({
+    pluginRoot: f.legacyRoot,
+    resourceRoot: f.legacyRoot,
+    dataRoot: f.dataRoot,
+    secretRoot: f.secretRoot,
+    workspaceRoot: f.workspaceRoot,
+    stateRoot,
+  }, "legacy-session");
+  assert.equal(businessSession.session_id, "legacy-session");
+  const recoveredHtmlReportDir = htmlReportSessionDir(f.workspaceRoot, "legacy-report", stateRoot);
+  assert.equal(recoveredHtmlReportDir, path.join(stateRoot, "html-report", "legacy-report"));
   const legacyReport = JSON.parse(fs.readFileSync(path.join(f.legacyRoot, ".harness/state/html-report/legacy-report/result.json"), "utf8"));
   assert.equal(legacyReport.status, "confirmed");
-  const legacyMetric = spawnSync(f.metricCli, { encoding: "utf8" });
+  const legacyMetric = runFixtureCommand(f.metricCli);
   assert.equal(legacyMetric.status, 0, legacyMetric.stderr);
 
   const secret = first.items.find((item) => item.name === "auth-secret");
@@ -201,6 +230,20 @@ test("migrate copies verified legacy data to roots, preserves source, and is ide
   assert.deepEqual(snapshotTree(f.dataRoot), afterFirst);
   assert.doesNotMatch(secondIo.stdoutText, /legacy-secret-material/);
   assert.doesNotMatch(secondIo.stderrText, /legacy-secret-material/);
+
+  const previousStateRoot = process.env.HARNESS_STATE_ROOT;
+  process.env.HARNESS_STATE_ROOT = stateRoot;
+  try {
+    const started = await startHtmlReport(f.workspaceRoot, "legacy-report");
+    assert.equal(started.ok, true, started.error);
+    const resumed = htmlReportStatus(f.workspaceRoot, "legacy-report");
+    assert.equal(resumed.ok, true, resumed.error);
+    assert.equal(resumed.exists, true);
+    assert.equal(resumed.state.currentStage, "A_CONFIG");
+  } finally {
+    if (previousStateRoot === undefined) delete process.env.HARNESS_STATE_ROOT;
+    else process.env.HARNESS_STATE_ROOT = previousStateRoot;
+  }
 });
 
 test("migration fails closed when enabled legacy auth has no explicit secret root", async (t) => {
@@ -266,9 +309,9 @@ test("migration rolls back dataRoot when secret finalization fails", async (t) =
     fs.renameSync = originalRename;
   }
   assert.equal(fs.existsSync(f.dataRoot), false);
-  const legacyHook = spawnSync(f.legacyHook, { encoding: "utf8" });
+  const legacyHook = runFixtureCommand(f.legacyHook);
   assert.equal(legacyHook.status, 0, legacyHook.stderr);
-  assert.equal(legacyHook.stdout, "legacy-hook-ok\n");
+  assert.equal(legacyHook.stdout.trim(), "legacy-hook-ok");
   const profilesRoot = path.join(f.secretRoot, "profiles");
   const hasCommittedSecret = fs.existsSync(profilesRoot) && fs.readdirSync(profilesRoot)
     .some((name) => fs.existsSync(path.join(profilesRoot, name, "auth.blob")));
@@ -617,5 +660,7 @@ test("migration fixture covers supported platform runtime names and versioned ta
     assert.equal(report.ok, true, `${platform}/${architecture}`);
     assert.equal(report.target.platform, expectedPlatform);
     assert.equal(fs.existsSync(metric), true, metric);
+    const installManifest = JSON.parse(fs.readFileSync(path.join(f.dataRoot, "install-manifest.json"), "utf8"));
+    assert.equal(installManifest.metricCli.platform, expectedPlatform);
   }
 });

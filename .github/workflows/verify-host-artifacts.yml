@@ -38,3 +38,39 @@ jobs:
           node scripts/host-artifact.mjs build --host all --output-dir "$artifact_stage" --version "$ARTIFACT_VERSION"
           node scripts/host-artifact.mjs verify --host all --artifact-root "$artifact_stage"
           node scripts/host-artifact.mjs self-test --host all --artifact-root "$artifact_stage"
+
+  migration-platforms:
+    name: Migration smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run migration compatibility suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p migration-evidence
+          node --test --test-reporter=tap npm/test/migrate.test.js \
+            | tee "migration-evidence/migrate-${RUNNER_OS}-${RUNNER_ARCH}.tap"
+
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-evidence-${{ runner.os }}-${{ runner.arch }}
+          path: migration-evidence/
+          if-no-files-found: error

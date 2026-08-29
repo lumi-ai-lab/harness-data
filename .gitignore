@@ -26,6 +26,7 @@ __pycache__/
 
 # Generated harness data and local compiled binaries
 .harness/
+/resource-manifest.json
 bin/*
 !bin/data-harness-cli
 !bin/data-harness-cli.cmd
