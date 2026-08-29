@@ -4,7 +4,8 @@ import { printJSON } from "../lib/json-out.js";
 import { loadCorpus } from "../lib/wikis/parse.js";
 import { loadIndex, loadRuntimeIndex } from "../lib/wikis/index.js";
 
-export async function runShow(root, args, io = process) {
+export async function runShow(root, args, io = process, context = null) {
+  const rootOrContext = context || root;
   const parsed = parseFlags(args, { json: { type: "boolean", default: false } });
   const rest = parsed.rest.filter((arg) => {
     if (arg === "--json") {
@@ -14,7 +15,7 @@ export async function runShow(root, args, io = process) {
     return true;
   });
   if (rest.length !== 1) throw new ExitError("show requires id or path");
-  const doc = findShowDocument(root, rest[0]);
+  const doc = findShowDocument(rootOrContext, rest[0]);
   if (!doc) throw new ExitError(`not found: ${rest[0]}`);
   if (parsed.values.json) {
     printJSON(doc.payload, io.stdout);

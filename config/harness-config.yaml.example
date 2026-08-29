@@ -1,19 +1,14 @@
-# Harness repository configuration.
+# Harness Data configuration example.
+# Codex Plugin users normally let the installed Plugin Setup generate this file.
 
 paths:
-  knowledge: wikis
+  knowledge: resources/wikis
 
 cli:
   qdm_metric_cli: /absolute/path/to/qdm-metric-cli
 
-# Required data-auth for qdm-metric-cli.
-# Installer: `npx @lumi-ai-lab/harness-data install --data-auth` writes mode on +
-# copies config/fixtures/local-test-auth.blob → config/dev-auth.blob.
-# Local/production runtime supplies an encrypted blob via HARNESS_AUTH_BLOB_FILE +
-# HARNESS_AUTH_USER_ID; keep allow_local_blob enabled for this MVP.
-# Local-only file fallback (dev): blob_file + dev_user_id (dev_user_id has no code default).
 authz:
   mode: on
-  # blob_file: config/dev-auth.blob
-  # dev_user_id: local-test-user
+  # blob_file: /absolute/path/to/auth.blob
+  # dev_user_id: your-user-id
   allow_local_blob: true

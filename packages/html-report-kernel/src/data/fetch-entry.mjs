@@ -275,6 +275,7 @@ async function fetchCard(sessionDir, card, {
   queryFn = runMetricQuery,
   sleepFn = sleepSync,
   projectRoot = root,
+  context = null,
 }) {
   const cardId = sanitizeCardId(card.id);
   const outDir = join(sessionDir, "data", "cards", cardId);
@@ -318,7 +319,7 @@ async function fetchCard(sessionDir, card, {
     }
     let result;
     try {
-      result = await queryFn(query, { projectRoot, sessionId, timeoutMs: remainingMs });
+      result = await queryFn(query, { projectRoot, context, sessionId, timeoutMs: remainingMs });
     } catch (error) {
       failure = String(error.message || error);
       break;
@@ -374,6 +375,7 @@ export async function fetchAllEntries(resultPath, {
   parallel = false,
   concurrency = 6,
   projectRoot = root,
+  context = null,
 } = {}) {
   const absResult = resolve(resultPath);
   const sessionDir = dirname(absResult);
@@ -394,6 +396,7 @@ export async function fetchAllEntries(resultPath, {
         resultMtimeMs,
         sessionId,
         projectRoot,
+        context,
         queryFn: runMetricQueryAsync,
         sleepFn: asyncSleep,
       })
@@ -407,6 +410,7 @@ export async function fetchAllEntries(resultPath, {
       resultMtimeMs,
       sessionId,
       projectRoot,
+      context,
     }));
   }
   return {

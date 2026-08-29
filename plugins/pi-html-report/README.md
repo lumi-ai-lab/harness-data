@@ -1,21 +1,19 @@
-# @lumi-ai-lab/pi-html-report
+# Pi html-report adapter
 
-PI plugin for the html-report pipeline. It ships the qdm-harness Extension, html-report Skills, and four report agents. Deterministic fetch/caption/compose logic comes from the bundled Kernel.
+This directory contains the Pi adapter maintained alongside the Harness Data Codex Plugin. It reuses the shared html-report kernel and data contracts; it is not a separate Marketplace source for the Codex Plugin.
 
-## Prerequisite
+The shared Plugin source is:
 
-The workspace must already be a Harness Data runtime (`npx @lumi-ai-lab/harness-data install`): Node, `qdm-metric-cli`, `config/harness-config.yaml`, authz, and wikis.
-
-## Install
-
-```bash
-pi install npm:@lumi-ai-lab/pi-html-report
+```text
+plugins/harness-data/
 ```
 
-Restart Pi so Extension and agent discovery reload. Then `html-report` should see:
+The adapter must receive explicit resource, data, workspace, state, and secret roots from its host. It must not infer a product root from the current working directory or write state into a Plugin cache.
 
-- qdm-harness
-- html-report / html-report-design skills
-- `qdm-html-report.report-writer` / `report-researcher` / `report-reviewer` / `report-designer`
+Build and verify locally:
 
-Uninstalling the plugin unregisters Extension / Skill / Agents. It does not delete runtime, config, auth, wikis, or sessions.
+```bash
+npm --prefix plugins/pi-html-report run build
+npm --prefix plugins/pi-html-report run verify
+npm --prefix plugins/pi-html-report test
+```

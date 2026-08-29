@@ -1,7 +1,10 @@
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { loadPathsConfig, newPathResolverWithPaths } from "../harness.js";
+import { loadPathsConfig, newPathResolverWithPaths, normalizeResolverOwners } from "../harness.js";
+import { validatePluginManifestBinding } from "../plugin-manifest.js";
+import { ROOT_CONTEXT_ERROR_CODES, RootContextError } from "../root-context.js";
 import { runAllChecks, runCheck } from "./checks.js";
 import { KIND_PLAYBOOK, KIND_SPEC, SPEC_TYPE_METRIC } from "./paths.js";
 import { loadCorpus } from "./parse.js";
@@ -9,22 +12,160 @@ import { loadTemplateSelectionPolicy, validateTemplateSelectionPolicy } from "./
 
 export const INDEX_REL = ".harness/index/wikis-index.json";
 export const RUNTIME_INDEX_REL = ".harness/index/wikis-runtime-index.json";
+export const RESOURCE_MANIFEST_REL = "resource-manifest.json";
+export const RESOURCE_MANIFEST_SCHEMA_VERSION = 1;
 
-export function loadIndex(root) {
-  const data = readFileSync(path.join(root, INDEX_REL), "utf8");
-  return JSON.parse(data);
+export function loadIndex(rootOrContext) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
+  const index = readJSON(path.join(resourceRoot, INDEX_REL), "wikis index");
+  validateResourceManifest(rootOrContext, { index });
+  return index;
 }
 
-export function loadRuntimeIndex(root) {
+export function loadRuntimeIndex(rootOrContext) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   try {
-    const data = readFileSync(path.join(root, RUNTIME_INDEX_REL), "utf8");
-    return JSON.parse(data);
+    const index = readJSON(path.join(resourceRoot, RUNTIME_INDEX_REL), "runtime wikis index");
+    validateResourceManifest(rootOrContext, { index });
+    return index;
   } catch (error) {
     if (error && error.code === "ENOENT") {
-      return buildRuntimeIndex(loadIndex(root));
+      return buildRuntimeIndex(loadIndex(rootOrContext));
     }
     throw error;
   }
+}
+
+/**
+ * Validate a relocatable resource bundle before structured plugin consumers use
+ * it. Legacy roots deliberately skip this check so an old install --dir
+ * runtime can remain readable during the migration window.
+ */
+export function validateResourceManifest(rootOrContext, { index = null } = {}) {
+  const owners = normalizeResolverOwners(rootOrContext);
+  if (owners.legacy) return null;
+  const resourceRoot = owners.resourceRoot;
+  const manifest = readResourceManifest(resourceRoot);
+  validateManifestShape(manifest);
+  const seen = new Set();
+  for (const item of manifest.files) {
+    const relative = safeManifestPath(item?.path);
+    if (seen.has(relative)) throw resourceMismatch(`resource manifest contains duplicate file: ${relative}`);
+    seen.add(relative);
+    const expected = String(item?.sha256 || "").trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(expected)) {
+      throw resourceMismatch(`resource manifest has invalid SHA-256 for ${relative}`);
+    }
+    const filePath = path.join(resourceRoot, ...relative.split("/"));
+    let info;
+    try {
+      info = lstatSync(filePath);
+    } catch {
+      throw resourceMismatch(`resource file is missing: ${relative}; reinstall plugin resources`);
+    }
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw resourceMismatch(`resource file must be a regular file: ${relative}`);
+    }
+    const actual = fileSha256(filePath);
+    if (actual !== expected) {
+      throw resourceMismatch(`resource hash mismatch: ${relative}; reinstall plugin resources`);
+    }
+  }
+  if (index) validateIndexVersion(index, manifest);
+  validatePluginManifestBinding(resourceRoot, manifest);
+  return manifest;
+}
+
+export function loadResourceManifest(rootOrContext) {
+  const owners = normalizeResolverOwners(rootOrContext);
+  if (owners.legacy) return null;
+  const manifest = readResourceManifest(owners.resourceRoot);
+  validateManifestShape(manifest);
+  return manifest;
+}
+
+function readResourceManifest(resourceRoot) {
+  const filePath = path.join(resourceRoot, RESOURCE_MANIFEST_REL);
+  if (!existsSync(filePath)) {
+    throw resourceMismatch("resource manifest is missing; reinstall or update plugin resources");
+  }
+  return readJSON(filePath, "resource manifest");
+}
+
+function validateManifestShape(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw resourceMismatch("resource manifest must be an object");
+  }
+  if (Number(manifest.schemaVersion) !== RESOURCE_MANIFEST_SCHEMA_VERSION) {
+    throw resourceMismatch(`unsupported resource manifest schema: ${manifest.schemaVersion}`);
+  }
+  if (Number(manifest.resourceSchemaVersion) !== RESOURCE_MANIFEST_SCHEMA_VERSION) {
+    throw resourceMismatch(`unsupported resource schema: ${manifest.resourceSchemaVersion}`);
+  }
+  if (manifest.resourceId !== "qdm-harness-wiki") {
+    throw resourceMismatch(`unexpected resource id: ${manifest.resourceId || "missing"}`);
+  }
+  if (!/^[a-f0-9]{64}$/i.test(String(manifest.wikiContentVersion || ""))) {
+    throw resourceMismatch("resource manifest wikiContentVersion must be a SHA-256 hex digest");
+  }
+  if (!Array.isArray(manifest.files) || !manifest.files.length) {
+    throw resourceMismatch("resource manifest files must be a non-empty array");
+  }
+}
+
+function validateIndexVersion(index, manifest) {
+  if (!index || typeof index !== "object" || Array.isArray(index)) {
+    throw resourceMismatch("resource index must be an object");
+  }
+  const meta = index.meta;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    throw resourceMismatch("resource index meta is missing");
+  }
+  if (meta.resourceId !== manifest.resourceId) {
+    throw resourceMismatch("resource index id does not match resource manifest");
+  }
+  if (Number(meta.resourceSchemaVersion) !== Number(manifest.resourceSchemaVersion)) {
+    throw resourceMismatch("resource index schema does not match resource manifest");
+  }
+  const version = String(meta.wikiContentVersion || meta.resourceVersion || "").trim().toLowerCase();
+  if (version !== String(manifest.wikiContentVersion).toLowerCase()) {
+    throw resourceMismatch("resource index version does not match resource manifest; reinstall plugin resources");
+  }
+}
+
+function safeManifestPath(value) {
+  const relative = String(value || "").replaceAll("\\", "/");
+  if (
+    !relative ||
+    relative.includes("\0") ||
+    path.posix.isAbsolute(relative) ||
+    path.win32.isAbsolute(relative) ||
+    relative === "." ||
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.includes("/../")
+  ) {
+    throw resourceMismatch("resource manifest file path must be a safe relative path");
+  }
+  return relative.replace(/^\.\//, "");
+}
+
+function readJSON(filePath, label) {
+  let data;
+  try {
+    data = readFileSync(filePath, "utf8");
+  } catch (error) {
+    throw error;
+  }
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    throw resourceMismatch(`${label} is invalid JSON: ${error?.message || error}`);
+  }
+}
+
+function resourceMismatch(message) {
+  return new RootContextError(ROOT_CONTEXT_ERROR_CODES.RESOURCE_MISMATCH, message);
 }
 
 export function buildRuntimeIndex(idx) {
@@ -71,7 +212,8 @@ export class CheckFailedError extends Error {
   }
 }
 
-export function buildIndex(root, skipChecks = false) {
+export function buildIndex(rootOrContext, skipChecks = false) {
+  const root = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!skipChecks) {
     const results = runAllChecks(root, { maxErrors: 500 });
     const total = results.reduce((sum, result) => sum + result.totalErrors, 0);
@@ -80,17 +222,25 @@ export function buildIndex(root, skipChecks = false) {
   const reliable = checkReliableBuildInputs(root);
   if (reliable) throw new Error(reliable);
   const { corpus } = loadCorpus(root);
-  const { policy: templatePolicy } = loadTemplateSelectionPolicy(root);
+  const { policy: templatePolicy, selectionPath } = loadTemplateSelectionPolicy(root);
   const policyErrs = validateTemplateSelectionPolicy(root, templatePolicy);
   if (policyErrs.length) {
     throw new Error(`template selection policy invalid: ${policyErrs.join("; ")}`);
   }
   const cfg = loadPathsConfig(root);
+  const resourceFiles = collectResourceFiles(root, corpus, selectionPath);
+  const wikiContentVersion = resourceContentVersion(resourceFiles);
   const idx = {
     meta: {
       version: 1,
       generatedAt: new Date().toISOString(),
-      root,
+      resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+      wikiContentVersion,
+      resourceVersion: wikiContentVersion,
+      // Kept as a relative compatibility marker; never persist the build
+      // machine's absolute resource root in a relocatable index.
+      root: ".",
       checksSkipped: skipChecks,
       paths: indexPaths(root, cfg),
     },
@@ -99,17 +249,78 @@ export function buildIndex(root, skipChecks = false) {
   };
   const runtime = buildRuntimeIndex(idx);
   runtime.templateSelection = [...(templatePolicy.templates || [])];
-  writeJSONAtomic(root, INDEX_REL, idx);
-  writeJSONAtomic(root, RUNTIME_INDEX_REL, runtime);
+  writeJSONAtomic(rootOrContext, INDEX_REL, idx);
+  writeJSONAtomic(rootOrContext, RUNTIME_INDEX_REL, runtime);
+  writeJSONAtomic(rootOrContext, RESOURCE_MANIFEST_REL, buildResourceManifest(root, resourceFiles, wikiContentVersion, skipChecks));
   return {
     path: INDEX_REL,
     runtimePath: RUNTIME_INDEX_REL,
+    resourceManifestPath: RESOURCE_MANIFEST_REL,
+    resourceVersion: wikiContentVersion,
     checksSkipped: skipChecks,
     docCount: idx.docs.length,
     recallCount: idx.recall.length,
     runtimeDocCount: Object.keys(runtime.docsByPath).length,
     runtimeRecallCount: runtime.recall.length,
   };
+}
+
+function collectResourceFiles(root, corpus, selectionPath) {
+  const paths = new Set();
+  for (const doc of corpus.docs || []) {
+    const relative = normalizeResourceRelative(doc.physicalRel);
+    if (relative) paths.add(relative);
+  }
+  const selectionRelative = relativeFromRoot(root, selectionPath);
+  if (selectionRelative && existsSync(path.join(root, selectionRelative))) paths.add(selectionRelative);
+  return [...paths].sort().map((relative) => ({
+    path: relative,
+    sha256: fileSha256(path.join(root, relative)),
+    kind: "wiki",
+  }));
+}
+
+function buildResourceManifest(root, resourceFiles, wikiContentVersion, checksSkipped) {
+  const indexFiles = [INDEX_REL, RUNTIME_INDEX_REL].map((relative) => ({
+    path: relative,
+    sha256: fileSha256(path.join(root, relative)),
+    kind: "index",
+  }));
+  return {
+    schemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+    resourceSchemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+    resourceId: "qdm-harness-wiki",
+    wikiContentVersion,
+    generatedAt: new Date().toISOString(),
+    checksSkipped,
+    files: [...resourceFiles, ...indexFiles].sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+function resourceContentVersion(files) {
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(file.path);
+    hash.update("\0");
+    hash.update(file.sha256);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function relativeFromRoot(root, filePath) {
+  if (!filePath) return "";
+  return normalizeResourceRelative(path.relative(root, filePath));
+}
+
+function normalizeResourceRelative(value) {
+  const relative = String(value || "").split(path.sep).join("/");
+  if (!relative || relative === "." || path.isAbsolute(relative) || relative === ".." || relative.startsWith("../")) return "";
+  return relative;
+}
+
+function fileSha256(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
 function checkReliableBuildInputs(root) {
@@ -201,8 +412,9 @@ function recallValues(doc) {
   return out;
 }
 
-function writeJSONAtomic(root, rel, value) {
-  const full = path.join(root, rel);
+function writeJSONAtomic(rootOrContext, rel, value) {
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
+  const full = path.join(resourceRoot, rel);
   mkdirSync(path.dirname(full), { recursive: true });
   const data = `${JSON.stringify(value, null, 2)}\n`;
   const tmp = path.join(path.dirname(full), `${path.basename(rel)}.tmp.${process.pid}`);

@@ -1,0 +1,23 @@
+{
+  "name": "harness-data",
+  "version": "0.0.54",
+  "description": "Harness Data capabilities for Codex CLI and ChatGPT App, including trusted QDM context and the html-report pipeline.",
+  "author": {
+    "name": "Lumi AI Lab"
+  },
+  "keywords": [
+    "qdm",
+    "harness",
+    "html-report",
+    "analytics"
+  ],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "kernel": {
+    "api": "v1",
+    "packages": [
+      "@lumi-ai-lab/html-report-kernel",
+      "@lumi-ai-lab/harness-runtime-node"
+    ]
+  }
+}

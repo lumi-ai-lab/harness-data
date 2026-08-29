@@ -1,4 +1,4 @@
-name: Release
+name: Codex Plugin Release
 
 on:
   push:
@@ -7,32 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, for example v0.0.27
+        description: Git tag to publish, for example v0.0.55
         required: true
         type: string
-      publish_npm:
-        description: Publish npm package; disable when retrying after npm already succeeded
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
-  packages: write
-  id-token: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: codex-plugin-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  validate:
-    name: Validate release tag
+  publish:
+    name: Publish Codex Marketplace ZIP
     runs-on: ubuntu-latest
-    outputs:
-      version_tag: ${{ steps.vars.outputs.version_tag }}
-      version: ${{ steps.vars.outputs.version }}
-
     steps:
       - name: Resolve release tag
         id: vars
@@ -51,194 +40,101 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.vars.outputs.version_tag }}
-          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-          submodules: recursive
           fetch-depth: 0
 
-      - name: Validate immutable release metadata
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate Marketplace and Plugin metadata
         env:
-          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
           VERSION: ${{ steps.vars.outputs.version }}
         run: |
           set -euo pipefail
-          tag_commit="$(git rev-list -n 1 "${VERSION_TAG}")"
-          head_commit="$(git rev-parse HEAD)"
-          if [[ "${tag_commit}" != "${head_commit}" ]]; then
-            echo "::error::checkout does not match ${VERSION_TAG}: ${head_commit} != ${tag_commit}"
-            exit 1
-          fi
+          node <<'NODE'
+          const fs = require("node:fs");
+          const version = process.env.VERSION;
+          const marketplace = JSON.parse(fs.readFileSync(".agents/plugins/marketplace.json", "utf8"));
+          if (marketplace.name !== "lumi-ai-lab") throw new Error(`unexpected Marketplace name: ${marketplace.name}`);
+          const entry = (marketplace.plugins || []).find((item) => item?.name === "harness-data");
+          if (!entry || entry.source?.path !== "./plugins/harness-data") {
+            throw new Error("Marketplace must expose ./plugins/harness-data as harness-data");
+          }
+          const plugin = JSON.parse(fs.readFileSync("plugins/harness-data/.codex-plugin/plugin.json", "utf8"));
+          if (plugin.name !== "harness-data") throw new Error(`unexpected Plugin name: ${plugin.name}`);
+          if (plugin.version !== version) throw new Error(`Plugin version ${plugin.version} does not match tag ${version}`);
+          const installer = JSON.parse(fs.readFileSync("npm/package.json", "utf8"));
+          if (installer.version !== version) throw new Error(`bundled installer version ${installer.version} does not match tag ${version}`);
+          if (fs.existsSync(".gitmodules")) throw new Error("Wiki submodules are not part of the Plugin release");
+          if (fs.existsSync("wikis")) throw new Error("top-level Wiki checkout is not part of the Plugin release");
+          NODE
 
-          package_version="$(node -p 'JSON.parse(require("fs").readFileSync("npm/package.json", "utf8")).version')"
-          if [[ "${package_version}" != "${VERSION}" ]]; then
-            echo "::error::npm/package.json version ${package_version} does not match tag ${VERSION_TAG}"
-            exit 1
-          fi
+      - name: Build Plugin bundle
+        run: node plugins/harness-data/scripts/bundle-dist.mjs --output-dir plugins/harness-data/dist
 
-          workbuddy_version="$(node -p 'JSON.parse(require("fs").readFileSync(".agents/workbuddy/.codebuddy-plugin/plugin.json", "utf8")).version')"
-          if [[ "${workbuddy_version}" != "${VERSION}" ]]; then
-            echo "::error::WorkBuddy plugin version ${workbuddy_version} does not match tag ${VERSION_TAG}"
-            exit 1
-          fi
-
-          workbuddy_marketplace_version="$(node -p 'JSON.parse(require("fs").readFileSync(".agents/.codebuddy-plugin/marketplace.json", "utf8")).plugins.find((plugin) => plugin.name === "qdm-harness").version')"
-          if [[ "${workbuddy_marketplace_version}" != "${VERSION}" ]]; then
-            echo "::error::WorkBuddy marketplace version ${workbuddy_marketplace_version} does not match tag ${VERSION_TAG}"
-            exit 1
-          fi
-
-          test -n "$(git ls-tree HEAD wikis | awk '{print $3}')"
-          test "$(git -C wikis rev-parse HEAD)" = "$(git ls-tree HEAD wikis | awk '{print $3}')"
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Test npm installer
-        working-directory: npm
-        run: |
-          npm install
-          npm test -- --test-concurrency=1
-          npm pack --dry-run
-
-      - name: Test JS data-harness-cli
-        working-directory: packages/data-harness-cli
-        run: node --test
-
-      - name: Build Wikis index from pinned submodule
-        run: |
-          chmod +x bin/data-harness-cli
-          ./bin/data-harness-cli wikis build-index --skip-checks
-          test -s .harness/index/wikis-index.json
-          test -s .harness/index/wikis-runtime-index.json
-
-      - name: Verify external CLI assets
+      - name: Pack Codex Marketplace ZIP
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          node scripts/build-codex-marketplace.mjs pack \
+            --zip "$GITHUB_WORKSPACE/dist/harness-data-codex-marketplace-${VERSION_TAG}.zip" \
+            --version "$VERSION"
+          unzip -l "$GITHUB_WORKSPACE/dist/harness-data-codex-marketplace-${VERSION_TAG}.zip" | grep -q 'harness-data-codex-marketplace/.agents/plugins/marketplace.json'
+          if unzip -Z1 "$GITHUB_WORKSPACE/dist/harness-data-codex-marketplace-${VERSION_TAG}.zip" | grep -Eq 'resources/wikis'; then
+            echo "::error::Marketplace ZIP must not contain private Wikis"
+            exit 1
+          fi
+
+      - name: Checkout private Wikis
+        uses: actions/checkout@v4
+        with:
+          repository: lumi-ai-lab/harness-data-wikis
+          token: ${{ secrets.WIKIS_CHECKOUT_TOKEN || secrets.RELEASE_GH_TOKEN || github.token }}
+          path: wikis-src
+
+      - name: Pack encrypted Wikis ZIP
+        env:
+          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
           RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required for production releases"; exit 1; }
-          node <<'NODE' > /tmp/external-assets.tsv
-          const fs = require("fs");
-          const childProcess = require("child_process");
-          const manifest = JSON.parse(fs.readFileSync("bootstrap/cli-manifest.json", "utf8"));
-          for (const tool of manifest.tools || []) {
-            if (tool.name === "data-harness-cli") continue;
-            const release = childProcess.execFileSync(
-              "gh",
-              ["release", "view", "--repo", tool.repo, "--json", "tagName", "--jq", ".tagName"],
-              { encoding: "utf8" }
-            ).trim();
-            for (const platform of Object.keys(tool.platforms || {})) {
-              const name = `${tool.binary}-${release}-${platform}.zip`;
-              console.log(`${tool.repo}\t${release}\t${name}`);
-            }
-          }
-          NODE
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "${tmp}"' EXIT
-          while IFS=$'\t' read -r repo tag asset; do
-            echo "checking ${repo} ${tag} ${asset}"
-            gh release view "$tag" --repo "$repo" --json assets \
-              --jq '.assets[].name' | grep -Fx "$asset" >/dev/null
-            gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmp"
-            unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${tmp}/${asset}" >/dev/null
-            if unzip -P "${RELEASE_ARCHIVE_PASSWORD}-wrong" -t "${tmp}/${asset}" >/dev/null 2>&1; then
-              echo "::error::external archive accepted an incorrect password: ${asset}"
-              exit 1
-            fi
-          done < /tmp/external-assets.tsv
+          test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required"; exit 1; }
+          test -f wikis-src/index.md
+          for dir in metrics reports dims rules; do
+            test -d "wikis-src/$dir"
+          done
+          wikis_asset="dist/harness-data-wikis-${VERSION_TAG}.zip"
+          (cd wikis-src && zip -q -r -P "${RELEASE_ARCHIVE_PASSWORD}" "${GITHUB_WORKSPACE}/${wikis_asset}" .)
+          unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${wikis_asset}" >/dev/null
+          if unzip -Z1 "${wikis_asset}" | grep -Eq '(^|/)\.git(/|$)'; then
+            echo "::error::Wikis ZIP must not include .git"
+            exit 1
+          fi
 
-  cli-release:
-    name: Publish CLI release assets
-    needs: validate
-    uses: ./.github/workflows/publish-cli-release.yml
-    with:
-      publish: true
-      version_tag: ${{ needs.validate.outputs.version_tag }}
-      ref: ${{ needs.validate.outputs.version_tag }}
-    secrets:
-      RELEASE_ARCHIVE_PASSWORD: ${{ secrets.RELEASE_ARCHIVE_PASSWORD }}
-      RELEASE_GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-
-  cli-container:
-    name: Publish CLI container
-    needs: validate
-    uses: ./.github/workflows/publish-cli-container.yml
-    with:
-      publish: true
-      version_tag: ${{ needs.validate.outputs.version_tag }}
-      ref: ${{ needs.validate.outputs.version_tag }}
-
-  verify-release-assets:
-    name: Verify release assets
-    needs:
-      - validate
-      - cli-release
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.version_tag }}
-
-      - name: Verify runtime and Wikis bundle assets
-        env:
-          VERSION_TAG: ${{ needs.validate.outputs.version_tag }}
+      - name: Run core tests
         run: |
           set -euo pipefail
-          for asset in \
-            "harness-data-runtime-${VERSION_TAG}.zip" \
-            "harness-data-wikis-${VERSION_TAG}.zip"; do
-            base="https://github.com/lumi-ai-lab/harness-data/releases/download/${VERSION_TAG}/${asset}"
-            curl -fsIL --retry 5 --retry-delay 3 "$base" >/dev/null
-          done
+          npm --prefix npm test -- --test-concurrency=1
+          node --test packages/data-harness-cli/test/*.test.js
+          node --test packages/harness-runtime-node/src/*.test.mjs
+          node --test plugins/harness-data/mcp/server.test.mjs
+          node --test plugins/harness-data/test/clean-room-setup.test.mjs
+          node --test scripts/build-codex-marketplace.test.mjs
 
-  npm:
-    name: Publish npm installer
-    needs:
-      - validate
-      - cli-container
-      - verify-release-assets
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_npm }}
-    uses: ./.github/workflows/publish-npm.yml
-    with:
-      publish: true
-      ref: ${{ needs.validate.outputs.version_tag }}
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  smoke:
-    name: Verify npm release
-    needs:
-      - validate
-      - npm
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Verify published package
+      - name: Publish GitHub Release assets
         env:
-          VERSION: ${{ needs.validate.outputs.version }}
+          GH_TOKEN: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
+          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
         run: |
           set -euo pipefail
-          for i in {1..20}; do
-            if npm view "@lumi-ai-lab/harness-data@${VERSION}" version \
-                --registry=https://registry.npmjs.org/ --prefer-online | grep -Fx "${VERSION}" >/dev/null; then
-              break
-            fi
-            if [[ "$i" == "20" ]]; then
-              echo "published npm package did not become available in time" >&2
-              exit 1
-            fi
-            sleep 15
-          done
-          npm access get status @lumi-ai-lab/harness-data --registry=https://registry.npmjs.org/ | grep -E ': public$' >/dev/null
-          npm dist-tag ls @lumi-ai-lab/harness-data --registry=https://registry.npmjs.org/ | grep -Fx "latest: ${VERSION}" >/dev/null
-          npm_config_registry=https://registry.npmjs.org/ npx -y "@lumi-ai-lab/harness-data@${VERSION}" version
+          if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+            gh release create "$VERSION_TAG" --title "$VERSION_TAG" --notes "Codex Plugin ${VERSION_TAG}"
+          fi
+          gh release upload "$VERSION_TAG" \
+            "dist/harness-data-codex-marketplace-${VERSION_TAG}.zip" \
+            "dist/harness-data-wikis-${VERSION_TAG}.zip" \
+            --clobber

@@ -1,7 +1,9 @@
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { loadConfig, newPathResolver } from "../harness.js";
+import { loadConfig, newPathResolver, normalizeResolverOwners } from "../harness.js";
+import { contextFromHookPayload, RootContextError } from "../root-context.js";
+import { assertWorkspaceAllowed } from "../workspace-policy.js";
 import { diagnosticsDir, load as loadState, MODE_FREE, safeSessionId, save as saveState } from "../sessionstate.js";
 import { isAllowedTemplateSelectionPath } from "../wikis/template-selection.js";
 
@@ -15,25 +17,79 @@ export const REPORT_CONFIGS = {
   "financial-overview": { report: "company", requiredModules: ["indicators", "tree", "table"] },
 };
 
-export function runClaudeHook(root, input) {
+export function runClaudeHook(root, input, context = null, options = {}) {
   const payload = parsePayload(input);
   if (!payload || payload.tool_name !== "Bash" || !String(payload.tool_input?.command || "").trim()) {
     return { ok: false, output: null };
   }
-  let sessionID = payload.session_id || process.env.CLAUDE_SESSION_ID || "unknown";
-  return runTemplateHook(root, payload.tool_input.command, sessionID);
+  let effectiveContext = context;
+  try {
+    effectiveContext = contextFromHookPayload(payload, {
+      root,
+      env: options.env || process.env,
+      baseContext: context,
+    }) || effectiveContext;
+  } catch (error) {
+    if (error instanceof RootContextError) {
+      return { ok: true, output: workspaceRequiredOutput(`${error.code}: ${error.message}`) };
+    }
+    return { ok: true, output: workspaceRequiredOutput("QDM_HARNESS_UNAVAILABLE: Harness hook context could not be loaded.") };
+  }
+  let sessionID = payload.session_id || options.env?.CLAUDE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "unknown";
+  const workspaceDecision = checkWorkspacePolicy(effectiveContext);
+  if (workspaceDecision === "denied") return { ok: false, output: null };
+  if (workspaceDecision === "unavailable") {
+    return {
+      ok: true,
+      output: workspaceRequiredOutput("QDM_SETUP_REQUIRED: configure the Harness Data workspace allowlist before using this project."),
+    };
+  }
+  if (effectiveContext && (!effectiveContext.workspaceRoot || effectiveContext.capabilities?.canWriteWorkspace === false) && (isTemplateStageCommand(payload.tool_input.command) || isTemplateInjectionCommand(payload.tool_input.command))) {
+    return {
+      ok: true,
+      output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: template/report operations require workspaceRoot; no project state was written."),
+    };
+  }
+  return runTemplateHook(effectiveContext || root, payload.tool_input.command, sessionID);
 }
 
-export function runWorkBuddyHook(root, input) {
+export function runWorkBuddyHook(root, input, context = null, options = {}) {
   const payload = parsePayload(input);
   const command = String(payload?.tool_input?.command || "").trim();
   if (!payload || payload.tool_name !== "Bash" || !command) {
     return { ok: false, output: null };
   }
+  let effectiveContext = context;
+  try {
+    effectiveContext = contextFromHookPayload(payload, {
+      root,
+      env: options.env || process.env,
+      baseContext: context,
+    }) || effectiveContext;
+  } catch (error) {
+    if (error instanceof RootContextError) {
+      return { ok: true, output: workBuddySafetyOutput(`${error.code}: ${error.message}`) };
+    }
+    return { ok: true, output: workBuddySafetyOutput("QDM_HARNESS_UNAVAILABLE: Harness hook context could not be loaded.") };
+  }
+  const workspaceDecision = checkWorkspacePolicy(effectiveContext);
+  if (workspaceDecision === "denied") return { ok: false, output: null };
+  if (workspaceDecision === "unavailable") {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput("QDM_SETUP_REQUIRED: configure the Harness Data workspace allowlist before using this project."),
+    };
+  }
   const templateCommand = isTemplateStageCommand(command) || isTemplateInjectionCommand(command);
   const metricCommand = isQDMMetricCommand(command);
   if (!templateCommand && !metricCommand) return { ok: false, output: null };
   if (metricCommand && !templateCommand) return { ok: false, output: null };
+  if (effectiveContext && (!effectiveContext.workspaceRoot || effectiveContext.capabilities?.canWriteWorkspace === false) && templateCommand) {
+    return {
+      ok: true,
+      output: workBuddySafetyOutput("QDM_WORKSPACE_REQUIRED: template/report operations require workspaceRoot; no project state was written."),
+    };
+  }
 
   const sessionID = String(payload.session_id || "").trim();
   if (!sessionID) {
@@ -45,7 +101,7 @@ export function runWorkBuddyHook(root, input) {
     };
   }
   try {
-    loadConfig(root);
+    loadConfig(effectiveContext || root);
   } catch {
     return {
       ok: true,
@@ -55,7 +111,7 @@ export function runWorkBuddyHook(root, input) {
     };
   }
   try {
-    const result = runTemplateHook(root, command, WORKBUDDY_SESSION_PREFIX + sessionID);
+    const result = runTemplateHook(effectiveContext || root, command, WORKBUDDY_SESSION_PREFIX + sessionID);
     if (!result.ok) return { ok: false, output: null };
     return {
       ok: true,
@@ -74,10 +130,31 @@ export function runWorkBuddyHook(root, input) {
   }
 }
 
+function checkWorkspacePolicy(context) {
+  if (!context?.workspaceRoot) return "ok";
+  try {
+    assertWorkspaceAllowed(context);
+    return "ok";
+  } catch (error) {
+    if (error?.code === "QDM_WORKSPACE_NOT_ALLOWED") return "denied";
+    if (error?.code === "QDM_SETUP_REQUIRED") return "unavailable";
+    throw error;
+  }
+}
+
 function workBuddySafetyOutput(message) {
   return {
     continue: true,
     systemMessage: message,
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext: message,
+    },
+  };
+}
+
+function workspaceRequiredOutput(message) {
+  return {
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       additionalContext: message,
@@ -461,7 +538,8 @@ function recordTemplateDiagnostic(root, sessionID, session, reportState, outcome
   try {
     resolver = newPathResolver(root);
   } catch {
-    resolver = { resolve: (rel) => path.join(root, rel) };
+    const resourceRoot = normalizeResolverOwners(root).resourceRoot;
+    resolver = { resolve: (rel) => path.join(resourceRoot, rel) };
   }
   const event = {
     ts: new Date().toISOString(),
@@ -477,7 +555,7 @@ function recordTemplateDiagnostic(root, sessionID, session, reportState, outcome
     outcome,
   };
   try {
-    const dir = diagnosticsDir(root);
+  const dir = diagnosticsDir(root);
     mkdirSync(dir, { recursive: true });
     appendFileSync(path.join(dir, `${safeSessionId(sessionID)}.jsonl`), `${JSON.stringify(event)}\n`);
   } catch {

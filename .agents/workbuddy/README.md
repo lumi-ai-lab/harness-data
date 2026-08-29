@@ -27,14 +27,14 @@ The JavaScript adapter only normalizes WorkBuddy transport fields and tool names
 
 1. Install or update the Harness runtime so the plugin is available as `agents/workbuddy` and its local Marketplace manifest as `agents/.codebuddy-plugin/marketplace.json`.
 2. In WorkBuddy's plugin management UI, choose **Add Marketplace** and select the runtime's `agents` directory (not `agents/workbuddy`).
-3. Install and enable `qdm-harness@lumi-harness-data`, reload plugins, and start a new conversation in the Harness runtime workspace.
+3. Install and enable `qdm-harness@lumi-ai-lab`, reload plugins, and start a new conversation in the Harness runtime workspace.
 4. Run `harness-data doctor --dir <runtime>` to validate the package and inspect enablement across user/project/local settings.
 
 CLI equivalent when the `codebuddy` command is available:
 
 ```bash
 codebuddy plugin marketplace add "<runtime>/agents"
-codebuddy plugin install qdm-harness@lumi-harness-data --scope user
+codebuddy plugin install qdm-harness@lumi-ai-lab --scope user
 ```
 
 The npm installer deliberately does not edit WorkBuddy settings or Marketplace registration automatically. Preparing the Marketplace and enabling its plugin in WorkBuddy are separate operations.

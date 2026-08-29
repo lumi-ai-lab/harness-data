@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import test from "node:test";
 
 import { runWikis } from "../src/commands/wikis.js";
 import { ExitError } from "../src/lib/exit.js";
-import { buildIndex, loadRuntimeIndex } from "../src/lib/wikis/index.js";
+import { buildIndex, loadRuntimeIndex, RESOURCE_MANIFEST_REL } from "../src/lib/wikis/index.js";
 import {
   buildTemplateDoctor,
   isAllowedTemplateSelectionPath,
@@ -259,9 +260,40 @@ templates:
   );
   buildIndex(root, true);
   const runtime = loadRuntimeIndex(root);
+  const index = JSON.parse(readFileSync(path.join(root, ".harness", "index", "wikis-index.json"), "utf8"));
+  assert.equal(index.meta.root, ".");
+  assert.equal(index.meta.resourceId, "qdm-harness-wiki");
+  assert.equal(path.isAbsolute(index.meta.root), false);
   assert.equal(runtime.templateSelection.length, 1);
   assert.equal(runtime.templateSelection[0].id, "business_report");
   assert.equal(runtime.templateSelection[0].template, "reports/经营综合分析报告/template.md");
+});
+
+test("buildIndex writes a relocatable resource manifest with verified content hashes", () => {
+  const root = structuredRoot();
+  writeReportObject(root, "经营综合分析报告");
+  const first = buildIndex(root, true);
+  const manifestPath = path.join(root, RESOURCE_MANIFEST_REL);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  assert.equal(first.resourceManifestPath, RESOURCE_MANIFEST_REL);
+  assert.match(first.resourceVersion, /^[a-f0-9]{64}$/);
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.resourceSchemaVersion, 1);
+  assert.equal(manifest.resourceId, "qdm-harness-wiki");
+  assert.equal(manifest.wikiContentVersion, first.resourceVersion);
+  assert.equal(manifest.files.some((entry) => entry.path === ".harness/index/wikis-index.json" && entry.kind === "index"), true);
+  assert.equal(manifest.files.some((entry) => entry.path === ".harness/index/wikis-runtime-index.json" && entry.kind === "index"), true);
+  for (const entry of manifest.files) {
+    assert.equal(path.isAbsolute(entry.path), false);
+    assert.equal(entry.path.startsWith("../"), false);
+    assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+    const actual = createHash("sha256").update(readFileSync(path.join(root, entry.path))).digest("hex");
+    assert.equal(entry.sha256, actual, entry.path);
+  }
+
+  writeFile(root, "wikis/reports/经营综合分析报告/template.md", "# 更新后的报告模板\n");
+  const second = buildIndex(root, true);
+  assert.notEqual(second.resourceVersion, first.resourceVersion);
 });
 
 test("buildIndex rejects invalid template selection policy", () => {

@@ -13,20 +13,20 @@ import { inspectRuntimeAgentListResult } from "../index.ts";
 import { classifyResearcherCommand } from "../../report-researcher-guard/guard.mjs";
 
 test("canonical and legacy report agent names resolve to the same role", () => {
-  assert.equal(canonicalReportAgentName("report-writer"), "qdm-html-report.report-writer");
+  assert.equal(canonicalReportAgentName("report-writer"), "harness-data.report-writer");
   assert.equal(isReportAgentName("report-writer", "report-writer"), true);
-  assert.equal(isReportAgentName("qdm-html-report.report-writer", "report-writer"), true);
-  assert.equal(isReportAgentName("qdm-html-report.report-writer", "report-reviewer"), false);
+  assert.equal(isReportAgentName("harness-data.report-writer", "report-writer"), true);
+  assert.equal(isReportAgentName("harness-data.report-writer", "report-reviewer"), false);
   assert.equal(isReportAgentName("worker", "report-writer"), false);
 });
 
 test("runtime list accepts canonical package agent rows", (t) => {
   t.after(() => resetObservedReportAgents());
   const text = [
-    "- qdm-html-report.report-writer (package): write",
-    "- qdm-html-report.report-researcher (package): research",
-    "- qdm-html-report.report-reviewer (package): review",
-    "- qdm-html-report.report-designer (package): design",
+    "- harness-data.report-writer (package): write",
+    "- harness-data.report-researcher (package): research",
+    "- harness-data.report-reviewer (package): review",
+    "- harness-data.report-designer (package): design",
   ].join("\n");
   assert.equal(runtimeListHasReportAgent(text, "report-writer"), true);
   const inspected = inspectRuntimeAgentListResult({
@@ -37,14 +37,14 @@ test("runtime list accepts canonical package agent rows", (t) => {
   assert.equal(inspected.ok, true);
   assert.deepEqual(inspected.missingAgents, []);
   rememberObservedReportAgentsFromListText(text);
-  assert.equal(reportAgentDispatchName("report-writer"), "qdm-html-report.report-writer");
+  assert.equal(reportAgentDispatchName("report-writer"), "harness-data.report-writer");
 });
 
 test("runtime list prefers legacy dispatch when both names are present", (t) => {
   t.after(() => resetObservedReportAgents());
   const text = [
     "- report-writer (project): write",
-    "- qdm-html-report.report-writer (package): write",
+    "- harness-data.report-writer (package): write",
     "- report-researcher (project): research",
     "- report-reviewer (project): review",
     "- report-designer (project): design",

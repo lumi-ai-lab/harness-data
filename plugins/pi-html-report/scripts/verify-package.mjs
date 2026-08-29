@@ -1,12 +1,31 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { verifyArtifact } from "../../../scripts/verify-artifact.mjs";
+
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const repoRoot = dirname(dirname(pluginRoot));
 const pkg = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8"));
-const dist = join(pluginRoot, "dist");
+const dist = resolveDist();
 const errors = [];
+
+function resolveDist() {
+  const configured = String(process.env.PI_HTML_REPORT_OUTPUT_DIR || "").trim();
+  if (!configured) return join(pluginRoot, "dist");
+  if (!isAbsolute(configured)) throw new Error("PI_HTML_REPORT_OUTPUT_DIR must be an absolute path");
+  const target = resolve(configured);
+  const relativeToRepo = relative(repoRoot, target);
+  const outsideRepo = /^\.\.(?:[\\/]|$)/.test(relativeToRepo) || isAbsolute(relativeToRepo);
+  if (
+    !relativeToRepo ||
+    (!outsideRepo && [".agents", "packages", "plugins", "scripts", "npm", "config", "bootstrap", "wikis"].includes(relativeToRepo.split(/[\\/]/)[0]))
+  ) {
+    throw new Error(`PI_HTML_REPORT_OUTPUT_DIR must not replace a source directory: ${target}`);
+  }
+  return target;
+}
 
 function need(path, label) {
   if (!existsSync(path)) errors.push(`missing ${label}: ${path}`);
@@ -29,16 +48,19 @@ need(join(dist, "skills", "html-report", "SKILL.md"), "html-report skill");
 need(join(dist, "skills", "html-report-design", "SKILL.md"), "html-report-design skill");
 need(join(dist, "vendor", "html-report-kernel", "src", "index.mjs"), "bundled kernel");
 need(join(dist, "vendor", "harness-runtime-node", "src", "index.mjs"), "bundled runtime");
+need(join(dist, "plugin-manifest.json"), "product plugin manifest");
 
 for (const name of ["report-writer", "report-researcher", "report-reviewer", "report-designer"]) {
   const agentPath = join(dist, "agents", `${name}.md`);
   need(agentPath, `${name} agent`);
   if (existsSync(agentPath)) {
     const text = readFileSync(agentPath, "utf8");
-    if (!text.includes("package: qdm-html-report")) errors.push(`${name} missing package: qdm-html-report`);
+    if (!text.includes("package: harness-data")) errors.push(`${name} missing package: harness-data`);
     if (text.includes(".agents/pi/")) errors.push(`${name} still references .agents/pi/`);
   }
 }
+
+errors.push(...verifyArtifact(dist, { kind: "pi" }).errors);
 
 if (errors.length) {
   process.stderr.write(`${errors.map((line) => `error: ${line}`).join("\n")}\n`);

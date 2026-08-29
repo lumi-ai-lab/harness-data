@@ -258,7 +258,7 @@ async function downloadPrivateWithToken(asset, file, options = {}) {
 
 async function downloadAsset(tool, asset, file, options = {}) {
   if (asset.releaseSource === "gitee") {
-    await download(asset.url, file, { "User-Agent": "harness-data-installer" }, {
+    await download(asset.url, file, releaseAssetHeaders(asset, options), {
       progressLabel: assetName(asset),
       log: options.log,
       progress: options.progress,
@@ -292,6 +292,14 @@ async function downloadAsset(tool, asset, file, options = {}) {
   }
   const detail = failures.filter(Boolean).join("; ");
   throw new Error(`private GitHub Release asset requires gh auth login, GITHUB_TOKEN, or --github-token: ${assetName(asset)}${detail ? ` (${detail})` : ""}`);
+}
+
+function releaseAssetHeaders(asset, options = {}) {
+  const headers = { "User-Agent": "harness-data-installer" };
+  if (asset?.releaseSource !== "gitee") return headers;
+  const token = options.giteeToken || (options.env || process.env).GITEE_TOKEN || "";
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 function fileSha256(file) {

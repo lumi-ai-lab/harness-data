@@ -553,6 +553,32 @@ test("htmlReportSessionDir nests under .harness/state/html-report", () => {
   assert.match(dir, /^\/repo\/\.harness\/state\/html-report\/[0-9a-f]{64}$/);
 });
 
+test("htmlReportSessionDir reopens a migrated legacy session directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "hr-legacy-session-test-"));
+  const stateRoot = join(root, "external-state");
+  const sessionId = "legacy-report";
+  const legacyDir = join(stateRoot, "html-report", sessionId);
+  try {
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "result.json"), JSON.stringify({ status: "confirmed", session_id: sessionId, cards: [] }));
+    assert.equal(htmlReportSessionDir(root, sessionId, stateRoot), legacyDir);
+
+    const canonicalDir = join(
+      stateRoot,
+      "html-report",
+      createHash("sha256").update(`workbuddy:${sessionId}`).digest("hex"),
+    );
+    mkdirSync(join(canonicalDir, "debug"), { recursive: true });
+    writeFileSync(join(canonicalDir, "debug", "a-config-question.json"), JSON.stringify({ userQuestion: "legacy stub" }));
+    assert.equal(htmlReportSessionDir(root, sessionId, stateRoot), legacyDir);
+
+    writeFileSync(join(canonicalDir, "debug", "pipeline-state.json"), JSON.stringify({ sessionId }));
+    assert.equal(htmlReportSessionDir(root, sessionId, stateRoot), canonicalDir);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test("writerSchema pins role and cardId", () => {
   const schema = writerSchema("card-001");
   const ok = validateJsonSchema({ role: "report-writer", taskId: "t1", cardId: "card-001", paragraphs: ["x"] }, schema);
@@ -1889,6 +1915,10 @@ test("M6 thin entry treats B2_MAIN as delivered instead of prompting background 
     assert.match(main.message, /初版报告已生成/);
     assert.match(main.message, /不要在后台继续推进/);
     assert.match(main.message, /不要运行 approve/);
+    const sessionMain = join(sessionDir, "analysis", "main.md");
+    const workspaceMain = join(root, "analysis", "main.md");
+    assert.equal(existsSync(workspaceMain), true, "explicit report flow must publish workspace analysis/main.md");
+    assert.equal(readFileSync(workspaceMain, "utf8"), readFileSync(sessionMain, "utf8"));
 
     const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
     assert.equal(s.ok, true, s.error);

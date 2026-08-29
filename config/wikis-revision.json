@@ -1,0 +1,9 @@
+{
+  "repository": "embedded",
+  "checkedAt": "2026-08-31",
+  "checks": [
+    "check-all"
+  ],
+  "status": "passed",
+  "contentVersion": "d68a86e98db5642f94b246021c41e7835f967d4d02948c6d08427ef7d0c1dce7"
+}

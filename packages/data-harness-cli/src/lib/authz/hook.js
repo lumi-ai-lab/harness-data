@@ -1,7 +1,8 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 
-import { authzEnabled, loadConfig } from "../harness.js";
+import { authzEnabled, loadConfig, normalizeResolverOwners } from "../harness.js";
+import { assertWorkspaceAllowed } from "../workspace-policy.js";
 import { resolveAuthBlob } from "./auth-blob.js";
 import {
   ADAPTER_ALLOW,
@@ -30,20 +31,22 @@ import {
   powerShellMetricInvocationCount,
 } from "./powershell-command.js";
 
-export function run(root, agent, input) {
-  const cfg = loadConfig(root);
+export function run(rootOrContext, agent, input) {
+  const cfg = loadConfig(rootOrContext);
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!authzEnabled(cfg.authz)) {
     return { ok: false, output: emptyHookOutput() };
   }
-  return runEnabled(cfg, root, agent, input, false);
+  return runEnabled(cfg, resourceRoot, agent, input, false, rootOrContext);
 }
 
-export function runAdapterEnvelope(root, agent, input) {
-  const cfg = loadConfig(root);
+export function runAdapterEnvelope(rootOrContext, agent, input) {
+  const cfg = loadConfig(rootOrContext);
+  const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
   if (!authzEnabled(cfg.authz)) {
     return adapterEnvelope(ADAPTER_DISABLED, {});
   }
-  const { ok, output } = runEnabled(cfg, root, agent, input, true);
+  const { ok, output } = runEnabled(cfg, resourceRoot, agent, input, true, rootOrContext);
   if (!ok) return adapterEnvelope(ADAPTER_NOOP, {});
   const decision = output.hookSpecificOutput.permissionDecision;
   if (decision === "allow") return adapterEnvelope(ADAPTER_ALLOW, output);
@@ -59,7 +62,7 @@ function emptyHookOutput() {
   return { hookSpecificOutput: { hookEventName: "", permissionDecision: "" } };
 }
 
-function runEnabled(cfg, root, agent, input, strictInput) {
+function runEnabled(cfg, root, agent, input, strictInput, rootContext = null) {
   const parsed = parseHookPayload(input);
   if (!parsed.ok) {
     if (!strictInput) return { ok: false, output: emptyHookOutput() };
@@ -67,6 +70,17 @@ function runEnabled(cfg, root, agent, input, strictInput) {
   }
   const payload = parsed.payload;
   const toolName = String(payload.toolName || "").trim().toLowerCase();
+  const command = payload.toolInput?.command;
+  const workspaceDecision = checkWorkspacePolicy(rootContext, payload);
+  if (workspaceDecision === "denied") {
+    if (typeof command === "string" && looksLikeGatedMetricCommand(command)) {
+      return { ok: true, output: denyOutput("QDM_WORKSPACE_NOT_ALLOWED: the current workspace is not in the Harness Data allowlist") };
+    }
+    return { ok: false, output: emptyHookOutput() };
+  }
+  if (workspaceDecision === "unavailable" && typeof command === "string" && looksLikeGatedMetricCommand(command)) {
+    return { ok: true, output: denyOutput("QDM_SETUP_REQUIRED: configure the Harness Data workspace allowlist before using QDM data commands") };
+  }
   if (
     String(agent || "").trim().toLowerCase() === "workbuddy" &&
     toolName !== "" &&
@@ -84,7 +98,6 @@ function runEnabled(cfg, root, agent, input, strictInput) {
     if (!strictInput) return { ok: false, output: emptyHookOutput() };
     return { ok: true, output: denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an invalid PreToolUse event") };
   }
-  const command = payload.toolInput?.command;
   if (typeof command !== "string" || !command.trim()) {
     if (!strictInput) return { ok: false, output: emptyHookOutput() };
     return { ok: true, output: denyOutput("QDM_AUTHZ_INPUT_INVALID: WorkBuddy provided an incomplete PreToolUse payload") };
@@ -139,14 +152,14 @@ function runEnabled(cfg, root, agent, input, strictInput) {
 
   let resolved;
   try {
-    resolved = resolveAuthBlob({ projectRoot: root, config: cfg.authz });
+    resolved = resolveAuthBlob({ projectRoot: root, config: cfg.authz, secretRef: rootContext?.secretRef });
   } catch (error) {
     return { ok: true, output: denyOutput(missingAuthReason(dialect, command, cfg.authz, error)) };
   }
 
   let metricCliPath;
   try {
-    metricCliPath = resolveMetricCLIPath(root, cfg);
+    metricCliPath = resolveMetricCLIPath(rootContext || root, cfg);
   } catch {
     return {
       ok: true,
@@ -156,7 +169,8 @@ function runEnabled(cfg, root, agent, input, strictInput) {
 
   let rewritten;
   try {
-    rewritten = rewriteGatedMetricCommands(command, resolved.blob, metricCliPath, dialect);
+    const authArgument = process.platform === "win32" || !resolved.sourcePath ? resolved.blob : resolved.sourcePath;
+    rewritten = rewriteGatedMetricCommands(command, authArgument, metricCliPath, dialect);
   } catch {
     rewritten = "";
   }
@@ -265,11 +279,26 @@ function parseHookPayload(input) {
       payload: {
         hookEventName: typeof raw.hook_event_name === "string" ? raw.hook_event_name : "",
         toolName: typeof raw.tool_name === "string" ? raw.tool_name : "",
+        cwd: typeof raw.cwd === "string" ? raw.cwd : (typeof raw.workspace_root === "string" ? raw.workspace_root : ""),
         toolInput,
       },
     };
   } catch {
     return { ok: false };
+  }
+}
+
+function checkWorkspacePolicy(rootContext, payload) {
+  if (!rootContext || typeof rootContext !== "object" || !rootContext.pluginRoot) return "ok";
+  const workspaceRoot = String(payload?.cwd || rootContext.workspaceRoot || process.env.HARNESS_WORKSPACE_ROOT || process.cwd()).trim();
+  if (!workspaceRoot) return "unavailable";
+  try {
+    assertWorkspaceAllowed({ ...rootContext, workspaceRoot });
+    return "ok";
+  } catch (error) {
+    if (error?.code === "QDM_WORKSPACE_NOT_ALLOWED") return "denied";
+    if (error?.code === "QDM_SETUP_REQUIRED") return "unavailable";
+    throw error;
   }
 }
 
@@ -330,7 +359,9 @@ export function resolveMetricCLIPath(root, cfg) {
   if (cfg?.cli?.qdmMetricCli) candidates.push(resolveProjectPath(root, cfg.cli.qdmMetricCli));
   let metricName = "qdm-metric-cli";
   if (process.platform === "win32") metricName += ".exe";
-  candidates.push(path.join(root, "bin", metricName));
+  const context = root && typeof root === "object" ? root : null;
+  if (context?.pluginRoot) candidates.push(path.join(context.pluginRoot, "runtimes", runtimePlatformKey(), metricName));
+  candidates.push(path.join(root && typeof root === "string" ? root : context?.pluginRoot || "", "bin", metricName));
   for (const candidate of candidates) {
     try {
       const info = statSync(candidate);
@@ -350,9 +381,18 @@ export function resolveMetricCLIPath(root, cfg) {
   throw new Error("configured and runtime CLI paths are missing or not executable");
 }
 
+function runtimePlatformKey() {
+  if (process.platform === "darwin" && process.arch === "arm64") return "darwin-arm64";
+  if (process.platform === "linux" && process.arch === "x64") return "linux-amd64";
+  if (process.platform === "win32" && process.arch === "x64") return "windows-amd64";
+  if (process.platform === "win32" && process.arch === "arm64") return "windows-arm64";
+  return `${process.platform}-${process.arch}`;
+}
+
 function resolveProjectPath(root, value) {
   if (path.isAbsolute(value) || value.startsWith("/")) return value;
-  return path.join(root, value);
+  const base = root && typeof root === "object" ? (root.pluginRoot || root.resourceRoot || root.dataRoot) : root;
+  return path.join(base || "", value);
 }
 
 export function toGoHookJSON(output) {

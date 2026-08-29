@@ -1,72 +1,37 @@
-name: Wikis Compatibility
+name: Wiki Release Validation
 
 on:
-  pull_request:
-    branches:
-      - master
-    paths:
-      - .gitmodules
-      - wikis
-      - cli/**
-      - config/**
-      - bootstrap/**
-      - .agents/**
-      - npm/**
-  push:
-    branches:
-      - master
-    paths:
-      - .gitmodules
-      - wikis
-      - cli/**
-      - config/**
-      - bootstrap/**
-      - .agents/**
-      - npm/**
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: wikis-compatibility-${{ github.event.pull_request.number || github.ref }}
+  group: wikis-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Test pinned Wikis snapshot
+  validate:
+    name: Validate private Wikis checkout
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout with pinned Wikis submodule
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Checkout private Wikis
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.RELEASE_GH_TOKEN || github.token }}
-          submodules: recursive
+          repository: lumi-ai-lab/harness-data-wikis
+          token: ${{ secrets.WIKIS_CHECKOUT_TOKEN || secrets.RELEASE_GH_TOKEN || github.token }}
+          path: wikis-src
 
-      - name: Verify pinned submodule commit
-        run: |
-          set -euo pipefail
-          expected="$(git ls-tree HEAD wikis | awk '{print $3}')"
-          actual="$(git -C wikis rev-parse HEAD)"
-          test -n "$expected"
-          test "$actual" = "$expected"
-
-      - name: Setup Node
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Test JS data-harness-cli
-        working-directory: packages/data-harness-cli
-        run: node --test
-
-      - name: Build Wikis indexes
+      - name: Verify Wikis content
         run: |
-          chmod +x bin/data-harness-cli
-          ./bin/data-harness-cli wikis build-index --skip-checks
-          test -s .harness/index/wikis-index.json
-          test -s .harness/index/wikis-runtime-index.json
-
-      - name: Test npm installer and Agent adapters
-        working-directory: npm
-        run: npm test -- --test-concurrency=1
+          set -euo pipefail
+          node scripts/verify-pinned-wikis.mjs --wikis-root "$GITHUB_WORKSPACE/wikis-src"
+          (cd wikis-src && node "$GITHUB_WORKSPACE/packages/data-harness-cli/src/main.js" wikis check-all)

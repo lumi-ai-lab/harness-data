@@ -1,161 +1,91 @@
-# Harness Data npm installer
+# Harness Data Plugin 内部 Setup 实现
 
-## Prerequisites
+这里的代码不是当前用户安装入口。它会被复制到：
 
-- **Node.js 18+**
-- **Git** (on PATH)
-- **tar** (on PATH; retained for historical `.tar.gz` Release fallback, and bundled with Git for Windows on Windows)
-- **unzip** (on PATH on every supported platform; not bundled with Git for Windows by default. Install via MSYS2 (`pacman -S unzip`) or copy from an MSYS2 installation into a PATH directory. The installer checks for `unzip` and will stop with `missing required command: unzip` if it is absent.)
-- **Windows only** — additional requirements:
-  - **Agent selection** — Windows defaults to Codex and also supports explicit WorkBuddy; other Agents are not available on Windows.
-  - **Authorization required** — Every install enables authorization. WorkBuddy auth is supported on macOS and Windows; use another Agent on unsupported platforms.
-  - **Windows x64 + ARM64** are both supported.
+```text
+plugins/harness-data/dist/harness-data-installer/
+```
 
-Install a Harness Data runtime in the current directory:
+用户先下载公开 Marketplace ZIP，解压后安装：
 
 ```bash
-npx @lumi-ai-lab/harness-data install
+unzip harness-data-codex-marketplace-vX.Y.Z.zip
+codex plugin marketplace add "$PWD/harness-data-codex-marketplace"
+codex plugin add harness-data@lumi-ai-lab
 ```
 
-Install into an explicit runtime directory:
+然后执行已安装 Plugin 内的：
 
 ```bash
-npx @lumi-ai-lab/harness-data install --dir /path/to/runtime
+node "$PLUGIN_ROOT/scripts/setup.mjs"
 ```
 
-Recommended latest install from Gitee (Linux/macOS):
+## Setup 职责
+
+`src/commands/setup.js` 为 Codex Plugin 准备运行实例：
+
+- 解析 `pluginRoot`、`resourceRoot`、`dataRoot`、`secretRoot` 和 `workspaceRoot`；
+- 将配置、Root Context、授权文件和外部 `qdm-metric-cli` 写入 Plugin 目录；
+- 优先从 Gitee `git_pengmd/harness-metric-release`，失败后从 GitHub `pengmide/qdm-metric-cli` 获取当前平台的 latest Release；
+- 下载私有 Wikis ZIP（或 `--wikis-source`）到 Plugin `resources/wikis/`，并在 Plugin 内构建索引；
+- 用户级默认关闭插件，并在指定项目写入 `.codex/config.toml` 启用；
+- 不在项目目录创建 Harness 状态目录。
+
+支持的平台：
+
+```text
+darwin-arm64
+linux-amd64
+windows-amd64
+windows-arm64
+```
+
+## Setup 参数
+
+```text
+--data-root PATH
+--workspace-root PATH
+--workspace-allowlist PATH       可重复；目录不存在则创建并启用本插件
+--metric-cli PATH
+--gitee-token TOKEN
+--github-token TOKEN
+--release-archive-password VALUE
+--auth-blob BLOB
+--auth-blob-file PATH
+--auth-user-id ID
+--secret-ref VALUE
+--no-auth
+--json
+```
+
+未提供 Gitee/GitHub Token、Release ZIP 密码或 QDM `auth.blob` 时，交互式终端会私密询问。非交互运行必须通过参数或环境变量提供所需材料。
+
+## 目录约定
+
+Codex Plugin 布局：
+
+```text
+<pluginRoot>/
+├── resources/wikis/                  # Setup 下载后运行时直接读取
+├── .harness/index/                   # Setup 生成的索引
+├── resource-manifest.json            # Setup 生成
+├── config/                           # Setup 生成
+├── secrets/auth.blob                 # Setup 生成，0600
+├── runtimes/<platform>/qdm-metric-cli
+├── context.json                      # Setup 生成
+└── install-manifest.json             # Setup 生成
+```
+
+普通 Harness 状态和 html-report Pipeline 状态在外部 `dataRoot/state/workspaces/<hash>/`。最终报告由 html-report MCP 写入 `workspaceRoot/analysis/main.md`；同级 HTML 只有在用户明确确认后才生成。
+
+## 兼容实现
+
+旧本地 runtime 的 `install`、`update` 和 `migrate` 代码仍保留在源码中，用于内部迁移和回归测试；它们不属于新用户的 Plugin 安装流程。Wiki Git checkout、独立 Wiki 发布和独立 runtime 发布也不属于当前产品渠道。
+
+## 开发测试
 
 ```bash
-npx -y @lumi-ai-lab/harness-data@latest install \
-  --release-source gitee \
-  --dir ~/qdm-harness-data/harness-data-runtime \
-  --agent codex \
-  --auth-blob 'qdm1enc...' \
-  --auth-user-id 'your-user-id' \
-  --yes
+npm test -- --test-concurrency=1
+node ../plugins/harness-data/scripts/bundle-dist.mjs \
+  --output-dir ../plugins/harness-data/dist
 ```
-
-PowerShell:
-
-```powershell
-npx -y @lumi-ai-lab/harness-data@latest install `
-  --release-source gitee `
-  --dir "D:\qdm-harness-data\harness-data-runtime" `
-  --agent codex `
-  --auth-blob "qdm1enc..." `
-  --auth-user-id "your-user-id" `
-  --yes
-```
-
-Development administrator install (do not combine `--dev` with auth Blob flags):
-
-```bash
-npx -y @lumi-ai-lab/harness-data@latest install \
-  --release-source gitee \
-  --dir ~/qdm-harness-data/harness-data-runtime \
-  --agent codex \
-  --dev \
-  --dev-password 'PASSWORD' \
-  --yes
-```
-
-Release ZIP password is built into the installer. `install` and `update` do not prompt for it
-and do not require `HARNESS_RELEASE_PASSWORD`. There is intentionally no `--release-password`
-option. During extraction the installer invokes `unzip` with a redacted sensitive argument;
-the password is never written to installer state, configuration, logs, or errors. Releases use
-traditional password ZIP encryption as an access barrier only; it is not strong confidentiality
-against a determined recipient.
-
-Release downloads default to `auto`: the installer first checks the mirrored Gitee
-Release for the exact required uploaded ZIP, then falls back to GitHub only when the
-Gitee Release is unavailable or missing that asset. Choose a provider explicitly with
-`--release-source auto|gitee|github` or `HARNESS_RELEASE_SOURCE`:
-
-```bash
-npx @lumi-ai-lab/harness-data install --release-source gitee
-HARNESS_RELEASE_SOURCE=github npx @lumi-ai-lab/harness-data update
-```
-
-Gitee mirrors `data-harness-cli`, the runtime, and
-`harness-data-wikis-<tag>.zip` from `git_pengmd/harness-release`, and
-`qdm-metric-cli` from `git_pengmd/harness-metric-release`. Only normal Release
-attachments with the exact expected filename are selected; source archives are never
-used.
-
-Use a GitHub token for private GitHub Release assets:
-
-```bash
-npx @lumi-ai-lab/harness-data install --github-token ...
-```
-
-or:
-
-```bash
-GITHUB_TOKEN=... npx @lumi-ai-lab/harness-data install
-```
-
-Metric **data-auth** is enabled by default. Interactive install prompts for the encrypted Blob and `dev_user_id`:
-
-```bash
-npx @lumi-ai-lab/harness-data install
-```
-
-For non-interactive installs, pass flags or environment variables:
-
-```bash
-npx @lumi-ai-lab/harness-data install \
-  --auth-blob 'qdm1enc...' --auth-user-id 'your-user-id' --yes
-
-HARNESS_AUTH_BLOB='qdm1enc...' HARNESS_AUTH_USER_ID='your-user-id' \
-npx @lumi-ai-lab/harness-data install --yes
-```
-
-Register the development administrator through `qdm-metric-cli dev`:
-
-```bash
-npx @lumi-ai-lab/harness-data install --dev
-npx @lumi-ai-lab/harness-data install --dev --dev-password 'PASSWORD' --yes
-```
-
-Use the built-in fixture for development and testing:
-
-```bash
-npx @lumi-ai-lab/harness-data install --data-auth
-```
-
-The same auth parameters support `--agent workbuddy` on macOS and Windows. WorkBuddy auth is rejected on other platforms; use another Agent there. User-provided Blobs and the fixture working copy are stored at `config/dev-auth.blob` with mode `0600`.
-
-The shipped `config/fixtures/local-test-auth.blob` is used as local fallback (`dev_user_id: local-test-user`). For the Codex App or terminal scenario, admins can distribute a real encrypted blob file to each user outside the workspace and users bind it with `HARNESS_AUTH_BLOB_FILE` + `HARNESS_AUTH_USER_ID`; keep `authz.allow_local_blob: true` for this mode. Codex uses `PreToolUse` hook to inject auth; the hook reads the local blob and rewrites gated `qdm-metric-cli` commands directly. When `authz.mode=on`, ordinary Codex Bash commands are rewritten by the hook to unset auth source env (`HARNESS_AUTH_BLOB`, `HARNESS_AUTH_BLOB_FILE`, `HARNESS_AUTH_USER_ID`, `LUMI_REQUESTER_CONTEXT_DIR`) before execution. `LUMI_REQUESTER_CONTEXT_DIR` is no longer read but is still scrubbed for legacy safety. When authz is off, the hook passes every Bash command through unchanged.
-
-With `auto` or `gitee`, the runtime, Wikis, and both CLI tools can be installed from
-a complete Gitee mirror without a GitHub token or a local `harness-data-wikis` copy.
-With `--release-source github`, the existing private GitHub restriction remains: the
-installer asks for a local `qdm-metric-cli` path when GitHub auth is unavailable.
-Data queries use only `qdm-metric-cli` (`qdm-cmr-cli` / `qdm-indicators-cli` /
-`qdm-sql-cli` / `cas-cli` are no longer installed).
-
-Update an existing runtime interactively:
-
-```bash
-npx @lumi-ai-lab/harness-data update
-```
-
-Diagnose a runtime:
-
-```bash
-npx @lumi-ai-lab/harness-data doctor
-```
-
-The runtime is assembled from the `harness-data` runtime bundle, platform-specific CLI
-Release assets (`data-harness-cli`, `qdm-metric-cli`), the version-matched
-`harness-data-wikis` Release ZIP, generated local config, selected Agent symlinks,
-and the WorkBuddy plugin package.
-
-Supported Release platforms are Windows x64, Windows ARM64, Linux x64, and Apple Silicon
-macOS. Intel macOS (`darwin-amd64`) is no longer supported.
-
-`--agent` supports `claude`, `codex`, `pi`, `openclaw`, `hermes`, `workbuddy`, `both`, and `all`. `both` remains Claude + Codex. Until the project-owned WorkBuddy desktop E2E matrix passes, `all` keeps its existing Claude + Codex + Pi + OpenClaw + Hermes semantics; choose `--agent workbuddy` explicitly. On Windows, only `codex` is available and is auto-selected.
-
-WorkBuddy auth requires Desktop **5.3.11+** with embedded CodeBuddy CLI **2.115.0+**. The installer prepares a local Marketplace at `agents/.codebuddy-plugin/marketplace.json` whose `qdm-harness` plugin source is `agents/workbuddy`; it does not edit WorkBuddy settings or Marketplace registration. In WorkBuddy's plugin manager, choose **Add Marketplace**, select the runtime's `agents` directory, install and enable `qdm-harness@lumi-harness-data`, reload plugins, and start a new conversation in the Harness runtime workspace. Marketplace/package presence, plugin enablement, runtime versions, and auth source are reported separately by `doctor`.
-
-On macOS and Windows, `authz.mode=on` is enforced by a fail-closed `PreToolUse` hook. For managed macOS credentials, set `HARNESS_AUTH_BLOB_FILE` and `HARNESS_AUTH_USER_ID` with `launchctl`, keep the Blob outside the workspace with mode `0600`, restart WorkBuddy, and run `doctor`. Windows QDM data commands must use Bash; gated PowerShell commands are denied before credentials are read. Direct injection places the encrypted Blob in `updatedInput.command`, so this mode is limited to local validation or controlled pilots until a credential-isolated integration is available.

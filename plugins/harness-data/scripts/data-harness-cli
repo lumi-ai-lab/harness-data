@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { readPersistedContext, setupEnvironment } from "./context-store.mjs";
+
+const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+process.env.HARNESS_PLUGIN_ROOT = pluginRoot;
+process.env.HARNESS_CONTEXT_FILE ||= join(pluginRoot, "context.json");
+process.env.HARNESS_WORKSPACE_POLICY ||= join(pluginRoot, "config", "workspace-policy.json");
+const args = process.argv.slice(2);
+const command = String(args[0] || "");
+
+if (command === "setup") {
+  Object.assign(process.env, setupEnvironment({ pluginRoot }));
+  delete process.env.HARNESS_CONTEXT_FILE;
+  const { main } = await import("../dist/harness-data-installer/src/cli.js");
+  const setupIndex = args.indexOf("setup");
+  const setupArgs = setupIndex >= 0 ? [...args.slice(0, setupIndex), ...args.slice(setupIndex + 1)] : args;
+  try {
+    await main([
+      process.execPath,
+      fileURLToPath(import.meta.url),
+      "setup",
+      ...setupArgs,
+      "--plugin-root",
+      pluginRoot,
+      "--host",
+      "codex",
+    ]);
+  } catch (error) {
+    const message = error?.code ? `${error.code}: ${error.message || error}` : String(error?.message || error);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  }
+} else {
+  if (!["help", "--help", "-h"].includes(command)) {
+    try {
+      const loaded = readPersistedContext();
+      process.env.HARNESS_CONTEXT_FILE = loaded.contextPath;
+    } catch (error) {
+      process.stderr.write(`${error?.code || "QDM_SETUP_REQUIRED"}: ${error?.message || error}\n`);
+      process.exit(2);
+    }
+  }
+  process.env.HARNESS_PLUGIN_ROOT = pluginRoot;
+  process.env.HARNESS_HOST = "codex";
+  const { main } = await import("../dist/data-harness-cli/src/main.js");
+  const cliArgs = ["help", "--help", "-h"].includes(command) ? args : ["--plugin-root", pluginRoot, ...args];
+  await main(cliArgs);
+}

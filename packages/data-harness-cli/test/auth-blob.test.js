@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -53,6 +53,7 @@ test("resolveAuthBlob reads env blob file", () => {
   });
   assert.equal(resolved.source, BLOB_SOURCE_ENV_FILE);
   assert.equal(resolved.blob, testBlob);
+  assert.equal(resolved.sourcePath, realpathSync(blobPath));
   assert.equal(resolved.userId, "env-user");
 });
 
@@ -69,7 +70,23 @@ test("resolveAuthBlob reads configured file", () => {
   });
   assert.equal(resolved.source, BLOB_SOURCE_FILE);
   assert.equal(resolved.blob, testBlob);
+  assert.equal(resolved.sourcePath, realpathSync(blobPath));
   assert.equal(resolved.userId, "local-user");
+});
+
+test("secretRef file remains available when local blob fallback is disabled", () => {
+  const root = tempRoot();
+  const blobPath = path.join(root, "secret-ref.blob");
+  writeFileSync(blobPath, `${testBlob}\n`, { mode: 0o600 });
+  chmodSync(blobPath, 0o600);
+  const resolved = resolveAuthBlob({
+    projectRoot: root,
+    config: { allowLocalBlob: false, devUserId: "secret-user" },
+    secretRef: { kind: "file", path: blobPath },
+    env: {},
+  });
+  assert.equal(resolved.source, "secret_ref_file");
+  assert.equal(resolved.sourcePath, realpathSync(blobPath));
 });
 
 test("resolveAuthBlob env blob prioritized over config file", () => {

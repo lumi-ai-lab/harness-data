@@ -533,12 +533,14 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 | 项 | 位置 |
 |---|---|
 | Marketplace | `.agents/plugins/marketplace.json` |
-| Plugin manifest | `.agents/plugins/qdm-html-report/plugin.json` |
-| MCP 声明 | `.agents/plugins/qdm-html-report/.mcp.json` |
-| Skill | `.agents/plugins/qdm-html-report/skills/html-report/SKILL.md` |
-| MCP server | `.agents/plugins/qdm-html-report/mcp/server.mjs` |
+| Plugin 源目录 | `plugins/harness-data/` |
+| Plugin manifest | `plugins/harness-data/.codex-plugin/plugin.json` |
+| MCP 声明 | `plugins/harness-data/.mcp.json` |
+| Skill | `plugins/harness-data/skills/html-report/SKILL.md` |
+| MCP server | `plugins/harness-data/mcp/server.mjs` |
+| 安装后 Plugin Root | `$CODEX_HOME/plugins/cache/lumi-ai-lab/harness-data/<version>/` |
 
-安装后 runtime 路径：`agents/plugins/`（CI 打包已包含）。
+主仓库直接作为 Codex Marketplace；Setup 允许在安装后的 Plugin Root 写入配置、secret、metric CLI 和索引。普通 Harness 状态与 Pipeline 状态写入 Plugin 外的 `dataRoot/state/workspaces/<workspace-hash>/`。
 
 ### 11.3 MCP 工具
 
@@ -548,7 +550,7 @@ HTML Report · B2 Writer             6/14 · 43% · 0 failed
 | `html_report_next` | B0 预检通过后关闭 UI → 逐卡 fetch-entry + evidence → compose-main.mjs；返回逐卡 progress 与 active/next 卡片元数据 |
 | `html_report_close_ui` | 显式关闭 qdm-metric-cli ui，保留 session 数据 |
 | `html_report_submit_writer` | 宿主只交 caption JSON → 写 `caption.md`；返回逐卡 progress 与 active/next 卡片元数据 |
-| `html_report_generate_html` | 用户明确确认后，把 `analysis/main.md` 导出为同级 `main.html` |
+| `html_report_generate_html` | 用户明确确认后，传入 `confirmation: "生成 HTML"`，把 `analysis/main.md` 导出为同级 `main.html` |
 | `html_report_status` | 返回当前 stage / cards 状态、逐卡 progress 与只读 html 摘要 |
 
 ### 11.4 B0 差异（App/CLI vs PI）

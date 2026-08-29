@@ -45,7 +45,8 @@ const SIMPLE_CHECKS = new Set([
   "check-links",
 ]);
 
-export async function runWikis(root, args, io = process) {
+export async function runWikis(root, args, io = process, context = null) {
+  const rootOrContext = context || root;
   if (args.length < 1) throw new ExitError(USAGE, { code: 2 });
   const name = args[0];
   if (SIMPLE_CHECKS.has(name)) {
@@ -57,18 +58,18 @@ export async function runWikis(root, args, io = process) {
   }
   switch (name) {
     case "check-context": {
-      const result = runWikiCheckContext(root, args.slice(1), io);
+      const result = runWikiCheckContext(rootOrContext, args.slice(1), io);
       if (result.totalErrors > 0) {
         throw new ExitError(`${result.check} failed with ${result.totalErrors} error(s)`, { code: 1, silent: true });
       }
       return;
     }
     case "context-stats":
-      return runWikiContextStats(root, args.slice(1), io);
+      return runWikiContextStats(rootOrContext, args.slice(1), io);
     case "recall-debug":
-      return runWikiRecallDebug(root, args.slice(1), io);
+      return runWikiRecallDebug(rootOrContext, args.slice(1), io);
     case "templates":
-      return runWikiTemplates(root, args.slice(1), io);
+      return runWikiTemplates(rootOrContext, args.slice(1), io);
     case "aliases":
       return runWikiAliases(root, args.slice(1), io);
     case "metric-duplicates":

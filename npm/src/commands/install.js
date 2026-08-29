@@ -124,6 +124,11 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   if (!options.force && fs.existsSync(path.join(runtimeDir, "agents")) &&
       fs.existsSync(path.join(runtimeDir, "config")) &&
       fs.existsSync(path.join(runtimeDir, "bootstrap", "cli-manifest.json")) &&
+      fs.existsSync(path.join(runtimeDir, "packages", "data-harness-cli", "src", "main.js")) &&
+      fs.existsSync(path.join(runtimeDir, "packages", "html-report-kernel", "src", "index.mjs")) &&
+      fs.existsSync(path.join(runtimeDir, "packages", "harness-runtime-node", "src", "index.mjs")) &&
+      fs.existsSync(path.join(runtimeDir, "plugins")) &&
+      fs.existsSync(path.join(runtimeDir, "plugin-manifest.json")) &&
       (!options.requireWorkBuddy || (
         fs.existsSync(path.join(runtimeDir, "agents", "workbuddy", ".codebuddy-plugin", "plugin.json")) &&
         fs.existsSync(path.join(runtimeDir, "agents", ".codebuddy-plugin", "marketplace.json"))
@@ -142,7 +147,11 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   fs.mkdirSync(cacheDir, { recursive: true });
   const archive = path.join(cacheDir, assetName);
   action(`下载 harness-data-runtime ${tag}`);
-  await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
+  if (typeof options.downloadAsset === "function") {
+    await options.downloadAsset(asset, archive, { ...options, progressLabel: assetName });
+  } else {
+    await downloadReleaseAsset(asset, archive, { ...options, progressLabel: assetName });
+  }
 
   const extractDir = fs.mkdtempSync(path.join(cacheDir, "runtime-"));
   const stagedRoot = fs.mkdtempSync(path.join(runtimeDir, ".install-new-runtime-"));
@@ -161,11 +170,27 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     for (const dir of ["agents", "bootstrap"]) if (!fs.existsSync(path.join(extractDir, dir))) throw new Error(`runtime bundle missing ${dir}/`);
     const configSource = path.join(extractDir, "config");
     if (!fs.existsSync(configSource)) throw new Error("runtime bundle missing config/");
+    const packageNames = ["data-harness-cli", "html-report-kernel", "harness-runtime-node"];
     const cliSource = path.join(extractDir, "packages", "data-harness-cli", "src", "main.js");
+    const pluginsSource = path.join(extractDir, "plugins");
+    const productManifestSource = path.join(extractDir, "plugin-manifest.json");
+
+    validateExtractedRuntime(extractDir, { productManifestSource });
 
     for (const dir of ["agents", "bootstrap"]) fs.cpSync(path.join(extractDir, dir), path.join(stagedRoot, dir), { recursive: true });
     if (fs.existsSync(cliSource)) {
-      fs.cpSync(path.join(extractDir, "packages", "data-harness-cli"), path.join(stagedRoot, "packages", "data-harness-cli"), { recursive: true });
+      for (const name of packageNames) {
+        const source = path.join(extractDir, "packages", name);
+        if (fs.existsSync(source)) fs.cpSync(source, path.join(stagedRoot, "packages", name), { recursive: true });
+      }
+    }
+    // Top-level host plugins are part of the release runtime when present.
+    // Keep this optional so legacy archives remain installable.
+    if (fs.existsSync(pluginsSource)) {
+      fs.cpSync(pluginsSource, path.join(stagedRoot, "plugins"), { recursive: true });
+    }
+    if (fs.existsSync(productManifestSource)) {
+      fs.copyFileSync(productManifestSource, path.join(stagedRoot, "plugin-manifest.json"));
     }
     // Recursive so config/fixtures (local-test auth blob) lands in the runtime.
     fs.cpSync(configSource, path.join(stagedRoot, "config"), { recursive: true });
@@ -177,8 +202,16 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
     }
 
     for (const name of ["agents", "bootstrap"]) replaceRuntimePath(runtimeDir, name, stagedRoot, backups);
-    if (fs.existsSync(path.join(stagedRoot, "packages", "data-harness-cli"))) {
-      replaceRuntimePath(runtimeDir, path.join("packages", "data-harness-cli"), stagedRoot, backups);
+    for (const name of packageNames) {
+      if (fs.existsSync(path.join(stagedRoot, "packages", name))) {
+        replaceRuntimePath(runtimeDir, path.join("packages", name), stagedRoot, backups);
+      }
+    }
+    if (fs.existsSync(path.join(stagedRoot, "plugins"))) {
+      replaceRuntimePath(runtimeDir, "plugins", stagedRoot, backups);
+    }
+    if (fs.existsSync(path.join(stagedRoot, "plugin-manifest.json"))) {
+      replaceRuntimePath(runtimeDir, "plugin-manifest.json", stagedRoot, backups);
     }
     mergeRuntimeConfig(runtimeDir, path.join(stagedRoot, "config"));
     cleanupRuntimeBackups(backups);
@@ -192,6 +225,122 @@ export async function installRuntimeBundle(runtimeDir, options = {}) {
   }
   ok(`runtime bundle ${tag}`);
   return { tag, skipped: false };
+}
+
+function validateExtractedRuntime(extractDir, { productManifestSource }) {
+  // Archives published before the Phase 3 manifest contract remain readable
+  // during the compatibility window. New archives opt into strict validation
+  // by carrying the top-level product manifest.
+  if (!fs.existsSync(productManifestSource)) return;
+  for (const relative of [
+    "packages/data-harness-cli/src/main.js",
+    "packages/data-harness-cli/package.json",
+    "packages/html-report-kernel/src/index.mjs",
+    "packages/html-report-kernel/package.json",
+    "packages/harness-runtime-node/src/index.mjs",
+    "packages/harness-runtime-node/package.json",
+    "plugins/harness-data/plugin-manifest.json",
+  ]) {
+    if (!fs.existsSync(path.join(extractDir, relative))) throw new Error(`runtime bundle missing ${relative}`);
+  }
+  const runtimeManifest = readArchivePluginManifest(productManifestSource, "plugin-manifest.json");
+  validateArchivePluginManifest(runtimeManifest, {
+    label: "plugin-manifest.json",
+    host: "runtime",
+    requiredCore: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
+  });
+  validateArchiveCorePackages(extractDir, runtimeManifest);
+
+  const nestedRelative = "plugins/harness-data/plugin-manifest.json";
+  const nestedManifest = readArchivePluginManifest(path.join(extractDir, nestedRelative), nestedRelative);
+  validateArchivePluginManifest(nestedManifest, {
+    label: nestedRelative,
+    host: "codex",
+    requiredCore: ["htmlReportKernel", "harnessRuntimeNode"],
+  });
+}
+
+function readArchivePluginManifest(filePath, label) {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("must contain an object");
+    return value;
+  } catch (error) {
+    throw new Error(`runtime bundle has invalid ${label}: ${error?.message || error}`);
+  }
+}
+
+function validateArchivePluginManifest(manifest, { label, host, requiredCore }) {
+  const object = (value, field) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} must be an object`);
+    return value;
+  };
+  const string = (value, field) => {
+    const text = String(value || "").trim();
+    if (!text) throw new Error(`${field} must be a non-empty string`);
+    return text;
+  };
+  const integer = (value, field) => {
+    if (!Number.isInteger(Number(value))) throw new Error(`${field} must be an integer`);
+    return Number(value);
+  };
+  try {
+    if (integer(manifest.schemaVersion, `${label}.schemaVersion`) !== 1) throw new Error("unsupported schema version");
+    if (string(manifest.product, `${label}.product`) !== "qdm-harness") throw new Error("unexpected product");
+    if (string(manifest.host, `${label}.host`) !== host) throw new Error(`host must be ${host}`);
+    const plugin = object(manifest.plugin, `${label}.plugin`);
+    string(plugin.name, `${label}.plugin.name`);
+    string(plugin.version, `${label}.plugin.version`);
+    const core = object(manifest.core, `${label}.core`);
+    if (string(core.apiVersion, `${label}.core.apiVersion`) !== "v1") throw new Error("unsupported core API");
+    const packages = object(core.packages, `${label}.core.packages`);
+    for (const name of requiredCore) {
+      const entry = object(packages[name], `${label}.core.packages.${name}`);
+      string(entry.name, `${label}.core.packages.${name}.name`);
+      string(entry.version, `${label}.core.packages.${name}.version`);
+    }
+    const resource = object(manifest.resource, `${label}.resource`);
+    const mode = string(resource.mode, `${label}.resource.mode`);
+    if (mode !== "embedded" && mode !== "external") throw new Error("unsupported resource mode");
+    if (string(resource.resourceId, `${label}.resource.resourceId`) !== "qdm-harness-wiki") throw new Error("unexpected resource id");
+    if (integer(resource.schemaVersion, `${label}.resource.schemaVersion`) !== 1) throw new Error("unsupported resource schema");
+    if (mode === "embedded" && !/^[a-f0-9]{64}$/i.test(string(resource.contentVersion, `${label}.resource.contentVersion`))) {
+      throw new Error("embedded resource contentVersion must be a SHA-256");
+    }
+    const metricCli = object(manifest.metricCli, `${label}.metricCli`);
+    string(metricCli.binary, `${label}.metricCli.binary`);
+    const state = object(manifest.state, `${label}.state`);
+    if (integer(state.schemaVersion, `${label}.state.schemaVersion`) !== 1) throw new Error("unsupported state schema");
+    const compatibility = object(manifest.compatibility, `${label}.compatibility`);
+    string(compatibility.node, `${label}.compatibility.node`);
+    if (string(compatibility.coreApi, `${label}.compatibility.coreApi`) !== "v1"
+      || integer(compatibility.resourceSchema, `${label}.compatibility.resourceSchema`) !== 1
+      || integer(compatibility.stateSchema, `${label}.compatibility.stateSchema`) !== 1) {
+      throw new Error("unsupported compatibility contract");
+    }
+  } catch (error) {
+    throw new Error(`runtime bundle has invalid ${label}: ${error?.message || error}`);
+  }
+}
+
+function validateArchiveCorePackages(extractDir, manifest) {
+  const locations = {
+    dataHarnessCli: "packages/data-harness-cli/package.json",
+    htmlReportKernel: "packages/html-report-kernel/package.json",
+    harnessRuntimeNode: "packages/harness-runtime-node/package.json",
+  };
+  for (const [key, relative] of Object.entries(locations)) {
+    const expected = manifest.core.packages[key];
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(path.join(extractDir, relative), "utf8"));
+    } catch (error) {
+      throw new Error(`runtime bundle has invalid ${relative}: ${error?.message || error}`);
+    }
+    if (String(pkg?.name || "") !== expected.name || String(pkg?.version || "") !== expected.version) {
+      throw new Error(`runtime bundle core package does not match plugin manifest: ${relative}`);
+    }
+  }
 }
 
 async function promptExecutable(runtimeDir, name, options = {}) {

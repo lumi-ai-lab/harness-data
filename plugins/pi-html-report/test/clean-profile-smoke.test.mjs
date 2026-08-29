@@ -89,9 +89,9 @@ function assertPackageResources(packageRoot) {
   const runtimeNames = agents.map((agent) => agent.runtimeName);
   for (const role of REQUIRED_ROLES) {
     assert.equal(
-      runtimeNames.includes(`qdm-html-report.${role}`),
+      runtimeNames.includes(`harness-data.${role}`),
       true,
-      `missing package agent qdm-html-report.${role}: ${runtimeNames.join(",")}`
+      `missing package agent harness-data.${role}: ${runtimeNames.join(",")}`
     );
   }
   for (const agent of agents) {

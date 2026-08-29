@@ -1,4 +1,4 @@
-export const REPORT_AGENT_PACKAGE = "qdm-html-report";
+export const REPORT_AGENT_PACKAGE = "harness-data";
 
 export const REPORT_AGENT_ROLES = Object.freeze([
   "report-writer",

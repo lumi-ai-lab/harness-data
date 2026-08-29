@@ -53,9 +53,9 @@ This skill currently supports the **Pi Agent runtime only**. Before the parent
 model starts Phase A, qdm-harness emits an in-process pi-subagents slash bridge
 request with exactly `{ action: "list" }`. The extension binds the response to
 the current Session and Gate attempt and verifies the four report agents.
-Canonical runtime names are `qdm-html-report.report-writer`,
-`qdm-html-report.report-researcher`, `qdm-html-report.report-reviewer`, and
-`qdm-html-report.report-designer`; legacy bare `report-*` names still satisfy
+Canonical runtime names are `harness-data.report-writer`,
+`harness-data.report-researcher`, `harness-data.report-reviewer`, and
+`harness-data.report-designer`; legacy bare `report-*` names still satisfy
 the same check.
 
 The parent model must not repeat this call. A missing bridge, timeout, malformed
@@ -235,10 +235,10 @@ Phase B requires these **Pi** agents (registry under `.pi/agents/`):
 
 | Display | `name` |
 | --- | --- |
-| Report Writer | `qdm-html-report.report-writer` (legacy `report-writer`) |
-| Report Researcher | `qdm-html-report.report-researcher` (legacy `report-researcher`) |
-| Report Reviewer | `qdm-html-report.report-reviewer` (legacy `report-reviewer`) |
-| Report Designer | `qdm-html-report.report-designer` (legacy `report-designer`) |
+| Report Writer | `harness-data.report-writer` (legacy `report-writer`) |
+| Report Researcher | `harness-data.report-researcher` (legacy `report-researcher`) |
+| Report Reviewer | `harness-data.report-reviewer` (legacy `report-reviewer`) |
+| Report Designer | `harness-data.report-designer` (legacy `report-designer`) |
 
 **Before any fetch / analysis**, qdm-harness automatically emits one new
 `{ action: "list" }` request through the real pi-subagents event bridge. It

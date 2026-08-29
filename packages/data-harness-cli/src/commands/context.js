@@ -4,7 +4,7 @@ import { printCompactJSON, printJSON } from "../lib/json-out.js";
 import { build } from "../lib/context/build.js";
 import { runClaudeHook, runWorkBuddyHook } from "../lib/context/hook.js";
 
-export async function runContext(root, args, io = process) {
+export async function runContext(root, args, io = process, context = null) {
   const parsed = parseFlags(args, {
     question: { type: "string", default: "" },
     json: { type: "boolean", default: false },
@@ -18,7 +18,7 @@ export async function runContext(root, args, io = process) {
     case "json": {
       const question = String(parsed.values.question || "");
       if (!question) throw new ExitError("context requires --question");
-      const response = build(root, question);
+      const response = build(context || root, question);
       if (format === "json") {
         printJSON(response, io.stdout);
         return;
@@ -32,13 +32,15 @@ export async function runContext(root, args, io = process) {
     case "codex-hook":
     case "agent-hook": {
       const input = await readStdin(io);
-      const { ok, output } = runClaudeHook(root, input);
-      if (ok) printCompactJSON(toHookJSON(output), io.stdout);
+      const { ok, output } = runClaudeHook(root, input, context, { env: io.env || process.env });
+      if (ok) {
+        printCompactJSON(toHookJSON(output, { includeContextFiles: format === "agent-hook" }), io.stdout);
+      }
       return;
     }
     case "workbuddy-hook": {
       const input = await readStdin(io);
-      const { ok, output } = runWorkBuddyHook(root, input);
+      const { ok, output } = runWorkBuddyHook(root, input, context, { env: io.env || process.env });
       if (ok) printCompactJSON(toWorkBuddyJSON(output), io.stdout);
       return;
     }
@@ -47,12 +49,13 @@ export async function runContext(root, args, io = process) {
   }
 }
 
-function toHookJSON(output) {
+// Keep the internal contextFiles allow-list out of standard host hook output.
+function toHookJSON(output, { includeContextFiles = false } = {}) {
   const hook = {
     hookEventName: output.hookSpecificOutput.hookEventName,
     additionalContext: output.hookSpecificOutput.additionalContext,
   };
-  if (output.hookSpecificOutput.contextFiles?.length) {
+  if (includeContextFiles && output.hookSpecificOutput.contextFiles?.length) {
     hook.contextFiles = output.hookSpecificOutput.contextFiles;
   }
   return { hookSpecificOutput: hook };
@@ -61,7 +64,7 @@ function toHookJSON(output) {
 function toWorkBuddyJSON(output) {
   const body = {
     continue: output.continue,
-    hookSpecificOutput: toHookJSON(output).hookSpecificOutput,
+    hookSpecificOutput: toHookJSON(output, { includeContextFiles: true }).hookSpecificOutput,
   };
   if (output.systemMessage) body.systemMessage = output.systemMessage;
   return body;

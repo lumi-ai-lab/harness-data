@@ -1,0 +1,52 @@
+name: Codex Plugin Validation
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-plugin-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Codex Plugin source and Marketplace ZIP
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build Plugin bundle
+        run: node plugins/harness-data/scripts/bundle-dist.mjs --output-dir plugins/harness-data/dist
+
+      - name: Verify Marketplace source and Release ZIP contents
+        run: |
+          set -euo pipefail
+          test ! -e .gitmodules
+          test ! -e wikis
+          node scripts/build-codex-marketplace.mjs verify --repo-root "$GITHUB_WORKSPACE"
+          node --test scripts/build-codex-marketplace.test.mjs
+
+      - name: Run core tests
+        run: |
+          set -euo pipefail
+          npm --prefix npm test -- --test-concurrency=1
+          node --test packages/data-harness-cli/test/*.test.js
+          node --test packages/harness-runtime-node/src/*.test.mjs
+          node --test plugins/harness-data/mcp/server.test.mjs
+          node --test plugins/harness-data/test/clean-room-setup.test.mjs
+          node --test scripts/plugin-dev-init.test.mjs
+          node --test scripts/verify-pinned-wikis.test.mjs scripts/verify-wikis-relocation.test.mjs

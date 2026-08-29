@@ -1,0 +1,16 @@
+# Setup-managed files intentionally live beside the installed Plugin.
+.harness/
+.bootstrap-cache/
+config/settings.json
+config/harness-config.yaml
+config/workspace-policy.json
+context.json
+install-manifest.json
+resource-manifest.json
+runtimes/
+secrets/
+
+# Build artifacts and vendored wikis (generated, not source)
+dist/
+bootstrap/
+resources/wikis/

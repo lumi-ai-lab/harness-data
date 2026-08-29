@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { runAuthzHook } from "../src/commands/authz-hook.js";
-import { ENV_AUTH_BLOB, ENV_AUTH_USER_ID } from "../src/lib/authz/constants.js";
+import { ENV_AUTH_BLOB, ENV_AUTH_BLOB_FILE, ENV_AUTH_USER_ID } from "../src/lib/authz/constants.js";
 import { run, runAdapterEnvelope, toGoHookJSON } from "../src/lib/authz/hook.js";
 import { shellQuote } from "../src/lib/authz/metric-command.js";
 import { ExitError } from "../src/lib/exit.js";
@@ -112,6 +112,41 @@ authz:
     const expectedPrefix = `unset HARNESS_AUTH_BLOB HARNESS_AUTH_BLOB_FILE HARNESS_AUTH_USER_ID LUMI_REQUESTER_CONTEXT_DIR; ${shellQuote(path.join(root, "bin", metricName))} analysis execute --metric saleAmt --data-auth --auth-blob 'qdm1enc.testblob'`;
     assert.equal(command, expectedPrefix);
   });
+});
+
+test("hook authz file source passes a canonical path, not the blob, on Unix", { skip: process.platform === "win32" }, () => {
+  const root = writeHarnessConfig(`paths:
+  knowledge: wikis
+
+cli:
+  qdm_metric_cli: /abs/bin/qdm-metric-cli
+
+authz:
+  mode: on
+  allow_local_blob: true
+`);
+  const blobPath = path.join(root, "config", "file-auth.blob");
+  writeFileSync(blobPath, `${testBlob}\n`, { mode: 0o600 });
+  chmodSync(blobPath, 0o600);
+  const previous = {
+    blob: process.env[ENV_AUTH_BLOB],
+    file: process.env[ENV_AUTH_BLOB_FILE],
+    user: process.env[ENV_AUTH_USER_ID],
+  };
+  delete process.env[ENV_AUTH_BLOB];
+  process.env[ENV_AUTH_BLOB_FILE] = blobPath;
+  process.env[ENV_AUTH_USER_ID] = "env-user";
+  try {
+    const { ok, output } = run(root, "codex", hookInput("qdm-metric-cli analysis execute --metric saleAmt"));
+    assert.equal(ok, true);
+    const command = toGoHookJSON(output).hookSpecificOutput.updatedInput.command;
+    assert.equal(command.includes(testBlob), false);
+    assert.equal(command.includes(path.resolve(blobPath)), true);
+  } finally {
+    if (previous.blob == null) delete process.env[ENV_AUTH_BLOB]; else process.env[ENV_AUTH_BLOB] = previous.blob;
+    if (previous.file == null) delete process.env[ENV_AUTH_BLOB_FILE]; else process.env[ENV_AUTH_BLOB_FILE] = previous.file;
+    if (previous.user == null) delete process.env[ENV_AUTH_USER_ID]; else process.env[ENV_AUTH_USER_ID] = previous.user;
+  }
 });
 
 test("adapter envelope disabled without authz section", () => {

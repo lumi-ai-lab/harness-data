@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { cleanRelPath, exists, fromSlash, isAbsolutePath, pathJoinClean, toSlash } from "./fs-utils.js";
+import { ROOT_CONTEXT_ERROR_CODES, RootContextError, workspaceIdentity } from "./root-context.js";
 
 export const CONFIG_REL = "config/harness-config.yaml";
 export const PATHS_CONFIG_REL = "config/harness-paths.yaml";
@@ -39,7 +40,50 @@ export function localBlobAllowed(authz) {
   return Boolean(authz.allowLocalBlob);
 }
 
-export function findRoot(start = ".") {
+/**
+ * Normalize the owner roots used by path-aware consumers. A legacy string
+ * remains a single-root compatibility adapter; a structured Root Context keeps
+ * resource/data/workspace/state/secret ownership explicit.
+ */
+export function normalizeResolverOwners(rootOrContext) {
+  if (typeof rootOrContext === "string") {
+    const root = String(rootOrContext);
+    return {
+      resourceRoot: root,
+      dataRoot: root,
+      workspaceRoot: root,
+      stateRoot: path.join(root, ".harness", "state"),
+      secretRoot: "",
+      secretRef: null,
+      configPath: path.join(root, CONFIG_REL),
+      legacy: true,
+    };
+  }
+  if (!rootOrContext || typeof rootOrContext !== "object" || Array.isArray(rootOrContext)) {
+    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, "path owners must be a root string or Root Context object");
+  }
+  const resourceRoot = String(rootOrContext.resourceRoot || rootOrContext.pluginRoot || "").trim();
+  if (!resourceRoot) throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.PLUGIN_ROOT_UNAVAILABLE, "resourceRoot/pluginRoot is required");
+  const dataRoot = String(rootOrContext.dataRoot || "").trim();
+  const workspaceRoot = String(rootOrContext.workspaceRoot || "").trim();
+  const schemaVersion = Number(rootOrContext.schemaVersion || 1);
+  const host = String(rootOrContext.host || "unknown").trim() || "unknown";
+  const stateRoot = String(rootOrContext.stateRoot || "").trim() ||
+    (dataRoot && workspaceRoot ? path.join(dataRoot, "state", "workspaces", workspaceIdentity({ workspaceRoot, host, schemaVersion })) : "");
+  return {
+    resourceRoot,
+    dataRoot,
+    workspaceRoot,
+    stateRoot,
+    secretRoot: String(rootOrContext.secretRoot || "").trim(),
+    secretRef: rootOrContext.secretRef || null,
+    configPath: String(rootOrContext.configPath || "").trim() || (dataRoot ? path.join(dataRoot, "config", "settings.json") : ""),
+    legacy: false,
+  };
+}
+
+/** Legacy-only upward scan. New plugin adapters must pass Root Context. */
+export function findLegacyRoot(start = ".") {
   let dir = path.resolve(start);
   for (;;) {
     if (isRoot(dir)) return dir;
@@ -51,6 +95,11 @@ export function findRoot(start = ".") {
     }
     dir = parent;
   }
+}
+
+// Backward-compatible export for old runtime hooks and migration tooling.
+export function findRoot(start = ".") {
+  return findLegacyRoot(start);
 }
 
 export function isRoot(dir) {
@@ -76,11 +125,12 @@ export function isRoot(dir) {
   return true;
 }
 
-export function loadPathsConfig(root) {
-  return loadConfig(root).paths;
+export function loadPathsConfig(rootOrContext) {
+  return loadConfig(rootOrContext).paths;
 }
 
-export function loadConfig(root) {
+export function loadConfig(rootOrContext) {
+  const root = normalizeResolverOwners(rootOrContext).resourceRoot;
   let cfg = defaultConfig();
   const filePath = path.join(root, CONFIG_REL);
   let raw;
@@ -217,27 +267,41 @@ function loadLegacyPathsConfig(root, cfg) {
   return cfg;
 }
 
-export function newPathResolver(root) {
-  return new PathResolver(root, loadPathsConfig(root));
+export function newPathResolver(rootOrContext) {
+  const owners = normalizeResolverOwners(rootOrContext);
+  return new PathResolver(owners, loadPathsConfig(rootOrContext));
 }
 
-export function newPathResolverWithPaths(root, paths) {
+export function newPathResolverWithPaths(rootOrContext, paths) {
   validatePathsConfig("runtime index", paths);
-  return new PathResolver(root, paths);
+  return new PathResolver(normalizeResolverOwners(rootOrContext), paths);
 }
 
 export class PathResolver {
   /**
-   * @param {string} root
+   * @param {string | ReturnType<typeof normalizeResolverOwners>} rootOrOwners
    * @param {PathsConfig} paths
    */
-  constructor(root, paths) {
-    this.root = root;
+  constructor(rootOrOwners, paths) {
+    this.owners = typeof rootOrOwners === "string" ? normalizeResolverOwners(rootOrOwners) : rootOrOwners;
+    this.root = this.owners.resourceRoot;
+    this.resourceRoot = this.owners.resourceRoot;
+    this.dataRoot = this.owners.dataRoot;
+    this.workspaceRoot = this.owners.workspaceRoot;
+    this.stateRoot = this.owners.stateRoot;
+    this.secretRoot = this.owners.secretRoot;
+    this.secretRef = this.owners.secretRef;
     this.paths = paths;
   }
 
   resolve(rel) {
-    return path.join(this.root, fromSlash(this.resolveRel(rel)));
+    return this.resolveOwned("resource", this.resolveRel(rel));
+  }
+
+  resolveOwned(owner, rel) {
+    const base = this.ownerRoot(owner);
+    const relative = cleanOwnerRel(rel);
+    return path.join(base, fromSlash(relative));
   }
 
   resolveRel(rel) {
@@ -272,6 +336,24 @@ export class PathResolver {
       if (rel.startsWith(`${base}/`)) return `${prefix}/${rel.slice(base.length + 1)}`;
     }
     return rel;
+  }
+
+  ownerRoot(owner) {
+    switch (String(owner || "resource")) {
+      case "resource":
+      case "plugin":
+        return this.resourceRoot;
+      case "data":
+        return requireOwnerRoot(this.dataRoot, "dataRoot");
+      case "workspace":
+        return requireOwnerRoot(this.workspaceRoot, "workspaceRoot", ROOT_CONTEXT_ERROR_CODES.WORKSPACE_REQUIRED);
+      case "state":
+        return requireOwnerRoot(this.stateRoot, "stateRoot");
+      case "secret":
+        return requireOwnerRoot(this.secretRoot, "secretRoot");
+      default:
+        throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, `unsupported path owner: ${owner}`);
+    }
   }
 }
 
@@ -401,4 +483,22 @@ function isConfiguredPhysicalRel(rel, cfg) {
 function invalidRelPath(rel) {
   rel = cleanRelPath(rel);
   return isAbsolutePath(rel) || rel === ".." || rel.startsWith("../") || rel.includes("/../");
+}
+
+function cleanOwnerRel(rel) {
+  const value = String(rel || "").trim();
+  if (!value || value === ".") return ".";
+  if (isAbsolutePath(value)) {
+    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, "owned path must be relative");
+  }
+  const normalized = toSlash(path.normalize(fromSlash(value)));
+  if (normalized === ".." || normalized.startsWith("../") || normalized.includes("/../")) {
+    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, "owned path escapes its root");
+  }
+  return normalized;
+}
+
+function requireOwnerRoot(value, name, code = ROOT_CONTEXT_ERROR_CODES.INVALID) {
+  if (!value) throw new RootContextError(code, `${name} is unavailable`);
+  return value;
 }

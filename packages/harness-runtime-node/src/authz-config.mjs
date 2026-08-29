@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { loadLumiHostAuth } from "./lumi-envelope.mjs";
@@ -27,6 +27,26 @@ export function loadAuthzConfig(projectRoot, env = process.env) {
     metricCli: "",
   };
 
+  if (projectRoot && typeof projectRoot === "object") {
+    const context = projectRoot;
+    const baseRoot = context.dataRoot || context.workspaceRoot || context.pluginRoot;
+    try {
+      const settings = JSON.parse(readFileSync(context.configPath, "utf8"));
+      const configured = {
+        ...defaults,
+        mode: settings?.authz?.mode === "on" ? "on" : "off",
+        devUserId: String(settings?.authz?.userId || ""),
+        metricCli: String(settings?.metricCliPath || ""),
+      };
+      return applyEnvOverrides(configured, env, baseRoot);
+    } catch {
+      const legacyPath = join(baseRoot, "config", "harness-config.yaml");
+      if (!existsSync(legacyPath)) return applyEnvOverrides(defaults, env, baseRoot);
+      const raw = readFileSync(legacyPath, "utf8");
+      return applyEnvOverrides({ ...defaults, ...parseAuthzSection(raw), metricCli: parseCliMetricPath(raw) || "" }, env, baseRoot);
+    }
+  }
+
   const configPath = join(projectRoot, "config", "harness-config.yaml");
   if (!existsSync(configPath)) {
     return applyEnvOverrides(defaults, env, projectRoot);
@@ -47,16 +67,21 @@ export function loadAuthzConfig(projectRoot, env = process.env) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function resolveMetricCliPath(projectRoot, config, env = process.env) {
+  const context = projectRoot && typeof projectRoot === "object" ? projectRoot : null;
+  const baseRoot = context ? (context.dataRoot || context.workspaceRoot || context.pluginRoot) : projectRoot;
   const candidates = [
     trim(env.QDM_METRIC_CLI),
-    config?.metricCli ? resolveProjectPath(projectRoot, config.metricCli) : "",
-    join(projectRoot, "bin", "qdm-metric-cli"),
+    config?.metricCli ? resolveProjectPath(baseRoot, config.metricCli) : "",
+    context?.pluginRoot ? join(context.pluginRoot, "runtimes", runtimePlatformKey(), `qdm-metric-cli${process.platform === "win32" ? ".exe" : ""}`) : "",
+    context?.pluginRoot ? join(context.pluginRoot, "bin", `qdm-metric-cli${process.platform === "win32" ? ".exe" : ""}`) : "",
+    context?.dataRoot ? join(context.dataRoot, "bin", `qdm-metric-cli${process.platform === "win32" ? ".exe" : ""}`) : "",
+    join(baseRoot, "bin", `qdm-metric-cli${process.platform === "win32" ? ".exe" : ""}`),
   ].filter(Boolean);
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return candidates[0] || join(projectRoot, "bin", "qdm-metric-cli");
+  return candidates[0] || join(baseRoot, "bin", "qdm-metric-cli");
 }
 
 /**
@@ -146,6 +171,7 @@ export function parseCliMetricPath(raw) {
  *   hostAuth?: string | null,
  *   hostUserId?: string | null,
  *   sessionId?: string | null,
+ *   secretRef?: { kind: string, path?: string, fd?: number } | null,
  *   env?: NodeJS.ProcessEnv,
  *   now?: number,
  * }} options
@@ -189,6 +215,25 @@ export function resolveAuthBlob(options) {
     return { ok: false, error: fromLumi.error };
   }
 
+  if (options.secretRef) {
+    const kind = String(options.secretRef.kind || "").trim().toLowerCase();
+    const loaded = kind === "file"
+      ? readBlobFile(options.secretRef.path, options.projectRoot)
+      : kind === "fd"
+        ? readBlobFd(options.secretRef.fd)
+        : { ok: false, error: `secret reference kind is not supported by the Node adapter: ${options.secretRef.kind}` };
+    if (!loaded.ok) return loaded;
+    const userId = trim(env.HARNESS_AUTH_USER_ID) || trim(config.devUserId);
+    if (!userId) return { ok: false, error: `secretRef ${kind} requires HARNESS_AUTH_USER_ID or authz.dev_user_id` };
+    return {
+      ok: true,
+      blob: loaded.blob,
+      ...(loaded.path ? { sourcePath: loaded.path } : {}),
+      userId,
+      source: kind === "fd" ? "secret_ref_fd" : "secret_ref_file",
+    };
+  }
+
   if (!config.allowLocalBlob) {
     return {
       ok: false,
@@ -222,7 +267,7 @@ export function resolveAuthBlob(options) {
         error: "authz local blob requires HARNESS_AUTH_USER_ID or authz.dev_user_id",
       };
     }
-    return { ok: true, blob: loaded.blob, userId, source: "env_file" };
+    return { ok: true, blob: loaded.blob, sourcePath: loaded.path, userId, source: "env_file" };
   }
 
   if (config.blobFile) {
@@ -235,7 +280,7 @@ export function resolveAuthBlob(options) {
         error: "authz.blob_file requires authz.dev_user_id (no default principal)",
       };
     }
-    return { ok: true, blob: loaded.blob, userId, source: "file" };
+    return { ok: true, blob: loaded.blob, sourcePath: loaded.path, userId, source: "file" };
   }
 
   return {
@@ -258,6 +303,18 @@ function readBlobFile(pathValue, projectRoot) {
   if (!existsSync(absolute)) {
     return { ok: false, error: `auth blob file not found: ${absolute}` };
   }
+  let info;
+  try {
+    info = lstatSync(absolute);
+  } catch {
+    return { ok: false, error: `auth blob file not found: ${absolute}` };
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    return { ok: false, error: `auth blob file must be a regular file: ${absolute}` };
+  }
+  if (process.platform !== "win32" && (info.mode & 0o777) !== 0o600) {
+    return { ok: false, error: `auth blob file permissions must be 0600: ${absolute}` };
+  }
   const blob = readFileSync(absolute, "utf8").trim();
   if (!blob) {
     return { ok: false, error: `auth blob file is empty: ${absolute}` };
@@ -265,6 +322,22 @@ function readBlobFile(pathValue, projectRoot) {
   if (!isEncryptedBlob(blob)) {
     return { ok: false, error: `auth blob file must contain a qdm1enc blob: ${absolute}` };
   }
+  return { ok: true, blob, path: realpathSync(absolute) };
+}
+
+function readBlobFd(fd) {
+  const number = Number(fd);
+  if (!Number.isInteger(number) || number < 0) {
+    return { ok: false, error: "secretRef fd must be a non-negative integer" };
+  }
+  let blob;
+  try {
+    blob = readFileSync(number, "utf8").trim();
+  } catch (error) {
+    return { ok: false, error: `secretRef fd could not be read: ${error?.message || error}` };
+  }
+  if (!blob) return { ok: false, error: "secretRef fd is empty" };
+  if (!isEncryptedBlob(blob)) return { ok: false, error: "secretRef fd must contain a qdm1enc blob" };
   return { ok: true, blob };
 }
 
@@ -290,6 +363,16 @@ function applyEnvOverrides(config, env, projectRoot = "") {
 function resolveProjectPath(projectRoot, pathValue) {
   if (!pathValue) return "";
   return isAbsolute(pathValue) ? pathValue : resolve(projectRoot, pathValue);
+}
+
+function runtimePlatformKey() {
+  const os = process.platform;
+  const arch = process.arch;
+  if (os === "darwin" && arch === "arm64") return "darwin-arm64";
+  if (os === "linux" && arch === "x64") return "linux-amd64";
+  if (os === "win32" && arch === "x64") return "windows-amd64";
+  if (os === "win32" && arch === "arm64") return "windows-arm64";
+  return `${os}-${arch}`;
 }
 
 function parseBool(value, fallback) {
