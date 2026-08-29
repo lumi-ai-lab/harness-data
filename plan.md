@@ -993,8 +993,10 @@ doctor --json 至少输出：
 - 三平台迁移证据：Linux X64 为 19 pass；macOS ARM64 为 19 pass；Windows X64 为 16 pass、3 项目录 symlink 能力测试明确 skip、0 fail。三个 evidence artifact 均绑定提交 `d44b64799d78ba4d548673fa20f15f2ca042c1ab`。
 - 发布相关远端证据：Wikis Compatibility run `33266302360` 通过；Publish CLI Container run `33266302347` 的 multi-arch build 通过。期间修复了不可达的 Wikis gitlink、私有子模块 checkout token 和 `.dockerignore` 排除 CLI 入口的问题。
 - Wikis 修复已基于最新远端 master 重放为 revision `b76aef3cea6d6d99a8411f2afe5bc41929aed8f5`，并提交到 `harness-data-wikis#14`；主仓 gitlink 与 `config/wikis-revision.json` 已同步。
-- 当前仍未完成：P3-EXIT-04 仍需合并后由 master/release 流程证明正式发布内容与 installer 解包一致；仍缺真实旧 `0.0.53` runtime 样本的现场迁移，以及真实 Codex UI reload/new-session 验收。
-- 下一步按依赖顺序：先合并 `harness-data-wikis#14`，再评审合并 `harness-data#74`；归档 master/release validation 证据后，用真实旧 runtime 样本完成 P4-12，再进入 Phase 5 的宿主实机验证。
+- P4-12 现场验证完成：使用 `/Users/pengmd/c/qdm/harness-data` 的真实 `0.0.53` runtime 快照，完成 check、迁移、doctor、二次幂等、business session 读取及 html-report `paused → running → paused` 恢复；原 runtime 未被修改。证据见 `docs/migration-field-validation-2026-08-29.md`。
+- 现场验证补齐四个兼容缺口：新 host artifact pluginRoot 身份、旧 `.agents/` 布局、空壳 canonical session 目录冲突，以及迁移后 `pipeline-state.json.sessionDir` 的旧绝对路径。
+- 当前仍未完成：P3-EXIT-04 仍需合并后由 master/release 流程证明正式发布内容与 installer 解包一致；仍缺真实 Codex UI reload/new-session 验收。
+- 下一步按依赖顺序：先合并 `harness-data-wikis#14`，再评审合并 `harness-data#74`；归档 master/release validation 证据后，完成真实 Codex UI smoke，再进入其余宿主的 Phase 5 验证。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1110,7 +1112,7 @@ doctor --json 至少输出：
 - [x] P4-09（诊断）生成兼容报告和非敏感 diagnostics，doctor 通过后才允许切换。
 - [x] P4-10（跨平台）为 macOS、Linux、Windows 各准备至少一条迁移 fixture/验证路径；远端三平台 runner 证据为 run `33266302354`。
 - [x] P4-11（幂等）验证成功迁移、坏版本、权限失败和重复 migrate 的行为。
-- [ ] P4-12（现场）使用至少一份真实旧 `0.0.53` runtime 验证 business-report/html-report session 可重新打开、继续运行，且旧 hook/runtime 保持可回滚。
+- [x] P4-12（现场）使用真实旧 `0.0.53` runtime 验证 business-report/html-report session 可重新打开、继续运行，且旧 runtime 保持可回滚；见 `docs/migration-field-validation-2026-08-29.md`。
 
 退出条件：
 
@@ -1204,4 +1206,4 @@ doctor --json 至少输出：
 - npm artifact：`cd npm && npm run verify:artifact`。
 - 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行；真实 CI 发布仍待运行周期证据。
 
-以上命令只证明对应实现已通过本地验证。P3-EXIT-03 与 P4-10 已补远端 CI/真实平台 runner 证据；P3-EXIT-04、P4-12 以及 Phase 5/6 仍需正式发布、真实旧 runtime 或独立宿主证据，不能用模拟 fixture 替代。
+以上命令只证明对应实现已通过本地验证。P3-EXIT-03、P4-10 与 P4-12 已分别补远端 CI、真实平台 runner 和真实旧 runtime 证据；P3-EXIT-04 以及 Phase 5/6 仍需正式发布或独立宿主证据，不能用模拟 fixture 替代。

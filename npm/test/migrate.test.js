@@ -9,11 +9,9 @@ import test from "node:test";
 
 import { migrateCommand, planMigration } from "../src/commands/migrate.js";
 import { binaryName, platformKey } from "../src/lib/platform.js";
-import { workspaceIdentity } from "../src/lib/root-context.js";
 import { load as loadBusinessReportState } from "../../packages/data-harness-cli/src/lib/sessionstate.js";
 import {
   htmlReportSessionDir,
-  start as startHtmlReport,
   status as htmlReportStatus,
 } from "../../.agents/workbuddy/scripts/html-report-stage-runner.mjs";
 
@@ -70,7 +68,7 @@ function legacyFixture({ auth = true, platform = process.platform } = {}) {
   const secretRoot = path.join(root, "secrets");
   const workspaceRoot = path.join(root, "workspace");
   fs.mkdirSync(workspaceRoot, { recursive: true });
-  for (const dir of ["agents/codex/hooks", "wikis/metrics", "wikis/reports", "wikis/dims", "wikis/rules", "bin", "config", ".harness/index", ".harness/state/business-report", ".harness/state/html-report/legacy-report"]) {
+  for (const dir of ["agents/codex/hooks", "wikis/metrics", "wikis/reports", "wikis/dims", "wikis/rules", "bin", "config", ".harness/index", ".harness/state/business-report", ".harness/state/html-report/legacy-report/debug"]) {
     fs.mkdirSync(path.join(legacyRoot, dir), { recursive: true });
   }
   write(legacyRoot, "bootstrap/cli-manifest.json", JSON.stringify({
@@ -84,6 +82,17 @@ function legacyFixture({ auth = true, platform = process.platform } = {}) {
   write(legacyRoot, ".harness/index/wikis-runtime-index.json", JSON.stringify({ meta: { root: legacyRoot, version: 1 }, docsByPath: {} }));
   write(legacyRoot, ".harness/state/business-report/legacy-session.json", JSON.stringify({ session_id: "legacy-session", reports: {} }));
   write(legacyRoot, ".harness/state/html-report/legacy-report/result.json", JSON.stringify({ status: "confirmed", session_id: "legacy-report", cards: [] }));
+  write(legacyRoot, ".harness/state/html-report/legacy-report/debug/pipeline-state.json", JSON.stringify({
+    version: 1,
+    producer: "stage-gate.mjs",
+    sessionId: "legacy-report",
+    sessionDir: path.join(legacyRoot, ".harness", "state", "html-report", "legacy-report"),
+    mode: "step",
+    status: "paused",
+    currentStage: "A_CONFIG",
+    policy: {},
+    stages: {},
+  }));
   write(legacyRoot, ".harness/state/should-skip.lock", "stale\n");
   write(legacyRoot, ".harness/installer-state.json", JSON.stringify({
     schemaVersion: 4,
@@ -185,10 +194,14 @@ test("migrate copies verified legacy data to roots, preserves source, and is ide
   assert.equal(fs.existsSync(migratedMetric), true);
   assert.equal(sha256(fs.readFileSync(migratedMetric)), sha256(fs.readFileSync(f.metricCli)));
 
-  const stateRoot = path.join(f.dataRoot, "state", "workspaces", workspaceIdentity({ host: "codex", workspaceRoot: fs.realpathSync.native(f.workspaceRoot), schemaVersion: 1 }));
+  const stateRoot = first.target.stateRoot;
   assert.equal(fs.existsSync(path.join(stateRoot, "business-report", "legacy-session.json")), true);
   assert.equal(fs.existsSync(path.join(stateRoot, "html-report", "legacy-report", "result.json")), true);
   assert.equal(fs.existsSync(path.join(stateRoot, "should-skip.lock")), false);
+  const migratedPipeline = JSON.parse(fs.readFileSync(path.join(stateRoot, "html-report", "legacy-report", "debug", "pipeline-state.json"), "utf8"));
+  assert.equal(migratedPipeline.sessionDir, path.join(stateRoot, "html-report", "legacy-report"));
+  assert.equal(migratedPipeline.status, "paused");
+  assert.equal(migratedPipeline.currentStage, "A_CONFIG");
   const businessSession = loadBusinessReportState({
     pluginRoot: f.legacyRoot,
     resourceRoot: f.legacyRoot,
@@ -234,11 +247,10 @@ test("migrate copies verified legacy data to roots, preserves source, and is ide
   const previousStateRoot = process.env.HARNESS_STATE_ROOT;
   process.env.HARNESS_STATE_ROOT = stateRoot;
   try {
-    const started = await startHtmlReport(f.workspaceRoot, "legacy-report");
-    assert.equal(started.ok, true, started.error);
     const resumed = htmlReportStatus(f.workspaceRoot, "legacy-report");
     assert.equal(resumed.ok, true, resumed.error);
     assert.equal(resumed.exists, true);
+    assert.equal(resumed.state.status, "paused");
     assert.equal(resumed.state.currentStage, "A_CONFIG");
   } finally {
     if (previousStateRoot === undefined) delete process.env.HARNESS_STATE_ROOT;
@@ -538,6 +550,47 @@ test("migration validates an explicit pluginRoot before writing target data", (t
   });
   assert.equal(plan.ok, false);
   assert.equal(plan.blockers.some((entry) => entry.code === "QDM_MIGRATION_REQUIRED"), true);
+  assert.equal(fs.existsSync(f.dataRoot), false);
+});
+
+test("migration accepts a manifest-bearing host artifact as pluginRoot", (t) => {
+  const f = legacyFixture({ auth: false });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const pluginRoot = path.join(f.root, "codex-artifact");
+  fs.mkdirSync(path.join(pluginRoot, "adapter"), { recursive: true });
+  write(pluginRoot, "bootstrap/cli-manifest.json", JSON.stringify({ schemaVersion: 2, owner: "lumi-ai-lab", tools: [] }));
+  write(pluginRoot, "plugin-manifest.json", JSON.stringify({
+    schemaVersion: 1,
+    product: "qdm-harness",
+    host: "codex",
+    plugin: { name: "qdm-html-report", version: "test-artifact" },
+  }));
+
+  const plan = planMigration({
+    check: true,
+    from: f.legacyRoot,
+    to: f.dataRoot,
+    workspaceRoot: f.workspaceRoot,
+    pluginRoot,
+  });
+  assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+  assert.equal(plan.target.pluginRoot, fs.realpathSync.native(pluginRoot));
+  assert.equal(fs.existsSync(f.dataRoot), false);
+});
+
+test("migration accepts the legacy .agents compatibility layout", (t) => {
+  const f = legacyFixture({ auth: false });
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  fs.renameSync(path.join(f.legacyRoot, "agents"), path.join(f.legacyRoot, ".agents"));
+
+  const plan = planMigration({
+    check: true,
+    from: f.legacyRoot,
+    to: f.dataRoot,
+    workspaceRoot: f.workspaceRoot,
+  });
+  assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+  assert.equal(plan.sourceValid, true);
   assert.equal(fs.existsSync(f.dataRoot), false);
 });
 

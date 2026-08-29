@@ -131,7 +131,7 @@ export function planMigration(options = {}) {
         }));
       }
       if (legacy.statePath) {
-        report.items.push(item("legacy-state", legacy.statePath, stateRoot, "copy", {
+        report.items.push(item("legacy-state", legacy.statePath, stateRoot, "copy-rewrite", {
           sourceTreeSha256: legacy.stateSha256,
           entries: legacy.stateEntries,
           skips: ["*.lock"],
@@ -256,7 +256,14 @@ async function executeMigration(plan) {
         expectedEntries: stateItem.entries,
         sourceRoot: source.root,
       });
-      records.push(recordFromItem(stateItem, stagedStateRoot, { skip: skipStateLock }));
+      const rewrittenFiles = rewriteLegacyHtmlReportState(stagedStateRoot, target.stateRoot);
+      records.push({
+        ...recordFromItem(stateItem, stagedStateRoot, { skip: skipStateLock }),
+        sourceTreeSha256: stateItem.sourceTreeSha256,
+        sourceEntries: stateItem.entries,
+        rewrittenFiles,
+        status: rewrittenFiles.length > 0 ? "copied-rewritten" : "copied",
+      });
     }
 
     const secretRef = prepareSecret(auth, source.id);
@@ -440,9 +447,17 @@ function inspectLegacyRuntime(sourceRoot) {
   if (!Number.isInteger(Number(manifest.schemaVersion)) || Number(manifest.schemaVersion) < 1 || Number(manifest.schemaVersion) > 2) {
     throw new MigrationError("QDM_MIGRATION_REQUIRED", `unsupported legacy CLI manifest schema: ${manifest.schemaVersion}`);
   }
-  const agentsPath = path.join(sourceRoot, "agents");
-  assertNoSymlinkPath(sourceRoot, agentsPath, "legacy agents directory");
-  assertDirectory(agentsPath, "legacy runtime agents/");
+  const agentsPath = ["agents", ".agents"]
+    .map((name) => path.join(sourceRoot, name))
+    .find((candidate) => {
+      if (!fs.existsSync(candidate)) return false;
+      assertNoSymlinkPath(sourceRoot, candidate, "legacy agents directory");
+      assertDirectory(candidate, "legacy runtime agents/ or .agents/");
+      return true;
+    });
+  if (!agentsPath) {
+    throw new MigrationError("QDM_MIGRATION_REQUIRED", `legacy runtime agents/ or .agents/ is missing: ${sourceRoot}`);
+  }
   const configPath = path.join(sourceRoot, "config", "harness-config.yaml");
   assertNoSymlinkPath(sourceRoot, configPath, "legacy harness config");
   assertRegularFile(configPath, "legacy runtime config/harness-config.yaml");
@@ -820,6 +835,14 @@ function verifyMigrationRecord(record, expected, dataRoot, auth) {
     if (expected.action === "copy" && Number.isInteger(expected.entries) && record.entries !== expected.entries) {
       throw new MigrationError("QDM_MIGRATION_REQUIRED", `migration record source entry count changed: ${record.name}`);
     }
+    if (expected.action === "copy-rewrite") {
+      if (record.sourceTreeSha256 !== expected.sourceTreeSha256 || record.sourceEntries !== expected.entries) {
+        throw new MigrationError("QDM_MIGRATION_REQUIRED", `migration record rewritten source identity changed: ${record.name}`);
+      }
+      if (!Array.isArray(record.rewrittenFiles)) {
+        throw new MigrationError("QDM_MIGRATION_REQUIRED", `migration record rewritten file list is invalid: ${record.name}`);
+      }
+    }
     assertDirectory(record.target, `migrated ${record.name}`);
     const skip = record.name === "wikis" ? skipGitMetadata : (record.name === "legacy-state" ? skipStateLock : null);
     const digest = treeDigest(record.target, { skip });
@@ -843,6 +866,27 @@ function verifyMigrationSourceUnchanged(plan) {
   if (fingerprint !== plan.source.fingerprint) {
     throw new MigrationError("QDM_MIGRATION_REQUIRED", "legacy migration source changed after planning; rerun migrate --check before copying");
   }
+}
+
+function rewriteLegacyHtmlReportState(stagedStateRoot, finalStateRoot) {
+  const htmlRoot = path.join(stagedStateRoot, "html-report");
+  if (!isDirectory(htmlRoot)) return [];
+  const rewritten = [];
+  for (const entry of fs.readdirSync(htmlRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const stagedSessionDir = path.join(htmlRoot, entry.name);
+    const pipelinePath = path.join(stagedSessionDir, "debug", "pipeline-state.json");
+    if (!fs.existsSync(pipelinePath)) continue;
+    assertNoSymlinkPath(stagedStateRoot, pipelinePath, "migrated html-report pipeline state");
+    const state = readJsonRequired(pipelinePath, "migrated html-report pipeline state");
+    const relativeSession = path.relative(stagedStateRoot, stagedSessionDir);
+    const finalSessionDir = path.join(finalStateRoot, relativeSession);
+    if (state.sessionDir === finalSessionDir) continue;
+    state.sessionDir = finalSessionDir;
+    writeJsonAtomic(pipelinePath, state, 0o600);
+    rewritten.push(path.relative(stagedStateRoot, pipelinePath).split(path.sep).join("/"));
+  }
+  return rewritten.sort();
 }
 
 function migrationSourceFingerprint({ legacy, metricCli, resource, auth }) {
@@ -958,12 +1002,29 @@ function validateDistinctRoots({ sourceRoot, dataRoot, workspaceRoot, secretRoot
 
 function validateMigrationPluginRoot(pluginRoot) {
   const manifestPath = path.join(pluginRoot, "bootstrap", "cli-manifest.json");
-  const agentsPath = path.join(pluginRoot, "agents");
   assertNoSymlinkPath(pluginRoot, manifestPath, "migration plugin runtime manifest");
-  assertNoSymlinkPath(pluginRoot, agentsPath, "migration plugin agents directory");
   assertRegularFile(manifestPath, "migration plugin runtime manifest");
-  assertDirectory(agentsPath, "migration plugin agents directory");
   readJsonRequired(manifestPath, "migration plugin runtime manifest");
+
+  const pluginManifestPath = path.join(pluginRoot, "plugin-manifest.json");
+  if (fs.existsSync(pluginManifestPath)) {
+    assertNoSymlinkPath(pluginRoot, pluginManifestPath, "migration plugin manifest");
+    const pluginManifest = readJsonRequired(pluginManifestPath, "migration plugin manifest");
+    if (Number(pluginManifest.schemaVersion) !== 1
+      || pluginManifest.product !== "qdm-harness"
+      || !String(pluginManifest.host || "").trim()
+      || !String(pluginManifest.plugin?.version || "").trim()) {
+      throw new MigrationError("QDM_MIGRATION_REQUIRED", "migration plugin manifest does not identify a supported qdm-harness artifact");
+    }
+    const adapterPath = path.join(pluginRoot, "adapter");
+    assertNoSymlinkPath(pluginRoot, adapterPath, "migration plugin adapter directory");
+    assertDirectory(adapterPath, "migration plugin adapter directory");
+    return;
+  }
+
+  const agentsPath = path.join(pluginRoot, "agents");
+  assertNoSymlinkPath(pluginRoot, agentsPath, "migration plugin agents directory");
+  assertDirectory(agentsPath, "migration plugin agents directory");
 }
 
 function resolveInside(root, relative, label) {

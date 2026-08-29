@@ -151,12 +151,11 @@ export function htmlReportSessionDir(projectRoot, sessionId, stateRoot = process
   const base = stateRoot ? resolve(stateRoot) : join(resolve(projectRoot), ".harness", "state");
   const canonical = join(base, "html-report", sessionStorageKey(sessionId));
   const legacy = join(base, "html-report", sanitizeSessionId(sessionId));
-  if (
-    !existsSync(canonical)
-    && (existsSync(join(legacy, "result.json")) || existsSync(join(legacy, "debug", "pipeline-state.json")))
-  ) {
-    return legacy;
-  }
+  const canonicalRecoverable = existsSync(join(canonical, "result.json"))
+    || existsSync(join(canonical, "debug", "pipeline-state.json"));
+  const legacyRecoverable = existsSync(join(legacy, "result.json"))
+    || existsSync(join(legacy, "debug", "pipeline-state.json"));
+  if (!canonicalRecoverable && legacyRecoverable) return legacy;
   return canonical;
 }
 

@@ -568,7 +568,11 @@ test("htmlReportSessionDir reopens a migrated legacy session directory", () => {
       "html-report",
       createHash("sha256").update(`workbuddy:${sessionId}`).digest("hex"),
     );
-    mkdirSync(canonicalDir, { recursive: true });
+    mkdirSync(join(canonicalDir, "debug"), { recursive: true });
+    writeFileSync(join(canonicalDir, "debug", "a-config-question.json"), JSON.stringify({ userQuestion: "legacy stub" }));
+    assert.equal(htmlReportSessionDir(root, sessionId, stateRoot), legacyDir);
+
+    writeFileSync(join(canonicalDir, "debug", "pipeline-state.json"), JSON.stringify({ sessionId }));
     assert.equal(htmlReportSessionDir(root, sessionId, stateRoot), canonicalDir);
   } finally {
     cleanup(root);
