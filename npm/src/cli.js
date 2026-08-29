@@ -1,4 +1,5 @@
 import { installCommand } from "./commands/install.js";
+import { migrateCommand } from "./commands/migrate.js";
 import { updateCommand } from "./commands/update.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { pathsCommand } from "./commands/paths.js";
@@ -7,7 +8,7 @@ import { setupCommand } from "./commands/setup.js";
 import { versionCommand } from "./commands/version.js";
 import { qwenpawCommand } from "./commands/qwenpaw.js";
 
-const commands = new Set(["install", "update", "setup", "doctor", "paths", "report", "version", "qwenpaw"]);
+const commands = new Set(["install", "update", "setup", "doctor", "paths", "report", "migrate", "version", "qwenpaw"]);
 
 function parse(argv) {
   const args = argv.slice(2);
@@ -39,9 +40,10 @@ export async function main(argv) {
   if (command === "doctor") return doctorCommand(options);
   if (command === "paths") return pathsCommand(options);
   if (command === "report") return reportCommand(options);
+  if (command === "migrate") return migrateCommand(options);
   if (command === "version") return versionCommand(options);
   if (command === "qwenpaw") return qwenpawCommand(options);
-  console.log(`Usage: harness-data <install|update|setup|doctor|paths|report|version> [options]
+  console.log(`Usage: harness-data <install|update|setup|doctor|paths|report|migrate|version> [options]
 
 Commands:
   install  Install a Harness Data runtime in the current directory
@@ -50,6 +52,7 @@ Commands:
   doctor   Diagnose runtime or structured Root Context
   paths    Print structured Root Context roots (use --json for machine output)
   report   Run the explicit html-report lifecycle for a host session
+  migrate  Check or copy a legacy install --dir runtime into the dual-root data model
   version  Print installer, repository, wikis, and manifest versions
   qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
 
@@ -88,8 +91,17 @@ Report options:
   --task ID                          Card/task id for retry
   --format text|json                 Runner output format
 
+Migration options:
+  migrate --check --from PATH --to PATH --workspace-root PATH [--plugin-root PATH] [--secret-root PATH] [--host HOST] [--json]
+  migrate --from PATH --to PATH --workspace-root PATH [--plugin-root PATH] [--secret-root PATH] [--host HOST] [--json]
+  --from PATH                        Existing install --dir runtime (absolute path)
+  --to PATH                          New persistent dataRoot (absolute path)
+  --workspace-root PATH              Explicit project workspace for state identity
+  --plugin-root PATH                 Current plugin/runtime root; never inferred from the legacy runtime
+  --secret-root PATH                 Required when legacy authz is enabled
+
 Compatibility:
-  harness-data <install|update|doctor|version> [options]
+  harness-data <install|update|doctor|migrate|version> [options]
 
 Environment:
   HARNESS_RELEASE_SOURCE             Release source: auto, gitee, or github

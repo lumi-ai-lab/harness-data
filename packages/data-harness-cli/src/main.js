@@ -90,25 +90,32 @@ export async function run(argv = process.argv.slice(2), io = process) {
     throw new ExitError(`cannot find harness root: ${error.message || error}`);
   }
 
-  switch (invocation.command) {
-    case "authz-hook":
-      return runAuthzHook(root, invocation.commandArgs, io, context);
-    case "wikis":
-      return runWikis(root, invocation.commandArgs, io, context);
-    case "context":
-      return runContext(root, invocation.commandArgs, io, context);
-    case "posttool":
-      return runPosttool(root, invocation.commandArgs, io, context);
-    case "inject-template":
-      return runInjectTemplate(invocation.commandArgs, io, context);
-    case "stage":
-      return runStage(invocation.commandArgs, io, context);
-    case "show":
-      return runShow(root, invocation.commandArgs, io, context);
-    case "paths":
-      return runPaths(context, invocation.commandArgs, io);
-    default:
-      throw new ExitError(`unknown command: ${invocation.command}`);
+  try {
+    switch (invocation.command) {
+      case "authz-hook":
+        return await runAuthzHook(root, invocation.commandArgs, io, context);
+      case "wikis":
+        return await runWikis(root, invocation.commandArgs, io, context);
+      case "context":
+        return await runContext(root, invocation.commandArgs, io, context);
+      case "posttool":
+        return await runPosttool(root, invocation.commandArgs, io, context);
+      case "inject-template":
+        return await runInjectTemplate(invocation.commandArgs, io, context);
+      case "stage":
+        return await runStage(invocation.commandArgs, io, context);
+      case "show":
+        return await runShow(root, invocation.commandArgs, io, context);
+      case "paths":
+        return await runPaths(context, invocation.commandArgs, io);
+      default:
+        throw new ExitError(`unknown command: ${invocation.command}`);
+    }
+  } catch (error) {
+    if (error instanceof RootContextError) {
+      throw new ExitError(`${error.code}: ${error.message}`, { code: 2 });
+    }
+    throw error;
   }
 }
 

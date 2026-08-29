@@ -3,11 +3,13 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFi
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { writePluginManifest } from "../../../scripts/build-plugin-manifest.mjs";
+
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(pluginRoot));
 const dist = join(pluginRoot, "dist");
 const piRoot = join(repoRoot, ".agents", "pi");
-const localExtensionRoot = process.env.PI_HTML_REPORT_LOCAL_EXTENSION_ROOT?.trim() || "";
+const pluginPackage = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8"));
 
 const KERNEL_SHIMS = {
   "metric-query-contract.mjs": "html-report-kernel/src/query/metric-query-contract.mjs",
@@ -172,9 +174,7 @@ mkdirSync(join(dist, "agents"), { recursive: true });
 for (const agent of AGENTS) {
   const source = readFileSync(join(piRoot, "agents", agent.file), "utf8");
   const dest = join(dist, "agents", agent.file);
-  const extensionPath = localExtensionRoot
-    ? join(localExtensionRoot, "extensions", agent.extension)
-    : posixRel(join(dist, "agents"), join(dist, "extensions", agent.extension));
+  const extensionPath = posixRel(join(dist, "agents"), join(dist, "extensions", agent.extension));
   rewriteAgent(
     source,
     dest,
@@ -190,5 +190,13 @@ writeFileSync(
     agents: AGENTS.map((agent) => agent.file.replace(/\.md$/, "")),
   }, null, 2)}\n`
 );
+
+writePluginManifest({
+  artifactRoot: dist,
+  host: "pi",
+  pluginName: pluginPackage.name,
+  pluginVersion: pluginPackage.version,
+  resourceMode: "external",
+});
 
 console.log(`built ${relative(repoRoot, dist)}`);

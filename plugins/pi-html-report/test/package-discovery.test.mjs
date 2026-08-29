@@ -31,6 +31,12 @@ test("build produces a self-contained dist that verify-package accepts", () => {
   const verified = run("verify-package.mjs");
   assert.match(verified.stdout, /package ok/);
 
+  const productManifest = JSON.parse(readFileSync(join(pluginRoot, "dist", "plugin-manifest.json"), "utf8"));
+  assert.equal(productManifest.host, "pi");
+  assert.equal(productManifest.plugin.version, "0.0.46");
+  assert.equal(productManifest.core.packages.htmlReportKernel.version, "0.0.46");
+  assert.equal(productManifest.resource.mode, "external");
+
   const writer = readFileSync(join(pluginRoot, "dist", "agents", "report-writer.md"), "utf8");
   assert.match(writer, /^package: qdm-html-report$/m);
   assert.match(writer, /subagentOnlyExtensions: \.\.\/extensions\/report-writer-fetch\/index\.mjs/);

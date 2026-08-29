@@ -16,6 +16,8 @@ import { resolveRootContext } from "../src/lib/root-context.js";
 import { runWorkbuddy } from "../../.agents/workbuddy/scripts/html-report-workbuddy.mjs";
 import { htmlReportSessionDir } from "../../.agents/workbuddy/scripts/html-report-stage-runner.mjs";
 import { rowsSha256 } from "../../packages/html-report-kernel/src/index.mjs";
+import { writePluginManifest } from "../../scripts/build-plugin-manifest.mjs";
+import { verifyArtifact } from "../../scripts/verify-artifact.mjs";
 
 const npmRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(npmRoot, "bin", "harness-data.js");
@@ -159,6 +161,67 @@ function stagePluginRuntime(pluginRoot, version) {
   const entry = path.join(pluginRoot, "packages", "data-harness-cli", "src", "main.js");
   fs.writeFileSync(hookCli, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(entry)} "$@"\n`, { mode: 0o755 });
   fs.chmodSync(hookCli, 0o755);
+}
+
+function includeArtifactFile(source) {
+  const name = path.basename(source);
+  return name !== "test" && name !== "tests" && !/\.(?:test|spec)\.(?:[cm]?[jt]s|ts)$/i.test(name);
+}
+
+function copyArtifactTree(source, destination) {
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.cpSync(source, destination, { recursive: true, filter: includeArtifactFile });
+}
+
+function stageReleaseRuntime(stageRoot, version = "0.0.53-release-smoke") {
+  const sourceRoot = path.join(npmRoot, "..");
+  fs.mkdirSync(stageRoot, { recursive: true });
+  for (const name of ["bootstrap", "config", "bin"]) fs.mkdirSync(path.join(stageRoot, name), { recursive: true });
+  for (const name of ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", ".codebuddy-plugin", "plugins"]) {
+    copyArtifactTree(path.join(sourceRoot, ".agents", name), path.join(stageRoot, "agents", name));
+  }
+  copyArtifactTree(path.join(sourceRoot, "plugins"), path.join(stageRoot, "plugins"));
+  copyArtifactTree(
+    path.join(sourceRoot, "packages", "html-report-kernel"),
+    path.join(stageRoot, "plugins", "qdm-html-report", "dist", "html-report-kernel"),
+  );
+  copyArtifactTree(
+    path.join(sourceRoot, "packages", "harness-runtime-node"),
+    path.join(stageRoot, "plugins", "qdm-html-report", "dist", "harness-runtime-node"),
+  );
+  copyArtifactTree(
+    path.join(sourceRoot, "packages", "data-harness-cli"),
+    path.join(stageRoot, "packages", "data-harness-cli"),
+  );
+  copyArtifactTree(
+    path.join(sourceRoot, "packages", "html-report-kernel"),
+    path.join(stageRoot, "packages", "html-report-kernel"),
+  );
+  copyArtifactTree(
+    path.join(sourceRoot, "packages", "harness-runtime-node"),
+    path.join(stageRoot, "packages", "harness-runtime-node"),
+  );
+  fs.copyFileSync(path.join(sourceRoot, "bootstrap", "cli-manifest.json"), path.join(stageRoot, "bootstrap", "cli-manifest.json"));
+  fs.copyFileSync(path.join(sourceRoot, "config", "harness-config.yaml.example"), path.join(stageRoot, "config", "harness-config.yaml"));
+  fs.copyFileSync(path.join(sourceRoot, "config", "harness-config.yaml.example"), path.join(stageRoot, "config", "harness-config.yaml.example"));
+  fs.copyFileSync(path.join(sourceRoot, "config", "qdm-cli-paths.env.example"), path.join(stageRoot, "config", "qdm-cli-paths.env.example"));
+  fs.copyFileSync(path.join(sourceRoot, "bin", "data-harness-cli"), path.join(stageRoot, "bin", "data-harness-cli"));
+  fs.copyFileSync(path.join(sourceRoot, "bin", "data-harness-cli.cmd"), path.join(stageRoot, "bin", "data-harness-cli.cmd"));
+  if (process.platform !== "win32") fs.chmodSync(path.join(stageRoot, "bin", "data-harness-cli"), 0o755);
+  writePluginManifest({
+    artifactRoot: stageRoot,
+    host: "runtime",
+    pluginName: "qdm-harness",
+    pluginVersion: version,
+    resourceMode: "external",
+  });
+  writePluginManifest({
+    artifactRoot: path.join(stageRoot, "plugins", "qdm-html-report"),
+    host: "codex",
+    resourceMode: "external",
+  });
+  const audit = verifyArtifact(stageRoot, { kind: "runtime" });
+  assert.deepEqual(audit.errors, [], audit.errors.join("\n"));
 }
 
 function writeRootContext(f, { pluginRoot = f.pluginRoot, sessionId = "golden-session", name = `context-${sessionId}.json` } = {}) {
@@ -600,6 +663,97 @@ test("clean-install fixture stages a relocatable Codex runtime without touching 
   assert.equal(fs.existsSync(path.join(runtimeDir, "plugins", "qdm-html-report", "plugin.txt")), true);
   assert.equal(fs.existsSync(path.join(runtimeDir, "bin", "data-harness-cli")), true);
   assert.equal(fs.existsSync(path.join(f.root, "workspace", ".harness")), false);
+});
+
+test("manifest-bearing runtime archives are rejected before an existing runtime is replaced", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const source = path.join(f.root, "runtime-source");
+  stageReleaseRuntime(source);
+  const manifestPath = path.join(source, "plugin-manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.schemaVersion = 99;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  const archive = path.join(f.root, "invalid-runtime.tar.gz");
+  const packed = spawnSync("tar", ["-czf", archive, "-C", source, "."], { encoding: "utf8" });
+  assert.equal(packed.status, 0, packed.stderr || packed.stdout);
+
+  const runtimeDir = path.join(f.root, "runtime");
+  fs.mkdirSync(path.join(runtimeDir, "agents"), { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, "agents", "keep.txt"), "preserve me\n");
+  await assert.rejects(
+    installRuntimeBundle(runtimeDir, {
+      _harnessRelease: { tag: "invalid", assets: { runtime: { name: "invalid-runtime.tar.gz" } } },
+      downloadAsset: async (_asset, destination) => fs.copyFileSync(archive, destination),
+    }),
+    /runtime bundle has invalid plugin-manifest\.json/,
+  );
+  assert.equal(fs.readFileSync(path.join(runtimeDir, "agents", "keep.txt"), "utf8"), "preserve me\n");
+});
+
+test("release ZIP clean-room installs a read-only random runtime artifact", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("release ZIP password smoke uses the POSIX zip/unzip fixture");
+    return;
+  }
+  const f = fixture();
+  const releaseStage = path.join(f.root, "release-stage");
+  const archive = path.join(f.root, "harness-data-runtime-v-release-smoke.zip");
+  const runtimeRoot = path.join(f.root, "installed-runtime");
+  const contextFile = writeRootContext(f, { pluginRoot: runtimeRoot, sessionId: "release-smoke", name: "release-smoke-context.json" });
+  t.after(() => {
+    setTreeWritable(runtimeRoot);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  stageReleaseRuntime(releaseStage);
+  const zipped = spawnSync("zip", ["-q", "-r", "-P", "release-smoke-password", archive, "."], {
+    cwd: releaseStage,
+    encoding: "utf8",
+  });
+  assert.equal(zipped.status, 0, zipped.stderr || zipped.stdout);
+
+  const installed = await installRuntimeBundle(runtimeRoot, {
+    _harnessRelease: { tag: "v-release-smoke", assets: { runtime: { name: path.basename(archive) } } },
+    _releaseArchivePassword: "release-smoke-password",
+    downloadAsset: async (_asset, destination) => fs.copyFileSync(archive, destination),
+  });
+  assert.equal(installed.tag, "v-release-smoke");
+  assert.equal(fs.existsSync(path.join(runtimeRoot, "plugin-manifest.json")), true);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, "plugins", "qdm-html-report", "plugin-manifest.json")), true);
+
+  const selfTest = spawnSync(process.execPath, [
+    path.join(runtimeRoot, "plugins", "qdm-html-report", "mcp", "server.mjs"),
+    "--self-test",
+  ], { cwd: runtimeRoot, encoding: "utf8" });
+  assert.equal(selfTest.status, 0, selfTest.stderr || selfTest.stdout);
+
+  const before = snapshotTree(runtimeRoot);
+  setTreeReadOnly(runtimeRoot);
+  assertCliSuccess(runHarnessCli([
+    "setup",
+    "--context-file", contextFile,
+    "--metric-cli", f.metricCli,
+    "--json",
+  ]));
+  const doctor = JSON.parse(assertCliSuccess(runHarnessCli([
+    "doctor",
+    "--context-file", contextFile,
+    "--json",
+  ])));
+  assert.equal(doctor.ok, true);
+  const report = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "start",
+    "--context-file", contextFile,
+    "--session", "release-smoke-report",
+    "--phase-a", "agent",
+    "--json",
+  ])));
+  assert.equal(report.ok, true, report.stderr || report.stdout);
+  assert.equal(fs.existsSync(path.join(f.workspaceRoot, ".harness")), false);
+  assert.equal(fs.existsSync(path.join(f.dataRoot, "state")), true);
+  assert.deepEqual(snapshotTree(runtimeRoot), before);
 });
 
 test("root context rejects a missing workspace only for write-capable callers", () => {

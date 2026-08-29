@@ -31,6 +31,7 @@ need(join(dist, "skills", "html-report", "SKILL.md"), "html-report skill");
 need(join(dist, "skills", "html-report-design", "SKILL.md"), "html-report-design skill");
 need(join(dist, "vendor", "html-report-kernel", "src", "index.mjs"), "bundled kernel");
 need(join(dist, "vendor", "harness-runtime-node", "src", "index.mjs"), "bundled runtime");
+need(join(dist, "plugin-manifest.json"), "product plugin manifest");
 
 for (const name of ["report-writer", "report-researcher", "report-reviewer", "report-designer"]) {
   const agentPath = join(dist, "agents", `${name}.md`);

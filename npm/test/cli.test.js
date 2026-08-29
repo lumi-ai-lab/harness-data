@@ -103,7 +103,7 @@ function reusableToolManifest(key) {
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+  assert.match(result.stdout, /harness-data <install\|update\|setup\|doctor\|paths\|report\|migrate\|version>/);
   assert.doesNotMatch(result.stdout, /\bauth\b.*CAS/);
   assert.match(result.stdout, /--auth-blob/);
   assert.match(result.stdout, /--auth-user-id/);

@@ -613,6 +613,14 @@ setup 必须幂等，负责：
 - 旧 runtime state 和 auth 不自动覆盖新数据；
 - migrate 成功前，旧路径保持可回滚。
 
+#### 已冻结的兼容窗口决策（2026-08-29）
+
+- `0.0.53` 是旧 `install --dir` 模型的基线版本；
+- 首个包含 `qdm-harness migrate` 的版本（计划为 `0.0.54`）和其后一个正式 patch 版本（计划为 `0.0.55`）继续完整支持旧入口；
+- 只有从其后的版本开始，且 Phase 4/6 的迁移、回滚、跨平台和发布周期门槛全部满足时，才允许删除旧入口；
+- 若迁移首发版本号变化，窗口随之顺延，仍固定为“迁移首发版 + 一个正式 patch 版本”；
+- 详细政策、停止支持门槛和用户可见要求见 `docs/legacy-installer-compatibility.md`。
+
 ### 12.2 迁移命令
 
 提供：
@@ -961,20 +969,23 @@ doctor --json 至少输出：
 - 任何涉及 auth、路径解析、迁移和发布内容的任务，未通过对应验收前不得标记完成。
 - 新增命令或测试在实现前只能作为“待新增入口”，不得把现有旧模型的绿灯测试当作新架构验收。
 
-#### 当前进度快照（2026-08-29）
+#### 当前进度快照（更新于 2026-08-29）
 
 - 已完成 Root Context v1 的 CLI/runtime 实现、路径校验、五根 owner 映射、优先级解析、错误码和跨实现 fixture。
 - 已完成 PathResolver 双根分流、legacy `findRoot()` 隔离、结构化 context 接入、按需 hook、state schema/原子写入/基础锁与 stale-lock 恢复，以及 html-report 显式 roots 改造。
 - 已完成 Codex golden-path 的决策记录、能力矩阵、验收矩阵、npm 层 `setup`/`paths`/结构化 `doctor`、hook envelope 转换、缺 workspace fail-closed 和显式 report wrapper。
 - 本轮新增并验证 `qdm-harness setup|paths|doctor|report` 入口；setup 产物固定在 `dataRoot`，report session 固定在 `stateRoot`，Codex hook 在 runtime 不可发现时给出可执行 setup 提示。
 - 已完成 auth `secretRef`/0600 文件通道的最小安全实现、敏感信息脱敏、wiki index 可重定位改造，以及 installer staging/plugins 修复。
-- 已完成 CLI/runtime/installer/WorkBuddy 回归与打包校验：npm 150 pass、CLI 78 pass + 2 skip、runtime 17 pass、WorkBuddy hook 7 pass；新增 npm golden-path、hook envelope 和 report state-root 测试均通过。
+- 已完成 CLI/runtime/installer/WorkBuddy 回归与打包校验；新增 npm golden-path、hook envelope 和 report state-root 测试均通过。
 - 已完成 Codex clean-room/只读 pluginRoot 自动化链路、跨进程 report session 恢复、插件目录替换后的 auth/runtime/state 复用，以及 confirmed `result.json`→workspace `analysis/main.md` 的可复核 E2E。
 - 已完成资源 `resource-manifest.json`（相对路径、内容版本和 SHA-256）与 runtime staging、Pi dist、npm tarball 的统一 artifact 审计；release staging 不再携带 auth fixture 或测试文件。
-- 本轮可复核验证：`npm test -- --test-concurrency=1` 为 150 pass；`packages/data-harness-cli` 为 78 pass + 2 skip；Pi artifact 为 4 pass；artifact verifier 为 2 pass；B2_MAIN 定向验证为 2 pass。
 - 已知环境限制：完整 `html-report-stage-runner.test.mjs` 有 55 pass，另 2 项依赖本机 `codebuddy` 可执行文件而失败；这两项不覆盖本轮改动，不能替代真实 Codex UI reload 的验收。
-- 当前仍未完成：P0-11 的旧 installer 兼容窗口决策、真实 release archive 的随机安装目录 smoke、真实 Codex UI reload、完整版本绑定/资源失配处理、迁移命令与旧 installer 退出，以及多宿主验证。
-- 下一步按依赖顺序：先确认 P0-11 的兼容窗口；随后完成 P3-05/P3-07 的版本绑定、P3-09 的真实 artifact clean-room smoke 和 P3-11 的资源失配错误；最后进入 Phase 4 migration。
+- 本轮完成 Phase 3 的 cross-host manifest/核心包版本绑定、runtime/PI artifact 审计、安装器对新 manifest archive 的严格校验，以及 ZIP 解压后的二次 CI artifact 校验；PI agent extension 路径保持相对可搬迁。
+- 本轮完成 Phase 3 release ZIP clean-room smoke：随机安装目录、只读 pluginRoot、可写 dataRoot、MCP self-test、setup/doctor/report 全链路均由自动化覆盖。
+- 本轮完成 Phase 4 migration MVP：只读 `migrate --check`、copy+hash/tree 校验+pointer、版本化 metric runtime、workspace state/session 映射、secretRef/0600、doctor gate、幂等/损坏/源变更/软链/权限/回滚失败防护。
+- 本轮可复核验证：`cd npm && npm test -- --test-concurrency=1` 为 170 pass；`npm pack --dry-run` 通过；`packages/data-harness-cli` 为 82 pass + 2 skip；`packages/harness-runtime-node` 为 17 pass；Pi artifact 为 4 pass；artifact manifest/verifier 为 5 pass。
+- 当前仍未完成：固定 wiki revision/checks、全宿主 build/verify/self-test、真实 Codex UI reload、旧 runtime 自动发现后的 migrate 提示、旧 hook 保活与三平台迁移 fixture。
+- 下一步按依赖顺序：补齐 P3-01/P3-02/P3-06 和 P3 exit 证据；再补 Phase 4 的旧 hook/跨平台验证，之后进入多宿主 Phase 5。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -990,7 +1001,7 @@ doctor --json 至少输出：
 - [x] P0-08（状态）定义 workspace/session identity、state schema、lock/lease、并发冲突和 stale-lock 恢复规则。
 - [x] P0-09（宿主）建立七宿主 capability matrix，记录 workspace/data/secret/session/hook/reload 能力及证据来源。
 - [x] P0-10（质量）建立验收矩阵和基线命令，区分“现有回归测试”和“待新增双根/迁移/只读测试”。
-- [ ] P0-11（兼容）明确旧 `install --dir` 的兼容版本范围、迁移入口和停止支持条件。
+- [x] P0-11（兼容）明确旧 `install --dir` 的兼容版本范围、迁移入口和停止支持条件；详见 `docs/legacy-installer-compatibility.md`。
 - [ ] P0-12（文档）补齐或归档本方案引用的 handoff 调研文档；若无法恢复，记录缺口并用当前代码/发布链路重新留证。
 
 退出条件：
@@ -998,7 +1009,7 @@ doctor --json 至少输出：
 - [x] P0-EXIT-01：产品确认 `dataRoot`/`secretRoot` 是必需概念，pluginRoot 不作为数据盘。
 - [x] P0-EXIT-02：默认 hook 模式确定为 on-demand。
 - [x] P0-EXIT-03：Root Context、state、auth transport、capability matrix 和验收清单均有可评审文档或 fixture。
-- [ ] P0-EXIT-04：旧 installer 兼容窗口和迁移入口获得确认。
+- [x] P0-EXIT-04：旧 installer 兼容窗口和迁移入口获得确认。
 
 最小验证：新增合法、缺失、冲突、相对路径和 symlink Root Context fixture；CLI 与 runtime-node 对合法 fixture 得到同一规范化结果，非法 fixture 返回稳定错误码且不回退到 `process.cwd()`。
 
@@ -1058,13 +1069,13 @@ doctor --json 至少输出：
 - [ ] P3-02（资源）构建可重定位的 `wikis-index.json` 和 `wikis-runtime-index.json`。
 - [x] P3-03（资源）删除 index 中的构建机绝对路径，改用 resource ID、相对路径和 `resourceRoot`。
 - [x] P3-04（资源）生成 `resource-manifest.json`，记录内容版本、schema 版本和 SHA-256。
-- [ ] P3-05（核心）构建通用 core 与 html-report kernel，并显式记录版本字段。
+- [x] P3-05（核心）构建通用 core 与 html-report kernel，并显式记录版本字段。
 - [ ] P3-06（发布）为每个宿主建立独立 build/verify/self-test 脚本。
-- [ ] P3-07（发布）生成顶层 manifest，绑定 plugin/core/resource/state/metric-cli 版本和兼容范围。
+- [x] P3-07（发布）生成顶层 manifest，绑定 plugin/core/resource/state/metric-cli 版本和兼容范围。
 - [x] P3-08（安装）修复 CI staging 与 installer 实际消费内容不一致，确保 top-level plugins 等必需内容被安装。
-- [ ] P3-09（验证）在随机安装目录、只读 pluginRoot + 可写 dataRoot 的 clean-room 环境执行 self-test/smoke。
+- [x] P3-09（验证）在随机安装目录、只读 pluginRoot + 可写 dataRoot 的 clean-room 环境执行 self-test/smoke。
 - [x] P3-10（审计）扫描 artifact，确认不含 auth、state、项目文件、`.git`、metric-cli 下载结果和构建机绝对路径。
-- [ ] P3-11（发布）验证资源或插件版本不匹配时返回清晰错误，并完成 `npm pack --dry-run` 等包内容检查。
+- [x] P3-11（发布）验证资源或插件版本不匹配时返回清晰错误，并完成 `npm pack --dry-run` 等包内容检查。
 
 退出条件：
 
@@ -1080,22 +1091,22 @@ doctor --json 至少输出：
 目标：在不破坏旧 runtime 的前提下，把旧数据安全迁移到四根模型。
 
 - [ ] P4-01（兼容）保留至少一个小版本的旧 `install --dir` 兼容窗口，新插件发现旧 runtime 时只提示 migrate。
-- [ ] P4-02（CLI）实现只读 `qdm-harness migrate --check --from <old-runtime>`。
-- [ ] P4-03（CLI）实现 `qdm-harness migrate --from <old-runtime> --to <data-root>`。
-- [ ] P4-04（迁移）校验旧 runtime identity、版本和 manifest，再执行迁移。
-- [ ] P4-05（迁移）迁移/登记 wiki content version、index 和 metric-cli 校验摘要。
-- [ ] P4-06（安全）将旧 auth 转为 secret reference，禁止复制到 plugin package；迁移日志不得包含 blob 或完整 prompt。
-- [ ] P4-07（状态）将旧 `.harness/state` 映射到 workspace identity 对应的 stateRoot，并迁移 html-report session/job。
+- [x] P4-02（CLI）实现只读 `qdm-harness migrate --check --from <old-runtime>`。
+- [x] P4-03（CLI）实现 `qdm-harness migrate --from <old-runtime> --to <data-root>`。
+- [x] P4-04（迁移）校验旧 runtime identity、版本和 manifest，再执行迁移。
+- [x] P4-05（迁移）迁移/登记 wiki content version、index 和 metric-cli 校验摘要。
+- [x] P4-06（安全）将旧 auth 转为 secret reference，禁止复制到 plugin package；迁移日志不得包含 blob 或完整 prompt。
+- [x] P4-07（状态）将旧 `.harness/state` 映射到 workspace identity 对应的 stateRoot，并迁移 html-report session/job。
 - [ ] P4-08（回滚）使用 copy + 校验 + pointer 实现迁移，保留旧数据和旧 hook 可回滚路径。
-- [ ] P4-09（诊断）生成兼容报告和非敏感 diagnostics，doctor 通过后才允许切换。
+- [x] P4-09（诊断）生成兼容报告和非敏感 diagnostics，doctor 通过后才允许切换。
 - [ ] P4-10（跨平台）为 macOS、Linux、Windows 各准备至少一条迁移 fixture/验证路径。
-- [ ] P4-11（幂等）验证成功迁移、坏版本、权限失败和重复 migrate 的行为。
+- [x] P4-11（幂等）验证成功迁移、坏版本、权限失败和重复 migrate 的行为。
 
 退出条件：
 
 - [ ] P4-EXIT-01：迁移失败不修改或破坏旧 runtime，旧 hook 仍可使用。
 - [ ] P4-EXIT-02：迁移成功后旧报告、session 和 runtime 状态可继续使用。
-- [ ] P4-EXIT-03：同一输入连续执行两次 migrate，结果一致且日志不泄露敏感内容。
+- [x] P4-EXIT-03：同一输入连续执行两次 migrate，结果一致且日志不泄露敏感内容。
 
 ### 20.7 Phase 5：扩展到其他宿主
 

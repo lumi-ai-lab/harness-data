@@ -3,6 +3,8 @@ import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadPluginManifest } from "../packages/data-harness-cli/src/lib/plugin-manifest.js";
+
 const KINDS = new Set(["auto", "runtime", "pi", "npm"]);
 const FORBIDDEN_DIRECTORIES = new Set([".git", ".harness", "node_modules", "state", "sessions", "diagnostics", "jobs", "test", "tests"]);
 const TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -13,15 +15,24 @@ const REQUIRED_PATHS = {
     "bootstrap/cli-manifest.json",
     "config",
     "packages/data-harness-cli/src/main.js",
+    "packages/data-harness-cli/package.json",
+    "packages/html-report-kernel/src/index.mjs",
+    "packages/html-report-kernel/package.json",
+    "packages/harness-runtime-node/src/index.mjs",
+    "packages/harness-runtime-node/package.json",
     "plugins",
+    "plugin-manifest.json",
   ],
   pi: [
     "manifest.json",
+    "plugin-manifest.json",
     "extensions",
     "skills",
     "agents",
     "vendor/html-report-kernel/src/index.mjs",
+    "vendor/html-report-kernel/package.json",
     "vendor/harness-runtime-node/src/index.mjs",
+    "vendor/harness-runtime-node/package.json",
   ],
   npm: ["package.json"],
 };
@@ -37,6 +48,7 @@ export function verifyArtifact(root, { kind = "auto" } = {}) {
 
   const effectiveKind = requestedKind === "auto" ? detectKind(resolved) : requestedKind;
   validateRequiredPaths(resolved, effectiveKind, errors);
+  validatePluginManifest(resolved, effectiveKind, errors);
   walkArtifact(resolved, "", errors);
   return { root: resolved, kind: effectiveKind, errors };
 }
@@ -51,6 +63,37 @@ function detectKind(root) {
 function validateRequiredPaths(root, kind, errors) {
   for (const relative of REQUIRED_PATHS[kind] || []) {
     if (!existsSync(path.join(root, relative))) errors.push(`missing required ${kind} path: ${relative}`);
+  }
+}
+
+function validatePluginManifest(root, kind, errors) {
+  if (kind !== "runtime" && kind !== "pi") return;
+  try {
+    const manifest = loadPluginManifest(root, { required: true });
+    if (kind === "runtime" && manifest.host !== "runtime") {
+      errors.push(`runtime plugin manifest host must be runtime: ${manifest.host}`);
+    }
+    if (kind === "pi" && manifest.host !== "pi") {
+      errors.push(`pi plugin manifest host must be pi: ${manifest.host}`);
+    }
+    if (kind === "runtime") validateNestedCodexManifest(root, errors);
+  } catch (error) {
+    errors.push(`invalid plugin manifest: ${error?.message || error}`);
+  }
+}
+
+function validateNestedCodexManifest(root, errors) {
+  const nestedRoot = path.join(root, "plugins", "qdm-html-report");
+  const nestedPath = path.join(nestedRoot, "plugin-manifest.json");
+  if (!existsSync(nestedPath)) {
+    errors.push("missing required nested Codex plugin manifest: plugins/qdm-html-report/plugin-manifest.json");
+    return;
+  }
+  try {
+    const manifest = loadPluginManifest(nestedRoot, { required: true });
+    if (manifest.host !== "codex") errors.push(`nested Codex plugin manifest host must be codex: ${manifest.host}`);
+  } catch (error) {
+    errors.push(`invalid nested Codex plugin manifest: ${error?.message || error}`);
   }
 }
 

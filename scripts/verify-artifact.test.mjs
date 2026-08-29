@@ -19,6 +19,39 @@ function runtimeFixture() {
   mkdirSync(path.join(root, "plugins"), { recursive: true });
   write(root, "bootstrap/cli-manifest.json", "{}\n");
   write(root, "packages/data-harness-cli/src/main.js", "export {};\n");
+  write(root, "packages/data-harness-cli/package.json", "{\"name\":\"@lumi-ai-lab/data-harness-cli\",\"version\":\"0.0.53\"}\n");
+  write(root, "packages/html-report-kernel/src/index.mjs", "export {};\n");
+  write(root, "packages/html-report-kernel/package.json", "{\"name\":\"@lumi-ai-lab/html-report-kernel\",\"version\":\"0.0.46\"}\n");
+  write(root, "packages/harness-runtime-node/src/index.mjs", "export {};\n");
+  write(root, "packages/harness-runtime-node/package.json", "{\"name\":\"@lumi-ai-lab/harness-runtime-node\",\"version\":\"0.0.46\"}\n");
+  write(root, "plugin-manifest.json", `${JSON.stringify({
+    schemaVersion: 1,
+    product: "qdm-harness",
+    host: "runtime",
+    plugin: { name: "qdm-harness", version: "0.0.53" },
+    core: { apiVersion: "v1", packages: { dataHarnessCli: { name: "@lumi-ai-lab/data-harness-cli", version: "0.0.53" } } },
+    resource: { mode: "external", resourceId: "qdm-harness-wiki", schemaVersion: 1, contentVersion: "" },
+    metricCli: { binary: "qdm-metric-cli", version: "" },
+    state: { schemaVersion: 1 },
+    compatibility: { node: ">=18", coreApi: "v1", resourceSchema: 1, stateSchema: 1 },
+  }, null, 2)}\n`);
+  write(root, "plugins/qdm-html-report/.codex-plugin/plugin.json", "{\"name\":\"qdm-html-report\",\"version\":\"0.0.50\"}\n");
+  write(root, "plugins/qdm-html-report/dist/html-report-kernel/package.json", "{\"name\":\"@lumi-ai-lab/html-report-kernel\",\"version\":\"0.0.46\"}\n");
+  write(root, "plugins/qdm-html-report/dist/harness-runtime-node/package.json", "{\"name\":\"@lumi-ai-lab/harness-runtime-node\",\"version\":\"0.0.46\"}\n");
+  write(root, "plugins/qdm-html-report/plugin-manifest.json", `${JSON.stringify({
+    schemaVersion: 1,
+    product: "qdm-harness",
+    host: "codex",
+    plugin: { name: "qdm-html-report", version: "0.0.50" },
+    core: { apiVersion: "v1", packages: {
+      htmlReportKernel: { name: "@lumi-ai-lab/html-report-kernel", version: "0.0.46" },
+      harnessRuntimeNode: { name: "@lumi-ai-lab/harness-runtime-node", version: "0.0.46" },
+    } },
+    resource: { mode: "external", resourceId: "qdm-harness-wiki", schemaVersion: 1, contentVersion: "" },
+    metricCli: { binary: "qdm-metric-cli", version: "" },
+    state: { schemaVersion: 1 },
+    compatibility: { node: ">=18", coreApi: "v1", resourceSchema: 1, stateSchema: 1 },
+  }, null, 2)}\n`);
   return root;
 }
 
@@ -42,4 +75,11 @@ test("verifyArtifact rejects secrets, mutable state, binaries, symlinks, and bui
   assert.equal(report.errors.some((line) => line.includes("downloaded metric CLI")), true);
   assert.equal(report.errors.some((line) => line.includes("build-machine absolute path") && line.includes("agent.md")), true);
   assert.equal(report.errors.some((line) => line.includes("symlink is not allowed") && line.includes("linked.md")), true);
+});
+
+test("verifyArtifact requires a valid product plugin manifest", () => {
+  const root = runtimeFixture();
+  write(root, "plugin-manifest.json", "{}\n");
+  const report = verifyArtifact(root, { kind: "runtime" });
+  assert.equal(report.errors.some((line) => line.includes("invalid plugin manifest")), true);
 });

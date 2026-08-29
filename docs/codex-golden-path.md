@@ -18,7 +18,7 @@
 | hook 模式 | structured context 默认 on-demand；普通 prompt 不注入 wiki、不创建 durable state |
 | 无 workspace | `paths`/`doctor`/只读 context 可用；report、template、session 写操作返回 `QDM_WORKSPACE_REQUIRED` |
 | 报告位置 | 用户明确要求导出时写入 workspace 下的 `analysis/main.md`；session/job 状态留在 `stateRoot` |
-| legacy 兼容 | 保留 `install --dir` 与旧 workspace 诊断，迁移命令完成前不删除 |
+| legacy 兼容 | `0.0.53` 为旧模型基线；迁移首发版及其后一个正式 patch 版本保留 `install --dir`，其后仅在迁移/回滚门槛满足时移除。详见 [`legacy-installer-compatibility.md`](legacy-installer-compatibility.md) |
 
 ## 命令契约
 

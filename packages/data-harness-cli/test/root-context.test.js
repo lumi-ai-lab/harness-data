@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -68,6 +69,19 @@ function memoryIO(env = {}) {
     },
     output() { return chunks.join(""); },
   };
+}
+
+function writeRuntimeResourceManifest(root, runtimeIndex) {
+  const runtimeIndexPath = path.join(root, ".harness", "index", "wikis-runtime-index.json");
+  const resourceVersion = String(runtimeIndex.meta.wikiContentVersion || runtimeIndex.meta.resourceVersion || "");
+  const sha256 = createHash("sha256").update(readFileSync(runtimeIndexPath)).digest("hex");
+  writeFileSync(path.join(root, "resource-manifest.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    resourceSchemaVersion: 1,
+    resourceId: "qdm-harness-wiki",
+    wikiContentVersion: resourceVersion,
+    files: [{ path: ".harness/index/wikis-runtime-index.json", sha256, kind: "index" }],
+  }, null, 2)}\n`);
 }
 
 test("RootContext v1 normalizes the shared fixture and derives a workspace state root", () => {
@@ -211,10 +225,20 @@ test("structured prompt hooks run for an explicit skill and store only a prompt 
   mkdirSync(path.join(roots.pluginRoot, "config"), { recursive: true });
   writeFileSync(path.join(roots.pluginRoot, "config", "harness-config.yaml"), "paths:\n  knowledge: .\n");
   mkdirSync(path.join(roots.pluginRoot, ".harness", "index"), { recursive: true });
-  writeFileSync(
-    path.join(roots.pluginRoot, ".harness", "index", "wikis-runtime-index.json"),
-    `${JSON.stringify({ meta: { paths: { knowledge: ".", spec: "spec", playbooks: "playbooks", templates: "templates" } }, docsByPath: {}, recall: [], templateSelection: [] })}\n`,
-  );
+  const runtimeIndex = {
+    meta: {
+      resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: 1,
+      wikiContentVersion: createHash("sha256").update("root-context-fixture").digest("hex"),
+      resourceVersion: createHash("sha256").update("root-context-fixture").digest("hex"),
+      paths: { knowledge: ".", spec: "spec", playbooks: "playbooks", templates: "templates" },
+    },
+    docsByPath: {},
+    recall: [],
+    templateSelection: [],
+  };
+  writeFileSync(path.join(roots.pluginRoot, ".harness", "index", "wikis-runtime-index.json"), `${JSON.stringify(runtimeIndex)}\n`);
+  writeRuntimeResourceManifest(roots.pluginRoot, runtimeIndex);
   const context = normalizeRootContext(fixtureContext(roots));
   const result = runClaudeHook(
     context.pluginRoot,
