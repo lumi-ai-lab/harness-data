@@ -968,9 +968,13 @@ doctor --json 至少输出：
 - 已完成 Codex golden-path 的决策记录、能力矩阵、验收矩阵、npm 层 `setup`/`paths`/结构化 `doctor`、hook envelope 转换、缺 workspace fail-closed 和显式 report wrapper。
 - 本轮新增并验证 `qdm-harness setup|paths|doctor|report` 入口；setup 产物固定在 `dataRoot`，report session 固定在 `stateRoot`，Codex hook 在 runtime 不可发现时给出可执行 setup 提示。
 - 已完成 auth `secretRef`/0600 文件通道的最小安全实现、敏感信息脱敏、wiki index 可重定位改造，以及 installer staging/plugins 修复。
-- 已完成 CLI/runtime/installer/WorkBuddy 回归与打包校验：npm 147 pass、CLI 77 pass + 2 skip、runtime 17 pass、WorkBuddy hook 7 pass；新增 npm golden-path、hook envelope 和 report state-root 测试均通过。
-- 当前仍未完成：真实 clean-install artifact、pluginRoot 只读完整链路、reload/new-session 全量恢复、报告最终产物 E2E、迁移命令与旧 installer 退出、完整 artifact 审计和多宿主验证。
-- 下一步按依赖顺序：补 Codex clean-install/只读 pluginRoot smoke，再完成 report `result.json`→`analysis/main.md` 的可复核 E2E，之后进入 Phase 3 artifact 审计。
+- 已完成 CLI/runtime/installer/WorkBuddy 回归与打包校验：npm 150 pass、CLI 78 pass + 2 skip、runtime 17 pass、WorkBuddy hook 7 pass；新增 npm golden-path、hook envelope 和 report state-root 测试均通过。
+- 已完成 Codex clean-room/只读 pluginRoot 自动化链路、跨进程 report session 恢复、插件目录替换后的 auth/runtime/state 复用，以及 confirmed `result.json`→workspace `analysis/main.md` 的可复核 E2E。
+- 已完成资源 `resource-manifest.json`（相对路径、内容版本和 SHA-256）与 runtime staging、Pi dist、npm tarball 的统一 artifact 审计；release staging 不再携带 auth fixture 或测试文件。
+- 本轮可复核验证：`npm test -- --test-concurrency=1` 为 150 pass；`packages/data-harness-cli` 为 78 pass + 2 skip；Pi artifact 为 4 pass；artifact verifier 为 2 pass；B2_MAIN 定向验证为 2 pass。
+- 已知环境限制：完整 `html-report-stage-runner.test.mjs` 有 55 pass，另 2 项依赖本机 `codebuddy` 可执行文件而失败；这两项不覆盖本轮改动，不能替代真实 Codex UI reload 的验收。
+- 当前仍未完成：P0-11 的旧 installer 兼容窗口决策、真实 release archive 的随机安装目录 smoke、真实 Codex UI reload、完整版本绑定/资源失配处理、迁移命令与旧 installer 退出，以及多宿主验证。
+- 下一步按依赖顺序：先确认 P0-11 的兼容窗口；随后完成 P3-05/P3-07 的版本绑定、P3-09 的真实 artifact clean-room smoke 和 P3-11 的资源失配错误；最后进入 Phase 4 migration。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1018,7 +1022,7 @@ doctor --json 至少输出：
 退出条件：
 
 - [x] P1-EXIT-01：双根及 owner 单元测试通过，CLI/runtime 对同一 context 解析一致。
-- [ ] P1-EXIT-02：pluginRoot 只读时 context/show/recall 等读操作成功，config/runtime/state/secret 不写入 pluginRoot。
+- [x] P1-EXIT-02：pluginRoot 只读时 context/show/recall 等读操作成功，config/runtime/state/secret 不写入 pluginRoot。
 - [x] P1-EXIT-03：workspace 缺失时写操作稳定失败，两个 workspace 并行时 state 不串。
 - [x] P1-EXIT-04：旧 CLI 回归测试保持通过。
 
@@ -1033,16 +1037,16 @@ doctor --json 至少输出：
 - [x] P2-05（hook）实现宿主 hook envelope → Root Context 的转换和首次失败时的可执行 setup 提示。
 - [x] P2-06（入口）接入 explicit skill/command，并验证普通 prompt 默认不注入 wiki。
 - [x] P2-07（报告）接入 report/session state，显式 report/template 才创建 durable state。
-- [ ] P2-08（生命周期）验证 reload/new-session 后 auth、runtime、state 和 report session 可恢复。
+- [x] P2-08（生命周期）验证 reload/new-session 后 auth、runtime、state 和 report session 可恢复（自动化进程/插件替换模拟；Codex UI 实机留给 Phase 5）。
 - [x] P2-09（权限）在只读 pluginRoot + 可写 dataRoot 环境运行完整链路。
-- [ ] P2-10（端到端）完成一次 explicit report flow，并保存可复核的输入、输出和诊断摘要。
+- [x] P2-10（端到端）完成一次 explicit report flow，并保存可复核的输入、输出和诊断摘要。
 - [x] P2-11（副作用）验证普通 prompt 不创建 state、不创建 `.harness`，只读 doctor/status 不写盘。
 
 退出条件：
 
-- [ ] P2-EXIT-01：替换插件目录后 auth、runtime、state 均保留。
+- [x] P2-EXIT-01：替换插件目录后 auth、runtime、state 均保留。
 - [x] P2-EXIT-02：`setup` 幂等且不创建用户项目 `.harness`；`doctor --json` 不输出 secret 内容。
-- [ ] P2-EXIT-03：explicit report flow 端到端通过，普通 prompt 无 durable state。
+- [x] P2-EXIT-03：explicit report flow 端到端通过，普通 prompt 无 durable state。
 
 最小验证：`cd npm && npm test -- --test-concurrency=1`；宿主 clean-install/setup/doctor/reload fixture；html-report 运行 `node plugins/qdm-html-report/mcp/server.mjs --self-test`（若该宿主使用该 MCP）。
 
@@ -1053,13 +1057,13 @@ doctor --json 至少输出：
 - [ ] P3-01（资源）固定 wiki revision，运行 wiki checks。
 - [ ] P3-02（资源）构建可重定位的 `wikis-index.json` 和 `wikis-runtime-index.json`。
 - [x] P3-03（资源）删除 index 中的构建机绝对路径，改用 resource ID、相对路径和 `resourceRoot`。
-- [ ] P3-04（资源）生成 `resource-manifest.json`，记录内容版本、schema 版本和 SHA-256。
+- [x] P3-04（资源）生成 `resource-manifest.json`，记录内容版本、schema 版本和 SHA-256。
 - [ ] P3-05（核心）构建通用 core 与 html-report kernel，并显式记录版本字段。
 - [ ] P3-06（发布）为每个宿主建立独立 build/verify/self-test 脚本。
 - [ ] P3-07（发布）生成顶层 manifest，绑定 plugin/core/resource/state/metric-cli 版本和兼容范围。
 - [x] P3-08（安装）修复 CI staging 与 installer 实际消费内容不一致，确保 top-level plugins 等必需内容被安装。
 - [ ] P3-09（验证）在随机安装目录、只读 pluginRoot + 可写 dataRoot 的 clean-room 环境执行 self-test/smoke。
-- [ ] P3-10（审计）扫描 artifact，确认不含 auth、state、项目文件、`.git`、metric-cli 下载结果和构建机绝对路径。
+- [x] P3-10（审计）扫描 artifact，确认不含 auth、state、项目文件、`.git`、metric-cli 下载结果和构建机绝对路径。
 - [ ] P3-11（发布）验证资源或插件版本不匹配时返回清晰错误，并完成 `npm pack --dry-run` 等包内容检查。
 
 退出条件：

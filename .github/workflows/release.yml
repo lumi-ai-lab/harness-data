@@ -111,6 +111,7 @@ jobs:
           ./bin/data-harness-cli wikis build-index --skip-checks
           test -s .harness/index/wikis-index.json
           test -s .harness/index/wikis-runtime-index.json
+          test -s resource-manifest.json
 
       - name: Verify external CLI assets
         env:

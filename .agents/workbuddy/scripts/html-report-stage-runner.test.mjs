@@ -1889,6 +1889,10 @@ test("M6 thin entry treats B2_MAIN as delivered instead of prompting background 
     assert.match(main.message, /初版报告已生成/);
     assert.match(main.message, /不要在后台继续推进/);
     assert.match(main.message, /不要运行 approve/);
+    const sessionMain = join(sessionDir, "analysis", "main.md");
+    const workspaceMain = join(root, "analysis", "main.md");
+    assert.equal(existsSync(workspaceMain), true, "explicit report flow must publish workspace analysis/main.md");
+    assert.equal(readFileSync(workspaceMain, "utf8"), readFileSync(sessionMain, "utf8"));
 
     const s = await runWorkbuddy(["status", "--session", sessionId, "--root", root]);
     assert.equal(s.ok, true, s.error);

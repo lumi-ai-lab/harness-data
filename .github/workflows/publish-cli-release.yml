@@ -61,8 +61,12 @@ jobs:
           cp -R .agents/workbuddy runtime/agents/workbuddy
           cp -R .agents/.codebuddy-plugin runtime/agents/.codebuddy-plugin
           cp -R .agents/plugins runtime/agents/plugins
+          find runtime/agents -type d \( -name test -o -name tests \) -prune -exec rm -rf {} +
+          find runtime/agents -type f \( -name '*.test.js' -o -name '*.test.mjs' -o -name '*.spec.js' -o -name '*.spec.mjs' \) -delete
           node plugins/qdm-html-report/scripts/bundle-dist.mjs
           cp -R plugins runtime/plugins
+          find runtime/plugins -type d \( -name test -o -name tests \) -prune -exec rm -rf {} +
+          find runtime/plugins -type f \( -name '*.test.js' -o -name '*.test.mjs' -o -name '*.spec.js' -o -name '*.spec.mjs' \) -delete
           test -f runtime/agents/.codebuddy-plugin/marketplace.json
           test -f runtime/agents/plugins/marketplace.json
           test -f runtime/plugins/qdm-html-report/.codex-plugin/plugin.json
@@ -83,10 +87,6 @@ jobs:
           chmod +x runtime/agents/workbuddy/bin/run-node runtime/agents/workbuddy/scripts/harness-hook.mjs
           cp config/harness-config.yaml.example runtime/config/harness-config.yaml.example
           cp config/qdm-cli-paths.env.example runtime/config/qdm-cli-paths.env.example
-          mkdir -p runtime/config/fixtures
-          cp config/fixtures/local-test-auth.blob runtime/config/fixtures/local-test-auth.blob
-          cp config/fixtures/local-test-auth.json runtime/config/fixtures/local-test-auth.json
-          cp config/fixtures/README.md runtime/config/fixtures/README.md
           cp bootstrap/cli-manifest.json runtime/bootstrap/cli-manifest.json
           cp -R packages/data-harness-cli runtime/packages/data-harness-cli
           rm -rf runtime/packages/data-harness-cli/test
@@ -94,6 +94,7 @@ jobs:
           cp bin/data-harness-cli.cmd runtime/bin/data-harness-cli.cmd
           chmod +x runtime/bin/data-harness-cli
           test -f runtime/packages/data-harness-cli/src/main.js
+          node scripts/verify-artifact.mjs runtime --kind runtime
           test -n "${RELEASE_ARCHIVE_PASSWORD}" || { echo "::error::RELEASE_ARCHIVE_PASSWORD is required for production releases"; exit 1; }
           runtime_asset="dist/harness-data-runtime-${VERSION_TAG}.zip"
           (cd runtime && zip -q -r -P "${RELEASE_ARCHIVE_PASSWORD}" "../${runtime_asset}" .)

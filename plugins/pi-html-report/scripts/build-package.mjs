@@ -69,6 +69,10 @@ function copyDir(src, dest, { skip } = {}) {
   }
 }
 
+function skipArtifactTestEntry(name) {
+  return name === "test" || /\.(?:test|spec)\.(?:[cm]?[jt]s|ts)$/i.test(name);
+}
+
 function posixRel(fromDir, toFile) {
   const rel = relative(fromDir, toFile).split("\\").join("/");
   return rel.startsWith(".") ? rel : `./${rel}`;
@@ -114,11 +118,11 @@ function rewriteAgent(sourceText, destFile, extensionRel) {
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-copyDir(join(repoRoot, "packages", "html-report-kernel"), join(dist, "vendor", "html-report-kernel"));
-copyDir(join(repoRoot, "packages", "harness-runtime-node"), join(dist, "vendor", "harness-runtime-node"));
+copyDir(join(repoRoot, "packages", "html-report-kernel"), join(dist, "vendor", "html-report-kernel"), { skip: skipArtifactTestEntry });
+copyDir(join(repoRoot, "packages", "harness-runtime-node"), join(dist, "vendor", "harness-runtime-node"), { skip: skipArtifactTestEntry });
 
 copyDir(join(piRoot, "extensions"), join(dist, "extensions"), {
-  skip: (name) => name === "test",
+  skip: skipArtifactTestEntry,
 });
 writeShim(
   join(dist, "extensions", "qdm-harness", "authz-config.mjs"),
@@ -130,9 +134,9 @@ writeShim(
 );
 
 copyDir(join(piRoot, "skills", "html-report"), join(dist, "skills", "html-report"), {
-  skip: (name) => name === "test",
+  skip: skipArtifactTestEntry,
 });
-copyDir(join(piRoot, "skills", "html-report-design"), join(dist, "skills", "html-report-design"));
+copyDir(join(piRoot, "skills", "html-report-design"), join(dist, "skills", "html-report-design"), { skip: skipArtifactTestEntry });
 
 const scriptsDir = join(dist, "skills", "html-report", "scripts");
 for (const [name, vendorRel] of Object.entries(KERNEL_SHIMS)) {

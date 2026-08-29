@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,8 @@ import { reportCommand } from "../src/commands/report.js";
 import { setupCommand } from "../src/commands/setup.js";
 import { resolveRootContext } from "../src/lib/root-context.js";
 import { runWorkbuddy } from "../../.agents/workbuddy/scripts/html-report-workbuddy.mjs";
+import { htmlReportSessionDir } from "../../.agents/workbuddy/scripts/html-report-stage-runner.mjs";
+import { rowsSha256 } from "../../packages/html-report-kernel/src/index.mjs";
 
 const npmRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(npmRoot, "bin", "harness-data.js");
@@ -69,6 +72,155 @@ function listTree(root, prefix = "") {
     if (fs.statSync(full).isDirectory()) entries.push(...listTree(root, relative));
   }
   return entries;
+}
+
+function snapshotTree(root) {
+  const entries = [];
+  function visit(directory, prefix = "") {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const relative = path.join(prefix, name);
+      const full = path.join(directory, name);
+      const info = fs.lstatSync(full);
+      if (info.isSymbolicLink()) {
+        entries.push({ relative, type: "symlink", target: fs.readlinkSync(full) });
+      } else if (info.isDirectory()) {
+        entries.push({ relative, type: "directory" });
+        visit(full, relative);
+      } else {
+        entries.push({
+          relative,
+          type: "file",
+          sha256: createHash("sha256").update(fs.readFileSync(full)).digest("hex"),
+        });
+      }
+    }
+  }
+  visit(root);
+  return entries;
+}
+
+function visitTree(root, visitor) {
+  const entries = [root];
+  for (const name of fs.readdirSync(root)) {
+    const full = path.join(root, name);
+    if (fs.lstatSync(full).isDirectory()) entries.push(...visitTree(full, visitor));
+    else entries.push(full);
+  }
+  visitor(root, entries);
+  return entries;
+}
+
+function setTreeReadOnly(root) {
+  if (process.platform === "win32") return;
+  const entries = visitTree(root, () => {});
+  for (const entry of entries) {
+    const info = fs.lstatSync(entry);
+    if (info.isSymbolicLink()) continue;
+    fs.chmodSync(entry, info.isDirectory() || (info.mode & 0o111) ? 0o555 : 0o444);
+  }
+}
+
+function setTreeWritable(root) {
+  if (process.platform === "win32" || !fs.existsSync(root)) return;
+  const entries = visitTree(root, () => {});
+  for (const entry of entries) {
+    const info = fs.lstatSync(entry);
+    if (info.isSymbolicLink()) continue;
+    fs.chmodSync(entry, info.isDirectory() ? 0o755 : ((info.mode & 0o111) ? 0o755 : 0o644));
+  }
+}
+
+function stagePluginRuntime(pluginRoot, version) {
+  const sourceRoot = path.join(npmRoot, "..");
+  fs.mkdirSync(path.join(pluginRoot, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(pluginRoot, "bootstrap"), { recursive: true });
+  if (!fs.existsSync(path.join(pluginRoot, "bootstrap", "cli-manifest.json"))) {
+    fs.writeFileSync(path.join(pluginRoot, "bootstrap", "cli-manifest.json"), JSON.stringify({ schemaVersion: 2, tools: [] }));
+  }
+  for (const relative of [
+    ".agents/codex",
+    ".agents/pi",
+    ".agents/workbuddy",
+    "packages/data-harness-cli",
+    "packages/harness-runtime-node",
+    "packages/html-report-kernel",
+  ]) {
+    const source = path.join(sourceRoot, relative);
+    const destination = path.join(pluginRoot, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.cpSync(source, destination, { recursive: true });
+  }
+  fs.mkdirSync(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify({
+    name: "qdm-harness",
+    version,
+  }, null, 2));
+  const hookCli = path.join(pluginRoot, "bin", "data-harness-cli");
+  const entry = path.join(pluginRoot, "packages", "data-harness-cli", "src", "main.js");
+  fs.writeFileSync(hookCli, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(entry)} "$@"\n`, { mode: 0o755 });
+  fs.chmodSync(hookCli, 0o755);
+}
+
+function writeRootContext(f, { pluginRoot = f.pluginRoot, sessionId = "golden-session", name = `context-${sessionId}.json` } = {}) {
+  const contextFile = path.join(f.root, name);
+  fs.writeFileSync(contextFile, JSON.stringify({
+    schemaVersion: 1,
+    host: "codex",
+    pluginRoot,
+    dataRoot: f.dataRoot,
+    secretRoot: f.secretRoot,
+    workspaceRoot: f.workspaceRoot,
+    secretRef: { kind: "file", path: f.secretPath },
+    sessionId,
+  }, null, 2));
+  return contextFile;
+}
+
+function runHarnessCli(args, options = {}) {
+  return spawnSync(process.execPath, [cli, ...args], {
+    cwd: options.cwd || os.tmpdir(),
+    encoding: "utf8",
+    env: { ...process.env, ...(options.env || {}) },
+    input: options.input,
+  });
+}
+
+function assertCliSuccess(result) {
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result.stdout;
+}
+
+function runStageGateCommand(pluginRoot, sessionDir, operation, args = []) {
+  const script = path.join(pluginRoot, ".agents", "pi", "skills", "html-report", "scripts", "stage-gate.mjs");
+  const result = spawnSync(process.execPath, [script, operation, "--session-dir", sessionDir, ...args], {
+    cwd: sessionDir,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout);
+}
+
+function seedConfirmedReportSession(sessionDir) {
+  const cardId = "sales-by-region";
+  const rows = [
+    { bizDate: "2026-08-01", regionId: "east", saleAmt: 120000, profitAmt: 30000 },
+    { bizDate: "2026-08-02", regionId: "west", saleAmt: 40000, profitAmt: 10000 },
+  ];
+  const cardDir = path.join(sessionDir, "data", "cards", cardId);
+  fs.mkdirSync(cardDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, "result.json"), JSON.stringify({
+    status: "confirmed",
+    session_id: "report-e2e",
+    title: "区域销售报告",
+    userQuestion: "本月各区域销售表现如何？",
+    cards: [{ id: cardId, title: "区域销售" }],
+  }, null, 2));
+  fs.writeFileSync(path.join(cardDir, "entry.json"), JSON.stringify(rows, null, 2));
+  fs.writeFileSync(path.join(cardDir, "entry.meta.json"), JSON.stringify({
+    rowCount: rows.length,
+    rowsSha256: rowsSha256(rows),
+  }, null, 2));
+  fs.writeFileSync(path.join(cardDir, "caption.md"), "华东区域销售额为 120000 元，高于华西区域的 40000 元。\n");
 }
 
 test("Codex setup is idempotent and keeps mutable files outside pluginRoot", async () => {
@@ -234,6 +386,191 @@ test("qdm-harness report wrapper forwards an explicit lifecycle command", async 
   }, statusOutput);
   assert.equal(resumed.ok, true, resumed.stderr || resumed.stdout);
   assert.match(statusOutput.stdoutText, /wrapped-report|A_CONFIG|html-report/);
+});
+
+test("Codex clean-room uses a read-only pluginRoot without creating project state", async (t) => {
+  const f = fixture();
+  t.after(() => {
+    setTreeWritable(f.pluginRoot);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+  stagePluginRuntime(f.pluginRoot, "1.0.0-clean-room");
+  const before = snapshotTree(f.pluginRoot);
+  setTreeReadOnly(f.pluginRoot);
+
+  assertCliSuccess(runHarnessCli([
+    "setup",
+    "--context-file", f.contextFile,
+    "--metric-cli", f.metricCli,
+    "--json",
+  ]));
+  const paths = JSON.parse(assertCliSuccess(runHarnessCli([
+    "paths",
+    "--context-file", f.contextFile,
+    "--json",
+  ])));
+  assert.equal(paths.roots.pluginRoot, f.pluginRoot);
+  assert.equal(paths.roots.dataRoot, f.dataRoot);
+  const doctor = JSON.parse(assertCliSuccess(runHarnessCli([
+    "doctor",
+    "--context-file", f.contextFile,
+    "--json",
+  ])));
+  assert.equal(doctor.ok, true);
+  assert.equal(doctor.secret.status, "configured");
+
+  const started = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "start",
+    "--context-file", f.contextFile,
+    "--session", "clean-room-session",
+    "--phase-a", "agent",
+    "--json",
+  ])));
+  assert.equal(started.ok, true, started.stderr || started.stdout);
+
+  if (process.platform !== "win32") {
+    const hooks = JSON.parse(fs.readFileSync(path.join(f.pluginRoot, ".agents", "codex", "hooks.json"), "utf8"));
+    const hookCommand = hooks.hooks.UserPromptSubmit[0].hooks[0].command;
+    const hook = spawnSync("bash", ["-c", hookCommand], {
+      cwd: f.workspaceRoot,
+      encoding: "utf8",
+      input: JSON.stringify({ prompt: "请修复这个 CSS bug", cwd: f.workspaceRoot, session_id: "clean-hook" }),
+      env: {
+        ...process.env,
+        HARNESS_PLUGIN_ROOT: f.pluginRoot,
+        HARNESS_DATA_ROOT: f.dataRoot,
+        HARNESS_SECRET_ROOT: f.secretRoot,
+        HARNESS_SECRET_REF: f.secretPath,
+        HARNESS_WORKSPACE_ROOT: f.workspaceRoot,
+        HARNESS_HOST: "codex",
+      },
+    });
+    assert.equal(hook.status, 0, hook.stderr || hook.stdout);
+    assert.equal(hook.stdout.trim(), "", "ordinary prompt must remain on-demand");
+  }
+
+  const status = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "status",
+    "--context-file", f.contextFile,
+    "--session", "clean-room-session",
+    "--format", "json",
+    "--json",
+  ])));
+  assert.equal(status.ok, true, status.stderr || status.stdout);
+  assert.equal(fs.existsSync(path.join(f.workspaceRoot, ".harness")), false);
+  assert.equal(fs.existsSync(path.join(f.dataRoot, "state")), true);
+  assert.deepEqual(snapshotTree(f.pluginRoot), before);
+});
+
+test("Codex report E2E publishes workspace output and survives plugin replacement", async (t) => {
+  const f = fixture();
+  const pluginV2 = path.join(f.root, "plugin-v2");
+  const sessionId = "report-e2e";
+  const contextV1 = writeRootContext(f, { sessionId, name: "context-v1.json" });
+  const contextV2 = writeRootContext(f, { pluginRoot: pluginV2, sessionId, name: "context-v2.json" });
+  t.after(() => {
+    setTreeWritable(f.pluginRoot);
+    setTreeWritable(pluginV2);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  });
+
+  fs.mkdirSync(pluginV2, { recursive: true });
+  stagePluginRuntime(f.pluginRoot, "1.0.0-report");
+  stagePluginRuntime(pluginV2, "1.0.1-report");
+  const pluginV1Before = snapshotTree(f.pluginRoot);
+  const pluginV2Before = snapshotTree(pluginV2);
+  setTreeReadOnly(f.pluginRoot);
+  setTreeReadOnly(pluginV2);
+
+  const setup = JSON.parse(assertCliSuccess(runHarnessCli([
+    "setup",
+    "--context-file", contextV1,
+    "--metric-cli", f.metricCli,
+    "--json",
+  ])));
+  const metricCliPath = setup.metricCli.path;
+  const metricCliHash = createHash("sha256").update(fs.readFileSync(metricCliPath)).digest("hex");
+  const context = resolveRootContext({ contextFile: contextV1 });
+
+  const started = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "start",
+    "--context-file", contextV1,
+    "--session", sessionId,
+    "--phase-a", "agent",
+    "--json",
+  ])));
+  assert.equal(started.ok, true, started.stderr || started.stdout);
+
+  const sessionDir = htmlReportSessionDir(f.workspaceRoot, sessionId, context.stateRoot);
+  assert.equal(fs.existsSync(sessionDir), true);
+  seedConfirmedReportSession(sessionDir);
+  runStageGateCommand(f.pluginRoot, sessionDir, "finish", ["--stage", "A_CONFIG"]);
+  runStageGateCommand(f.pluginRoot, sessionDir, "approve", ["--phrase", "继续"]);
+  runStageGateCommand(f.pluginRoot, sessionDir, "finish", ["--stage", "B0_PREFLIGHT"]);
+  runStageGateCommand(f.pluginRoot, sessionDir, "finish", ["--stage", "B2_WRITER"]);
+
+  const advanced = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "advance",
+    "--context-file", contextV1,
+    "--session", sessionId,
+    "--json",
+  ])));
+  assert.equal(advanced.ok, true, advanced.stderr || advanced.stdout);
+  const sessionMain = path.join(sessionDir, "analysis", "main.md");
+  const workspaceMain = path.join(f.workspaceRoot, "analysis", "main.md");
+  assert.equal(fs.existsSync(sessionMain), true);
+  assert.equal(fs.existsSync(workspaceMain), true);
+  assert.equal(fs.readFileSync(workspaceMain, "utf8"), fs.readFileSync(sessionMain, "utf8"));
+  assert.match(fs.readFileSync(workspaceMain, "utf8"), /区域销售报告/);
+  assert.equal(fs.existsSync(path.join(f.workspaceRoot, ".harness")), false);
+
+  const reloaded = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "status",
+    "--context-file", contextV1,
+    "--session", sessionId,
+    "--format", "json",
+    "--json",
+  ])));
+  assert.equal(reloaded.ok, true, reloaded.stderr || reloaded.stdout);
+  assert.match(reloaded.stdout, /B2_MAIN/);
+
+  assertCliSuccess(runHarnessCli([
+    "setup",
+    "--context-file", contextV2,
+    "--json",
+  ]));
+  const afterReplacement = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "status",
+    "--context-file", contextV2,
+    "--session", sessionId,
+    "--format", "json",
+    "--json",
+  ])));
+  assert.equal(afterReplacement.ok, true, afterReplacement.stderr || afterReplacement.stdout);
+  assert.match(afterReplacement.stdout, /B2_MAIN/);
+  const newSession = JSON.parse(assertCliSuccess(runHarnessCli([
+    "report",
+    "start",
+    "--context-file", contextV2,
+    "--session", "replacement-new-session",
+    "--phase-a", "agent",
+    "--json",
+  ])));
+  assert.equal(newSession.ok, true, newSession.stderr || newSession.stdout);
+
+  const installManifest = JSON.parse(fs.readFileSync(path.join(f.dataRoot, "install-manifest.json"), "utf8"));
+  assert.equal(installManifest.pluginRoot, pluginV2);
+  assert.equal(fs.readFileSync(f.secretPath, "utf8"), "qdm1enc.golden-path-secret\n");
+  assert.equal(createHash("sha256").update(fs.readFileSync(metricCliPath)).digest("hex"), metricCliHash);
+  assert.equal(fs.existsSync(sessionDir), true, "existing report session must remain recoverable");
+  assert.deepEqual(snapshotTree(f.pluginRoot), pluginV1Before);
+  assert.deepEqual(snapshotTree(pluginV2), pluginV2Before);
 });
 
 test("clean-install fixture stages a relocatable Codex runtime without touching a project", async () => {

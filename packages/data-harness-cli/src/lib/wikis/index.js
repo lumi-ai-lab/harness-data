@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { loadPathsConfig, newPathResolverWithPaths, normalizeResolverOwners } from "../harness.js";
@@ -9,6 +10,8 @@ import { loadTemplateSelectionPolicy, validateTemplateSelectionPolicy } from "./
 
 export const INDEX_REL = ".harness/index/wikis-index.json";
 export const RUNTIME_INDEX_REL = ".harness/index/wikis-runtime-index.json";
+export const RESOURCE_MANIFEST_REL = "resource-manifest.json";
+export const RESOURCE_MANIFEST_SCHEMA_VERSION = 1;
 
 export function loadIndex(rootOrContext) {
   const resourceRoot = normalizeResolverOwners(rootOrContext).resourceRoot;
@@ -83,17 +86,22 @@ export function buildIndex(rootOrContext, skipChecks = false) {
   const reliable = checkReliableBuildInputs(root);
   if (reliable) throw new Error(reliable);
   const { corpus } = loadCorpus(root);
-  const { policy: templatePolicy } = loadTemplateSelectionPolicy(root);
+  const { policy: templatePolicy, selectionPath } = loadTemplateSelectionPolicy(root);
   const policyErrs = validateTemplateSelectionPolicy(root, templatePolicy);
   if (policyErrs.length) {
     throw new Error(`template selection policy invalid: ${policyErrs.join("; ")}`);
   }
   const cfg = loadPathsConfig(root);
+  const resourceFiles = collectResourceFiles(root, corpus, selectionPath);
+  const wikiContentVersion = resourceContentVersion(resourceFiles);
   const idx = {
     meta: {
       version: 1,
       generatedAt: new Date().toISOString(),
       resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+      wikiContentVersion,
+      resourceVersion: wikiContentVersion,
       // Kept as a relative compatibility marker; never persist the build
       // machine's absolute resource root in a relocatable index.
       root: ".",
@@ -107,15 +115,76 @@ export function buildIndex(rootOrContext, skipChecks = false) {
   runtime.templateSelection = [...(templatePolicy.templates || [])];
   writeJSONAtomic(rootOrContext, INDEX_REL, idx);
   writeJSONAtomic(rootOrContext, RUNTIME_INDEX_REL, runtime);
+  writeJSONAtomic(rootOrContext, RESOURCE_MANIFEST_REL, buildResourceManifest(root, resourceFiles, wikiContentVersion, skipChecks));
   return {
     path: INDEX_REL,
     runtimePath: RUNTIME_INDEX_REL,
+    resourceManifestPath: RESOURCE_MANIFEST_REL,
+    resourceVersion: wikiContentVersion,
     checksSkipped: skipChecks,
     docCount: idx.docs.length,
     recallCount: idx.recall.length,
     runtimeDocCount: Object.keys(runtime.docsByPath).length,
     runtimeRecallCount: runtime.recall.length,
   };
+}
+
+function collectResourceFiles(root, corpus, selectionPath) {
+  const paths = new Set();
+  for (const doc of corpus.docs || []) {
+    const relative = normalizeResourceRelative(doc.physicalRel);
+    if (relative) paths.add(relative);
+  }
+  const selectionRelative = relativeFromRoot(root, selectionPath);
+  if (selectionRelative && existsSync(path.join(root, selectionRelative))) paths.add(selectionRelative);
+  return [...paths].sort().map((relative) => ({
+    path: relative,
+    sha256: fileSha256(path.join(root, relative)),
+    kind: "wiki",
+  }));
+}
+
+function buildResourceManifest(root, resourceFiles, wikiContentVersion, checksSkipped) {
+  const indexFiles = [INDEX_REL, RUNTIME_INDEX_REL].map((relative) => ({
+    path: relative,
+    sha256: fileSha256(path.join(root, relative)),
+    kind: "index",
+  }));
+  return {
+    schemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+    resourceSchemaVersion: RESOURCE_MANIFEST_SCHEMA_VERSION,
+    resourceId: "qdm-harness-wiki",
+    wikiContentVersion,
+    generatedAt: new Date().toISOString(),
+    checksSkipped,
+    files: [...resourceFiles, ...indexFiles].sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+function resourceContentVersion(files) {
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(file.path);
+    hash.update("\0");
+    hash.update(file.sha256);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function relativeFromRoot(root, filePath) {
+  if (!filePath) return "";
+  return normalizeResourceRelative(path.relative(root, filePath));
+}
+
+function normalizeResourceRelative(value) {
+  const relative = String(value || "").split(path.sep).join("/");
+  if (!relative || relative === "." || path.isAbsolute(relative) || relative === ".." || relative.startsWith("../")) return "";
+  return relative;
+}
+
+function fileSha256(filePath) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
 function checkReliableBuildInputs(root) {

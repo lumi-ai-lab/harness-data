@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { verifyArtifact } from "../../../scripts/verify-artifact.mjs";
+
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const pkg = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8"));
 const dist = join(pluginRoot, "dist");
@@ -39,6 +41,8 @@ for (const name of ["report-writer", "report-researcher", "report-reviewer", "re
     if (text.includes(".agents/pi/")) errors.push(`${name} still references .agents/pi/`);
   }
 }
+
+errors.push(...verifyArtifact(dist, { kind: "pi" }).errors);
 
 if (errors.length) {
   process.stderr.write(`${errors.map((line) => `error: ${line}`).join("\n")}\n`);

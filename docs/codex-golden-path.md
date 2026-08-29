@@ -51,10 +51,10 @@ qdm-harness doctor --context-file <context.json> --json
 | doctor JSON 脱敏 | 已通过 | `collectRootDoctor` + golden-path test |
 | hook envelope → context | 已通过单元验证 | `packages/data-harness-cli/test/root-context.test.js` |
 | 缺 workspace 写入 fail-closed | 已通过单元验证 | `packages/data-harness-cli/test/root-context.test.js` |
-| pluginRoot 只读完整链路 | 待 clean-room | Phase 2/P3 |
-| explicit report E2E | 待接入 Codex fixture | Phase 2 |
-| reload/new-session 恢复 | 待验证 | Phase 2 |
-| artifact relocation/audit | 待验证 | Phase 3 |
+| pluginRoot 只读完整链路 | 已通过自动化 clean-room | `npm/test/golden-path.test.js` |
+| explicit report E2E | 已通过离线可复核 fixture | `result.json` → session 副本 → workspace `analysis/main.md` |
+| reload/new-session 恢复 | 已通过跨进程与插件替换模拟；Codex UI 实机仍留给 Phase 5 | `npm/test/golden-path.test.js` |
+| artifact relocation/audit | 已完成静态审计；真实 release archive 随机安装 smoke 待 Phase 3 后续 | `scripts/verify-artifact.mjs` |
 
 ## Clean-room fixture 布局
 
@@ -68,3 +68,9 @@ fixture-root/
 ```
 
 测试使用本地 executable fixture 代替网络下载，真实发布链路仍需在随机安装目录复核。
+
+## 自动化验收补充（2026-08-29）
+
+- clean-room 测试把完整 Codex runtime 复制到随机目录，并以只读 `pluginRoot`、可写 `dataRoot`、独立 `secretRoot` 和 workspace 运行 `setup`、`paths`、`doctor`、report 与实际 Codex hook command；全过程校验插件目录内容不变。
+- report E2E 以 confirmed `result.json`、可校验的卡片数据和 caption 为输入，通过独立 Node 进程推进到 `B2_MAIN`；session 中保留可恢复的 `analysis/main.md`，用户可见副本原子写入 `<workspaceRoot>/analysis/main.md`。
+- 同一测试以 v2 插件目录重新启动，验证既有 auth reference、下载 runtime、报告 session 保持可用，并能创建新 session。该证据验证进程/目录替换语义，不等同于真实 Codex 客户端 UI 的 reload 操作。
