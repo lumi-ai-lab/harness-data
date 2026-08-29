@@ -7,11 +7,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { rowsSha256 } from "../../../packages/html-report-kernel/src/data/fetch-entry.mjs";
+import { sessionDirFor as metricCliSessionDirFor } from "../../../packages/harness-runtime-node/src/open-metric-cli-ui.mjs";
 
 const serverPath = fileURLToPath(new URL("./server.mjs", import.meta.url));
 const repoRoot = resolve(new URL("../../../", import.meta.url).pathname);
 const pluginSkillPath = join(repoRoot, "plugins", "qdm-html-report", "skills", "html-report", "SKILL.md");
 const localSkillPath = join(repoRoot, ".codex", "skills", "html-report", "SKILL.md");
+
+function sessionDirFor(sessionId, workspaceRoot = repoRoot) {
+  return metricCliSessionDirFor(workspaceRoot, sessionId);
+}
+
+function legacySessionDirFor(sessionId, workspaceRoot = repoRoot) {
+  return join(workspaceRoot, ".harness", "state", "html-report", sessionId);
+}
 
 async function installFakeMd2html(dir, { fail = false } = {}) {
   await mkdir(dir, { recursive: true });
@@ -98,7 +107,7 @@ function startServer(t, { env = process.env, cwd = repoRoot } = {}) {
 }
 
 async function seedB2MainSession(t, sessionId, { main = "# 报告\n" } = {}) {
-  const sessionDir = join(repoRoot, ".harness", "state", "html-report", sessionId);
+  const sessionDir = sessionDirFor(sessionId);
   t.after(async () => rm(sessionDir, { recursive: true, force: true }));
   await mkdir(join(sessionDir, "analysis"), { recursive: true });
   await mkdir(join(sessionDir, "debug"), { recursive: true });
@@ -124,7 +133,7 @@ async function installFakeMetricCli(dir) {
 }
 
 async function seedAConfigSession(t, sessionId, result) {
-  const sessionDir = join(repoRoot, ".harness", "state", "html-report", sessionId);
+  const sessionDir = sessionDirFor(sessionId);
   t.after(async () => rm(sessionDir, { recursive: true, force: true }));
   await mkdir(join(sessionDir, "debug"), { recursive: true });
   await writeFile(join(sessionDir, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
@@ -241,6 +250,51 @@ test("Codex html-report Skill exactly mirrors the plugin Skill", async (t) => {
     readFile(localSkillPath, "utf8"),
   ]);
   assert.equal(localSkill, pluginSkill);
+});
+
+test("MCP uses the metric-cli UI session directory and recovers a pre-fix split session", async (t) => {
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-qdm-cli-session-path-"));
+  t.after(async () => rm(binDir, { recursive: true, force: true }));
+  const metricCli = await installFakeMetricCli(binDir);
+  const { rpc, callTool } = startServer(t, {
+    env: { ...process.env, QDM_METRIC_CLI: metricCli, HTML_REPORT_METRIC_CLI_UI_OPEN: "0" },
+  });
+  await rpc("initialize", {});
+
+  const freshSessionId = `mcp-session-path-${process.pid}-${Date.now()}`;
+  const fresh = await callTool("html_report_start", { sessionId: freshSessionId, userQuestion: "测试目录一致性" });
+  assert.equal(fresh.error, undefined);
+  assert.equal(fresh.result.sessionDir, sessionDirFor(freshSessionId));
+
+  const sessionId = `mcp-session-recovery-${process.pid}-${Date.now()}`;
+  const canonical = sessionDirFor(sessionId);
+  const legacy = legacySessionDirFor(sessionId);
+  t.after(async () => {
+    await rm(canonical, { recursive: true, force: true });
+    await rm(legacy, { recursive: true, force: true });
+  });
+  const card = testCard("sales", "销售额");
+  await mkdir(join(legacy, "debug"), { recursive: true });
+  await writeFile(join(legacy, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
+    version: 1,
+    sessionId,
+    stage: "a_config",
+    cards: [],
+    currentIndex: -1,
+    startedAt: "2026-08-29T00:00:00.000Z",
+  }, null, 2)}\n`);
+  await mkdir(join(canonical, "debug"), { recursive: true });
+  await writeFile(join(canonical, "result.json"), `${JSON.stringify({
+    status: "confirmed",
+    cards: [card],
+  }, null, 2)}\n`);
+  await seedCachedCard(canonical, card.id, [{ saleAmt: 100 }], { saleAmt: "销售额" });
+
+  const next = await callTool("html_report_next", { sessionId });
+  assert.equal(next.error, undefined);
+  assert.equal(next.result.stage, "b2_writer");
+  assert.equal(next.result.cardId, card.id);
+  assert.equal(existsSync(join(canonical, "debug", "mcp-pipeline-state.json")), true);
 });
 
 test("MCP returns visible progress for each cached Writer card", async (t) => {
@@ -637,7 +691,7 @@ test("plugin-cache cwd still reads sessions from HARNESS_WORKSPACE_ROOT", async 
   await writeFile(join(harness, "config", "harness-config.yaml"), "cli:\n  qdm_metric_cli: /bin/true\n");
 
   const sessionId = `mcp-ws-${process.pid}-${Date.now()}`;
-  const sessionDir = join(harness, ".harness", "state", "html-report", sessionId);
+  const sessionDir = sessionDirFor(sessionId, harness);
   await mkdir(join(sessionDir, "debug"), { recursive: true });
   await writeFile(join(sessionDir, "debug", "mcp-pipeline-state.json"), `${JSON.stringify({
     version: 1,

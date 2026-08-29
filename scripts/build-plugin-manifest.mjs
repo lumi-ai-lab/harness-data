@@ -16,6 +16,7 @@ const PACKAGE_CANDIDATES = {
   dataHarnessCli: [
     "packages/data-harness-cli/package.json",
     "vendor/data-harness-cli/package.json",
+    "vendor/data-harness-cli/package.json",
   ],
   htmlReportKernel: [
     "packages/html-report-kernel/package.json",
@@ -105,6 +106,11 @@ function assertRequiredCorePackages(host, packages, root) {
     runtime: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
     pi: ["htmlReportKernel", "harnessRuntimeNode"],
     codex: ["htmlReportKernel", "harnessRuntimeNode"],
+    claude: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
+    workbuddy: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
+    qwenpaw: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
+    hermes: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
+    openclaw: ["dataHarnessCli", "htmlReportKernel", "harnessRuntimeNode"],
   }[host] || [];
   if (!Object.keys(packages).length) {
     throw new Error(`cannot build plugin manifest: no core package metadata found in ${root}`);

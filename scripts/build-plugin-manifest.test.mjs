@@ -16,6 +16,7 @@ function write(root, relative, value) {
 
 function fixture({ embedded = false } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "qdm-plugin-manifest-"));
+  write(root, "vendor/data-harness-cli/package.json", { name: "@lumi-ai-lab/data-harness-cli", version: "0.0.53" });
   write(root, "vendor/html-report-kernel/package.json", { name: "@lumi-ai-lab/html-report-kernel", version: "1.2.3" });
   write(root, "vendor/harness-runtime-node/package.json", { name: "@lumi-ai-lab/harness-runtime-node", version: "4.5.6" });
   write(root, "bootstrap/cli-manifest.json", { tools: [{ name: "qdm-metric-cli", binary: "qdm-metric-cli", version: "7.8.9" }] });
@@ -61,4 +62,20 @@ test("writePluginManifest makes external resource ownership explicit when a bund
   assert.equal(written.resource.mode, "external");
   assert.equal(written.resource.contentVersion, "");
   assert.equal(path.basename(result.path), "plugin-manifest.json");
+});
+
+test("buildPluginManifest requires all core packages for host-scoped adapters", () => {
+  const root = fixture();
+  const manifest = buildPluginManifest({
+    artifactRoot: root,
+    host: "claude",
+    pluginName: "qdm-harness-claude",
+    pluginVersion: "0.0.54",
+    resourceMode: "external",
+  });
+  assert.deepEqual(Object.keys(manifest.core.packages).sort(), [
+    "dataHarnessCli",
+    "harnessRuntimeNode",
+    "htmlReportKernel",
+  ]);
 });

@@ -1,11 +1,16 @@
 {
   "name": "qdm-html-report",
-  "version": "0.0.50",
+  "version": "0.0.50+codex.20260829160631",
   "description": "html-report pipeline for Codex CLI and ChatGPT App (stops at analysis/main.md).",
   "author": {
     "name": "Lumi AI Lab"
   },
-  "keywords": ["qdm", "harness", "html-report", "analytics"],
+  "keywords": [
+    "qdm",
+    "harness",
+    "html-report",
+    "analytics"
+  ],
   "skills": "./skills",
   "mcpServers": "./.mcp.json",
   "kernel": {

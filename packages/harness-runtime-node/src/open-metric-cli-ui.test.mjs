@@ -30,6 +30,7 @@ test("metric-cli UI stores session files in the explicit stateRoot", async () =>
   try {
     const opened = await openMetricCliUi({ context, sessionId: "ui-session", spawnUi: false, open: false, env: {} });
     const marker = join(opened.sessionDir, ...METRIC_CLI_UI_MARKER_RELATIVE_PATH);
+    assert.equal(opened.sessionDir, sessionDirFor(context.pluginRoot, "ui-session", context.stateRoot));
     assert.equal(marker.startsWith(context.stateRoot), true);
     assert.equal(marker.startsWith(context.pluginRoot), false);
     assert.equal(existsSync(marker), true);

@@ -1,15 +1,31 @@
 #!/usr/bin/env node
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { writePluginManifest } from "../../../scripts/build-plugin-manifest.mjs";
 
 const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(pluginRoot));
-const dist = join(pluginRoot, "dist");
+const dist = resolveDist();
 const piRoot = join(repoRoot, ".agents", "pi");
 const pluginPackage = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8"));
+
+function resolveDist() {
+  const configured = String(process.env.PI_HTML_REPORT_OUTPUT_DIR || "").trim();
+  if (!configured) return join(pluginRoot, "dist");
+  if (!isAbsolute(configured)) throw new Error("PI_HTML_REPORT_OUTPUT_DIR must be an absolute path");
+  const target = resolve(configured);
+  const relativeToRepo = relative(repoRoot, target);
+  const outsideRepo = /^\.\.(?:[\\/]|$)/.test(relativeToRepo) || isAbsolute(relativeToRepo);
+  if (
+    !relativeToRepo ||
+    (!outsideRepo && [".agents", "packages", "plugins", "scripts", "npm", "config", "bootstrap", "wikis"].includes(relativeToRepo.split(/[\\/]/)[0]))
+  ) {
+    throw new Error(`PI_HTML_REPORT_OUTPUT_DIR must not replace a source directory: ${target}`);
+  }
+  return target;
+}
 
 const KERNEL_SHIMS = {
   "metric-query-contract.mjs": "html-report-kernel/src/query/metric-query-contract.mjs",

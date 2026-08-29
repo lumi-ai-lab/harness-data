@@ -1,0 +1,40 @@
+name: Verify Host Artifacts
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-artifacts:
+    name: Build, verify, and self-test host artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source and pinned Wikis
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build and verify every host artifact
+        env:
+          ARTIFACT_VERSION: ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          artifact_stage="$(mktemp -d)"
+          trap 'rm -rf "$artifact_stage"' EXIT
+          node scripts/host-artifact.mjs build --host all --output-dir "$artifact_stage" --version "$ARTIFACT_VERSION"
+          node scripts/host-artifact.mjs verify --host all --artifact-root "$artifact_stage"
+          node scripts/host-artifact.mjs self-test --host all --artifact-root "$artifact_stage"

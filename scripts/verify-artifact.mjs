@@ -4,8 +4,27 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadPluginManifest } from "../packages/data-harness-cli/src/lib/plugin-manifest.js";
+import {
+  hostArtifactKind,
+  hostFromArtifactKind,
+  isHostArtifactKind,
+  requiredPathsForHost,
+  requireHostArtifactSpec,
+} from "./host-artifact-contract.mjs";
 
-const KINDS = new Set(["auto", "runtime", "pi", "npm"]);
+const KINDS = new Set([
+  "auto",
+  "runtime",
+  "pi",
+  "npm",
+  "host-claude",
+  "host-codex",
+  "host-workbuddy",
+  "host-pi",
+  "host-qwenpaw",
+  "host-hermes",
+  "host-openclaw",
+]);
 const FORBIDDEN_DIRECTORIES = new Set([".git", ".harness", "node_modules", "state", "sessions", "diagnostics", "jobs", "test", "tests"]);
 const TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
 
@@ -54,6 +73,13 @@ export function verifyArtifact(root, { kind = "auto" } = {}) {
 }
 
 function detectKind(root) {
+  if (existsSync(path.join(root, "host-artifact.json"))) {
+    try {
+      return hostArtifactKind(JSON.parse(readFileSync(path.join(root, "host-artifact.json"), "utf8")).host);
+    } catch {
+      return "auto";
+    }
+  }
   if (existsSync(path.join(root, "bootstrap", "cli-manifest.json"))) return "runtime";
   if (existsSync(path.join(root, "manifest.json")) && existsSync(path.join(root, "vendor"))) return "pi";
   if (existsSync(path.join(root, "package.json"))) return "npm";
@@ -61,24 +87,46 @@ function detectKind(root) {
 }
 
 function validateRequiredPaths(root, kind, errors) {
-  for (const relative of REQUIRED_PATHS[kind] || []) {
+  const required = isHostArtifactKind(kind)
+    ? requiredPathsForHost(hostFromArtifactKind(kind))
+    : REQUIRED_PATHS[kind] || [];
+  for (const relative of required) {
     if (!existsSync(path.join(root, relative))) errors.push(`missing required ${kind} path: ${relative}`);
   }
 }
 
 function validatePluginManifest(root, kind, errors) {
-  if (kind !== "runtime" && kind !== "pi") return;
+  const expectedHost = isHostArtifactKind(kind) ? hostFromArtifactKind(kind) : kind;
+  if (kind !== "runtime" && kind !== "pi" && !isHostArtifactKind(kind)) return;
   try {
     const manifest = loadPluginManifest(root, { required: true });
-    if (kind === "runtime" && manifest.host !== "runtime") {
-      errors.push(`runtime plugin manifest host must be runtime: ${manifest.host}`);
-    }
-    if (kind === "pi" && manifest.host !== "pi") {
-      errors.push(`pi plugin manifest host must be pi: ${manifest.host}`);
-    }
+    if (manifest.host !== expectedHost) errors.push(`${kind} plugin manifest host must be ${expectedHost}: ${manifest.host}`);
     if (kind === "runtime") validateNestedCodexManifest(root, errors);
   } catch (error) {
     errors.push(`invalid plugin manifest: ${error?.message || error}`);
+  }
+  if (isHostArtifactKind(kind)) validateHostArtifactDescriptor(root, expectedHost, errors);
+}
+
+function validateHostArtifactDescriptor(root, host, errors) {
+  const filePath = path.join(root, "host-artifact.json");
+  try {
+    const descriptor = JSON.parse(readFileSync(filePath, "utf8"));
+    const spec = requireHostArtifactSpec(host);
+    if (descriptor?.schemaVersion !== 1) errors.push(`host artifact schema must be 1: ${descriptor?.schemaVersion}`);
+    if (descriptor?.host !== host) errors.push(`host artifact descriptor host must be ${host}: ${descriptor?.host || "missing"}`);
+    if (descriptor?.adapter?.manifest !== spec.adapterManifest) {
+      errors.push(`host artifact adapter manifest must be ${spec.adapterManifest}: ${descriptor?.adapter?.manifest || "missing"}`);
+    }
+    const declared = Array.isArray(descriptor?.requiredPaths) ? descriptor.requiredPaths : [];
+    for (const relative of declared) {
+      if (!isSafeRelative(relative)) errors.push(`host artifact required path must be relative: ${relative}`);
+    }
+    for (const relative of requiredPathsForHost(host)) {
+      if (!declared.includes(relative)) errors.push(`host artifact descriptor missing required path: ${relative}`);
+    }
+  } catch (error) {
+    errors.push(`invalid host artifact descriptor: ${error?.message || error}`);
   }
 }
 
@@ -148,6 +196,11 @@ function toPosix(value) {
   return value.split(path.sep).join("/");
 }
 
+function isSafeRelative(value) {
+  const text = String(value || "").replaceAll("\\", "/");
+  return Boolean(text) && !text.startsWith("/") && !path.win32.isAbsolute(text) && text !== "." && text !== ".." && !text.startsWith("../") && !text.includes("/../");
+}
+
 export function main(argv = process.argv.slice(2)) {
   const { root, kind, error } = parseArgs(argv);
   if (error) {
@@ -173,13 +226,13 @@ function parseArgs(argv) {
       continue;
     }
     if (value === "-h" || value === "--help") {
-      return { error: "usage: node scripts/verify-artifact.mjs <artifact-root> [--kind runtime|pi|npm]" };
+      return { error: "usage: node scripts/verify-artifact.mjs <artifact-root> [--kind runtime|pi|npm|host-<host>]" };
     }
     if (value.startsWith("--")) return { error: `unknown option: ${value}` };
     if (root) return { error: "only one artifact root is allowed" };
     root = value;
   }
-  if (!root) return { error: "usage: node scripts/verify-artifact.mjs <artifact-root> [--kind runtime|pi|npm]" };
+  if (!root) return { error: "usage: node scripts/verify-artifact.mjs <artifact-root> [--kind runtime|pi|npm|host-<host>]" };
   return { root, kind };
 }
 

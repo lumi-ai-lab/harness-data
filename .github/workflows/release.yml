@@ -105,6 +105,17 @@ jobs:
         working-directory: packages/data-harness-cli
         run: node --test
 
+      - name: Build and verify every host artifact
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifact_stage="$(mktemp -d)"
+          trap 'rm -rf "$artifact_stage"' EXIT
+          node scripts/host-artifact.mjs build --host all --output-dir "$artifact_stage" --version "$VERSION"
+          node scripts/host-artifact.mjs verify --host all --artifact-root "$artifact_stage"
+          node scripts/host-artifact.mjs self-test --host all --artifact-root "$artifact_stage"
+
       - name: Build Wikis index from pinned submodule
         run: |
           chmod +x bin/data-harness-cli

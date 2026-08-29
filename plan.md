@@ -984,11 +984,13 @@ doctor --json 至少输出：
 - 本轮完成 Phase 3 的 cross-host manifest/核心包版本绑定、runtime/PI artifact 审计、安装器对新 manifest archive 的严格校验，以及 ZIP 解压后的二次 CI artifact 校验；PI agent extension 路径保持相对可搬迁。
 - 本轮完成 Phase 3 release ZIP clean-room smoke：随机安装目录、只读 pluginRoot、可写 dataRoot、MCP self-test、setup/doctor/report 全链路均由自动化覆盖。
 - 本轮完成 Phase 4 migration MVP：只读 `migrate --check`、copy+hash/tree 校验+pointer、版本化 metric runtime、workspace state/session 映射、secretRef/0600、doctor gate、幂等/损坏/源变更/软链/权限/回滚失败防护。
-- 本轮可复核验证：`cd npm && npm test -- --test-concurrency=1` 为 175 pass；`npm pack --dry-run` 与 `npm run verify:artifact` 均通过；`packages/data-harness-cli` 为 82 pass + 2 skip；`packages/harness-runtime-node` 为 17 pass；Pi artifact 为 4 pass；新增 artifact/pinned-Wiki/relocation 脚本测试为 5 pass。
+- 本轮完成 Phase 3 的七宿主 artifact 矩阵：新增统一 `build|verify|self-test` 入口，分别产出 Claude、Codex、WorkBuddy、Pi、QwenPaw、Hermes、OpenClaw 的隔离 artifact、顶层版本绑定 manifest 和宿主描述；日常 PR/主干 CI 与 release validation 均已配置接入矩阵。Pi 打包新增 `PI_HTML_REPORT_OUTPUT_DIR`，避免与其他构建/测试争用源码 `dist`。
+- 本轮可复核验证：`cd npm && npm test -- --test-concurrency=1` 为 175 pass；`npm pack --dry-run` 与 `npm run verify:artifact` 均通过；`packages/data-harness-cli` 为 82 pass + 2 skip；`packages/harness-runtime-node` 为 17 pass；Pi artifact 为 5 pass；新增 artifact/pinned-Wiki/relocation 脚本测试为 5 pass。
+- 本轮补充验证：宿主 artifact/build-manifest/verifier 矩阵为 8 pass；Pi artifact 测试为 5 pass，并与宿主矩阵并发运行通过；Codex runtime golden-path 为 15 pass，MCP self-test 为 10/10；新增 CI workflow 与 release workflow 的 YAML 解析、相关 Node 语法检查及 `git diff --check` 均通过。
 - 本轮新增证据：`config/wikis-revision.json` 固定 Wiki commit `95a19b5c4e7e2999862e7d55f52b04a2ef869d23`，`wikis check-all` 六项检查通过；relocation smoke 在随机目录完成 context/show/recall；runtime ZIP 构建、自检和 npm tarball 审计通过；旧 runtime 支持显式路径/环境变量发现并只给出 migrate 提示；迁移成功/失败均验证旧 hook 可继续运行，并覆盖三平台命名契约 fixture。
-- 最后复核（2026-08-29）：`git diff --check`、pinned-Wiki 校验、relocation smoke、artifact 脚本测试及四组核心回归均通过；当前没有新增失败或未归因回归。
-- 当前仍未完成：为全部七宿主建立独立 build/verify/self-test 并获得真实 CI 发布证据、真实 Codex UI reload、真实 macOS/Linux/Windows 运行，以及旧报告/session 在真实旧 runtime 上的现场验证。
-- 下一步按依赖顺序：补齐全宿主 artifact 与 CI 证据；随后补真实跨平台/旧 runtime 现场验证，完成 Phase 4 后再进入多宿主 Phase 5。
+- 最后本地复核（2026-08-29）：七宿主 artifact 可在隔离输出目录完成 build/verify/self-test，Pi 的独立输出目录回归通过；当前没有新增失败或未归因回归。
+- 当前仍未完成：当前工作树尚未提交，因而尚无 host-artifact CI 或 release workflow 的远端运行证据；此外仍缺真实 Codex UI reload、真实 macOS/Linux/Windows 运行，以及旧报告/session 在真实旧 runtime 上的现场验证。
+- 下一步按依赖顺序：审核并提交当前改动以触发 host-artifact CI/release validation，归档远端运行证据；随后补真实跨平台与旧 runtime 现场验证，完成 Phase 4 后再进入多宿主 Phase 5。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1073,7 +1075,7 @@ doctor --json 至少输出：
 - [x] P3-03（资源）删除 index 中的构建机绝对路径，改用 resource ID、相对路径和 `resourceRoot`。
 - [x] P3-04（资源）生成 `resource-manifest.json`，记录内容版本、schema 版本和 SHA-256。
 - [x] P3-05（核心）构建通用 core 与 html-report kernel，并显式记录版本字段。
-- [ ] P3-06（发布）为每个宿主建立独立 build/verify/self-test 脚本。
+- [x] P3-06（发布）为每个宿主建立独立 build/verify/self-test 脚本（本地实现与矩阵验证完成；远端 CI 运行证据由 P3-EXIT-04 管控）。
 - [x] P3-07（发布）生成顶层 manifest，绑定 plugin/core/resource/state/metric-cli 版本和兼容范围。
 - [x] P3-08（安装）修复 CI staging 与 installer 实际消费内容不一致，确保 top-level plugins 等必需内容被安装。
 - [x] P3-09（验证）在随机安装目录、只读 pluginRoot + 可写 dataRoot 的 clean-room 环境执行 self-test/smoke。
@@ -1193,7 +1195,8 @@ doctor --json 至少输出：
 - html-report self-test：`node plugins/qdm-html-report/mcp/server.mjs --self-test`。
 - Pi artifact：`npm --prefix plugins/pi-html-report run build`、`run verify`、`npm test`。
 - Runtime artifact：`scripts/build-runtime-artifact.sh --output-dir <dir> --version <tag>`。
+- Host artifact matrix：`node scripts/host-artifact.mjs build --host all --output-dir <dir> --version <tag>`，随后执行同一脚本的 `verify` 与 `self-test` 子命令。
 - npm artifact：`cd npm && npm run verify:artifact`。
 - 发布链路：按 `.github/workflows/release.yml` 和 `.github/workflows/publish-cli-release.yml` 的 clean-room、版本、资源和安装器检查执行；真实 CI 发布仍待运行周期证据。
 
-以上命令只证明对应实现已通过验证；P3-06/P3-EXIT-03/04、P4-10 以及 Phase 5/6 仍需独立宿主、真实平台和 CI 证据，不能用模拟 fixture 替代。
+以上命令只证明对应实现已通过本地验证；P3-EXIT-03/04、P4-10 以及 Phase 5/6 仍需独立宿主、真实平台和 CI 证据，不能用模拟 fixture 替代。
