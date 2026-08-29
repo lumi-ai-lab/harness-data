@@ -34,7 +34,7 @@ qdm-harness doctor --context-file <context.json> --json
 
 | Host | workspace | data | secret | session | hook/reload | 证据 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | envelope/env | `CODEX_HOME`/显式 root | file `0600`/reference | `session_id` | hooks + shim；reload 待实机 | `npm/test/golden-path.test.js`、`packages/data-harness-cli/test/root-context.test.js` |
+| Codex | envelope/env | `CODEX_HOME`/显式 root | file `0600`/reference | `session_id` | hooks + shim；CLI TUI 新会话已通过 | `npm/test/golden-path.test.js`、`packages/data-harness-cli/test/root-context.test.js`、本文“Codex CLI TUI 实机验收” |
 | Claude | 待实机 | 待确认 | 待确认 | 待确认 | 待确认 | Phase 5 |
 | WorkBuddy | 已有 adapter | 待确认 | macOS/Windows adapter | 已有 runner | 已有 hook | `.agents/workbuddy/scripts/*` |
 | Pi | 待复核 | npm artifact | 待确认 | clean profile | build/verify/test | `plugins/pi-html-report/test/*` |
@@ -53,7 +53,7 @@ qdm-harness doctor --context-file <context.json> --json
 | 缺 workspace 写入 fail-closed | 已通过单元验证 | `packages/data-harness-cli/test/root-context.test.js` |
 | pluginRoot 只读完整链路 | 已通过自动化 clean-room | `npm/test/golden-path.test.js` |
 | explicit report E2E | 已通过离线可复核 fixture | `result.json` → session 副本 → workspace `analysis/main.md` |
-| reload/new-session 恢复 | 已通过跨进程与插件替换模拟；Codex UI 实机仍留给 Phase 5 | `npm/test/golden-path.test.js` |
+| reload/new-session 恢复 | 已通过跨进程与插件替换模拟，并在重装后的 Codex CLI TUI 新会话确认插件、MCP 和 skill 可见；桌面客户端仍需人工确认 | `npm/test/golden-path.test.js`、本文“Codex CLI TUI 实机验收” |
 | artifact relocation/audit | 已完成 pinned Wikis revision、索引随机搬迁、runtime ZIP clean-room 和静态审计 | `scripts/verify-pinned-wikis.mjs`、`scripts/verify-wikis-relocation.mjs`、`scripts/verify-artifact.mjs` |
 
 ## Clean-room fixture 布局
@@ -75,3 +75,15 @@ fixture-root/
 - Wiki 资源固定在 `config/wikis-revision.json` 声明的 commit；`scripts/verify-wikis-relocation.mjs` 会在临时目录运行 `check-all`、构建双索引，并验证搬迁后的 context/show/recall 仍只解析新 resource root。
 - report E2E 以 confirmed `result.json`、可校验的卡片数据和 caption 为输入，通过独立 Node 进程推进到 `B2_MAIN`；session 中保留可恢复的 `analysis/main.md`，用户可见副本原子写入 `<workspaceRoot>/analysis/main.md`。
 - 同一测试以 v2 插件目录重新启动，验证既有 auth reference、下载 runtime、报告 session 保持可用，并能创建新 session。该证据验证进程/目录替换语义，不等同于真实 Codex 客户端 UI 的 reload 操作。
+
+## Codex CLI TUI 实机验收（2026-08-29）
+
+在本仓库目录使用 `codex-cli 0.150.1` 完成一次真实插件重装和新会话 smoke：
+
+- 先执行 `codex plugin remove qdm-html-report@lumi-harness-data --json`，再执行 `codex plugin add qdm-html-report@lumi-harness-data --json`；重装后插件保持 enabled，安装版本为 `0.0.50+codex.20260829160631`。
+- 新启动 Codex TUI 会话，启动阶段 4/4 MCP servers 完成；`/plugins` 显示 `[*] qdm-html-report`、`Installed`、来源 `lumi-harness-data`。
+- `/mcp` 显示 `html-report: connected (6 tools)`。
+- 在输入框键入 `$html-report` 时，TUI 返回 `html-report (qdm-html-report...) [Skill]` 的候选和说明；未提交业务 prompt，因此没有创建报告或持久状态。
+- 安装缓存中的 MCP server 执行 `--self-test` 为 10/10 passed。
+
+这组证据证明当前 Codex CLI 的 reinstall、enablement、new-session discovery、MCP 连接和 skill 暴露正常。它不覆盖升级/回滚版本切换，也不替代桌面 Codex 客户端的人工 reload 检查；当前自动化控制工具因安全策略拒绝操作 `com.openai.codex`，因此桌面客户端一项保持未完成并显式记录为环境限制。

@@ -995,8 +995,9 @@ doctor --json 至少输出：
 - Wikis 修复已基于最新远端 master 重放为 revision `b76aef3cea6d6d99a8411f2afe5bc41929aed8f5`，并提交到 `harness-data-wikis#14`；主仓 gitlink 与 `config/wikis-revision.json` 已同步。
 - P4-12 现场验证完成：使用 `/Users/pengmd/c/qdm/harness-data` 的真实 `0.0.53` runtime 快照，完成 check、迁移、doctor、二次幂等、business session 读取及 html-report `paused → running → paused` 恢复；原 runtime 未被修改。证据见 `docs/migration-field-validation-2026-08-29.md`。
 - 现场验证补齐四个兼容缺口：新 host artifact pluginRoot 身份、旧 `.agents/` 布局、空壳 canonical session 目录冲突，以及迁移后 `pipeline-state.json.sessionDir` 的旧绝对路径。
-- 当前仍未完成：P3-EXIT-04 仍需合并后由 master/release 流程证明正式发布内容与 installer 解包一致；仍缺真实 Codex UI reload/new-session 验收。
-- 下一步按依赖顺序：先合并 `harness-data-wikis#14`，再评审合并 `harness-data#74`；归档 master/release validation 证据后，完成真实 Codex UI smoke，再进入其余宿主的 Phase 5 验证。
+- Codex CLI TUI 实机 smoke 已完成：真实 remove/add 重装后，在新会话中确认 `qdm-html-report` 已安装启用、`html-report` MCP 为 connected（6 tools），且 `$html-report` skill 可被发现；缓存 MCP self-test 为 10/10。证据见 `docs/codex-golden-path.md`。
+- 当前仍未完成：P3-EXIT-04 仍需合并后由 master/release 流程证明正式发布内容与 installer 解包一致；Codex 的升级/回滚、生产 secret provider 和桌面客户端 reload 仍需后续实机验收。
+- 下一步按依赖顺序：先合并 `harness-data-wikis#14`，再评审合并 `harness-data#74`；归档 master/release validation 证据后，补 Codex 升级/回滚与桌面客户端人工 smoke，再进入其余宿主的 Phase 5 验证。
 
 ### 20.2 Phase 0：契约和安全基线
 
@@ -1134,9 +1135,9 @@ doctor --json 至少输出：
 
 #### P5-02 Codex
 
-- [ ] 完成 discovery/install/enablement 和 hook envelope 验证。
+- [x] 完成 discovery/install/enablement 和 hook envelope 验证；CLI TUI 新会话已确认插件、MCP 和 skill 可见。
 - [ ] 完成 `CODEX_HOME`/显式 dataRoot、workspace/secret handoff、卸载重装、升级回滚 smoke。
-- [ ] 记录 artifact、版本、能力和失败证据到 capability matrix/runbook。
+- [x] 记录 artifact、版本、能力和环境限制证据到 capability matrix/runbook，见 `docs/codex-golden-path.md`。
 
 #### P5-03 WorkBuddy
 
