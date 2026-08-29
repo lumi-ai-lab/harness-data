@@ -2,7 +2,9 @@
 .github
 .claude
 .harness
-bin
+bin/*
+!bin/data-harness-cli
+!bin/data-harness-cli.cmd
 config/harness-config.yaml
 config/qdm-cli-paths.env
 **/.DS_Store
