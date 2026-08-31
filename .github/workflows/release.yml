@@ -108,6 +108,7 @@ jobs:
             test -d "wikis-src/$dir"
           done
           wikis_asset="dist/harness-data-wikis-${VERSION_TAG}.zip"
+          rm -rf wikis-src/.git
           (cd wikis-src && zip -q -r -P "${RELEASE_ARCHIVE_PASSWORD}" "${GITHUB_WORKSPACE}/${wikis_asset}" .)
           unzip -P "${RELEASE_ARCHIVE_PASSWORD}" -t "${wikis_asset}" >/dev/null
           if unzip -Z1 "${wikis_asset}" | grep -Eq '(^|/)\.git(/|$)'; then
