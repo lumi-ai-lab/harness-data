@@ -125,10 +125,15 @@ async function migrateLegacySessionTrees(canonical, sources, workspaceRoot) {
   const staging = `${canonical}.migration-${process.pid}-${Date.now()}`;
   const backup = `${canonical}.backup-${process.pid}-${Date.now()}`;
   await mkdir(dirname(canonical), { recursive: true });
+  // preserveTimestamps keeps the original artifact mtimes so a migrated
+  // cache (entry.json written after result.json) is not judged stale by
+  // reusableEntry's notBeforeMs check, which would trigger an unnecessary
+  // fresh metric-cli fetch.
+  const cpOpts = { recursive: true, force: false, errorOnExist: false, preserveTimestamps: true };
   try {
-    if (existsSync(canonical)) await cp(canonical, staging, { recursive: true, force: false, errorOnExist: false });
+    if (existsSync(canonical)) await cp(canonical, staging, cpOpts);
     for (const source of available) {
-      await cp(source, staging, { recursive: true, force: false, errorOnExist: false });
+      await cp(source, staging, cpOpts);
     }
     await assertSafeSessionTree(staging);
     if (existsSync(canonical)) await rename(canonical, backup);
