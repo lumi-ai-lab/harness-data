@@ -820,6 +820,7 @@ test("release ZIP clean-room installs a random Plugin runtime artifact", async (
   assert.equal(fs.existsSync(path.join(runtimeRoot, "plugins", "harness-data", "plugin-manifest.json")), true);
 
   const installedPluginRoot = path.join(runtimeRoot, "plugins", "harness-data");
+  stageTestWikis(installedPluginRoot);
   const contextFile = writeRootContext(f, {
     pluginRoot: installedPluginRoot,
     sessionId: "release-smoke",
