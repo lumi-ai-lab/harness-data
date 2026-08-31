@@ -27,7 +27,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -147,8 +147,31 @@ function sessionStorageKey(raw) {
   return createHash("sha256").update(`workbuddy:${String(raw || "")}`).digest("hex");
 }
 
-export function htmlReportSessionDir(projectRoot, sessionId) {
-  return join(resolve(projectRoot), ".harness", "state", "html-report", sessionStorageKey(sessionId));
+export function htmlReportSessionDir(projectRoot, sessionId, stateRoot = process.env.HARNESS_STATE_ROOT || "") {
+  const base = stateRoot ? resolve(stateRoot) : join(resolve(projectRoot), ".harness", "state");
+  const canonical = join(base, "html-report", sessionStorageKey(sessionId));
+  const legacy = join(base, "html-report", sanitizeSessionId(sessionId));
+  const canonicalRecoverable = existsSync(join(canonical, "result.json"))
+    || existsSync(join(canonical, "debug", "pipeline-state.json"));
+  const legacyRecoverable = existsSync(join(legacy, "result.json"))
+    || existsSync(join(legacy, "debug", "pipeline-state.json"));
+  if (!canonicalRecoverable && legacyRecoverable) return legacy;
+  return canonical;
+}
+
+/**
+ * Keep the generated session artifact for recovery, then publish the user-facing
+ * report to the declared workspace. A report lifecycle is explicit, so this is
+ * the single intentional workspace write in the B2_MAIN path.
+ */
+export function publishMainToWorkspace(projectRoot, sessionMainPath) {
+  const mainPath = join(resolve(projectRoot), "analysis", "main.md");
+  const directory = dirname(mainPath);
+  mkdirSync(directory, { recursive: true });
+  const temporary = join(directory, `.main.md.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  writeFileSync(temporary, readFileSync(sessionMainPath));
+  renameSync(temporary, mainPath);
+  return mainPath;
 }
 
 function findHarnessRoot(start = process.cwd()) {
@@ -1596,11 +1619,13 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       return { ok: true, message: outcome.message, state: after.payload?.state, outcome };
     }
     case "B2_MAIN": {
-      // 用 composeMain 生成 analysis/main.md（answerFirst 可选，当前用默认）
+      // 先在 session 内生成可恢复的 analysis/main.md，再原子发布用户可见副本到 workspace。
       let composed;
-      const mainPath = join(htmlReportSessionDir(projectRoot, sessionId), "analysis", "main.md");
+      const sessionMainPath = join(htmlReportSessionDir(projectRoot, sessionId), "analysis", "main.md");
+      let workspaceMainPath;
       try {
         composed = await composeMain(htmlReportSessionDir(projectRoot, sessionId));
+        workspaceMainPath = publishMainToWorkspace(projectRoot, composed.mainPath);
       } catch (error) {
         return { ok: false, message: `composeMain 生成 analysis/main.md 失败（可能还有卡片缺 caption.md）：${error?.message || error}` };
       }
@@ -1611,11 +1636,11 @@ async function advanceStage(projectRoot, sessionId, state, { runChild, fetchEntr
       return {
         ok: true,
         message: [
-          `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，报告文件：${mainPath}，等待人工批准（不自动 approve）。`,
+          `B2_MAIN 已生成 main.md（${composed.cardIds?.length || 0} 卡）并 finish，报告文件：${workspaceMainPath}（session 副本：${sessionMainPath}），等待人工批准（不自动 approve）。`,
           gateActionHint(projectRoot, sessionId, after.payload?.state),
         ].filter(Boolean).join("\n"),
         state: after.payload?.state,
-        composed,
+        composed: { ...composed, workspaceMainPath },
       };
     }
     case "B25_EDITOR": {

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const stateDir = path.join("lumi-ai-lab", "harness-data-installer");
+const stateDir = path.join(".lumi-ai-lab", "qdm-harness");
+const legacyStateDir = path.join("lumi-ai-lab", "harness-data-installer");
 
 export function expandHome(value) {
   if (!value) return value;
@@ -16,16 +17,38 @@ export function defaultWorkspaceDir() {
 }
 
 export function userStatePath() {
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", stateDir, "state.json");
-  if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), stateDir, "state.json");
-  return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), stateDir, "state.json");
+  return path.join(os.homedir(), stateDir, "state.json");
+}
+
+export function legacyUserStatePath({ platform = process.platform, env = process.env, homeDir = os.homedir() } = {}) {
+  if (platform === "darwin") return path.join(homeDir, "Library", "Application Support", legacyStateDir, "state.json");
+  if (platform === "win32") return path.join(env.LOCALAPPDATA || path.join(homeDir, "AppData", "Local"), legacyStateDir, "state.json");
+  return path.join(env.XDG_STATE_HOME || path.join(homeDir, ".local", "state"), legacyStateDir, "state.json");
 }
 
 export function readUserState() {
+  const current = readStateFile(userStatePath());
+  if (current) return current;
+  const legacy = readStateFile(legacyUserStatePath());
+  if (!legacy) return {};
   try {
-    return JSON.parse(fs.readFileSync(userStatePath(), "utf8"));
+    const target = userStatePath();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(temporary, `${JSON.stringify(legacy, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, target);
   } catch {
-    return {};
+    // The legacy state remains readable even when migration is not writable.
+  }
+  return legacy;
+}
+
+function readStateFile(filePath) {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
   }
 }
 

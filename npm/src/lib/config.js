@@ -2,14 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { binaryName } from "./platform.js";
 
-export const agentChoices = ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"];
-export const concreteAgentNames = ["claude", "codex", "pi", "openclaw", "hermes"];
+export const agentChoices = ["claude", "codex", "pi", "workbuddy", "both", "all"];
+export const concreteAgentNames = ["claude", "codex", "pi"];
 export const agentLinks = {
   claude: [["agents/claude", ".claude"]],
   codex: [["agents/codex", ".codex"]],
   pi: [["agents/pi", ".pi"]],
-  openclaw: [["agents/openclaw", ".openclaw"]],
-  hermes: [["agents/hermes", ".hermes"]],
   // WorkBuddy uses its plugin package directly; it must not be represented by
   // a misleading project symlink such as .workbuddy.
   workbuddy: [],
@@ -18,8 +16,6 @@ export const agentLinks = {
     ["agents/claude", ".claude"],
     ["agents/codex", ".codex"],
     ["agents/pi", ".pi"],
-    ["agents/openclaw", ".openclaw"],
-    ["agents/hermes", ".hermes"],
   ],
 };
 export const agentChoiceText = agentChoices.join(", ");

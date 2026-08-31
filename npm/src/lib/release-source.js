@@ -5,6 +5,17 @@ import { downloadReleaseAsset as downloadGithubReleaseAsset, githubJson } from "
 
 const userAgent = "harness-data-installer";
 const sources = new Set(["auto", "gitee", "github"]);
+
+export function giteeToken(options = {}) {
+  return options.giteeToken || (options.env || process.env).GITEE_TOKEN || "";
+}
+
+export function giteeHeaders(options = {}) {
+  const headers = { "User-Agent": userAgent };
+  const token = giteeToken(options);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 const giteeMirrorRepos = Object.freeze({
   "lumi-ai-lab/harness-data": "git_pengmd/harness-release",
   "pengmide/qdm-metric-cli": "git_pengmd/harness-metric-release"
@@ -12,7 +23,8 @@ const giteeMirrorRepos = Object.freeze({
 
 export function resolveReleaseSource(options = {}) {
   const hasOption = Object.prototype.hasOwnProperty.call(options, "releaseSource");
-  const raw = hasOption ? options.releaseSource : (process.env.HARNESS_RELEASE_SOURCE || "auto");
+  const env = options.env || process.env;
+  const raw = hasOption ? options.releaseSource : (env.HARNESS_RELEASE_SOURCE || "auto");
   const source = typeof raw === "string" ? raw.trim().toLowerCase() : "";
   if (!sources.has(source)) {
     throw new Error(`invalid release source ${JSON.stringify(raw)}; expected auto, gitee, or github`);
@@ -41,11 +53,11 @@ function releaseAssetNames(buildNames, tag) {
   return names;
 }
 
-async function giteeJson(url) {
+async function giteeJson(url, options = {}) {
   const dir = fs.mkdtempSync(path.join(process.cwd(), ".gitee-api-"));
   const file = path.join(dir, "response.json");
   try {
-    await download(url, file, { "User-Agent": userAgent });
+    await download(url, file, giteeHeaders(options));
     return JSON.parse(fs.readFileSync(file, "utf8"));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -62,7 +74,7 @@ async function latestReleaseFrom(source, repo, options) {
   const mirrorRepo = giteeReleaseRepo(repo);
   return {
     repo: mirrorRepo,
-    release: await giteeJson(`https://gitee.com/api/v5/repos/${mirrorRepo}/releases/latest`)
+    release: await giteeJson(`https://gitee.com/api/v5/repos/${mirrorRepo}/releases/latest`, options)
   };
 }
 
@@ -151,7 +163,7 @@ export async function downloadReleaseAsset(asset, file, options = {}) {
   }
   const url = asset.downloadUrl || asset.browser_download_url || asset.download_url;
   if (!url) throw new Error(`Gitee Release asset has no download URL: ${asset.name || "unknown"}`);
-  await download(url, file, { "User-Agent": userAgent }, {
+  await download(url, file, giteeHeaders(options), {
     progressLabel: options.progressLabel,
     log: options.log,
     progress: options.progress,

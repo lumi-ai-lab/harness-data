@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'codex_home=\"${CODEX_HOME:-$HOME/.codex}\"; cli=\"\"; if [ -n \"$HARNESS_PLUGIN_ROOT\" ] && [ -f \"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\" ]; then cli=\"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\"; fi; if [ -z \"$cli\" ]; then for f in \"$codex_home\"/plugins/cache/lumi-ai-lab/harness-data/*/scripts/data-harness-cli; do [ -f \"$f\" ] || continue; if [ -z \"$cli\" ] || [[ \"$f\" > \"$cli\" ]]; then cli=\"$f\"; fi; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Install the harness-data Codex plugin or run harness-data setup.\" >&2; exit 1; fi; exec \"$cli\" context --format codex-hook'",
+            "statusMessage": "Loading QDM Harness context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'codex_home=\"${CODEX_HOME:-$HOME/.codex}\"; cli=\"\"; if [ -n \"$HARNESS_PLUGIN_ROOT\" ] && [ -f \"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\" ]; then cli=\"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\"; fi; if [ -z \"$cli\" ]; then for f in \"$codex_home\"/plugins/cache/lumi-ai-lab/harness-data/*/scripts/data-harness-cli; do [ -f \"$f\" ] || continue; if [ -z \"$cli\" ] || [[ \"$f\" > \"$cli\" ]]; then cli=\"$f\"; fi; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Install the harness-data Codex plugin or run harness-data setup.\" >&2; exit 2; fi; exec \"$cli\" authz-hook --agent codex'",
+            "statusMessage": "Authorizing QDM data command"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'codex_home=\"${CODEX_HOME:-$HOME/.codex}\"; cli=\"\"; if [ -n \"$HARNESS_PLUGIN_ROOT\" ] && [ -f \"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\" ]; then cli=\"$HARNESS_PLUGIN_ROOT/scripts/data-harness-cli\"; fi; if [ -z \"$cli\" ]; then for f in \"$codex_home\"/plugins/cache/lumi-ai-lab/harness-data/*/scripts/data-harness-cli; do [ -f \"$f\" ] || continue; if [ -z \"$cli\" ] || [[ \"$f\" > \"$cli\" ]]; then cli=\"$f\"; fi; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Install the harness-data Codex plugin or run harness-data setup.\" >&2; exit 1; fi; exec \"$cli\" posttool --format codex-hook'",
+            "statusMessage": "Updating QDM Harness state"
+          }
+        ]
+      }
+    ]
+  }
+}

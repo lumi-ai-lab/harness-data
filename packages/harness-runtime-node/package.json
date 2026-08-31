@@ -11,7 +11,8 @@
     "./metric-timeout": "./src/metric-timeout.mjs",
     "./metric-retry": "./src/metric-retry.mjs",
     "./open-metric-cli-ui": "./src/open-metric-cli-ui.mjs",
-    "./workspace": "./src/workspace-resolver.mjs"
+    "./workspace": "./src/workspace-resolver.mjs",
+    "./root-context": "./src/root-context.mjs"
   },
   "files": [
     "src"

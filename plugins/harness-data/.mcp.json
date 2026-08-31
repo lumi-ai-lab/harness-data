@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "html-report": {
+      "cwd": ".",
+      "command": "node",
+      "args": ["./mcp/server.mjs"],
+      "env_vars": [
+        "CODEX_HOME",
+        "PWD",
+        "HARNESS_PLUGIN_ROOT",
+        "HARNESS_CONTEXT_FILE",
+        "HARNESS_WORKSPACE_POLICY",
+        "HARNESS_DATA_ROOT",
+        "HARNESS_RESOURCE_ROOT",
+        "HARNESS_SECRET_ROOT",
+        "HARNESS_STATE_ROOT",
+        "HARNESS_CONFIG_PATH",
+        "HARNESS_SECRET_REF",
+        "HARNESS_WORKSPACE_ROOT",
+        "CODEX_WORKSPACE_ROOT",
+        "QDM_METRIC_CLI"
+      ]
+    }
+  }
+}

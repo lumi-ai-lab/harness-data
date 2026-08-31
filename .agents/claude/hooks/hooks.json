@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/data-harness-cli\" context --format claude-hook"
+        }
+      ]
+    }
+    ],
+    "PostToolUse": [
+    {
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/data-harness-cli\" posttool --format claude-hook"
+        }
+      ]
+    }
+    ]
+  }
+}

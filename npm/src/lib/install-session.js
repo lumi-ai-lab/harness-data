@@ -3,7 +3,7 @@ import path from "node:path";
 import { userStatePath } from "./paths.js";
 
 const trackedRoots = ["agents", "bootstrap", "bin", "wikis", "config", ".harness"];
-const hookRoots = [".claude", ".codex", ".pi", ".openclaw", ".hermes"];
+const hookRoots = [".claude", ".codex", ".pi"];
 const cacheRoot = ".bootstrap-cache";
 const tempPrefixes = [".install-session-backup-", ".install-backup-", ".install-new-runtime-"];
 

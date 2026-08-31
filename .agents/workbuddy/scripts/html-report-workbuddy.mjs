@@ -20,7 +20,7 @@
  *   node agents/workbuddy/scripts/html-report-workbuddy.mjs stop    --session <id>
  * 可选：--root <projectRoot>（默认自动探测）。
  */
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -34,6 +34,7 @@ import {
   stopRunnerChildren,
 } from "./html-report-stage-runner.mjs";
 import { openMetricCliUi, stopMetricCliUi } from "../../../packages/harness-runtime-node/src/open-metric-cli-ui.mjs";
+import { resolveRootContext } from "../../../packages/harness-runtime-node/src/root-context.mjs";
 
 export const WORKBUDDY_COMMANDS = Object.freeze(["start", "status", "advance", "approve", "retry", "cancel", "stop"]);
 
@@ -99,17 +100,60 @@ export async function runWorkbuddy(argv = [], { emit } = {}) {
   const rootArg = cliValue(argv, "--root");
   const taskId = cliValue(argv, "--task");
   const format = cliValue(argv, "--format") || "text";
+  const contextFile = cliValue(argv, "--context-file");
+  const contextOptions = {
+    contextFile,
+    pluginRoot: cliValue(argv, "--plugin-root"),
+    dataRoot: cliValue(argv, "--data-root"),
+    secretRoot: cliValue(argv, "--secret-root"),
+    workspaceRoot: cliValue(argv, "--workspace-root"),
+    stateRoot: cliValue(argv, "--state-root"),
+    secretRef: cliValue(argv, "--secret-ref"),
+    sessionId: sessionId || "",
+    host: cliValue(argv, "--host"),
+  };
+  const hasContextOptions = [
+    contextFile,
+    contextOptions.pluginRoot,
+    contextOptions.dataRoot,
+    contextOptions.secretRoot,
+    contextOptions.workspaceRoot,
+    contextOptions.stateRoot,
+    contextOptions.secretRef,
+    contextOptions.host,
+  ].some((value) => String(value || "").trim() !== "");
   if (!sessionId) {
     return { ok: false, exitCode: 2, error: `命令 ${command} 需要 --session <id>` };
   }
+  let context = null;
+  if (hasContextOptions) {
+    try {
+      const explicitContext = Object.fromEntries(Object.entries(contextOptions).filter(([, value]) => String(value || "").trim() !== ""));
+      context = resolveRootContext({
+        contextFile,
+        explicit: explicitContext,
+        env: process.env,
+      });
+    } catch (error) {
+      return { ok: false, exitCode: 2, error: error?.message || String(error) };
+    }
+  }
+  const writeActions = new Set(["start", "advance", "approve", "retry", "cancel", "stop"]);
+  if (context && writeActions.has(command) && (!context.workspaceRoot || context.capabilities?.canWriteWorkspace === false)) {
+    return { ok: false, exitCode: 2, error: "QDM_WORKSPACE_REQUIRED: report lifecycle commands require workspaceRoot" };
+  }
   let projectRoot;
   try {
-    projectRoot = resolveProjectRoot(rootArg);
+    projectRoot = context?.workspaceRoot || resolveProjectRoot(rootArg || context?.pluginRoot);
   } catch (error) {
     return { ok: false, exitCode: 2, error: error?.message || String(error) };
   }
+  const previousStateRoot = process.env.HARNESS_STATE_ROOT;
+  const effectiveStateRoot = context?.stateRoot || (context?.dataRoot ? join(context.dataRoot, "state") : "");
+  if (effectiveStateRoot) process.env.HARNESS_STATE_ROOT = effectiveStateRoot;
   let output;
-  switch (command) {
+  try {
+    switch (command) {
     case "start": {
       const phaseA = parsePhaseA(cliValue(argv, "--phase-a"));
       if (!phaseA.ok) return { ok: false, exitCode: 2, error: phaseA.error };
@@ -122,6 +166,12 @@ export async function runWorkbuddy(argv = [], { emit } = {}) {
             projectRoot,
             sessionId,
             userQuestion: question,
+            ...(context ? {
+              context,
+              workspaceRoot: context.workspaceRoot,
+              stateRoot: context.stateRoot,
+              dataRoot: context.dataRoot,
+            } : {}),
             open: true,
             detach: true,
             watchPid: "none",
@@ -160,7 +210,16 @@ export async function runWorkbuddy(argv = [], { emit } = {}) {
     case "stop": {
       const stoppedChildren = stopRunnerChildren(projectRoot, sessionId);
       if (stoppedChildren.stopped > 0) cancel(projectRoot, sessionId);
-      const stopped = await stopMetricCliUi({ projectRoot, sessionId });
+      const stopped = await stopMetricCliUi({
+        projectRoot,
+        ...(context ? {
+          context,
+          workspaceRoot: context.workspaceRoot,
+          stateRoot: context.stateRoot,
+          dataRoot: context.dataRoot,
+        } : {}),
+        sessionId,
+      });
       output = {
         ok: true,
         message: stopped.stopped
@@ -173,6 +232,10 @@ export async function runWorkbuddy(argv = [], { emit } = {}) {
     }
     default:
       output = { ok: false, error: "unreachable" };
+    }
+  } finally {
+    if (previousStateRoot === undefined) delete process.env.HARNESS_STATE_ROOT;
+    else process.env.HARNESS_STATE_ROOT = previousStateRoot;
   }
   let message = output.message || JSON.stringify(output);
   if (command === "status" && output.ok && format === "text") {

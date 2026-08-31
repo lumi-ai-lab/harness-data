@@ -6,7 +6,7 @@ import { download } from "./manifest.js";
 const userAgent = "harness-data-installer";
 
 export function githubToken(options = {}) {
-  return options.githubToken || process.env.GITHUB_TOKEN || "";
+  return options.githubToken || (options.env || process.env).GITHUB_TOKEN || "";
 }
 
 export async function hasGithubAuth(options = {}) {

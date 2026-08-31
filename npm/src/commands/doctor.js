@@ -1,9 +1,21 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { findWorkspaceDir, readWorkspaceState } from "../lib/paths.js";
-import { binaryName, isExecutable } from "../lib/platform.js";
+import { binaryName, isExecutable, isHarnessCliPresent } from "../lib/platform.js";
 import { concreteAgentNames, qdmCliBinaries, readAuthzFromHarnessConfig } from "../lib/config.js";
 import { packageVersion } from "../lib/package.js";
+import { inspectLegacyRuntime } from "../lib/legacy-runtime.js";
+import { hasStructuredRootContext, publicRootContext, resolveRootContext } from "../lib/root-context.js";
+import { assertWorkspaceAllowed } from "../lib/workspace-policy.js";
+import { inspectSecretReference, readInstallManifest } from "./setup.js";
+import {
+  projectCodexConfigPath,
+  readTomlTableAssignments,
+  resolveCodexHome,
+  resolveCodexPluginSelector,
+  userCodexConfigPath,
+} from "../lib/codex-plugin-scope.js";
 import {
   codeBuddyMinimumVersion,
   detectCodeBuddyVersion,
@@ -83,6 +95,8 @@ function selectedAgent(workspace, options = {}) {
 export async function collectDoctor(workspace, options = {}) {
   const checks = [];
   const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
+  const legacyMigration = inspectLegacyRuntime(workspace);
+  if (legacyMigration.detected) add("legacy runtime migration", true, legacyMigration.hint, "warning");
 
   add("runtime", fs.existsSync(path.join(workspace, "bootstrap", "cli-manifest.json")) && fs.existsSync(path.join(workspace, "agents")), workspace);
   add("wikis/index.md", fs.existsSync(path.join(workspace, "wikis", "index.md")));
@@ -91,6 +105,10 @@ export async function collectDoctor(workspace, options = {}) {
   add("wikis/dims", fs.existsSync(path.join(workspace, "wikis", "dims")));
   add("wikis/rules", fs.existsSync(path.join(workspace, "wikis", "rules")));
   for (const binary of qdmCliBinaries) {
+    if (binary === "data-harness-cli") {
+      add("bin/data-harness-cli", isHarnessCliPresent(workspace));
+      continue;
+    }
     add(`bin/${binary}`, isExecutable(path.join(workspace, "bin", binaryName(binary))));
   }
   add("config/harness-config.yaml", fs.existsSync(path.join(workspace, "config", "harness-config.yaml")));
@@ -178,11 +196,6 @@ export async function collectDoctor(workspace, options = {}) {
   const codexStatus = codexSelected ? codexHooksStatus(workspace) : null;
   if (codexSelected) add("Codex hooks", codexStatus.ok, codexStatus.detail);
   add("Agent hook", concreteAgentNames.some((name) => agentOk(workspace, name)) || (workBuddySelected && Boolean(workBuddy?.prepared)));
-  for (const name of ["openclaw", "hermes"]) {
-    if (fs.existsSync(path.join(workspace, `.${name}`))) {
-      add(`Agent hook .${name}`, agentOk(workspace, name), `agents/${name}`);
-    }
-  }
   if (!fs.existsSync(path.join(workspace, ".harness", "index", "wikis-index.json")) &&
       !fs.existsSync(path.join(workspace, ".harness", "index", "wikis-runtime-index.json"))) {
     checks.push({ name: "wikis index", ok: true, detail: "missing; run data-harness-cli wikis build-index --skip-checks" });
@@ -190,22 +203,257 @@ export async function collectDoctor(workspace, options = {}) {
 
   return {
     workspace,
-    checks
+    checks,
+    migration: legacyMigration.detected
+      ? { status: "available", sourceRoot: legacyMigration.root, hint: legacyMigration.hint }
+      : { status: "none" },
   };
 }
 
-export async function doctorCommand(options = {}) {
+export async function collectRootDoctor(context, options = {}) {
+  const checks = [];
+  const add = (name, ok, detail = "", status = ok ? "pass" : "fail") => checks.push({ name, ok, detail, status });
+  const legacyMigration = inspectLegacyRuntime(options.legacyRuntime || options.legacyDir || options.env?.HARNESS_LEGACY_RUNTIME || process.env.HARNESS_LEGACY_RUNTIME || "");
+  if (legacyMigration.detected) add("legacy runtime migration", true, legacyMigration.hint, "warning");
+  const directory = (value) => Boolean(value && isDirectory(value));
+  const dataWritable = directory(context.dataRoot)
+    ? canAccess(context.dataRoot, fs.constants.W_OK)
+    : canAccessExistingParent(context.dataRoot, fs.constants.W_OK);
+
+  add("pluginRoot", directory(context.pluginRoot), context.pluginRoot || "missing");
+  add("dataRoot", directory(context.dataRoot), context.dataRoot || "missing");
+  add("dataRoot writable", dataWritable, context.dataRoot || "missing");
+  add("secretRoot", !context.secretRoot || directory(context.secretRoot), context.secretRoot || "unconfigured", context.secretRoot && !directory(context.secretRoot) ? "fail" : "pass");
+  add(
+    "workspaceRoot",
+    Boolean(context.workspaceRoot && directory(context.workspaceRoot)),
+    context.workspaceRoot || "missing; read-only operations only",
+    context.workspaceRoot && directory(context.workspaceRoot) ? "pass" : "warning",
+  );
+  add(
+    "stateRoot",
+    Boolean(context.stateRoot && (directory(context.stateRoot) || canAccessExistingParent(context.stateRoot, fs.constants.W_OK))),
+    context.stateRoot || "missing",
+    context.stateRoot && (directory(context.stateRoot) || canAccessExistingParent(context.stateRoot, fs.constants.W_OK)) ? "pass" : "fail",
+  );
+
+  const installManifest = readInstallManifest(context);
+  add("install manifest", Boolean(installManifest), installManifest ? "" : "run qdm-harness setup first");
+  add("config", Boolean(context.configPath && fs.existsSync(context.configPath)), context.configPath || "missing");
+  if (!context.workspacePolicyPath || !fs.existsSync(context.workspacePolicyPath)) {
+    add("workspace allowlist", false, context.workspacePolicyPath || "missing");
+  } else if (context.workspaceRoot) {
+    try {
+      assertWorkspaceAllowed(context);
+      add("workspace allowlist", true, context.workspacePolicyPath);
+    } catch (error) {
+      add("workspace allowlist", false, error?.message || String(error));
+    }
+  } else {
+    add("workspace allowlist", true, `${context.workspacePolicyPath}; workspace not supplied`, "warning");
+  }
+  addCodexPluginScope(add, context, installManifest, options);
+
+  const metricPath = installManifest?.metricCli?.path || path.join(context.pluginRoot, "runtimes", platformKeyForDoctor(), binaryName("qdm-metric-cli"));
+  add("qdm-metric-cli", isExecutable(metricPath), metricPath);
+
+  const runtimeManifestPath = path.join(context.pluginRoot || "", "bootstrap", "cli-manifest.json");
+  const runtimeHash = fs.existsSync(runtimeManifestPath) ? fileSha256(runtimeManifestPath) : "";
+  add("runtime manifest", Boolean(runtimeHash), runtimeManifestPath || "missing");
+  const pluginVersion = discoverPluginVersion(context.pluginRoot) || installManifest?.pluginVersion || "";
+  const resourceVersion = discoverResourceVersion(context.pluginRoot) || installManifest?.resourceVersion || "";
+
+  const secret = inspectSecretReference(context);
+  add(
+    "secret reference",
+    secret.status !== "invalid",
+    secret.type,
+    secret.status === "invalid" ? "fail" : (secret.status === "unconfigured" ? "warning" : "pass"),
+  );
+  add(
+    "pluginRoot write policy",
+    true,
+    canAccess(context.pluginRoot, fs.constants.W_OK) ? "writable; setup-managed files stay inside the Plugin" : "not writable",
+  );
+
+  const publicContext = publicRootContext(context);
+  const failures = checks.filter((check) => !check.ok && check.status !== "warning");
+  return {
+    schemaVersion: context.schemaVersion,
+    host: context.host,
+    roots: {
+      pluginRoot: context.pluginRoot,
+      resourceRoot: context.resourceRoot,
+      dataRoot: context.dataRoot,
+      secretRoot: context.secretRoot,
+      workspaceRoot: context.workspaceRoot,
+      stateRoot: context.stateRoot,
+      workspacePolicyPath: context.workspacePolicyPath,
+    },
+    context: publicContext,
+    versions: {
+      installer: packageVersion(),
+      runtimeHash,
+      runtimeTag: installManifest?.runtimeTag || "",
+      pluginVersion,
+      resourceVersion,
+    },
+    runtimeHash,
+    pluginVersion,
+    resourceVersion,
+    secretSourceType: secret.type,
+    secret: { type: secret.type, status: secret.status },
+    migration: legacyMigration.detected
+      ? { status: "available", sourceRoot: legacyMigration.root, hint: legacyMigration.hint }
+      : { status: "none" },
+    capabilities: {
+      ...context.capabilities,
+      canWriteData: dataWritable,
+      canWriteWorkspace: Boolean(context.workspaceRoot && canAccess(context.workspaceRoot, fs.constants.W_OK)),
+    },
+    checks,
+    ok: failures.length === 0,
+  };
+}
+
+export async function doctorCommand(options = {}, io = process) {
+  const env = io.env || process.env;
+  if (hasStructuredRootContext(options, env)) {
+    const context = resolveRootContext(options, { env, requirePluginRoot: true });
+    const report = await collectRootDoctor(context, { ...options, env });
+    if (options.json) {
+      (io.stdout || process.stdout).write(`${JSON.stringify(report, null, 2)}\n`);
+    } else {
+      (io.stdout || process.stdout).write(`Harness Data root doctor: ${context.host}\n`);
+      for (const check of report.checks) {
+        const label = check.status === "warning" ? "WARN" : (check.ok ? "PASS" : "FAIL");
+        (io.stdout || process.stdout).write(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}\n`);
+      }
+    }
+    if (!report.ok && io === process) process.exitCode = 1;
+    return report;
+  }
   const workspace = findWorkspaceDir(options.dir);
   const report = await collectDoctor(workspace, options);
   if (options.json) {
-    console.log(JSON.stringify(report, null, 2));
+    (io.stdout || process.stdout).write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    console.log(`Harness Data runtime doctor: ${report.workspace}`);
+    (io.stdout || process.stdout).write(`Harness Data runtime doctor: ${report.workspace}\n`);
     for (const check of report.checks) {
       const label = check.status === "warning" ? "WARN" : (check.ok ? "PASS" : "FAIL");
-      console.log(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}`);
+      (io.stdout || process.stdout).write(`${label} ${check.name}${check.detail ? ` (${check.detail})` : ""}\n`);
     }
   }
-  if (report.checks.some((check) => !check.ok)) process.exitCode = 1;
+  if (report.checks.some((check) => !check.ok) && io === process) process.exitCode = 1;
   return report;
+}
+
+function addCodexPluginScope(add, context, installManifest, options = {}) {
+  if (String(context.host || "").toLowerCase() !== "codex") return;
+  const env = options.env || process.env;
+  const selector = installManifest?.codexPluginScope?.selector || resolveCodexPluginSelector(context.pluginRoot, options);
+  const userConfigPath = installManifest?.codexPluginScope?.userConfigPath || userCodexConfigPath(resolveCodexHome(env));
+  const userTable = readTomlFileTable(userConfigPath, ["plugins", selector]);
+  if (userTable?.enabled === false) {
+    add("codex plugin default", true, `${selector} disabled in ${userConfigPath}`);
+  } else {
+    add(
+      "codex plugin default",
+      true,
+      userTable
+        ? `${selector} is enabled globally in ${userConfigPath}; re-run setup to default-disable it`
+        : `run setup to disable ${selector} globally and enable it per project`,
+      "warning",
+    );
+  }
+  if (!context.workspaceRoot) return;
+  const projectConfigPath = projectCodexConfigPath(context.workspaceRoot);
+  const projectTable = readTomlFileTable(projectConfigPath, ["plugins", selector]);
+  if (projectTable?.enabled === true) {
+    add("codex plugin project", true, `${selector} enabled in ${projectConfigPath}`);
+    return;
+  }
+  add(
+    "codex plugin project",
+    true,
+    `run setup --workspace-allowlist ${context.workspaceRoot} to enable ${selector} for this project`,
+    "warning",
+  );
+}
+
+function readTomlFileTable(filePath, keys) {
+  try {
+    return readTomlTableAssignments(fs.readFileSync(filePath, "utf8"), keys);
+  } catch {
+    return null;
+  }
+}
+
+function isDirectory(filePath) {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function canAccess(filePath, mode) {
+  try {
+    fs.accessSync(filePath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canAccessExistingParent(filePath, mode) {
+  let current = path.resolve(filePath || ".");
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+  return canAccess(current, mode);
+}
+
+function fileSha256(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function platformKeyForDoctor() {
+  if (process.platform === "darwin") return `darwin-${process.arch === "x64" ? "amd64" : process.arch}`;
+  if (process.platform === "win32") return `windows-${process.arch === "x64" ? "amd64" : process.arch}`;
+  return `linux-${process.arch === "x64" ? "amd64" : process.arch}`;
+}
+
+function discoverPluginVersion(pluginRoot) {
+  for (const candidate of [
+    path.join(pluginRoot || "", ".codex-plugin", "plugin.json"),
+    path.join(pluginRoot || "", "agents", "codex", ".codex-plugin", "plugin.json"),
+    path.join(pluginRoot || "", "agents", "workbuddy", ".codebuddy-plugin", "plugin.json"),
+  ]) {
+    try {
+      const value = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      if (value?.version) return String(value.version);
+    } catch {
+      // try the next known host manifest
+    }
+  }
+  return "";
+}
+
+function discoverResourceVersion(pluginRoot) {
+  for (const candidate of [
+    path.join(pluginRoot || "", ".harness", "index", "wikis-runtime-index.json"),
+    path.join(pluginRoot || "", ".harness", "index", "wikis-index.json"),
+  ]) {
+    try {
+      const value = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      const version = value?.meta?.resourceVersion || value?.meta?.contentVersion || value?.meta?.version;
+      if (version) return String(version);
+    } catch {
+      // optional resource metadata
+    }
+  }
+  return "";
 }

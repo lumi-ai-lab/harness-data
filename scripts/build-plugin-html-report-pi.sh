@@ -45,8 +45,7 @@ log "plugin source: $PLUGIN_DIR"
 if [[ "$RUN_TESTS" == "1" ]]; then
   node --test --test-concurrency=1 "$PLUGIN_DIR"/test/*.test.mjs
 fi
-PI_HTML_REPORT_LOCAL_EXTENSION_ROOT="$PLUGIN_DIR/dist" \
-  npm --prefix "$PLUGIN_DIR" run build
+npm --prefix "$PLUGIN_DIR" run build
 npm --prefix "$PLUGIN_DIR" run verify
 
 [[ -f "$PLUGIN_DIR/dist/manifest.json" ]] || die "build completed without dist/manifest.json"
@@ -58,7 +57,7 @@ for agent in report-writer report-researcher report-reviewer report-designer; do
   agent_file="$PLUGIN_DIR/dist/agents/$agent.md"
   extension_path="$(sed -n 's/^subagentOnlyExtensions: //p' "$agent_file")"
   [[ -n "$extension_path" ]] || die "$agent agent has no subagentOnlyExtensions path"
-  [[ -f "$extension_path" ]] || die "$agent child extension is missing: $extension_path"
+  [[ -f "$(dirname "$agent_file")/$extension_path" ]] || die "$agent child extension is missing: $extension_path"
 done
 
 if grep -Rqs '/Users/pengmd/c/qdm/extensions/' "$PLUGIN_DIR/dist/agents"; then

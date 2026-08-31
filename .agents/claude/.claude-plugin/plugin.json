@@ -1,0 +1,8 @@
+{
+  "name": "qdm-harness-claude",
+  "version": "0.0.54",
+  "description": "QDM Harness hooks and skills for Claude Code",
+  "author": {
+    "name": "Lumi AI Lab"
+  }
+}

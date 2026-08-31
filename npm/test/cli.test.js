@@ -10,7 +10,7 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { binaryName, isExecutable, platformKey } from "../src/lib/platform.js";
-import { defaultWorkspaceDir, readWorkspaceState, userStatePath, writeState } from "../src/lib/paths.js";
+import { defaultWorkspaceDir, legacyUserStatePath, readWorkspaceState, userStatePath, writeState } from "../src/lib/paths.js";
 import { packageVersion } from "../src/lib/package.js";
 import { normalizeGitProtocol, protocolFromUrl } from "../src/lib/git-auth.js";
 import { download, installToolsFromManifest, readManifest } from "../src/lib/manifest.js";
@@ -21,7 +21,7 @@ import { buildAndCheck, collectInstallAccess, installCommand, installRuntimeBund
 import { collectInstallAuth } from "../src/lib/install-auth.js";
 import { collectReleaseArchivePassword, RELEASE_ARCHIVE_PASSWORD } from "../src/lib/release-password.js";
 import { createInstallSession } from "../src/lib/install-session.js";
-import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, toolInstallMode, updateWikis, wikisInstallMode } from "../src/commands/update.js";
+import { isNonBlockingUpdateDoctorCheck, restoreAgentHooksIfMissing, toolInstallMode, updateWikis, wikisInstallMode, withUpdateSession } from "../src/commands/update.js";
 import { collectDoctor } from "../src/commands/doctor.js";
 import { qwenpawCommand } from "../src/commands/qwenpaw.js";
 import {
@@ -103,7 +103,7 @@ function reusableToolManifest(key) {
 test("prints help", () => {
   const result = spawnSync(process.execPath, [bin], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /harness-data <install\|update\|doctor\|version>/);
+  assert.match(result.stdout, /harness-data <install\|update\|setup\|doctor\|paths\|report\|migrate\|version>/);
   assert.doesNotMatch(result.stdout, /\bauth\b.*CAS/);
   assert.match(result.stdout, /--auth-blob/);
   assert.match(result.stdout, /--auth-user-id/);
@@ -176,12 +176,13 @@ test("command failures redact sensitive arguments", async () => {
   );
 });
 
-test("install and update use the built-in Release ZIP password", async () => {
+test("Release ZIP password is supplied explicitly and never uses the legacy environment variable", async () => {
   const previous = process.env.HARNESS_RELEASE_PASSWORD;
   process.env.HARNESS_RELEASE_PASSWORD = "ignored-password";
   try {
-    assert.equal(RELEASE_ARCHIVE_PASSWORD, "qdm-dev");
-    assert.equal(await collectReleaseArchivePassword({ yes: true }), RELEASE_ARCHIVE_PASSWORD);
+    assert.equal(RELEASE_ARCHIVE_PASSWORD, "");
+    assert.equal(await collectReleaseArchivePassword({ yes: true, releaseArchivePassword: "explicit-password" }), "explicit-password");
+    await assert.rejects(collectReleaseArchivePassword({ yes: true }), /release-archive-password|HARNESS_RELEASE_ARCHIVE_PASSWORD/);
   } finally {
     if (previous === undefined) delete process.env.HARNESS_RELEASE_PASSWORD;
     else process.env.HARNESS_RELEASE_PASSWORD = previous;
@@ -196,7 +197,10 @@ test("resolves platform and state paths", () => {
   assert.match(platformKey(), /^(darwin-arm64|linux-amd64|windows-(?:amd64|arm64))$/);
   assert.throws(() => platformKey("darwin", "x64"), /unsupported platform: darwin-amd64/);
   assert.equal(defaultWorkspaceDir(), process.cwd());
-  assert.match(userStatePath(), /harness-data-installer/);
+  assert.match(userStatePath(), /qdm-harness/);
+  assert.match(legacyUserStatePath({ platform: "darwin", homeDir: "/tmp/home" }), /Library\/Application Support\/lumi-ai-lab\/harness-data-installer\/state\.json$/);
+  assert.match(legacyUserStatePath({ platform: "linux", homeDir: "/tmp/home", env: {} }), /\.local\/state\/lumi-ai-lab\/harness-data-installer\/state\.json$/);
+  assert.match(legacyUserStatePath({ platform: "win32", homeDir: "C:\\home", env: { LOCALAPPDATA: "C:\\local" } }), /harness-data-installer[\\/]state\.json$/);
 });
 
 test("workspace installer state is local-first and does not leak across runtimes", () => {
@@ -245,7 +249,7 @@ test("detects git protocol from remote URLs", () => {
 test("private qdm cli tools point at their own repositories", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   const byName = new Map(manifest.tools.map((tool) => [tool.name, tool]));
-  assert.deepEqual([...byName.keys()], ["data-harness-cli", "qdm-metric-cli"]);
+  assert.deepEqual([...byName.keys()], ["qdm-metric-cli"]);
   assert.equal(byName.get("qdm-metric-cli").repo, "pengmide/qdm-metric-cli");
   assert.equal(byName.get("qdm-metric-cli").private, true);
   assert.equal(byName.has("qdm-cmr-cli"), false);
@@ -275,11 +279,11 @@ test("local wikis source requires root index", () => {
 test("tool manifest is a latest-release install catalog", () => {
   const manifest = readManifest(path.join(root, "..", "bootstrap", "cli-manifest.json"));
   assert.equal(manifest.schemaVersion, 2);
-  const tool = manifest.tools.find((item) => item.name === "data-harness-cli");
-  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "data-harness-cli-v1.2.3-linux-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "data-harness-cli-v1.2.3-darwin-arm64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "data-harness-cli-v1.2.3-windows-amd64.zip");
-  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "data-harness-cli-v1.2.3-windows-arm64.zip");
+  const tool = manifest.tools.find((item) => item.name === "qdm-metric-cli");
+  assert.equal(toolAssetName(tool, "v1.2.3", "linux-amd64"), "qdm-metric-cli-v1.2.3-linux-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "darwin-arm64"), "qdm-metric-cli-v1.2.3-darwin-arm64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-amd64"), "qdm-metric-cli-v1.2.3-windows-amd64.zip");
+  assert.equal(toolAssetName(tool, "v1.2.3", "windows-arm64"), "qdm-metric-cli-v1.2.3-windows-arm64.zip");
   for (const item of manifest.tools) {
     assert.equal(item.platforms["windows-arm64"]?.archive, "zip", `${item.name} missing Windows ARM64 asset`);
     assert.equal(item.platforms["linux-amd64"]?.archive, "zip", `${item.name} missing Linux ZIP asset`);
@@ -1524,6 +1528,7 @@ test("runtime bundle tar failure does not replace existing runtime files", { ski
     ["agents/old.txt", "old agents\n"],
     ["bootstrap/cli-manifest.json", "{\"old\":true}\n"],
     ["config/qdm-cli-paths.env", "old config\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1589,6 +1594,7 @@ test("runtime bundle replace failure restores previous runtime files", { skip: p
     ["agents/old.txt", "old agents\n"],
     ["bootstrap/cli-manifest.json", "{\"old\":true}\n"],
     ["config/qdm-cli-paths.env", "old config\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1601,10 +1607,11 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
-printf 'new agents\\n' > "$dir/agents/new.txt"
-printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
-printf 'new config\\n' > "$dir/config/qdm-cli-paths.env"
+  mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config" "$dir/plugins/harness-data"
+  printf 'new agents\\n' > "$dir/agents/new.txt"
+  printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
+  printf 'new config\\n' > "$dir/config/qdm-cli-paths.env"
+  printf 'new plugin\\n' > "$dir/plugins/harness-data/fixture.txt"
 exit 0
 `, { mode: 0o755 });
 
@@ -1652,6 +1659,8 @@ exit 0
   assert.equal(fs.existsSync(path.join(workspace, "agents", "new.txt")), false);
   assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), "{\"old\":true}\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old config\n");
+  assert.equal(fs.readFileSync(path.join(workspace, "plugins", "old.txt"), "utf8"), "old plugin\n");
+  assert.equal(fs.existsSync(path.join(workspace, "plugins", "harness-data", "fixture.txt")), false);
 });
 
 test("runtime bundle update preserves local config while refreshing examples", { skip: process.platform === "win32" }, async () => {
@@ -1665,6 +1674,7 @@ test("runtime bundle update preserves local config while refreshing examples", {
     ["config/harness-config.yaml", "old harness config\n"],
     ["config/qdm-cli-paths.env", "old cli paths\n"],
     ["config/qdm-cli-paths.env.example", "old example\n"],
+    ["plugins/old.txt", "old plugin\n"],
   ]) {
     fs.mkdirSync(path.dirname(path.join(workspace, file)), { recursive: true });
     fs.writeFileSync(path.join(workspace, file), content);
@@ -1677,12 +1687,13 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config"
+mkdir -p "$dir/agents" "$dir/bootstrap" "$dir/config" "$dir/plugins/harness-data"
 printf 'new agents\\n' > "$dir/agents/new.txt"
 printf '{"new":true}\\n' > "$dir/bootstrap/cli-manifest.json"
 printf 'new harness example\\n' > "$dir/config/harness-config.yaml.example"
 printf 'new cli paths example\\n' > "$dir/config/qdm-cli-paths.env.example"
 printf 'should not replace local cli paths\\n' > "$dir/config/qdm-cli-paths.env"
+printf 'new plugin\\n' > "$dir/plugins/harness-data/fixture.txt"
 exit 0
 `, { mode: 0o755 });
 
@@ -1722,6 +1733,8 @@ exit 0
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env"), "utf8"), "old cli paths\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "harness-config.yaml.example"), "utf8"), "new harness example\n");
   assert.equal(fs.readFileSync(path.join(workspace, "config", "qdm-cli-paths.env.example"), "utf8"), "new cli paths example\n");
+  assert.equal(fs.existsSync(path.join(workspace, "plugins", "old.txt")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "plugins", "harness-data", "fixture.txt"), "utf8"), "new plugin\n");
 });
 
 test("release asset download uses browser URL without token", async () => {
@@ -2237,8 +2250,8 @@ test("dataAuth install overwrites user-provided blob with fixture (regression)",
   assert.match(harnessConfig, new RegExp(`dev_user_id: ${localTestAuthUserId}`));
 });
 
-test("agent choices include OpenClaw, Hermes, WorkBuddy, both, and all", () => {
-  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "openclaw", "hermes", "workbuddy", "both", "all"]);
+test("agent choices include supported adapters, both, and all", () => {
+  assert.deepEqual(agentChoices, ["claude", "codex", "pi", "workbuddy", "both", "all"]);
   assert.equal(agentIncludesWorkBuddy("workbuddy"), true);
   assert.equal(agentIncludesWorkBuddy("all"), false);
   assert.equal(agentIncludesWorkBuddy("both"), false);
@@ -2259,7 +2272,7 @@ test("WorkBuddy plugin package matches npm version and native hook contract", ()
   assert.equal(plugin.prepared, true, plugin.errors.join("; "));
   assert.equal(plugin.version, packageVersion());
   assert.equal(plugin.marketplaceVersion, packageVersion());
-  assert.equal(plugin.marketplaceName, "lumi-harness-data");
+  assert.equal(plugin.marketplaceName, "lumi-ai-lab");
   assert.equal(plugin.marketplaceRoot, path.join(workspace, "agents"));
   assert.equal(versionAtLeast("5.3.5"), true);
   assert.equal(versionAtLeast("5.3.8"), true);
@@ -2276,7 +2289,7 @@ test("WorkBuddy enablement detection distinguishes package from enabled plugin",
   assert.equal(status.enabled, false);
 
   fs.writeFileSync(path.join(settingsDir, "settings.json"), JSON.stringify({
-    enabledPlugins: { "qdm-harness@lumi-harness-data": true },
+    enabledPlugins: { "qdm-harness@lumi-ai-lab": true },
   }));
   status = detectWorkBuddyPluginEnabled({ homeDir: home });
   assert.equal(status.detected, true);
@@ -2305,7 +2318,7 @@ test("WorkBuddy enablement detection distinguishes package from enabled plugin",
   assert.equal(status.settingsPath, path.join(settingsDir, "settings.json"));
 
   fs.writeFileSync(path.join(workspace, ".codebuddy", "settings.local.json"), JSON.stringify({
-    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
+    enabledPlugins: { "qdm-harness@lumi-ai-lab": false },
   }));
   status = detectWorkBuddyPluginEnabled({ homeDir: home, workspace });
   assert.equal(status.configured, true);
@@ -2575,17 +2588,9 @@ test("Windows executable checks use file existence instead of POSIX mode bits", 
 
 test("links selected agent templates", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+  for (const name of ["claude", "codex", "pi"]) {
     fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
   }
-
-  const openclaw = linkAgents(workspace, "openclaw");
-  assert.deepEqual(openclaw, [["agents/openclaw", ".openclaw"]]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
-
-  const hermes = linkAgents(workspace, "hermes");
-  assert.deepEqual(hermes, [["agents/hermes", ".hermes"]]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
 
   const workbuddy = linkAgents(workspace, "workbuddy");
   assert.deepEqual(workbuddy, []);
@@ -2602,11 +2607,10 @@ test("links selected agent templates", () => {
     ["agents/claude", ".claude"],
     ["agents/codex", ".codex"],
     ["agents/pi", ".pi"],
-    ["agents/openclaw", ".openclaw"],
-    ["agents/hermes", ".hermes"],
+
+
   ]);
-  assert.equal(fs.realpathSync(path.join(workspace, ".openclaw")), fs.realpathSync(path.join(workspace, "agents", "openclaw")));
-  assert.equal(fs.realpathSync(path.join(workspace, ".hermes")), fs.realpathSync(path.join(workspace, "agents", "hermes")));
+
 });
 
 function copyWorkBuddyPlugin(workspace) {
@@ -2617,7 +2621,7 @@ function copyWorkBuddyPlugin(workspace) {
 
 function createAgentWorkspace() {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-"));
-  for (const name of ["claude", "codex", "pi", "openclaw", "hermes"]) {
+  for (const name of ["claude", "codex", "pi"]) {
     fs.mkdirSync(path.join(workspace, "agents", name), { recursive: true });
   }
   return workspace;
@@ -2707,8 +2711,6 @@ function createDoctorWorkspace(agent) {
     "agents/claude",
     "agents/codex",
     "agents/pi",
-    "agents/openclaw",
-    "agents/hermes",
     "bootstrap",
     "wikis/metrics",
     "wikis/reports",
@@ -2729,8 +2731,8 @@ function createDoctorWorkspace(agent) {
   return workspace;
 }
 
-test("doctor accepts OpenClaw, Hermes, both, and all agent hooks", async () => {
-  for (const agent of ["openclaw", "hermes", "both", "all"]) {
+test("doctor accepts both and all supported agent hooks", async () => {
+  for (const agent of ["both", "all"]) {
     const report = await collectDoctor(createDoctorWorkspace(agent));
     const agentChecks = report.checks.filter((check) => check.name.startsWith("Agent hook"));
     assert.ok(agentChecks.length > 0);
@@ -2744,7 +2746,7 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-workbuddy-home-"));
   fs.mkdirSync(path.join(home, ".workbuddy"), { recursive: true });
   fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
-    enabledPlugins: { "qdm-harness@lumi-harness-data": true },
+    enabledPlugins: { "qdm-harness@lumi-ai-lab": true },
   }));
 
   const report = await collectDoctor(workspace, {
@@ -2769,7 +2771,7 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
   assert.equal(unknownEnablement?.status, "warning");
 
   fs.writeFileSync(path.join(home, ".workbuddy", "settings.json"), JSON.stringify({
-    enabledPlugins: { "qdm-harness@lumi-harness-data": false },
+    enabledPlugins: { "qdm-harness@lumi-ai-lab": false },
   }));
   const disabled = await collectDoctor(workspace, { agent: "workbuddy", workBuddyVersion: "5.3.11", codeBuddyVersion: "2.115.0", homeDir: home });
   assert.equal(disabled.checks.find((check) => check.name === "WorkBuddy plugin enablement")?.ok, false);
@@ -2804,7 +2806,6 @@ test("doctor validates WorkBuddy package, version, and enablement separately", a
 
 test("update doctor treats missing agent hooks as non-blocking only", async () => {
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook" }), true);
-  assert.equal(isNonBlockingUpdateDoctorCheck({ name: "Agent hook .openclaw" }), true);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "bin/data-harness-cli" }), false);
   assert.equal(isNonBlockingUpdateDoctorCheck({ name: "config CLI paths" }), false);
 });
@@ -3227,6 +3228,38 @@ test("install session rollback restores pre-existing roots on a first install", 
   assert.equal(fs.existsSync(path.join(workspace, "agents")), false);
   assert.equal(fs.existsSync(path.join(workspace, ".harness")), false);
   assert.equal(fs.existsSync(path.join(workspace, ".claude")), false);
+});
+
+test("update session rolls back mixed-version writes when a later update step fails", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-test-update-session-"));
+  fs.mkdirSync(path.join(workspace, "bootstrap"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "old-manifest\n");
+  fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "bin", "qdm-metric-cli"), "old-runtime\n");
+  fs.mkdirSync(path.join(workspace, ".harness"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), "{\"runtimeTag\":\"old\"}\n");
+  const before = {
+    manifest: fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"),
+    runtime: fs.readFileSync(path.join(workspace, "bin", "qdm-metric-cli"), "utf8"),
+    state: fs.readFileSync(path.join(workspace, ".harness", "installer-state.json"), "utf8"),
+  };
+
+  await assert.rejects(
+    withUpdateSession(workspace, async () => {
+      fs.writeFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "new-manifest\n");
+      fs.writeFileSync(path.join(workspace, "bin", "qdm-metric-cli"), "new-runtime\n");
+      fs.writeFileSync(path.join(workspace, ".harness", "installer-state.json"), "{\"runtimeTag\":\"new\"}\n");
+      fs.mkdirSync(path.join(workspace, "wikis"), { recursive: true });
+      fs.writeFileSync(path.join(workspace, "wikis", "index.md"), "new-wikis\n");
+      throw new Error("simulated doctor failure");
+    }),
+    /simulated doctor failure/
+  );
+
+  assert.equal(fs.readFileSync(path.join(workspace, "bootstrap", "cli-manifest.json"), "utf8"), before.manifest);
+  assert.equal(fs.readFileSync(path.join(workspace, "bin", "qdm-metric-cli"), "utf8"), before.runtime);
+  assert.equal(fs.readFileSync(path.join(workspace, ".harness", "installer-state.json"), "utf8"), before.state);
+  assert.equal(fs.existsSync(path.join(workspace, "wikis")), false);
 });
 
 test("installToolsFromManifest rolls back earlier tools when a later download fails", { skip: process.platform === "win32" }, async () => {

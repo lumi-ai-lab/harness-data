@@ -3,25 +3,6 @@
   "owner": "lumi-ai-lab",
   "tools": [
     {
-      "name": "data-harness-cli",
-      "binary": "data-harness-cli",
-      "repo": "lumi-ai-lab/harness-data",
-      "platforms": {
-        "darwin-arm64": {
-          "archive": "zip"
-        },
-        "linux-amd64": {
-          "archive": "zip"
-        },
-        "windows-amd64": {
-          "archive": "zip"
-        },
-        "windows-arm64": {
-          "archive": "zip"
-        }
-      }
-    },
-    {
       "name": "qdm-metric-cli",
       "binary": "qdm-metric-cli",
       "repo": "pengmide/qdm-metric-cli",

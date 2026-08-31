@@ -1,11 +1,11 @@
 {
-  "name": "lumi-harness-data",
+  "name": "lumi-ai-lab",
   "plugins": [
     {
-      "name": "qdm-html-report",
+      "name": "harness-data",
       "source": {
         "source": "local",
-        "path": "./plugins/qdm-html-report"
+        "path": "./plugins/harness-data"
       },
       "policy": {
         "installation": "AVAILABLE",

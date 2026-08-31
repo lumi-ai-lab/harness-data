@@ -1,6 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import {
+  ROOT_CONTEXT_ERROR_CODES,
+  RootContextError,
+  normalizeRootContext,
+  resolveRootContext,
+} from "./root-context.mjs";
 
 export function isHarnessWorkspaceRoot(dir) {
   if (!dir) return false;
@@ -52,12 +58,28 @@ function walkToHarness(start) {
 }
 
 /**
- * Walk up from start until a harness workspace root is found.
- * When `start` is omitted, try env / parent cwd / process.cwd() in order.
- * Plugin MCP cwd is the plugin cache, so the session workspace must come from
- * HARNESS_WORKSPACE_ROOT, CODEX_WORKSPACE_ROOT, PWD, or the parent process.
+ * Resolve a workspace from an explicit Root Context when one is supplied.
+ * Otherwise retain the legacy env/parent-cwd upward scan for old hooks.
  */
 export function findWorkspaceRoot(start, env = process.env, options = {}) {
+  const structured = options.context || options.contextFile || hasStructuredContextEnv(env);
+  if (structured) {
+    try {
+      const context = options.context
+        ? normalizeRootContext(options.context)
+        : resolveRootContext({ contextFile: options.contextFile, env });
+      if (!context?.workspaceRoot) {
+        throw new RootContextError(
+          ROOT_CONTEXT_ERROR_CODES.WORKSPACE_REQUIRED,
+          "workspaceRoot is required for structured runtime resolution",
+        );
+      }
+      return context.workspaceRoot;
+    } catch (error) {
+      if (options.failClosed) return "";
+      throw error;
+    }
+  }
   const starts = start ? [start] : workspaceStartCandidates(env, options);
   let last = process.cwd();
   for (const candidate of starts) {
@@ -65,5 +87,23 @@ export function findWorkspaceRoot(start, env = process.env, options = {}) {
     const found = walkToHarness(last);
     if (found) return found;
   }
-  return last;
+  return options.failClosed ? "" : last;
+}
+
+/** Resolve a workspace only from an explicit Root Context. */
+export function resolveWorkspaceRoot({ context, contextFile = "", env = process.env, failClosed = false } = {}) {
+  if (!context && !contextFile && !hasStructuredContextEnv(env)) {
+    if (failClosed) return "";
+    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, "explicit Root Context is required");
+  }
+  return findWorkspaceRoot(undefined, env, { context, contextFile, failClosed });
+}
+
+function hasStructuredContextEnv(env = process.env) {
+  return Boolean(
+    env?.HARNESS_CONTEXT_FILE ||
+      env?.CODEX_CONTEXT_FILE ||
+      env?.HARNESS_PLUGIN_ROOT ||
+      env?.HARNESS_DATA_ROOT,
+  );
 }

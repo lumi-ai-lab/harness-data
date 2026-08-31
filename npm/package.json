@@ -1,10 +1,11 @@
 {
   "name": "@lumi-ai-lab/harness-data",
-  "version": "0.0.53",
-  "description": "Installer and updater for Harness Data",
+  "version": "0.0.54",
+  "description": "Internal Setup and compatibility implementation bundled with the Harness Data Codex Plugin",
   "type": "module",
   "bin": {
-    "harness-data": "bin/harness-data.js"
+    "harness-data": "bin/harness-data.js",
+    "qdm-harness": "bin/harness-data.js"
   },
   "files": [
     "bin",
@@ -13,7 +14,8 @@
   ],
   "scripts": {
     "test": "node --test",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "npm pack --dry-run",
+    "verify:artifact": "node ../scripts/verify-npm-artifact.mjs"
   },
   "engines": {
     "node": ">=18"

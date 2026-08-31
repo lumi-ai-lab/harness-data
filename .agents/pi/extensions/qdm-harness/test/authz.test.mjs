@@ -39,6 +39,12 @@ function createProject(t, { authzYaml } = {}) {
   return root;
 }
 
+function writePrivateFile(path, contents) {
+  writeFileSync(path, contents, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
 test("parseAuthzSection reads mode blob_file and dev_user_id", () => {
   const parsed = parseAuthzSection(`
 paths:
@@ -63,7 +69,7 @@ test("resolveAuthBlob prefers host over file; file used when no env (test stage)
   dev_user_id: local-test-user
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const config = loadAuthzConfig(root, {});
   assert.equal(config.mode, "on");
@@ -104,7 +110,7 @@ test("resolveAuthBlob fails when blob_file has no user id", (t) => {
   blob_file: config/dev-auth.blob
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const config = loadAuthzConfig(root, {});
   assert.equal(config.devUserId, "");
   const resolved = resolveAuthBlob({ projectRoot: root, config, env: {} });
@@ -415,7 +421,7 @@ authz:
   allow_local_blob: true
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const cli = join(root, "bin", "data-harness-cli");
   writeFileSync(
     cli,
@@ -632,7 +638,7 @@ test("resolveAuthBlob priority: host > envelope > env > file; allowLocalBlob gat
   allow_local_blob: true
 `,
   });
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const envelopeDir = mkdtempSync(join(tmpdir(), "qdm-lumi-prio-"));
   t.after(() => rmSync(envelopeDir, { force: true, recursive: true }));
@@ -690,7 +696,7 @@ test("resolveAuthBlob priority: host > envelope > env > file; allowLocalBlob gat
   allow_local_blob: false
 `,
   });
-  writeFileSync(join(lockedRoot, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(lockedRoot, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
   const locked = loadAuthzConfig(lockedRoot, {});
 
   const envelopeOk = resolveAuthBlob({
@@ -867,7 +873,7 @@ test("extension tool_call blocks model cat fixture when unbound and allow_local_
 `,
   });
   // Fixture on disk must not be used when allow_local_blob is false.
-  writeFileSync(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
+  writePrivateFile(join(root, "config", "dev-auth.blob"), `${SAMPLE_BLOB}\n`);
 
   const handlers = new Map();
   qdmHarnessExtension({

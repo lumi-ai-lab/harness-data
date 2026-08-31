@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$cli\" context --format codex-hook'",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ] && [ -n \"$HARNESS_PLUGIN_ROOT\" ]; then for n in data-harness-cli data-harness-cli.exe; do [ -f \"$HARNESS_PLUGIN_ROOT/bin/$n\" ] && cli=\"$HARNESS_PLUGIN_ROOT/bin/$n\"; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Run qdm-harness setup with --plugin-root and --data-root.\" >&2; exit 1; fi; \"$cli\" context --format codex-hook'",
             "statusMessage": "Loading QDM Harness context"
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 2; fi; \"$cli\" authz-hook --agent codex'",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ] && [ -n \"$HARNESS_PLUGIN_ROOT\" ]; then for n in data-harness-cli data-harness-cli.exe; do [ -f \"$HARNESS_PLUGIN_ROOT/bin/$n\" ] && cli=\"$HARNESS_PLUGIN_ROOT/bin/$n\"; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Run qdm-harness setup with --plugin-root and --data-root.\" >&2; exit 2; fi; \"$cli\" authz-hook --agent codex'",
             "statusMessage": "Authorizing QDM data command"
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ]; then echo \"data-harness-cli not found from $PWD\" >&2; exit 1; fi; \"$cli\" posttool --format codex-hook'",
+            "command": "bash -c 'root=\"$PWD\"; cli=\"\"; while [ \"$root\" != \"/\" ] && [ -z \"$cli\" ]; do for n in data-harness-cli data-harness-cli.exe; do [ -f \"$root/bin/$n\" ] && cli=\"$root/bin/$n\"; done; root=\"$(dirname \"$root\")\"; done; if [ -z \"$cli\" ] && [ -n \"$HARNESS_PLUGIN_ROOT\" ]; then for n in data-harness-cli data-harness-cli.exe; do [ -f \"$HARNESS_PLUGIN_ROOT/bin/$n\" ] && cli=\"$HARNESS_PLUGIN_ROOT/bin/$n\"; done; fi; if [ -z \"$cli\" ]; then echo \"QDM_SETUP_REQUIRED: data-harness-cli not found. Run qdm-harness setup with --plugin-root and --data-root.\" >&2; exit 1; fi; \"$cli\" posttool --format codex-hook'",
             "statusMessage": "Updating QDM Harness state"
           }
         ]

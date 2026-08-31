@@ -7,7 +7,7 @@ import { packageVersion } from "./package.js";
 export const workBuddyMinimumVersion = "5.3.5";
 export const workBuddyAuthMinimumVersion = "5.3.11";
 export const codeBuddyMinimumVersion = "2.115.0";
-export const workBuddyMarketplaceName = "lumi-harness-data";
+export const workBuddyMarketplaceName = "lumi-ai-lab";
 export const workBuddyMarketplaceRel = "agents";
 export const workBuddyPluginRel = "agents/workbuddy";
 

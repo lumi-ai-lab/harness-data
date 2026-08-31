@@ -313,10 +313,10 @@ test("runtime agent list inspection accepts canonical package agent names", () =
     content: [{
       type: "text",
       text: [
-        "- qdm-html-report.report-writer (package): write",
-        "- qdm-html-report.report-researcher (package): research",
-        "- qdm-html-report.report-reviewer (package): review",
-        "- qdm-html-report.report-designer (package): design",
+        "- harness-data.report-writer (package): write",
+        "- harness-data.report-researcher (package): research",
+        "- harness-data.report-reviewer (package): review",
+        "- harness-data.report-designer (package): design",
       ].join("\n"),
     }],
     isError: false,

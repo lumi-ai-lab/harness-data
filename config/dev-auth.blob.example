@@ -1,21 +1,10 @@
-# Working copy for local authz (gitignored). Prefer the installer:
+# Working copy for local authz (gitignored).
+# Codex Plugin Setup normally writes the supplied blob to:
+#   <pluginRoot>/secrets/auth.blob
 #
-#   npx @lumi-ai-lab/harness-data install --data-auth
+# Development fixture source:
+#   config/fixtures/local-test-auth.blob
 #
-# That copies config/fixtures/local-test-auth.blob → config/dev-auth.blob and sets:
-#
-#   authz:
-#     mode: on
-#     blob_file: config/dev-auth.blob
-#     dev_user_id: local-test-user
-#     allow_local_blob: true
-#
-# Manual regenerate:
-#
-#   cd /path/to/qdm-metric-cli
-#   go run ./scripts/auth_blob_encrypt.go \
-#     -in /path/to/harness-data/config/fixtures/local-test-auth.json \
-#     > /path/to/harness-data/config/dev-auth.blob
-#
-# Production should distribute an encrypted blob via HARNESS_AUTH_BLOB_FILE + HARNESS_AUTH_USER_ID (keep allow_local_blob: true).
-# Do not commit config/dev-auth.blob (gitignored).
+# Production users may provide --auth-blob-file or HARNESS_AUTH_BLOB_FILE.
+# Keep the file outside the workspace and use permissions 0600 when possible.
+# Do not commit a real auth.blob.
