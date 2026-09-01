@@ -1,6 +1,6 @@
 {
   "name": "@lumi-ai-lab/data-harness-cli",
-  "version": "0.0.55",
+  "version": "0.0.56",
   "description": "Data Harness CLI for QDM runtime constraint data",
   "type": "module",
   "exports": {
