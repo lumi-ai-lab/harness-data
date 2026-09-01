@@ -1,4 +1,11 @@
-"""Static, operator-controlled configuration for the QwenPaw QDM plugin."""
+"""Static, operator-controlled configuration for the QwenPaw QDM plugin.
+
+Schema 1 (legacy) derives every path from a single global ``runtime_dir``.
+Schema 2 (reference model) holds plugin identity, a Root Context file
+reference and a secret reference; the metric CLI path comes from the Root
+Context (instanceRoot/config/settings.json), so the plugin stops trusting a
+single global runtime directory.  A broken Root Context fails closed.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +21,8 @@ DEFAULT_PLUGIN_CONFIG_FILE = PROGRAM_DATA / "plugin-config.json"
 DEFAULT_QDM_AGENT_ID = "qdmDataAgent"
 SENSITIVE_CONFIG_RELATIVE_DIR = Path("config") / "qwenpaw"
 TOOL_POLICIES = frozenset({"preserve", "strict"})
+LEGACY_SCHEMA = 1
+REFERENCE_SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -36,7 +45,6 @@ class ReportLimits:
 
 @dataclass(frozen=True)
 class PluginConfig:
-    runtime_dir: Path
     qdm_agent_id: str
     user_id_display_mode: str
     tool_policy: str
@@ -46,9 +54,24 @@ class PluginConfig:
     auth_file_max_bytes: int | None = None
     context_cli_timeout_seconds: int = 60
     report_hook_timeout_seconds: int = 60
+    # 引用模型字段 (schema 2): 插件身份 + Root Context + secret 引用
+    plugin_id: str = "qdm-harness-qwenpaw"
+    plugin_version: str = ""
+    root_context_path: Path | None = None
+    secret_ref: str | None = None
+    enabled_agents: tuple[str, ...] = ()
+    # 兼容模型字段 (schema 1): runtime_dir 派生
+    runtime_dir: Path | None = None
+    _metric_cli_path: str | None = None
+    _sensitive_config_dir: str | None = None
+
     @property
     def sensitive_config_dir(self) -> Path:
-        return _confined_sensitive_dir(self.runtime_dir) if os.name == "nt" else Path("/run/secrets")
+        if self._sensitive_config_dir:
+            return Path(self._sensitive_config_dir)
+        if self.runtime_dir is not None and os.name == "nt":
+            return _confined_sensitive_dir(self.runtime_dir)
+        return Path("/run/secrets")
 
     @property
     def auth_file(self) -> Path:
@@ -60,10 +83,16 @@ class PluginConfig:
 
     @property
     def data_harness_cli(self) -> Path:
+        if self.runtime_dir is None:
+            return Path("data-harness-cli")
         return self.runtime_dir / "bin" / ("data-harness-cli.exe" if os.name == "nt" else "data-harness-cli")
 
     @property
     def qdm_metric_cli(self) -> Path:
+        if self._metric_cli_path:
+            return Path(self._metric_cli_path)
+        if self.runtime_dir is None:
+            return Path("qdm-metric-cli")
         return self.runtime_dir / "bin" / ("qdm-metric-cli.exe" if os.name == "nt" else "qdm-metric-cli")
 
 
@@ -74,12 +103,67 @@ class ConfigError(ValueError):
 def load_config(path: Path = DEFAULT_PLUGIN_CONFIG_FILE) -> PluginConfig:
     """Load only non-secret, operator-written plugin settings."""
     raw = _read_json(path)
+    schema = raw.get("schema_version")
+    if schema == REFERENCE_SCHEMA:
+        return _load_reference(raw, path)
+    if schema == LEGACY_SCHEMA:
+        return _load_legacy(raw)
+    raise ConfigError("plugin config schema_version is invalid")
+
+
+def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
+    required = {"schema_version", "plugin_id", "qdm_agent_id", "user_id_display_mode"}
+    allowed = required | {
+        "plugin_version", "root_context_path", "secret_ref", "enabled_agents",
+        "tool_policy", "context_limits", "query_limits", "report_limits",
+        "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds",
+    }
+    if not required.issubset(raw) or not set(raw).issubset(allowed):
+        raise ConfigError("plugin config contains unsupported fields")
+    plugin_id = raw.get("plugin_id")
+    agent_id = raw.get("qdm_agent_id")
+    display = raw.get("user_id_display_mode")
+    if not isinstance(plugin_id, str) or not plugin_id.strip():
+        raise ConfigError("plugin_id is invalid")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise ConfigError("qdm_agent_id is invalid")
+    if display not in {"off", "command"}:
+        raise ConfigError("user_id_display_mode must be off or command")
+    tool_policy = raw.get("tool_policy", "preserve")
+    if tool_policy not in TOOL_POLICIES:
+        raise ConfigError("tool_policy must be preserve or strict")
+
+    context_path = _reference_path(raw.get("root_context_path"), "root_context_path", require_file=True)
+    context = _load_root_context(context_path)
+    metric_cli_path = _metric_cli_from_context(context, config_file)
+    sensitive_dir = _sensitive_dir_from_reference(raw.get("secret_ref"), context)
+
+    enabled = raw.get("enabled_agents") or []
+    if not isinstance(enabled, list) or not all(isinstance(item, str) and item.strip() for item in enabled):
+        raise ConfigError("enabled_agents must be a list of agent ids")
+    return PluginConfig(
+        agent_id.strip(), display, tool_policy,
+        parse_context_limits(raw.get("context_limits")),
+        parse_query_limits(raw.get("query_limits")),
+        parse_report_limits(raw.get("report_limits")),
+        parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")),
+        parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"),
+        parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"),
+        plugin_id=plugin_id.strip(),
+        plugin_version=str(raw.get("plugin_version") or "").strip(),
+        root_context_path=context_path,
+        secret_ref=str(raw.get("secret_ref") or "").strip() or None,
+        enabled_agents=tuple(enabled),
+        _metric_cli_path=str(metric_cli_path),
+        _sensitive_config_dir=str(sensitive_dir),
+    )
+
+
+def _load_legacy(raw: dict[str, Any]) -> PluginConfig:
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
     allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
-    if raw.get("schema_version") != 1:
-        raise ConfigError("plugin config schema_version is invalid")
     runtime = raw.get("runtime_dir")
     agent_id = raw.get("qdm_agent_id")
     display = raw.get("user_id_display_mode")
@@ -95,7 +179,8 @@ def load_config(path: Path = DEFAULT_PLUGIN_CONFIG_FILE) -> PluginConfig:
     runtime_path = Path(runtime).expanduser()
     if not runtime_path.is_absolute() or runtime_path.is_symlink() or not runtime_path.is_dir():
         raise ConfigError("runtime_dir must be absolute")
-    return PluginConfig(runtime_path.resolve(), agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"))
+    return PluginConfig(agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"), runtime_dir=runtime_path.resolve())
+
 
 def parse_timeout(value: Any, field: str, default: int = 60, maximum: int = 300) -> int:
     if value is None:
@@ -148,6 +233,64 @@ def parse_report_limits(value: Any) -> ReportLimits:
     if not isinstance(value, dict) or set(value) != {"additional_context_bytes"}:
         raise ConfigError("report_limits is invalid")
     return ReportLimits(_positive_or_none(value.get("additional_context_bytes"), "report_limits.additional_context_bytes"))
+
+
+def _reference_path(value: Any, name: str, *, require_file: bool = False) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{name} is invalid")
+    path = Path(value).expanduser()
+    if not path.is_absolute() or path.is_symlink():
+        raise ConfigError(f"{name} must be an absolute, non-symlink path")
+    if require_file and not path.is_file():
+        raise ConfigError(f"{name} is unavailable")
+    return path
+
+
+def _load_root_context(path: Path) -> dict[str, Any]:
+    if path is None:
+        raise ConfigError("root_context_path is required")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError("root context is unavailable") from exc
+    if not isinstance(value, dict):
+        raise ConfigError("root context must be a JSON object")
+    return value
+
+
+def _metric_cli_from_context(context: dict[str, Any], config_file: Path) -> Path:
+    config_path = context.get("configPath")
+    if not isinstance(config_path, str) or not config_path:
+        raise ConfigError("root context configPath is invalid")
+    settings_file = Path(config_path).expanduser()
+    if settings_file.is_symlink() or not settings_file.is_file():
+        raise ConfigError("settings.json is unavailable")
+    try:
+        settings = json.loads(settings_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError("settings.json is unavailable") from exc
+    metric = settings.get("metricCliPath") if isinstance(settings, dict) else None
+    if not isinstance(metric, str) or not metric.strip() or not Path(metric).is_absolute():
+        raise ConfigError("root context metricCliPath is invalid")
+    return Path(metric)
+
+
+def _sensitive_dir_from_reference(secret_ref: Any, context: dict[str, Any]) -> Path:
+    if isinstance(secret_ref, str) and secret_ref.strip():
+        path = Path(secret_ref).expanduser()
+        if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+            raise ConfigError("secret_ref must be an absolute, non-symlink directory")
+        return path
+    secret_root = context.get("secretRoot")
+    if isinstance(secret_root, str) and secret_root:
+        path = Path(secret_root).expanduser()
+        if path.is_absolute() and not path.is_symlink():
+            return path
+    if os.name == "nt":
+        raise ConfigError("secret_ref is required on Windows")
+    return Path("/run/secrets")
 
 
 def sensitive_material_paths(runtime_dir: Path) -> tuple[Path, Path]:

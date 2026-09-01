@@ -59,10 +59,10 @@ Commands:
   report   Run the explicit html-report lifecycle for a host session
   migrate  Check or copy a legacy install --dir runtime into the dual-root data model
   version  Print installer, repository, wikis, and manifest versions
-  qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
+  qwenpaw  Install, diagnose, update, or remove the QwenPaw QDM plugin
 
 QwenPaw:
-  harness-data qwenpaw <install|doctor|uninstall> [options]
+  harness-data qwenpaw <setup|doctor|update|install|uninstall> [options]
 
 Install options:
   --dir PATH                         Legacy runtime directory (default: current directory)

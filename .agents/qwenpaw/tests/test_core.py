@@ -182,6 +182,71 @@ class AuthorizationTests(unittest.TestCase):
             self.assertNotIn("zhangsan", one)
             self.assertNotEqual(one, two)
 
+    def test_reference_config_derives_paths_from_root_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            instance = root / "instance"
+            config_dir = instance / "config"
+            config_dir.mkdir(parents=True)
+            runtimes = instance / "runtimes" / "darwin-arm64"
+            runtimes.mkdir(parents=True)
+            metric = runtimes / "qdm-metric-cli"
+            metric.write_bytes(b"x")
+            secret_dir = root / "secrets"
+            secret_dir.mkdir()
+            config_dir.joinpath("settings.json").write_text(json.dumps({"schemaVersion": 1, "metricCliPath": str(metric)}), encoding="utf-8")
+            context_file = instance / "context.json"
+            context_file.write_text(json.dumps({
+                "schemaVersion": 1, "host": "qwenpaw",
+                "resourceRoot": str(instance), "dataRoot": str(root / "data"),
+                "secretRoot": str(secret_dir), "configPath": str(config_dir / "settings.json"),
+            }), encoding="utf-8")
+            config = root / "plugin-config.json"
+            config.write_text(json.dumps({
+                "schema_version": 2,
+                "plugin_id": "qdm-harness-qwenpaw",
+                "plugin_version": "0.1.6",
+                "root_context_path": str(context_file),
+                "secret_ref": str(secret_dir),
+                "enabled_agents": ["qdmDataAgent"],
+                "qdm_agent_id": "qdmDataAgent",
+                "user_id_display_mode": "off",
+            }), encoding="utf-8")
+            loaded = load_config(config)
+            self.assertEqual(loaded.plugin_id, "qdm-harness-qwenpaw")
+            self.assertEqual(loaded.plugin_version, "0.1.6")
+            self.assertEqual(loaded.root_context_path, context_file)
+            self.assertEqual(loaded.enabled_agents, ("qdmDataAgent",))
+            self.assertEqual(loaded.qdm_metric_cli, metric)
+            self.assertEqual(loaded.auth_file, secret_dir / "channel-auth.json")
+            self.assertEqual(loaded.session_secret_file, secret_dir / "session-hmac.secret")
+
+    def test_reference_config_fails_closed_on_broken_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "plugin-config.json"
+            base = {
+                "schema_version": 2,
+                "plugin_id": "qdm-harness-qwenpaw",
+                "root_context_path": str(root / "missing" / "context.json"),
+                "qdm_agent_id": "qdmDataAgent",
+                "user_id_display_mode": "off",
+            }
+            config.write_text(json.dumps(base), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(config)
+            config.write_text(json.dumps({k: v for k, v in base.items() if k != "root_context_path"}), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(config)
+
+    def test_reference_config_rejects_unsupported_fields_and_missing_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "plugin-config.json"
+            config.write_text(json.dumps({"schema_version": 2, "qdm_agent_id": "qdmDataAgent", "user_id_display_mode": "off", "runtime_dir": str(root)}), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(config)
+
     @unittest.skipUnless(os.name == "nt", "Windows 敏感材料目录布局(非 Windows 使用 /run/secrets)")
     def test_runtime_config_derives_and_confines_sensitive_material_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
