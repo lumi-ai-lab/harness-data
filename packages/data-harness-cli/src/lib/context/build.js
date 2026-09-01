@@ -129,8 +129,23 @@ function buildFromWikisRuntimeIndex(resolver, index, question) {
       plan = { mode: MODE_MULTI, selectedPlaybooks: multi.candidates };
       for (const candidate of multi.candidates) add(candidate.path, "selected playbook");
     } else if (multi.reason === "multi_single_candidate_limit_exceeded") {
-      plan.reason = multi.reason;
-      addDefaultFreeFiles();
+      // Fuzzy recall can flood siblings of one term (e.g. the "19点前*"
+      // family) and blow past the candidate limit. Retry with only exact
+      // recall matches so a genuine multi-metric question still gets its
+      // playbooks instead of degrading to plain index files.
+      const exactMulti = multiSingleCandidates(
+        resolver,
+        byPath,
+        question,
+        ordinarySpecs.filter((spec) => exactRecallMatchLen(matches, spec.path).exact),
+      );
+      if (exactMulti.ok) {
+        plan = { mode: MODE_MULTI, selectedPlaybooks: exactMulti.candidates };
+        for (const candidate of exactMulti.candidates) add(candidate.path, "selected playbook");
+      } else {
+        plan.reason = multi.reason;
+        addDefaultFreeFiles();
+      }
     } else {
       plan.reason = "multi_metric_non_direct";
       addFreeSpecFiles(add, byPath, ordinarySpecs);
@@ -394,9 +409,11 @@ function multiSingleCandidates(resolver, byPath, question, specs) {
 }
 
 function isNonDirectMultiSingleQuestion(question) {
-  return hasAny(question, [
-    "为什么", "原因", "归因", "影响", "带动", "拖累", "波动", "下降", "上升", "下滑", "增长", "关系", "拆解", "分析", "概览", "报告",
-  ]);
+  if (hasAny(question, ["为什么", "原因", "归因", "影响", "带动", "拖累", "波动", "下降", "上升", "下滑", "增长", "关系", "拆解", "概览", "报告"])) return true;
+  // 分析 alone signals attribution/interpretation, but an explicit metric
+  // enumeration (、/，/, separated) is still a direct multi-metric request.
+  if (hasAny(question, ["分析"]) && !hasAny(question, ["、", "，", ","])) return true;
+  return false;
 }
 
 function candidatesFromPlan(plan, byPath) {

@@ -50,10 +50,21 @@ export function runClaudeHook(root, input, context = null, options = {}) {
     return { ok: false, output: null };
   }
   if (effectiveContext && (!effectiveContext.workspaceRoot || effectiveContext.capabilities?.canWriteWorkspace === false)) {
-    return {
-      ok: true,
-      output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: explicit context/report operations require workspaceRoot; read-only context is still available."),
-    };
+    // Only report operations require a writable workspace; read-only metric
+    // context stays available for read-only hosts (QwenPaw ships with
+    // canWriteWorkspace=false but still needs the injected manuals).
+    let requiresWorkspace = true;
+    try {
+      requiresWorkspace = buildWithPlan(effectiveContext, payload.prompt).mode === MODE_REPORT;
+    } catch {
+      requiresWorkspace = true; // fail closed when the plan cannot be built
+    }
+    if (requiresWorkspace) {
+      return {
+        ok: true,
+        output: workspaceRequiredOutput("QDM_WORKSPACE_REQUIRED: explicit context/report operations require workspaceRoot; read-only context is still available."),
+      };
+    }
   }
   try {
     const persistState = !effectiveContext ||

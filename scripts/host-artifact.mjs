@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { writePluginManifest } from "./build-plugin-manifest.mjs";
+import { stageQwenPawPlugin } from "./build-qwenpaw-plugin.mjs";
 import {
   HOST_ARTIFACT_HOSTS,
   hostArtifactKind,
@@ -120,6 +121,12 @@ function stageCommonFiles(repoRoot, target) {
 
 function stageAdapter(repoRoot, target, spec, pluginVersion) {
   const adapter = path.join(target, "adapter");
+  if (spec.host === "qwenpaw") {
+    // The QwenPaw host artifact reuses the formal release build so the
+    // internal matrix validates the exact artifact users will install.
+    stageQwenPawPlugin({ artifactRoot: adapter, version: pluginVersion, repoRoot });
+    return;
+  }
   if (spec.host !== "pi") {
     copyTree(path.join(repoRoot, spec.source), adapter);
     if (spec.host === "claude" || spec.host === "codex") {

@@ -23,12 +23,12 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       const value = inline ?? args[++i];
-      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace"].includes(key) && options[key] !== undefined) {
-        options[key] = Array.isArray(options[key]) ? [...options[key], value] : [options[key], value];
+      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace"].includes(key)) {
+        options[key] = Array.isArray(options[key]) ? [...options[key], value] : [value];
       } else {
         options[key] = value;
       }
@@ -59,10 +59,10 @@ Commands:
   report   Run the explicit html-report lifecycle for a host session
   migrate  Check or copy a legacy install --dir runtime into the dual-root data model
   version  Print installer, repository, wikis, and manifest versions
-  qwenpaw  Install, diagnose, or remove the QwenPaw QDM plugin
+  qwenpaw  Install, diagnose, update, or remove the QwenPaw QDM plugin
 
 QwenPaw:
-  harness-data qwenpaw <install|doctor|uninstall> [options]
+  harness-data qwenpaw <setup|doctor|update|install|uninstall> [options]
 
 Install options:
   --dir PATH                         Legacy runtime directory (default: current directory)
@@ -95,6 +95,7 @@ Root Context options (setup/doctor/paths/report):
   --download-metric-cli              Download metric-cli from the plugin manifest
   --wikis-source PATH                Local wikis directory (Codex setup copies it into the Plugin)
   --skip-wikis                       Skip wikis validation/index build during setup
+  --channel-auth-only                QwenPaw only: authorize via channel-auth.json; skip auth.blob and --auth-user-id
 
 Report options:
   report <start|status|advance|approve|retry|cancel|stop> --session ID

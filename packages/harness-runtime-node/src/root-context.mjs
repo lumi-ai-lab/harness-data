@@ -18,6 +18,7 @@ export const ROOT_CONTEXT_ERROR_CODES = Object.freeze({
 
 const ROOT_FLAG_FIELDS = Object.freeze({
   "plugin-root": "pluginRoot",
+  "artifact-root": "artifactRoot",
   "resource-root": "resourceRoot",
   "data-root": "dataRoot",
   "workspace-root": "workspaceRoot",
@@ -30,6 +31,7 @@ const ROOT_FLAG_FIELDS = Object.freeze({
 
 const ENV_FIELDS = Object.freeze([
   ["HARNESS_PLUGIN_ROOT", "pluginRoot"],
+  ["HARNESS_ARTIFACT_ROOT", "artifactRoot"],
   ["HARNESS_RESOURCE_ROOT", "resourceRoot"],
   ["HARNESS_DATA_ROOT", "dataRoot"],
   ["HARNESS_SECRET_ROOT", "secretRoot"],
@@ -209,6 +211,7 @@ export function normalizeRootContext(input, { source = "root context", requireWo
     errorCode: ROOT_CONTEXT_ERROR_CODES.PLUGIN_ROOT_UNAVAILABLE,
     requireExistingDirectory: true,
   });
+  const artifactRoot = normalizeRootPath(input.artifactRoot, "artifactRoot") || pluginRoot;
   const dataRoot = normalizeRootPath(input.dataRoot, "dataRoot", {
     required: true,
     errorCode: ROOT_CONTEXT_ERROR_CODES.DATA_ROOT_UNAVAILABLE,
@@ -223,16 +226,20 @@ export function normalizeRootContext(input, { source = "root context", requireWo
   const configPath = normalizeRootPath(input.configPath, "configPath") || (
     host === "codex" && pluginRoot
       ? path.join(pluginRoot, "config", "settings.json")
-      : path.join(dataRoot, "config", "settings.json")
+      : host === "qwenpaw" && resourceRoot
+        ? path.join(resourceRoot, "config", "settings.json")
+        : path.join(dataRoot, "config", "settings.json")
   );
   const workspacePolicyPath = normalizeRootPath(input.workspacePolicyPath, "workspacePolicyPath") || (
     host === "codex" && pluginRoot
       ? path.join(pluginRoot, "config", "workspace-policy.json")
-      : ""
+      : host === "qwenpaw" && resourceRoot
+        ? path.join(resourceRoot, "config", "workspace-policy.json")
+        : ""
   );
   const secretRef = normalizeSecretRef(input.secretRef);
   const sessionId = input.sessionId == null ? "" : String(input.sessionId).trim();
-  validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef });
+  validateRootRelationships({ pluginRoot, resourceRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef });
 
   const suppliedCapabilities = input.capabilities;
   if (suppliedCapabilities != null && (typeof suppliedCapabilities !== "object" || Array.isArray(suppliedCapabilities))) {
@@ -254,6 +261,7 @@ export function normalizeRootContext(input, { source = "root context", requireWo
     schemaVersion,
     host,
     pluginRoot,
+    artifactRoot,
     resourceRoot,
     dataRoot,
     secretRoot,
@@ -386,7 +394,7 @@ function canonicalizePath(value) {
   return path.join(real, ...suffix);
 }
 
-function validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef }) {
+function validateRootRelationships({ pluginRoot, resourceRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef }) {
   const disjoint = [
     ["pluginRoot", pluginRoot],
     ["dataRoot", dataRoot],
@@ -406,11 +414,11 @@ function validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspace
     throw invalid("secretRoot and workspaceRoot overlap");
   }
   if (stateRoot && !isPathWithin(dataRoot, stateRoot)) throw invalid("stateRoot must be inside dataRoot");
-  if (configPath && !isPathWithin(pluginRoot, configPath) && !isPathWithin(dataRoot, configPath)) {
-    throw invalid("configPath must be inside pluginRoot or dataRoot");
+  if (configPath && !isPathWithin(pluginRoot, configPath) && !isPathWithin(dataRoot, configPath) && !isPathWithin(resourceRoot, configPath)) {
+    throw invalid("configPath must be inside pluginRoot, resourceRoot or dataRoot");
   }
-  if (workspacePolicyPath && !isPathWithin(pluginRoot, workspacePolicyPath) && !isPathWithin(dataRoot, workspacePolicyPath)) {
-    throw invalid("workspacePolicyPath must be inside pluginRoot or dataRoot");
+  if (workspacePolicyPath && !isPathWithin(pluginRoot, workspacePolicyPath) && !isPathWithin(dataRoot, workspacePolicyPath) && !isPathWithin(resourceRoot, workspacePolicyPath)) {
+    throw invalid("workspacePolicyPath must be inside pluginRoot, resourceRoot or dataRoot");
   }
   if (secretRef?.kind === "file") {
     if (secretRoot && !isPathWithin(secretRoot, secretRef.path)) throw invalid("secretRef.path must be inside secretRoot");

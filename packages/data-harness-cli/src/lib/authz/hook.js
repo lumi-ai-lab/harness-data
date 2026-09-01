@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 
@@ -56,6 +57,199 @@ export function runAdapterEnvelope(rootOrContext, agent, input) {
 
 function adapterEnvelope(status, output) {
   return { schemaVersion: ADAPTER_SCHEMA_VERSION, status, hookOutput: output };
+}
+
+const QWENPAW_SCOPE_DIMENSIONS = Object.freeze({
+  manageAreaId: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
+  manageAreaIds: { code: "QDM_AREA_AUTH_SCOPE_EMPTY", message: "当前用户的管理区域授权范围为空或未配置完整" },
+  categoryLevel1Id: { code: "QDM_CATEGORY_OUTSIDE_DATA_SCOPE", message: "请求的商品分类不在当前用户授权范围内" },
+  categoryLevel1Ids: { code: "QDM_CATEGORY_AUTH_SCOPE_EMPTY", message: "当前用户的商品分类授权范围为空或未配置完整" },
+  sapArea2Id: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
+  dcSapArea2Id: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
+  storeId: { code: "QDM_STORE_OUTSIDE_DATA_SCOPE", message: "请求的门店不在当前用户授权范围内" },
+});
+
+/**
+ * QwenPaw has no shell tools, so the adapter authorizes the structured
+ * qdm_query payload directly: the decision, the authorized scope and the
+ * normalized (label-to-id) filters are produced by the JS CLI and returned
+ * in one envelope.  The Python bridge only executes the analysis afterwards.
+ */
+export function runQwenPawAdapterEnvelope(rootOrContext, input) {
+  const cfg = loadConfig(rootOrContext);
+  if (!authzEnabled(cfg.authz)) {
+    return adapterEnvelope(ADAPTER_DISABLED, {});
+  }
+  const payload = parseQwenPawPayload(input);
+  if (!payload.ok) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_INPUT_INVALID: QwenPaw provided invalid PreToolUse JSON"));
+  }
+  if (payload.toolName !== "qdm_query") {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_TOOL_UNSUPPORTED: only qdm_query is authorized through the QwenPaw adapter"));
+  }
+  const query = payload.toolInput || {};
+  if (typeof query !== "object" || Array.isArray(query)) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_INPUT_INVALID: QwenPaw qdm_query toolInput must be an object"));
+  }
+  let metricCliPath;
+  try {
+    metricCliPath = resolveMetricCLIPath(rootOrContext, cfg);
+  } catch {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_CLI_UNAVAILABLE: authz mode is on but no trusted qdm-metric-cli is available"));
+  }
+  const blob = String(payload.blob || "").trim();
+  if (!/^qdm1enc\.[A-Za-z0-9_-]+$/.test(blob)) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_BLOB_INVALID: the QwenPaw adapter requires a valid per-requester auth blob"));
+  }
+  let scope;
+  try {
+    scope = describeScope(metricCliPath, blob);
+  } catch (error) {
+    if (error?.qdmCode) {
+      return adapterEnvelope(ADAPTER_DENY, denyOutput(`${error.qdmCode}: ${error.qdmMessage}`));
+    }
+    const code = /AUTH_BLOB|DECRYPT/i.test(String(error?.message || "")) ? "QDM_CHANNEL_AUTH_DENIED" : "QDM_AUTHZ_DESCRIBE_FAILED";
+    return adapterEnvelope(ADAPTER_DENY, denyOutput(`${code}: ${safeDiagnostic(error)}`));
+  }
+  if (!scope.enabled) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTH_CAPABILITY_DENIED: 当前用户没有 QDM 数据查询权限"));
+  }
+  if (!scope.capabilities.includes("qdm.metric.query")) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTH_CAPABILITY_DENIED: 当前用户没有 QDM 数据查询权限"));
+  }
+  let normalized;
+  try {
+    normalized = normalizeQwenPawFilters(query.filters, scope);
+  } catch (error) {
+    if (error?.qdmCode) {
+      return adapterEnvelope(ADAPTER_DENY, denyOutput(`${error.qdmCode}: ${error.qdmMessage}`));
+    }
+    throw error;
+  }
+  return adapterEnvelope(ADAPTER_ALLOW, {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      scope: {
+        enabled: scope.enabled,
+        capabilities: scope.capabilities,
+        labelsResolved: scope.labelsResolved,
+        dataScope: scope.dataScope,
+      },
+      normalizedFilters: normalized,
+    },
+  });
+}
+
+function parseQwenPawPayload(input) {
+  const text = Buffer.isBuffer(input) ? input.toString("utf8") : String(input || "");
+  try {
+    const raw = JSON.parse(text);
+    if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return { ok: false };
+    return {
+      ok: true,
+      toolName: String(raw.tool_name || raw.toolName || "").trim(),
+      blob: String(raw.blob || raw.auth_blob || "").trim(),
+      toolInput: raw.tool_input || raw.toolInput,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function describeScope(metricCliPath, blob) {
+  const result = spawnSync(metricCliPath, ["auth", "describe", "--auth-blob", blob], {
+    encoding: "utf8",
+    timeout: 30000,
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || `auth describe exited ${result.status}`);
+  }
+  const parsed = parseSafeJSON(result.stdout);
+  if (!parsed || parsed.enabled !== true) throw new Error("auth describe did not return an enabled scope");
+  const capabilities = Array.isArray(parsed.capabilities) ? parsed.capabilities.filter((item) => typeof item === "string") : [];
+  const dataScope = normalizeScopeEntries(parsed.dataScope);
+  if (!Object.keys(dataScope).length) throw new QwenPawDeny("QDM_EMPTY_DATA_SCOPE", "当前用户的数据授权范围为空或未配置完整");
+  return {
+    enabled: true,
+    capabilities,
+    labelsResolved: parsed.labelsResolved !== false,
+    dataScope,
+  };
+}
+
+function normalizeScopeEntries(dataScope) {
+  const scope = {};
+  if (!dataScope || typeof dataScope !== "object" || Array.isArray(dataScope)) return scope;
+  for (const [dimension, entries] of Object.entries(dataScope)) {
+    if (!Array.isArray(entries)) continue;
+    const normalized = [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") continue;
+      const id = String(entry.id || "").trim();
+      if (id) normalized.push({ id, name: String(entry.name || "").trim() });
+    }
+    if (normalized.length) scope[dimension] = normalized;
+  }
+  return scope;
+}
+
+class QwenPawDeny extends Error {
+  constructor(code, message) {
+    super(message);
+    this.qdmCode = code;
+    this.qdmMessage = message;
+  }
+}
+
+function normalizeQwenPawFilters(filters, scope) {
+  if (filters == null || typeof filters !== "object" || Array.isArray(filters)) return null;
+  const normalized = {};
+  for (const [dimension, values] of Object.entries(filters)) {
+    if (!Array.isArray(values)) continue;
+    const contract = QWENPAW_SCOPE_DIMENSIONS[dimension];
+    if (!contract) {
+      normalized[dimension] = values.map(String);
+      continue;
+    }
+    const entries = scope.dataScope[dimension];
+    if (!entries || !entries.length) {
+      throw new QwenPawDeny(contract.code, contract.message);
+    }
+    const result = [];
+    for (const raw of values) {
+      const value = String(raw);
+      const byId = entries.find((entry) => value === entry.id);
+      if (byId) {
+        result.push(value);
+        continue;
+      }
+      const byName = entries.filter((entry) => value === entry.name);
+      if (byName.length !== 1) {
+        throw new QwenPawDeny(contract.code, contract.message);
+      }
+      result.push(byName[0].id);
+    }
+    if (new Set(result).size !== result.length) {
+      throw new QwenPawDeny("QDM_FILTER_VALUE_INVALID", "筛选值重复");
+    }
+    normalized[dimension] = result;
+  }
+  return normalized;
+}
+
+function parseSafeJSON(text) {
+  try {
+    const value = JSON.parse(String(text || ""));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeDiagnostic(error) {
+  const text = String(error?.message || error || "").replace(/qdm1enc\.[A-Za-z0-9_-]+/g, "[REDACTED]");
+  return text.slice(0, 200);
 }
 
 function emptyHookOutput() {

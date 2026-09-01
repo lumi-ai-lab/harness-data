@@ -116,15 +116,14 @@ test("prints help", () => {
   assert.doesNotMatch(result.stdout, /HARNESS_RELEASE_PASSWORD/);
 });
 
-test("qwenpaw command rejects invalid actions and missing runtime plugin source", async () => {
+test("qwenpaw command rejects invalid actions and missing plugin source", async () => {
   await assert.rejects(
     qwenpawCommand({ _: ["enable"] }),
-    /usage: harness-data qwenpaw <install\|doctor\|uninstall>/
+    /usage: harness-data qwenpaw <setup\|doctor\|update\|install\|uninstall>/
   );
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "harness-data-qwenpaw-"));
   await assert.rejects(
-    qwenpawCommand({ _: ["doctor"], runtime }),
-    /QwenPaw plugin source is missing/
+    qwenpawCommand({ _: ["setup"] }),
+    /qwenpaw setup requires --source/
   );
 });
 

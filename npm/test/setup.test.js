@@ -56,6 +56,21 @@ test("Codex Plugin setup keeps managed roots inside the Plugin", async (t) => {
   assert.equal(fs.existsSync(path.join(f.dataRoot, "wikis")), false);
 });
 
+test("--channel-auth-only is rejected outside host=qwenpaw", async (t) => {
+  const f = fixture();
+  t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+  const base = {
+    ...context(f),
+    configPath: path.join(f.pluginRoot, "config", "settings.json"),
+    secretRoot: path.join(f.pluginRoot, "secrets"),
+    workspacePolicyPath: path.join(f.pluginRoot, "config", "workspace-policy.json"),
+  };
+  await assert.rejects(
+    setupRootContext({ ...base }, { channelAuthOnly: true, env: { ...process.env, CODEX_HOME: path.join(f.root, "codex-home") } }),
+    /--channel-auth-only is only supported for host=qwenpaw/,
+  );
+});
+
 test("ensureMetricCli copies an explicit executable into the Plugin runtime", async (t) => {
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));

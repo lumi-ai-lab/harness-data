@@ -150,6 +150,7 @@ function discoverHostPluginVersion(root) {
     ".codex-plugin/plugin.json",
     "agents/codex/.codex-plugin/plugin.json",
     "agents/workbuddy/.codebuddy-plugin/plugin.json",
+    "plugin.json",
   ]) {
     try {
       const parsed = JSON.parse(readFileSync(path.join(root, relative), "utf8"));

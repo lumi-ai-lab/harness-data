@@ -17,6 +17,7 @@ export const ROOT_CONTEXT_ERROR_CODES = Object.freeze({
 const optionFields = [
   "contextFile",
   "pluginRoot",
+  "artifactRoot",
   "resourceRoot",
   "dataRoot",
   "secretRoot",
@@ -31,6 +32,7 @@ const optionFields = [
 
 const envFields = [
   ["HARNESS_PLUGIN_ROOT", "pluginRoot"],
+  ["HARNESS_ARTIFACT_ROOT", "artifactRoot"],
   ["HARNESS_DATA_ROOT", "dataRoot"],
   ["HARNESS_RESOURCE_ROOT", "resourceRoot"],
   ["HARNESS_SECRET_ROOT", "secretRoot"],
@@ -84,6 +86,7 @@ export function resolveRootContext(options = {}, { env = process.env, requirePlu
     merged.host = "codex";
   }
   if (!merged.pluginRoot && options.dir) merged.pluginRoot = path.resolve(String(options.dir));
+  if (!merged.artifactRoot) merged.artifactRoot = merged.pluginRoot || "";
   const codexHome = stringValue(env?.CODEX_HOME) || path.join(os.homedir(), ".codex");
   if (!merged.dataRoot && merged.host === "codex") merged.dataRoot = path.join(codexHome, "qdm-harness", "data");
   if (!merged.dataRoot) merged.dataRoot = defaultDataRoot(merged.host || "codex");
@@ -91,7 +94,9 @@ export function resolveRootContext(options = {}, { env = process.env, requirePlu
   if (!merged.secretRoot) merged.secretRoot = defaultSecretRoot(merged.host || "codex");
   if (!merged.resourceRoot) merged.resourceRoot = merged.pluginRoot || merged.dataRoot;
   if (!merged.configPath && merged.host === "codex" && merged.pluginRoot) merged.configPath = path.join(merged.pluginRoot, "config", "settings.json");
+  if (!merged.configPath && merged.host === "qwenpaw" && merged.resourceRoot) merged.configPath = path.join(merged.resourceRoot, "config", "settings.json");
   if (!merged.workspacePolicyPath && merged.host === "codex" && merged.pluginRoot) merged.workspacePolicyPath = path.join(merged.pluginRoot, "config", "workspace-policy.json");
+  if (!merged.workspacePolicyPath && merged.host === "qwenpaw" && merged.resourceRoot) merged.workspacePolicyPath = path.join(merged.resourceRoot, "config", "workspace-policy.json");
 
   return normalizeRootContext(merged, { source, requirePluginRoot });
 }
@@ -110,6 +115,7 @@ export function normalizeRootContext(input, { source = "root context", requirePl
     requireExisting: requirePluginRoot,
     code: ROOT_CONTEXT_ERROR_CODES.PLUGIN_ROOT_UNAVAILABLE,
   });
+  const artifactRoot = normalizeDirectory(input.artifactRoot, "artifactRoot") || pluginRoot || "";
   const dataRoot = normalizeDirectory(input.dataRoot, "dataRoot", {
     required: true,
     code: ROOT_CONTEXT_ERROR_CODES.DATA_ROOT_UNAVAILABLE,
@@ -124,17 +130,21 @@ export function normalizeRootContext(input, { source = "root context", requirePl
   const configPath = normalizeFilePath(input.configPath, "configPath") || (
     host === "codex" && pluginRoot
       ? path.join(pluginRoot, "config", "settings.json")
-      : path.join(dataRoot, "config", "settings.json")
+      : host === "qwenpaw" && resourceRoot
+        ? path.join(resourceRoot, "config", "settings.json")
+        : path.join(dataRoot, "config", "settings.json")
   );
   const workspacePolicyPath = normalizeFilePath(input.workspacePolicyPath, "workspacePolicyPath") || (
     host === "codex" && pluginRoot
       ? path.join(pluginRoot, "config", "workspace-policy.json")
-      : ""
+      : host === "qwenpaw" && resourceRoot
+        ? path.join(resourceRoot, "config", "workspace-policy.json")
+        : ""
   );
   const secretRef = normalizeSecretRef(input.secretRef);
   const sessionId = stringValue(input.sessionId);
 
-  validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef });
+  validateRootRelationships({ pluginRoot, resourceRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef });
   const supplied = input.capabilities || {};
   if (typeof supplied !== "object" || Array.isArray(supplied)) throw invalid("capabilities must be an object");
   const capabilities = {
@@ -160,6 +170,7 @@ export function normalizeRootContext(input, { source = "root context", requirePl
     schemaVersion,
     host,
     pluginRoot,
+    artifactRoot,
     resourceRoot,
     dataRoot,
     secretRoot,
@@ -178,6 +189,7 @@ export function publicRootContext(context) {
     schemaVersion: context.schemaVersion,
     host: context.host,
     pluginRoot: context.pluginRoot,
+    artifactRoot: context.artifactRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,
     secretRoot: context.secretRoot,
@@ -324,7 +336,7 @@ function validateSecretFile(filePath) {
   }
 }
 
-function validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef }) {
+function validateRootRelationships({ pluginRoot, resourceRoot, dataRoot, secretRoot, workspaceRoot, stateRoot, configPath, workspacePolicyPath, secretRef }) {
   const disjoint = [["pluginRoot", pluginRoot], ["dataRoot", dataRoot], ["workspaceRoot", workspaceRoot]].filter(([, value]) => value);
   for (let i = 0; i < disjoint.length; i += 1) {
     for (let j = i + 1; j < disjoint.length; j += 1) {
@@ -340,9 +352,9 @@ function validateRootRelationships({ pluginRoot, dataRoot, secretRoot, workspace
     throw invalid("secretRoot and workspaceRoot overlap");
   }
   if (!isPathWithin(dataRoot, stateRoot)) throw invalid("stateRoot must be inside dataRoot");
-  if (!isPathWithin(pluginRoot, configPath) && !isPathWithin(dataRoot, configPath)) throw invalid("configPath must be inside pluginRoot or dataRoot");
-  if (workspacePolicyPath && !isPathWithin(pluginRoot, workspacePolicyPath) && !isPathWithin(dataRoot, workspacePolicyPath)) {
-    throw invalid("workspacePolicyPath must be inside pluginRoot or dataRoot");
+  if (!isPathWithin(pluginRoot, configPath) && !isPathWithin(dataRoot, configPath) && !isPathWithin(resourceRoot, configPath)) throw invalid("configPath must be inside pluginRoot, resourceRoot or dataRoot");
+  if (workspacePolicyPath && !isPathWithin(pluginRoot, workspacePolicyPath) && !isPathWithin(dataRoot, workspacePolicyPath) && !isPathWithin(resourceRoot, workspacePolicyPath)) {
+    throw invalid("workspacePolicyPath must be inside pluginRoot, resourceRoot or dataRoot");
   }
   if (secretRef?.kind === "file") {
     if (secretRoot && !isPathWithin(secretRoot, secretRef.path)) throw invalid("secretRef.path must be inside secretRoot");

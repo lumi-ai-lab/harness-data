@@ -125,6 +125,27 @@ jobs:
           node --test plugins/harness-data/mcp/server.test.mjs
           node --test plugins/harness-data/test/clean-room-setup.test.mjs
           node --test scripts/build-codex-marketplace.test.mjs
+          node --test scripts/build-qwenpaw-plugin.test.mjs
+
+      - name: Build QwenPaw Plugin ZIP
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/build-qwenpaw-plugin.mjs --output-dir "$GITHUB_WORKSPACE/dist" --version "$VERSION"
+
+      - name: Verify QwenPaw Plugin ZIP
+        env:
+          VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          asset="dist/harness-data-qwenpaw-plugin-${VERSION_TAG}.zip"
+          unzip -Z1 "$asset" | grep -q '^plugin.json$'
+          if unzip -Z1 "$asset" | grep -Eq '(^|/)(wikis|resources|tests|__pycache__|\.harness)/'; then
+            echo "::error::QwenPaw Plugin ZIP must not contain wiki/secret/state/test content"
+            exit 1
+          fi
+          unzip -p "$asset" plugin-manifest.json | grep -q '"host": "qwenpaw"'
 
       - name: Publish GitHub Release assets
         env:
@@ -133,9 +154,10 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$VERSION_TAG" >/dev/null 2>&1; then
-            gh release create "$VERSION_TAG" --title "$VERSION_TAG" --notes "Codex Plugin ${VERSION_TAG}"
+            gh release create "$VERSION_TAG" --title "$VERSION_TAG" --notes "Codex + QwenPaw Plugin ${VERSION_TAG}"
           fi
           gh release upload "$VERSION_TAG" \
             "dist/harness-data-codex-marketplace-${VERSION_TAG}.zip" \
+            "dist/harness-data-qwenpaw-plugin-${VERSION_TAG}.zip" \
             "dist/harness-data-wikis-${VERSION_TAG}.zip" \
             --clobber

@@ -5,7 +5,10 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 import logging
 import hashlib
+import os
+import stat
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agentscope.message import TextBlock, ToolResultState
@@ -30,14 +33,100 @@ class AuthorizationSnapshot:
     scope_fingerprint: str
 
 
+def _ensure_cli_executable(shim: Path | None = None) -> None:
+    """Restore the exec bit on the bundled CLI shim.
+
+    QwenPaw's backend installs an uploaded ZIP with zipfile.extractall(),
+    which drops Unix permission bits.  Without this the runtime bridges
+    (authz-hook / context hook) fail their S_IXUSR pre-checks.
+    """
+    if os.name == "nt":
+        return
+    shim = shim or (Path(__file__).resolve().parent / "scripts" / "data-harness-cli")
+    try:
+        mode = shim.stat().st_mode
+        if not mode & stat.S_IXUSR:
+            shim.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError as exc:
+        logger.warning("could not make CLI shim executable: %s", exc)
+
+
+def _tool_descriptor_for(tool_name: str, tool_func: Any, enabled: bool, description: str) -> Any:
+    """Return the host ToolDescriptor bound to *tool_func*, creating it lazily.
+
+    register_tool defers descriptor attachment to a startup hook; the
+    workspace re-injection below can run before that hook, so build the
+    descriptor with the same fields the host would attach.
+    """
+    descriptor = getattr(tool_func, "_tool_descriptor", None)
+    if descriptor is not None:
+        return descriptor
+    try:
+        import inspect
+
+        from qwenpaw.runtime.tool_registry import ToolDescriptor
+    except ImportError:
+        return None
+    descriptor = ToolDescriptor(
+        name=tool_name,
+        func=tool_func,
+        enabled_by_default=enabled,
+        async_execution=inspect.iscoroutinefunction(tool_func),
+        description=description,
+    )
+    tool_func._tool_descriptor = descriptor  # type: ignore[attr-defined]
+    return descriptor
+
+
+def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
+    """Re-inject the plugin tools into a (re)created workspace.
+
+    QwenPaw rebuilds Workspace objects on plugin force-reinstall and on
+    config-driven zero-downtime reloads; register_tool's startup hook does
+    not run again for those, so without this the tools silently vanish
+    from the agent toolkit until the host restarts.
+    """
+    workspace = workspace_info.get("workspace")
+    if workspace is None:
+        try:
+            from qwenpaw.plugins.registry import PluginRegistry
+
+            manager = PluginRegistry().get_workspace_manager()
+            workspace = (
+                manager.agents.get(workspace_info.get("agent_id"))
+                if manager is not None
+                else None
+            )
+        except Exception:
+            workspace = None
+    if workspace is None:
+        return
+    tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
+    if tool_registry is None:
+        return
+    for tool_name, tool_func, enabled, description, _icon in tool_specs:
+        descriptor = _tool_descriptor_for(tool_name, tool_func, enabled, description)
+        if descriptor is None:
+            continue
+        try:
+            if tool_name in tool_registry and hasattr(tool_registry, "unregister"):
+                tool_registry.unregister(tool_name)
+            tool_registry.register(descriptor)
+        except (TypeError, ValueError):
+            pass
+
+
 class QdmHarnessQwenPawPlugin:
     def register(self, api: PluginApi) -> None:
         _require_qwenpaw_21()
-        register_now = getattr(api, "register_runtime_hook_now", None)
-        if not callable(register_now):
-            raise RuntimeError("QDM Harness requires QwenPaw 2.1.x register_runtime_hook_now()")
-        for hook_name, factory, priority in hook_factories():
-            register_now(hook_factory=factory, hook_name=hook_name, priority=priority, replace_legacy_same_name=False)
+        _ensure_cli_executable()
+        # QwenPaw's native Plugin API registers HookBase instances into every
+        # workspace's HookRegistry on startup (register_runtime_hook).
+        register_hook = getattr(api, "register_runtime_hook", None)
+        if not callable(register_hook):
+            raise RuntimeError("QDM Harness requires QwenPaw with register_runtime_hook()")
+        for _hook_name, factory, _priority in hook_factories():
+            register_hook(factory())
 
         async def qdm_query(
             metric: str,
@@ -72,18 +161,62 @@ class QdmHarnessQwenPawPlugin:
         async def qdm_scope_summary() -> ToolChunk:
             return _scope_summary()
 
-        api.register_tool(tool_name="qdm_query", tool_func=qdm_query, description="执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", icon="📊", enabled=True, tool_type="internal")
-        api.register_tool(tool_name="qdm_scope_summary", tool_func=qdm_scope_summary, description="返回当前渠道用户的脱敏 QDM 数据权限摘要。", icon="🔐", enabled=True, tool_type="internal")
+        tool_specs = (
+            ("qdm_query", qdm_query, True, "执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", "📊"),
+            ("qdm_scope_summary", qdm_scope_summary, True, "返回当前渠道用户的脱敏 QDM 数据权限摘要。", "🔐"),
+        )
+        for tool_name, tool_func, enabled, description, icon in tool_specs:
+            api.register_tool(tool_name=tool_name, tool_func=tool_func, description=description, icon=icon, enabled=enabled, tool_type="internal")
+        register_ws_hook = getattr(api, "register_workspace_created_hook", None)
+        if callable(register_ws_hook):
+            try:
+                register_ws_hook(
+                    hook_name="qdm_harness_reinject_tools",
+                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    priority=90,
+                    reload_safe=True,
+                )
+            except TypeError:
+                # QwenPaw 2.1.x 的 workspace_created 钩子没有 reload_safe 参数。
+                register_ws_hook(
+                    hook_name="qdm_harness_reinject_tools",
+                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    priority=90,
+                )
+        else:
+            logger.warning("QwenPaw host lacks register_workspace_created_hook(); qdm tools may disappear after plugin hot-reload")
         logger.info("QDM Harness runtime hooks and constrained tools registered")
+
+
+_SUPPORTED_QWENPAW_MAJOR_MINOR = frozenset({(2, 1), (2, 2)})
+
+
+def _supported_qwenpaw_version(installed: str) -> bool:
+    """Semantic version gate: accept 2.1.x and 2.2.x, including pre-releases.
+
+    QwenPaw pre-release builds are treated as their base release (e.g.
+    2.2.0b3 -> 2.2.0), mirroring the host's own compatibility check.
+    """
+    base = installed.split("+", 1)[0].strip().lower()
+    for marker in ("rc", "b", "a", "dev"):
+        if marker in base:
+            base = base.split(marker, 1)[0]
+    parts = base.split(".")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return False
+    return (major, minor) in _SUPPORTED_QWENPAW_MAJOR_MINOR
 
 
 def _require_qwenpaw_21() -> None:
     try:
         installed = version("qwenpaw")
     except PackageNotFoundError as exc:
-        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x") from exc
-    if not installed.startswith("2.1."):
-        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x")
+        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x or 2.2.x") from exc
+    if not _supported_qwenpaw_version(installed):
+        raise RuntimeError(f"QDM Harness requires QwenPaw 2.1.x or 2.2.x (found {installed})")
 
 
 def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
@@ -105,6 +238,8 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
     provider = ChannelAuthProvider(config.auth_file, max_bytes=config.auth_file_max_bytes)
     executor = QdmCliExecutor(
         config.qdm_metric_cli,
+        harness_cli=Path(__file__).resolve().parent / "scripts" / "data-harness-cli",
+        context_file=config.root_context_path,
         success_bytes=config.query_limits.success_bytes,
         timeout_seconds=config.query_limits.timeout_seconds,
     )

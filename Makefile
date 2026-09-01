@@ -1,20 +1,35 @@
-.PHONY: plugin plugin-init-codex-dev init codex dex dev marketplace-zip plugin-pack
+.PHONY: plugin plugin-init plugin-init-codex-dev plugin-init-qwenpaw-dev init codex dex dev marketplace-zip plugin-pack
 
 VERSION ?= $(shell node -p "require('./plugins/harness-data/.codex-plugin/plugin.json').version")
 MARKETPLACE_NAME := harness-data-codex-marketplace
 MARKETPLACE_ZIP := dist/$(MARKETPLACE_NAME)-v$(VERSION).zip
 MARKETPLACE_DIR := dist/$(MARKETPLACE_NAME)
 
-# Initialize the local Codex Plugin against this repository's Marketplace
-# manifest and run the installed Plugin setup.
+PLUGIN_HOST ?= codex
+PLUGIN_PROFILE ?= dev
+
+# Initialize the local Plugin against this repository and run the installed
+# Plugin setup.  PLUGIN_HOST selects the host: codex or qwenpaw.
 plugin: plugin-init-codex-dev
 
 # Keep the documented multi-target spelling useful without creating duplicate
 # initialization runs.
 init codex dex dev: plugin-init-codex-dev
 
+plugin-init:
+	@if [ "$(PLUGIN_HOST)" = "codex" ]; then \
+		node scripts/plugin-dev-init.mjs; \
+	elif [ "$(PLUGIN_HOST)" = "qwenpaw" ]; then \
+		node scripts/plugin-dev-init-qwenpaw.mjs; \
+	else \
+		echo "unsupported PLUGIN_HOST: $(PLUGIN_HOST)"; exit 1; \
+	fi
+
 plugin-init-codex-dev:
-	@node scripts/plugin-dev-init.mjs
+	@$(MAKE) plugin-init PLUGIN_HOST=codex PLUGIN_PROFILE=dev
+
+plugin-init-qwenpaw-dev:
+	@$(MAKE) plugin-init PLUGIN_HOST=qwenpaw PLUGIN_PROFILE=dev
 
 # Build the public Codex Marketplace ZIP locally (includes dist/, excludes wikis).
 plugin-pack: marketplace-zip
