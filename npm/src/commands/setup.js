@@ -108,7 +108,7 @@ export async function setupCommand(options = {}, io = process) {
 }
 
 async function prepareSetupSecret(context, options = {}) {
-  if (options.noAuth === true) return null;
+  if (options.noAuth === true || options.channelAuthOnly === true) return null;
   const secretRoot = context.secretRoot;
   if (!secretRoot) {
     throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.SECRET_UNAVAILABLE, "secretRoot is required for persisted setup");
@@ -173,6 +173,12 @@ function readAuthBlobFile(filePath) {
 
 export async function setupRootContext(context, options = {}) {
   assertCodexPluginLayout(context);
+  if (options.channelAuthOnly === true && String(context.host || "").toLowerCase() !== "qwenpaw") {
+    throw new RootContextError(
+      ROOT_CONTEXT_ERROR_CODES.INVALID,
+      "--channel-auth-only is only supported for host=qwenpaw (channel authorization via channel-auth.json)",
+    );
+  }
   const snapshot = createSetupSnapshot(context);
   try {
     const preparedSecret = await prepareSetupSecret(context, options);
@@ -199,10 +205,13 @@ async function setupRootContextInner(context, options = {}) {
     throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, `Plugin setup requires configPath ${expectedConfigPath}`);
   }
   const secret = inspectSecretReference(context);
-  if (!options.noAuth && context.secretRef?.kind !== "file") {
+  // --channel-auth-only (host=qwenpaw) keeps authz enabled but authorizes via
+  // channel-auth.json at runtime, so the auth.blob file contract does not apply.
+  const authzBlobRequired = options.noAuth !== true && options.channelAuthOnly !== true;
+  if (authzBlobRequired && context.secretRef?.kind !== "file") {
     throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.SECRET_UNAVAILABLE, "persisted setup requires a file secretRef");
   }
-  if (secret.status === "invalid" || (!options.noAuth && secret.status !== "configured")) {
+  if (secret.status === "invalid" || (authzBlobRequired && secret.status !== "configured")) {
     throw new RootContextError(
       ROOT_CONTEXT_ERROR_CODES.SECRET_UNAVAILABLE,
       secret.detail || "a valid --secret-ref is required unless --no-auth is explicit",
@@ -293,10 +302,10 @@ async function setupRootContextInner(context, options = {}) {
     workspacePolicyPath: context.workspacePolicyPath,
     metricCliPath: metricCli.path || "",
     authz: {
-      mode: options.noAuth ? "off" : "on",
+      mode: options.noAuth === true ? "off" : "on",
       userId: authUserId,
     },
-    secretRef: options.noAuth ? null : context.secretRef,
+    secretRef: options.noAuth === true || options.channelAuthOnly === true ? null : context.secretRef,
     secretRefType: secret.type,
     updatedAt: now,
   };
@@ -324,7 +333,7 @@ async function setupRootContextInner(context, options = {}) {
 }
 
 async function resolveAuthUserId(context, options = {}) {
-  if (options.noAuth === true) return "";
+  if (options.noAuth === true || options.channelAuthOnly === true) return "";
   const env = options.env || process.env;
   const supplied = String(options.authUserId || env.HARNESS_AUTH_USER_ID || "").trim();
   if (supplied) return supplied;
@@ -1009,12 +1018,12 @@ function persistedContextValue(context, options = {}) {
     secretRoot: context.secretRoot,
     configPath: context.configPath,
     workspacePolicyPath: context.workspacePolicyPath,
-    secretRef: options.noAuth ? null : context.secretRef,
+    secretRef: options.noAuth === true || options.channelAuthOnly === true ? null : context.secretRef,
     capabilities: {
       canWriteWorkspace: false,
       canWriteData: context.capabilities.canWriteData,
       hasStableSessionId: false,
-      supportsSecretReference: options.noAuth ? false : Boolean(context.secretRef),
+      supportsSecretReference: options.noAuth === true || options.channelAuthOnly === true ? false : Boolean(context.secretRef),
     },
   };
 }

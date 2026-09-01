@@ -48,6 +48,10 @@ export async function qwenpawCommand(options = {}) {
  *  3. build the instanceRoot via harness-data setup --host qwenpaw
  *  4. write the reference-model plugin-config.json pointing at the Root Context
  *  5. record the enabled agent; setup owns staging and snapshot rollback
+ *
+ * --channel-auth-only (QwenPaw channel authorization, e.g. WeCom/Feishu)
+ * keeps authz enabled but skips the auth.blob / --auth-user-id contract: the
+ * runtime resolves each requester's blob from channel-auth.json instead.
  */
 export async function setupQwenPaw(options = {}) {
   const source = resolvePluginSource(options);

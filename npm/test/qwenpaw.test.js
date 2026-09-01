@@ -137,6 +137,59 @@ test("qwenpaw setup installs the native plugin and builds the reference config",
   }
 });
 
+test("qwenpaw setup --channel-auth-only authorizes via channel-auth.json without auth.blob", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-channel-"));
+  try {
+    const source = stagePluginSource(root);
+    const python = writeFakePython(root);
+    const metric = writeMetricStub(root);
+    const wikis = path.join(root, "wikis");
+    seedWikis(wikis);
+    const instance = path.join(root, "instance");
+    const data = path.join(root, "data");
+    const project = path.join(root, "project");
+    const secrets = path.join(root, "secrets"); // not created: setup must create it
+    mkdirSync(project, { recursive: true });
+    const configFile = path.join(root, "plugin-config.json");
+
+    const result = runCli([
+      "qwenpaw", "setup",
+      "--source", source,
+      "--qwenpaw-python", python,
+      "--qwenpaw-working-dir", path.join(root, "qwenpaw-home"),
+      "--instance-root", instance,
+      "--data-root", data,
+      "--workspace-root", project,
+      "--workspace-allowlist", project,
+      "--wikis-source", wikis,
+      "--metric-cli", metric,
+      "--channel-auth-only",
+      "--plugin-config-file", configFile,
+      "--secret-dir", secrets,
+      "--json",
+    ], repoRoot);
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.ok(existsSync(path.join(instance, "context.json")), "instanceRoot context.json missing");
+    assert.ok(existsSync(secrets), "secret dir must be created for channel-auth.json");
+    assert.equal(existsSync(path.join(secrets, "auth.blob")), false, "--channel-auth-only must not write auth.blob");
+
+    const settings = JSON.parse(readFileSync(path.join(instance, "config", "settings.json"), "utf8"));
+    assert.equal(settings.authz.mode, "on", "authz must stay enabled for the QwenPaw adapter");
+    assert.equal(settings.authz.userId, "");
+    assert.equal(settings.secretRef, null);
+
+    const persisted = JSON.parse(readFileSync(path.join(instance, "context.json"), "utf8"));
+    assert.equal(persisted.secretRef, null);
+
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    assert.equal(config.schema_version, 2);
+    assert.equal(config.secret_ref, secrets, "reference config must point at the dir holding channel-auth.json");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("qwenpaw doctor reports missing instance as failures with json output", () => {
   const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-doctor-"));
   try {

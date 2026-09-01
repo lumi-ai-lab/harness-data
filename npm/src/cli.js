@@ -23,7 +23,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       const value = inline ?? args[++i];
@@ -95,6 +95,7 @@ Root Context options (setup/doctor/paths/report):
   --download-metric-cli              Download metric-cli from the plugin manifest
   --wikis-source PATH                Local wikis directory (Codex setup copies it into the Plugin)
   --skip-wikis                       Skip wikis validation/index build during setup
+  --channel-auth-only                QwenPaw only: authorize via channel-auth.json; skip auth.blob and --auth-user-id
 
 Report options:
   report <start|status|advance|approve|retry|cancel|stop> --session ID
