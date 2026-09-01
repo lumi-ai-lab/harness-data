@@ -16,15 +16,62 @@
  * Does not import .agents/pi or agents/pi at runtime.
  * B0 does NOT check for four PI agents (unlike PI B0).
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { cp, copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { loadKernel, loadRuntime, resolveKernelPath, resolveRuntimePath, kernelSource } from "./kernel-loader.mjs";
-import { getRootContext } from "./runtime-resolver.mjs";
+import { getHostAdapter, getRootContext } from "./runtime-resolver.mjs";
+
+const MCP_SERVER_VERSION = resolvePluginVersion();
+
+function resolvePluginVersion() {
+  try {
+    const manifestPath = join(dirname(fileURLToPath(import.meta.url)), "..", ".codex-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    return String(manifest?.version || process.env.HARNESS_PLUGIN_VERSION || "0.0.55");
+  } catch {
+    return String(process.env.HARNESS_PLUGIN_VERSION || "0.0.55");
+  }
+}
 
 function requireContext() {
   return getRootContext(process.env, { requireWorkspace: true });
+}
+
+let cachedHostAdapter = null;
+let cachedHostSignature = "";
+
+function hostAdapter() {
+  const signature = [
+    process.env.HARNESS_PLUGIN_ROOT,
+    process.env.HARNESS_HOST,
+    process.env.HARNESS_SURFACE,
+    process.env.CHATGPT_SURFACE,
+    process.env.HARNESS_CONTEXT_FILE,
+    process.env.HARNESS_WORKSPACE_ROOT,
+    process.env.CODEX_WORKSPACE_ROOT,
+    process.env.CHATGPT_WORKSPACE_ROOT,
+    process.env.HARNESS_DATA_ROOT,
+    process.env.HARNESS_WORKSPACE_POLICY,
+    process.env.HARNESS_SECRET_ROOT,
+    process.env.HARNESS_SECRET_REF,
+    process.env.HARNESS_SESSION_ID,
+    process.env.CHATGPT_SESSION_ID,
+    process.env.HARNESS_SUPPORTS_LOCAL_UI,
+    process.env.HARNESS_SUPPORTS_HOOKS,
+    process.env.HARNESS_CAN_WRITE_WORKSPACE,
+    process.env.HARNESS_CAN_WRITE_DATA,
+    process.env.HARNESS_READ_ONLY,
+    process.env.HARNESS_HAS_STABLE_SESSION_ID,
+    process.env.HARNESS_WORKSPACE_TRUSTED,
+  ].map((value) => String(value || "")).join("\u0000");
+  if (!cachedHostAdapter || cachedHostSignature !== signature) {
+    cachedHostAdapter = getHostAdapter(process.env);
+    cachedHostSignature = signature;
+  }
+  return cachedHostAdapter;
 }
 
 // ── pipeline state ────────────────────────────────────────────────────
@@ -281,9 +328,15 @@ async function reportProgress(sessionDir, state) {
  * The UI lifetime is tied to this MCP server process via --watch-pid.
  */
 async function htmlReportStart(args) {
-  const sessionId = String(args.sessionId || "").trim() || `mcp-${randomUUID().slice(0, 8)}`;
-  const userQuestion = String(args.userQuestion || "").trim();
+  const requestedSessionId = String(args.sessionId || "").trim();
+  const adapter = hostAdapter();
   const context = requireContext();
+  const hostSessionId = adapter.getSessionId();
+  if (!requestedSessionId && !hostSessionId && !adapter.getCapabilities().hasStableSessionId) {
+    throw new Error("QDM_SESSION_UNAVAILABLE: host did not provide a stable sessionId; pass sessionId explicitly");
+  }
+  const sessionId = requestedSessionId || hostSessionId || `mcp-${randomUUID().slice(0, 8)}`;
+  const userQuestion = String(args.userQuestion || "").trim();
   const sessionDir = sessionDirFor(sessionId, context);
 
   const { bindCliScriptPath, openMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
@@ -311,6 +364,9 @@ async function htmlReportStart(args) {
     sessionId,
     sessionDir,
     stage: "a_config",
+    host: context.host,
+    surface: context.surface,
+    capabilities: adapter.getCapabilities(),
     uiUrl: opened.serverUrl || null,
     ui: { state: "open", serverUrl: opened.serverUrl || null },
     message: "qdm-metric-cli ui is open. Tell the user: build cards, click 保存, then reply 继续.",
@@ -585,10 +641,14 @@ async function htmlReportStatus(args) {
   if (!sessionId) throw new Error("sessionId is required");
   const sessionDir = await resolveSessionDir(sessionId);
   const state = await readState(sessionDir);
+  const adapter = hostAdapter();
   if (!state) {
     return {
       sessionId,
       stage: "none",
+      host: adapter.host,
+      surface: adapter.surface,
+      capabilities: adapter.getCapabilities(),
       progress: await reportProgress(sessionDir, null),
       message: "No active session. Call html_report_start first.",
     };
@@ -601,6 +661,9 @@ async function htmlReportStatus(args) {
 
   return {
     sessionId,
+    host: adapter.host,
+    surface: adapter.surface,
+    capabilities: adapter.getCapabilities(),
     stage: state.stage,
     cards: state.cards,
     currentIndex: state.currentIndex,
@@ -614,7 +677,7 @@ async function htmlReportStatus(args) {
 
 // ── MCP tool schemas ──────────────────────────────────────────────────
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: "html_report_start",
     description: "Create a new html-report session and open qdm-metric-cli ui for the user to configure cards.",
@@ -687,7 +750,7 @@ const TOOLS = [
   },
 ];
 
-const HANDLERS = {
+export const HANDLERS = {
   html_report_start: htmlReportStart,
   html_report_next: htmlReportNext,
   html_report_close_ui: htmlReportCloseUi,
@@ -702,69 +765,91 @@ function send(msg) {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
 }
 
-async function handle(request) {
+/** Dispatch one MCP JSON-RPC request without committing to a transport. */
+export async function dispatchMcpRequest(request) {
   const { id, method, params } = request;
   try {
     switch (method) {
-      case "initialize":
-        send({
+      case "initialize": {
+        return {
           jsonrpc: "2.0",
           id,
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "html-report", version: "0.0.50" },
+            serverInfo: { name: "html-report", version: MCP_SERVER_VERSION },
           },
-        });
-        break;
+        };
+      }
       case "notifications/initialized":
-        break;
+        return null;
       case "tools/list":
-        send({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
-        break;
+        return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
       case "tools/call": {
         const name = params?.name;
         const handler = HANDLERS[name];
         if (!handler) throw new Error(`unknown tool: ${name}`);
         const result = await handler(params.arguments || {});
-        send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] } });
-        break;
+        return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] } };
       }
       default:
-        send({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });
+        return { jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } };
     }
   } catch (error) {
-    send({
+    return {
       jsonrpc: "2.0",
       id,
       error: {
         code: -32603,
         message: error?.code ? `${error.code}: ${error.message || error}` : (error instanceof Error ? error.message : String(error)),
       },
-    });
+    };
   }
+}
+
+/** Create a loopback bridge backed by this exact MCP dispatcher. */
+export async function createMcpBridge(options = {}) {
+  const { LocalBridge } = await loadRuntime("local-bridge.mjs");
+  return new LocalBridge({
+    ...options,
+    handler: options.handler || ((request) => dispatchMcpRequest(request)),
+  });
+}
+
+export async function startMcpBridge(options = {}) {
+  const bridge = await createMcpBridge(options);
+  await bridge.start();
+  return bridge;
+}
+
+async function handle(request) {
+  const response = await dispatchMcpRequest(request);
+  if (response) send(response);
+  return response;
 }
 
 // ── main loop ─────────────────────────────────────────────────────────
 
 let buf = "";
 
-process.stdin.on("data", (chunk) => {
-  buf += chunk.toString();
-  let nl;
-  while ((nl = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, nl).trim();
-    buf = buf.slice(nl + 1);
-    if (!line) continue;
-    handle(JSON.parse(line)).catch((error) => {
-      process.stderr.write(`unhandled error: ${error.message || error}\n`);
-    });
-  }
-});
+function startStdioServer() {
+  process.stdin.on("data", (chunk) => {
+    buf += chunk.toString();
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      handle(JSON.parse(line)).catch((error) => {
+        process.stderr.write(`unhandled error: ${error.message || error}\n`);
+      });
+    }
+  });
 
-process.stdin.on("end", () => {
-  process.exit(0);
-});
+  process.stdin.on("end", () => {
+    process.exit(0);
+  });
+}
 
 // ── self-test ─────────────────────────────────────────────────────────
 
@@ -795,6 +880,8 @@ async function selfTest() {
   eq("submit-card-caption exists", existsSync(resolveKernelPath("captions/submit-card-caption.mjs")), true);
   eq("prepare-card-caption-evidence exists", existsSync(resolveKernelPath("evidence/prepare-card-caption-evidence.mjs")), true);
   eq("authz-config exists", existsSync(resolveRuntimePath("authz-config.mjs")), true);
+  eq("host-context exists", existsSync(resolveRuntimePath("host-context.mjs")), true);
+  eq("local-bridge exists", existsSync(resolveRuntimePath("local-bridge.mjs")), true);
 
   const passed = asserts.filter((a) => a.ok).length;
   const failed = asserts.length - passed;
@@ -802,6 +889,8 @@ async function selfTest() {
   process.exit(failed > 0 ? 1 : 0);
 }
 
-if (process.argv.includes("--self-test")) {
-  selfTest();
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  if (process.argv.includes("--self-test")) selfTest();
+  else startStdioServer();
 }

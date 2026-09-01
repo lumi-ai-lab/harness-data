@@ -13,6 +13,7 @@ export const ROOT_CONTEXT_ERROR_CODES = Object.freeze({
   RESOURCE_MISMATCH: "QDM_RESOURCE_MISMATCH",
   WORKSPACE_NOT_ALLOWED: "QDM_WORKSPACE_NOT_ALLOWED",
   SECRET_UNAVAILABLE: "QDM_SECRET_UNAVAILABLE",
+  SESSION_UNAVAILABLE: "QDM_SESSION_UNAVAILABLE",
   SETUP_REQUIRED: "QDM_SETUP_REQUIRED",
   MIGRATION_REQUIRED: "QDM_MIGRATION_REQUIRED",
 });
@@ -27,6 +28,7 @@ const ROOT_FLAG_FIELDS = Object.freeze({
   "workspace-policy": "workspacePolicyPath",
   "secret-ref": "secretRef",
   "session-id": "sessionId",
+  surface: "surface",
 });
 
 const ENV_FIELDS = Object.freeze([
@@ -41,7 +43,12 @@ const ENV_FIELDS = Object.freeze([
   ["HARNESS_WORKSPACE_POLICY", "workspacePolicyPath"],
   ["HARNESS_SESSION_ID", "sessionId"],
   ["HARNESS_HOST", "host"],
+  ["CHATGPT_HOST", "host"],
+  ["HARNESS_SURFACE", "surface"],
+  ["CHATGPT_SURFACE", "surface"],
   ["CODEX_WORKSPACE_ROOT", "workspaceRoot"],
+  ["CHATGPT_WORKSPACE_ROOT", "workspaceRoot"],
+  ["OPENAI_WORKSPACE_ROOT", "workspaceRoot"],
 ]);
 
 export class RootContextError extends Error {
@@ -197,6 +204,8 @@ export function contextFromHookPayload(payload, { root = "", env = process.env, 
   if (!explicit.configPath && env?.HARNESS_CONFIG_PATH) explicit.configPath = env.HARNESS_CONFIG_PATH;
   if (!explicit.workspacePolicyPath && env?.HARNESS_WORKSPACE_POLICY) explicit.workspacePolicyPath = env.HARNESS_WORKSPACE_POLICY;
   if (!explicit.host && payload.host) explicit.host = payload.host;
+  if (!explicit.surface && (payload.surface || payload.surface_id)) explicit.surface = payload.surface || payload.surface_id;
+  if (!explicit.surface && env?.HARNESS_SURFACE) explicit.surface = env.HARNESS_SURFACE;
   if (!explicit.sessionId && (payload.session_id || payload.sessionId)) explicit.sessionId = payload.session_id || payload.sessionId;
   const payloadWorkspace = payload.workspaceRoot || payload.workspace_root || payload.cwd || "";
   if (payloadWorkspace) {
@@ -253,6 +262,7 @@ export function normalizeRootContext(input, { source = "root context", requireWo
     throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.WORKSPACE_REQUIRED, "workspaceRoot is required for this operation");
   }
   const host = String(input.host || "unknown").trim() || "unknown";
+  const surface = normalizeSurface(input.surface, host);
 
   const stateRoot = normalizeRootPath(input.stateRoot, "stateRoot") ||
     (workspaceRoot ? path.join(dataRoot, "state", "workspaces", workspaceIdentity({
@@ -294,6 +304,9 @@ export function normalizeRootContext(input, { source = "root context", requireWo
     hasStableSessionId: suppliedCapabilities?.hasStableSessionId ?? Boolean(sessionId),
     supportsSecretReference: suppliedCapabilities?.supportsSecretReference ?? Boolean(secretRef),
   };
+  for (const name of ["supportsLocalUi", "supportsHooks"]) {
+    if (suppliedCapabilities?.[name] !== undefined) capabilities[name] = suppliedCapabilities[name];
+  }
   for (const [name, value] of Object.entries(capabilities)) {
     if (typeof value !== "boolean") throw invalid(`capabilities.${name} must be boolean`);
   }
@@ -310,6 +323,7 @@ export function normalizeRootContext(input, { source = "root context", requireWo
   return {
     schemaVersion,
     host,
+    surface,
     pluginRoot,
     resourceRoot,
     dataRoot,
@@ -322,6 +336,19 @@ export function normalizeRootContext(input, { source = "root context", requireWo
     sessionId,
     capabilities,
   };
+}
+
+function normalizeSurface(value, host) {
+  const surface = String(value || "").trim().toLowerCase();
+  if (surface && !["codex", "desktop", "chat", "work", "cli"].includes(surface)) {
+    throw invalid(`surface must be one of codex, desktop, chat, work, cli: ${surface}`);
+  }
+  if (surface === "cli") return "codex";
+  if (surface) return surface;
+  const normalizedHost = String(host || "").trim().toLowerCase();
+  if (normalizedHost === "codex") return "codex";
+  if (normalizedHost === "chatgpt" || normalizedHost === "chatgpt-desktop") return "desktop";
+  return "unknown";
 }
 
 export function workspaceIdentity({ workspaceRoot, host = "unknown", schemaVersion = ROOT_CONTEXT_SCHEMA_VERSION } = {}) {
@@ -341,11 +368,11 @@ function contextFromEnv(env = process.env) {
   const values = {};
   for (const [name, field] of ENV_FIELDS) {
     const value = env?.[name];
-    if (value != null && String(value).trim() !== "") values[field] = String(value);
+    if (value != null && String(value).trim() !== "" && values[field] == null) values[field] = String(value);
   }
   if (!values.dataRoot && env?.CODEX_HOME) values.dataRoot = path.join(String(env.CODEX_HOME), "qdm-harness", "data");
   if (env?.HARNESS_SECRET_REF && !values.secretRef) values.secretRef = parseSecretRefValue(env.HARNESS_SECRET_REF);
-  const contextFile = env?.HARNESS_CONTEXT_FILE || env?.CODEX_CONTEXT_FILE || "";
+  const contextFile = env?.HARNESS_CONTEXT_FILE || env?.CODEX_CONTEXT_FILE || env?.CHATGPT_CONTEXT_FILE || env?.OPENAI_CONTEXT_FILE || "";
   return {
     values,
     contextFile,

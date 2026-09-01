@@ -117,3 +117,24 @@ test("runtime hook envelope conversion matches the CLI contract", async () => {
   assert.equal(context.capabilities.canWriteWorkspace, true);
   assert.equal(publicRootContext(context).secretRef, null);
 });
+
+test("runtime RootContext preserves host surface and optional UI/Hook capabilities", async () => {
+  const roots = await makeRoots();
+  const context = normalizeRootContext({
+    schemaVersion: 1,
+    host: "chatgpt-desktop",
+    surface: "work",
+    pluginRoot: roots.pluginRoot,
+    dataRoot: roots.dataRoot,
+    workspaceRoot: roots.workspaceRoot,
+    capabilities: {
+      canWriteWorkspace: true,
+      canWriteData: true,
+      supportsLocalUi: true,
+      supportsHooks: false,
+    },
+  });
+  assert.equal(context.surface, "work");
+  assert.equal(context.capabilities.supportsHooks, false);
+  assert.equal(context.capabilities.supportsLocalUi, true);
+});

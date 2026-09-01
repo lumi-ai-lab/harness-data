@@ -1,2 +1,4 @@
+# Adapter reference only. Setup writes the effective project configuration to
+# <workspace>/.codex/config.toml and records trust in the user Codex config.
 [features]
 hooks = true

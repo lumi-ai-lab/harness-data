@@ -230,6 +230,7 @@ async function setupRootContextInner(context, options = {}) {
     schemaVersion: INSTALL_MANIFEST_SCHEMA_VERSION,
     contextSchemaVersion: context.schemaVersion,
     host: context.host,
+    surface: context.surface,
     pluginRoot: context.pluginRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,
@@ -265,6 +266,7 @@ async function setupRootContextInner(context, options = {}) {
   const settings = {
     schemaVersion: context.schemaVersion,
     host: context.host,
+    surface: context.surface,
     pluginRoot: context.pluginRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,
@@ -856,6 +858,7 @@ async function buildWikisIndex(context, options = {}) {
     HARNESS_DATA_ROOT: context.dataRoot,
     HARNESS_WORKSPACE_POLICY: context.workspacePolicyPath || "",
     HARNESS_HOST: context.host,
+    HARNESS_SURFACE: ["codex", "desktop", "chat", "work"].includes(context.surface) ? context.surface : "",
   };
   const result = await run(process.execPath, [mainPath, "wikis", "build-index", "--skip-checks"], {
     cwd: context.resourceRoot,
@@ -967,6 +970,7 @@ function writePersistedCodexContext(context, options = {}) {
   writeJsonAtomic(filePath, {
     schemaVersion: context.schemaVersion,
     host: context.host,
+    surface: context.surface,
     pluginRoot: context.pluginRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,

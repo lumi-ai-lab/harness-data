@@ -11,6 +11,7 @@ export const ROOT_CONTEXT_ERROR_CODES = Object.freeze({
   DATA_ROOT_UNAVAILABLE: "QDM_DATA_ROOT_UNAVAILABLE",
   WORKSPACE_REQUIRED: "QDM_WORKSPACE_REQUIRED",
   SECRET_UNAVAILABLE: "QDM_SECRET_UNAVAILABLE",
+  SESSION_UNAVAILABLE: "QDM_SESSION_UNAVAILABLE",
   SETUP_REQUIRED: "QDM_SETUP_REQUIRED",
 });
 
@@ -27,6 +28,7 @@ const optionFields = [
   "secretRef",
   "sessionId",
   "host",
+  "surface",
 ];
 
 const envFields = [
@@ -41,7 +43,12 @@ const envFields = [
   ["HARNESS_WORKSPACE_POLICY", "workspacePolicyPath"],
   ["HARNESS_SESSION_ID", "sessionId"],
   ["HARNESS_HOST", "host"],
+  ["CHATGPT_HOST", "host"],
+  ["HARNESS_SURFACE", "surface"],
+  ["CHATGPT_SURFACE", "surface"],
   ["CODEX_WORKSPACE_ROOT", "workspaceRoot"],
+  ["CHATGPT_WORKSPACE_ROOT", "workspaceRoot"],
+  ["OPENAI_WORKSPACE_ROOT", "workspaceRoot"],
 ];
 
 export class RootContextError extends Error {
@@ -59,6 +66,10 @@ export function hasStructuredRootContext(options = {}, env = process.env) {
     env?.HARNESS_DATA_ROOT ||
     env?.HARNESS_CONTEXT_FILE ||
     env?.CODEX_CONTEXT_FILE ||
+    env?.CHATGPT_CONTEXT_FILE ||
+    env?.OPENAI_CONTEXT_FILE ||
+    env?.CHATGPT_WORKSPACE_ROOT ||
+    env?.OPENAI_WORKSPACE_ROOT ||
     env?.CODEX_HOME,
   );
 }
@@ -118,6 +129,7 @@ export function normalizeRootContext(input, { source = "root context", requirePl
   const secretRoot = normalizeDirectory(input.secretRoot, "secretRoot");
   const workspaceRoot = normalizeDirectory(input.workspaceRoot, "workspaceRoot");
   const host = stringValue(input.host) || "unknown";
+  const surface = normalizeSurface(input.surface, host);
   const stateRoot = normalizeDirectory(input.stateRoot, "stateRoot") || (workspaceRoot
     ? path.join(dataRoot, "state", "workspaces", workspaceIdentity({ host, workspaceRoot, schemaVersion }))
     : path.join(dataRoot, "state"));
@@ -143,6 +155,9 @@ export function normalizeRootContext(input, { source = "root context", requirePl
     hasStableSessionId: supplied.hasStableSessionId ?? Boolean(sessionId),
     supportsSecretReference: supplied.supportsSecretReference ?? Boolean(secretRef),
   };
+  for (const name of ["supportsLocalUi", "supportsHooks"]) {
+    if (supplied[name] !== undefined) capabilities[name] = supplied[name];
+  }
   for (const [name, value] of Object.entries(capabilities)) {
     if (typeof value !== "boolean") throw invalid(`capabilities.${name} must be boolean`);
   }
@@ -159,6 +174,7 @@ export function normalizeRootContext(input, { source = "root context", requirePl
   return {
     schemaVersion,
     host,
+    surface,
     pluginRoot,
     resourceRoot,
     dataRoot,
@@ -173,10 +189,24 @@ export function normalizeRootContext(input, { source = "root context", requirePl
   };
 }
 
+function normalizeSurface(value, host) {
+  const surface = String(value || "").trim().toLowerCase();
+  if (surface && !["codex", "desktop", "chat", "work", "cli"].includes(surface)) {
+    throw invalid(`surface must be one of codex, desktop, chat, work, cli: ${surface}`);
+  }
+  if (surface === "cli") return "codex";
+  if (surface) return surface;
+  const normalizedHost = String(host || "").trim().toLowerCase();
+  if (normalizedHost === "codex") return "codex";
+  if (normalizedHost === "chatgpt" || normalizedHost === "chatgpt-desktop") return "desktop";
+  return "unknown";
+}
+
 export function publicRootContext(context) {
   return {
     schemaVersion: context.schemaVersion,
     host: context.host,
+    surface: context.surface,
     pluginRoot: context.pluginRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,
@@ -213,12 +243,12 @@ export function defaultSecretRoot(_host = "unknown") {
 function contextFromEnv(env = process.env) {
   const values = {};
   for (const [name, field] of envFields) {
-    if (hasValue(env?.[name])) values[field] = String(env[name]);
+    if (hasValue(env?.[name]) && values[field] == null) values[field] = String(env[name]);
   }
   if (hasValue(env?.HARNESS_SECRET_REF)) values.secretRef = parseSecretRef(env.HARNESS_SECRET_REF);
   return {
     values,
-    contextFile: stringValue(env?.HARNESS_CONTEXT_FILE) || stringValue(env?.CODEX_CONTEXT_FILE),
+    contextFile: stringValue(env?.HARNESS_CONTEXT_FILE) || stringValue(env?.CODEX_CONTEXT_FILE) || stringValue(env?.CHATGPT_CONTEXT_FILE) || stringValue(env?.OPENAI_CONTEXT_FILE),
   };
 }
 

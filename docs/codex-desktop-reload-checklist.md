@@ -6,7 +6,7 @@
 ## 前置条件
 
 - Codex Desktop 已登录并能打开一个测试项目。
-- 当前插件版本为正式 `0.0.54`，并已在目标 marketplace 中启用。
+- 当前插件版本为正式 `0.0.55`，并已在目标 marketplace 中启用。
 - 测试项目、独立 `dataRoot`、`secretRoot` 和 `stateRoot` 均可访问。
 - 使用测试 secret；不要把生产 auth 内容写入记录或截图。
 

@@ -12,6 +12,10 @@ Harness Data 是一个由 Agent Plugin 提供的 QDM 数据能力。当前正式
 
 Plugin 内同时包含通用核心、Codex 适配层、Setup 脚本和 html-report 流程。私有 Wiki 不进入公开仓，由 Setup 下载加密 ZIP。当前用户安装入口是 Codex Plugin。
 
+运行时核心同时提供 ChatGPT Desktop 的 `ChatGPTDesktopAdapter`。Desktop 的
+普通 Chat/Work 使用 `surface = "chat"` 或 `"work"` 复用同一套 MCP 工具，
+不依赖 Codex Hooks；原生 stdio 不可用时可使用本机 loopback Bridge。
+
 ## Codex 安装
 
 先从 GitHub 或 Gitee Release 手动下载公开的 Marketplace ZIP（含 `dist`，不含 Wikis）：
@@ -242,7 +246,9 @@ MCP 提供以下工具：
 | `html_report_generate_html` | 用户确认后生成同级 `main.html` |
 | `html_report_status` | 查看 stage、卡片进度和 HTML 状态 |
 
-完整流程说明见 [`docs/plugin-html-report.md`](docs/plugin-html-report.md) 和 [`plugins/harness-data/skills/html-report/SKILL.md`](plugins/harness-data/skills/html-report/SKILL.md)。
+完整流程说明见 [`docs/plugin-html-report.md`](docs/plugin-html-report.md)、
+[`docs/host-adapters.md`](docs/host-adapters.md) 和
+[`plugins/harness-data/skills/html-report/SKILL.md`](plugins/harness-data/skills/html-report/SKILL.md)。
 
 ## 本地开发初始化
 
@@ -315,7 +321,7 @@ node plugins/harness-data/scripts/bundle-dist.mjs \
 
 ```bash
 node scripts/build-codex-marketplace.mjs \
-  verify --repo-root "$PWD" --version 0.0.54
+  verify --repo-root "$PWD" --version 0.0.55
 node --test scripts/build-codex-marketplace.test.mjs
 ```
 
