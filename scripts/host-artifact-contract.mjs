@@ -81,7 +81,19 @@ export const HOST_ARTIFACT_SPECS = Object.freeze({
     pluginName: "qdm-harness-qwenpaw",
     source: ".agents/qwenpaw",
     adapterManifest: "adapter/plugin.json",
-    requiredPaths: ["adapter/plugin.json", "adapter/plugin.py"],
+    requiredPaths: [
+      "adapter/plugin.json",
+      "adapter/plugin.py",
+      "adapter/qdm_cli.py",
+      "adapter/qdm_harness_context.py",
+      "adapter/qdm_channel_auth.py",
+      "adapter/qdm_config.py",
+      "adapter/qdm_identity.py",
+      "adapter/qdm_report_lifecycle.py",
+      "adapter/qdm_runtime_hooks.py",
+      "adapter/skills/qdm-harness/SKILL.md",
+      "adapter/scripts/data-harness-cli",
+    ],
   },
 });
 

@@ -16,7 +16,7 @@ const PACKAGE_CANDIDATES = {
   dataHarnessCli: [
     "packages/data-harness-cli/package.json",
     "vendor/data-harness-cli/package.json",
-    "vendor/data-harness-cli/package.json",
+    "dist/data-harness-cli/package.json",
   ],
   htmlReportKernel: [
     "packages/html-report-kernel/package.json",
@@ -84,6 +84,7 @@ function discoverPlugin(root, overrides) {
     ".codex-plugin/plugin.json",
     "agents/codex/.codex-plugin/plugin.json",
     "manifest.json",
+    "plugin.json",
   ]);
   return {
     name: requiredString(overrides.pluginName || hostManifest?.name || "", "pluginName"),
