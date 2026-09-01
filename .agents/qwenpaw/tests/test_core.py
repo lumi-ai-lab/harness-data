@@ -715,8 +715,20 @@ class HookLifecycleTests(unittest.TestCase):
         class Api:
             register_runtime_hook_now = staticmethod(lambda **_kwargs: None)
 
-        with patch("qdm_harness_qwenpaw_test.plugin.version", return_value="2.2.0"):
-            with self.assertRaisesRegex(RuntimeError, "QwenPaw 2.1.x"):
+        with patch("qdm_harness_qwenpaw_test.plugin.version", return_value="2.3.0"):
+            with self.assertRaisesRegex(RuntimeError, "QwenPaw 2.1.x or 2.2.x"):
+                QdmHarnessQwenPawPlugin().register(Api())  # type: ignore[arg-type]
+
+    def test_plugin_startup_accepts_22x_and_prerelease_versions(self) -> None:
+        class Api:
+            def register_runtime_hook_now(self, **_kwargs: object) -> None:
+                pass
+
+            def register_tool(self, **_kwargs: object) -> None:
+                pass
+
+        for installed in ("2.1.0", "2.1.6", "2.2.0", "2.2.0b3"):
+            with patch("qdm_harness_qwenpaw_test.plugin.version", return_value=installed):
                 QdmHarnessQwenPawPlugin().register(Api())  # type: ignore[arg-type]
 
 

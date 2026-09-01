@@ -75,6 +75,13 @@ export function stageQwenPawPlugin({ artifactRoot, version = "", repoRoot = REPO
 
   cpSync(source, target, { recursive: true, filter: includeAdapterFile });
 
+  const requestedVersion = String(version || "").trim().replace(/^v/, "");
+  if (requestedVersion) {
+    const pluginPath = path.join(target, "plugin.json");
+    const plugin = readJSON(pluginPath, "plugin.json");
+    writeFileSync(pluginPath, `${JSON.stringify({ ...plugin, version: requestedVersion }, null, 2)}\n`);
+  }
+
   const dist = path.join(target, "dist");
   mkdirSync(dist, { recursive: true });
   for (const name of CORE_PACKAGES) {

@@ -165,12 +165,19 @@ def _validate_source(source: Path) -> None:
 
 
 def _validate_qwenpaw(python: str, working_dir: str) -> None:
-    code = "import importlib.metadata; from qwenpaw.plugins.api import PluginApi; v=importlib.metadata.version('qwenpaw'); assert v.startswith('2.1.'),v; assert callable(getattr(PluginApi,'register_runtime_hook_now',None))"
+    code = (
+        "import importlib.metadata, re; from qwenpaw.plugins.api import PluginApi; "
+        "v=importlib.metadata.version('qwenpaw'); "
+        "base=re.split(r'rc|b|a|dev', v.split('+',1)[0], 1)[0]; "
+        "parts=base.split('.'); "
+        "assert (int(parts[0]), int(parts[1]) if len(parts)>1 else 0) in {(2,1),(2,2)}, v; "
+        "assert callable(getattr(PluginApi,'register_runtime_hook_now',None))"
+    )
     result = subprocess.run(
         [python, "-c", code], shell=False, env=_env(working_dir), capture_output=True,
     )
     if result.returncode:
-        raise RuntimeError("需要具备 register_runtime_hook_now() 的 QwenPaw 2.1.x")
+        raise RuntimeError("需要具备 register_runtime_hook_now() 的 QwenPaw 2.1.x 或 2.2.x")
 
 
 def _resolve_working_dir(python: str, explicit: str) -> Path:

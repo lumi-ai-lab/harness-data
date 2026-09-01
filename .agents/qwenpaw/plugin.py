@@ -77,13 +77,35 @@ class QdmHarnessQwenPawPlugin:
         logger.info("QDM Harness runtime hooks and constrained tools registered")
 
 
+_SUPPORTED_QWENPAW_MAJOR_MINOR = frozenset({(2, 1), (2, 2)})
+
+
+def _supported_qwenpaw_version(installed: str) -> bool:
+    """Semantic version gate: accept 2.1.x and 2.2.x, including pre-releases.
+
+    QwenPaw pre-release builds are treated as their base release (e.g.
+    2.2.0b3 -> 2.2.0), mirroring the host's own compatibility check.
+    """
+    base = installed.split("+", 1)[0].strip().lower()
+    for marker in ("rc", "b", "a", "dev"):
+        if marker in base:
+            base = base.split(marker, 1)[0]
+    parts = base.split(".")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return False
+    return (major, minor) in _SUPPORTED_QWENPAW_MAJOR_MINOR
+
+
 def _require_qwenpaw_21() -> None:
     try:
         installed = version("qwenpaw")
     except PackageNotFoundError as exc:
-        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x") from exc
-    if not installed.startswith("2.1."):
-        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x")
+        raise RuntimeError("QDM Harness requires QwenPaw 2.1.x or 2.2.x") from exc
+    if not _supported_qwenpaw_version(installed):
+        raise RuntimeError(f"QDM Harness requires QwenPaw 2.1.x or 2.2.x (found {installed})")
 
 
 def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
