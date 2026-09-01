@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import test from "node:test";
 import { buildCodexMarketplace, packCodexMarketplaceZip, verifyCodexMarketplace, verifyCodexRepository } from "./build-codex-marketplace.mjs";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const releaseVersion = JSON.parse(readFileSync(path.join(repoRoot, "plugins", "harness-data", ".codex-plugin", "plugin.json"), "utf8")).version;
 
 function bundleDist() {
   const result = spawnSync(process.execPath, [
@@ -19,14 +20,14 @@ function bundleDist() {
 }
 
 test("Git repository Marketplace source does not require dist or Wikis", () => {
-  const report = verifyCodexRepository({ repoRoot, version: "0.0.54" });
-  assert.equal(report.version, "0.0.54");
+  const report = verifyCodexRepository({ repoRoot, version: releaseVersion });
+  assert.equal(report.version, releaseVersion);
   assert.equal(report.pluginRoot, path.join(repoRoot, "plugins", "harness-data"));
 });
 
 test("Marketplace verifier accepts --repo-root without a temporary output directory", () => {
   const script = path.join(repoRoot, "scripts", "build-codex-marketplace.mjs");
-  const result = spawnSync(process.execPath, [script, "verify", "--repo-root", repoRoot, "--version", "0.0.54"], {
+  const result = spawnSync(process.execPath, [script, "verify", "--repo-root", repoRoot, "--version", releaseVersion], {
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);

@@ -224,16 +224,49 @@ test("structured session state uses a lock and recovers stale locks", () => {
   assert.equal(existsSync(lockPath), false);
 });
 
-test("structured prompt hooks are on-demand and do not persist ordinary prompts", () => {
+test("structured prompt hooks auto-inject project context and do not persist ordinary prompts", () => {
   const roots = makeRoots();
+  mkdirSync(path.join(roots.dataRoot, ".harness", "index"), { recursive: true });
+  const runtimeIndex = {
+    meta: {
+      resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: 1,
+      wikiContentVersion: createHash("sha256").update("auto-context-fixture").digest("hex"),
+      resourceVersion: createHash("sha256").update("auto-context-fixture").digest("hex"),
+      paths: { knowledge: ".", spec: "spec", playbooks: "playbooks", templates: "templates" },
+    },
+    docsByPath: {},
+    recall: [],
+    templateSelection: [],
+  };
+  writeFileSync(path.join(roots.dataRoot, ".harness", "index", "wikis-index.json"), `${JSON.stringify(runtimeIndex)}\n`);
+  writeFileSync(path.join(roots.dataRoot, ".harness", "index", "wikis-runtime-index.json"), `${JSON.stringify(runtimeIndex)}\n`);
+  writeRuntimeResourceManifest(roots.dataRoot, runtimeIndex);
   const context = normalizeRootContext(fixtureContext(roots));
-  const ordinary = runClaudeHook(
-    context.pluginRoot,
-    JSON.stringify({ session_id: "on-demand-session", prompt: "请帮我写一个 JavaScript 函数" }),
-    context,
-  );
-  assert.equal(ordinary.ok, false);
-  assert.equal(existsSync(statePath(context, "on-demand-session")), false);
+  const previousMode = process.env.QDM_HARNESS_HOOK_MODE;
+  try {
+    delete process.env.QDM_HARNESS_HOOK_MODE;
+    const ordinary = runClaudeHook(
+      context.pluginRoot,
+      JSON.stringify({ session_id: "auto-context-session", prompt: "请帮我写一个 JavaScript 函数" }),
+      context,
+    );
+    assert.equal(ordinary.ok, true);
+    assert.match(ordinary.output.hookSpecificOutput.additionalContext, /Harness mode: free/);
+    assert.equal(existsSync(statePath(context, "auto-context-session")), false);
+
+    process.env.QDM_HARNESS_HOOK_MODE = "on-demand";
+    const optedOut = runClaudeHook(
+      context.pluginRoot,
+      JSON.stringify({ session_id: "on-demand-session", prompt: "请帮我写一个 JavaScript 函数" }),
+      context,
+    );
+    assert.equal(optedOut.ok, false);
+    assert.equal(existsSync(statePath(context, "on-demand-session")), false);
+  } finally {
+    if (previousMode == null) delete process.env.QDM_HARNESS_HOOK_MODE;
+    else process.env.QDM_HARNESS_HOOK_MODE = previousMode;
+  }
 });
 
 test("Codex structured prompt hooks materialize trusted resource paths", () => {

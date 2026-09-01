@@ -56,7 +56,7 @@ Hermes 和 OpenClaw 适配层、测试、配置及产品引用已从当前产品
 3. auth、metric-cli、用户配置、session state、诊断日志不能默认写入 pluginRoot。
 4. 必须引入宿主持久数据根 dataRoot，并为没有标准数据目录的宿主提供 OS 级 fallback。
 5. workspaceRoot 必须由宿主显式传入或由已验证的 workspace handle 指定，不能继续依赖从插件 cache 或 PWD 猜测。
-6. 普通 prompt 默认不自动召回 QDM wiki；显式 skill/command 是默认入口，自动召回只能作为 opt-in。
+6. 插件仅在目标项目启用；已启用项目的普通 prompt 默认进入受控 Harness context，未启用项目不加载 Hook；不把全量 wiki 注入作为默认行为。
 7. 旧 install --dir 必须保留一个迁移兼容窗口，迁移验证完成后才能删除。
 
 如果产品坚持“完全不能有用户数据目录”，则必须缩小宿主支持范围：只能支持提供稳定持久数据 API 的宿主。不能同时承诺“七个宿主 + 插件目录可写 + 不需要 dataRoot”。
@@ -174,7 +174,7 @@ CI staging 会把 top-level plugins 放进 runtime 包：
 
 ### 3.5 默认最小副作用
 
-安装插件不等于每次打开 Agent 都要写盘或注入上下文。普通 prompt 默认只做低成本判断，不创建 .harness，不保存 prompt，不注入经营分析知识。
+安装插件不等于每次打开 Agent 都要写盘。项目启用后普通 prompt 可以注入受控 Harness context，但不创建项目 `.harness`、不保存完整 prompt，也不把无关经营分析知识全部注入。
 
 ## 4. 推荐的目标目录模型
 
@@ -438,18 +438,19 @@ wikis-index.json 和 wikis-runtime-index.json 必须：
 
 ## 8. Hook 行为策略
 
-### 8.1 默认模式：on-demand
+### 8.1 项目启用后的默认模式：auto-context
 
 普通 prompt 的默认流程：
 
 1. hook 解析宿主 envelope；
-2. 检查是否显式调用 qdm-harness skill/command，或是否命中已知 Harness 召回计划；
-3. 未触发且未命中时直接返回，不注入 wiki，不创建 state；
-4. 显式调用或 Codex 命中已知 Playbook 后才读取资源并构造上下文。
+2. 校验 Root Context 和 workspace policy；
+3. 对每个已启用项目的 prompt 执行 `buildWithPlan`；
+4. 命中指标/报告时注入对应 playbook/spec，未命中时注入受控的 free context；
+5. 普通结构化 prompt 仍不保存完整 prompt，也不创建项目 `.harness`。
 
-### 8.2 可选模式：auto-context
+### 8.2 兼容模式：on-demand
 
-允许用户或组织配置开启自动召回，但必须：
+需要减少上下文注入的项目或调试场景可设置 `QDM_HARNESS_HOOK_MODE=on-demand`。自动模式仍必须：
 
 - 明确显示当前模式；
 - 允许按宿主和 workspace 关闭；
@@ -711,7 +712,7 @@ setup 必须幂等，负责：
 退出条件：
 
 - 产品确认 dataRoot/secretRoot 不是可选概念；
-- 明确默认 hook 模式为 on-demand；
+- 明确已启用项目默认 hook 模式为 auto-context，并保留 on-demand 兼容覆盖；
 - 明确旧 installer 兼容窗口。
 
 ### Phase 1：核心双根重构
@@ -852,7 +853,7 @@ setup 必须幂等，负责：
 
 ### 14.4 Hook 行为
 
-- 普通编码 prompt 不注入 QDM context；
+- 普通编码 prompt 可注入受控 QDM context，但不创建项目 `.harness`；
 - 显式 skill 注入正确 wiki；
 - 普通 prompt 不创建 .harness；
 - template selection 后才创建 durable state；
@@ -911,7 +912,7 @@ doctor --json 至少输出：
 
 以下问题必须在 Phase 0 结束前明确：
 
-1. 默认 hook 是 on-demand 还是 auto-context。推荐 on-demand。
+1. 默认 hook 是 on-demand 还是 auto-context。已确认：项目启用 Harness 后默认 auto-context，并保留 `QDM_HARNESS_HOOK_MODE=on-demand` 兼容覆盖。
 2. workspace state 默认外置还是项目内。推荐外置，项目内仅保存用户明确要求的 artifacts。
 3. wiki 是否允许独立版本。推荐允许；第一版可继续随插件只读发布。
 4. auth 是否允许本地 blob。推荐生产使用 secret reference/file，开发模式才允许 fixture/env。
@@ -937,7 +938,7 @@ doctor --json 至少输出：
 ### P1
 
 - 把 writeWikiPlanState 改为事件驱动、按需持久化；
-- 默认关闭普通 prompt 的全局 wiki 注入；
+- 保持普通 prompt 的 context 选择受控，避免全量 wiki 注入；
 - 统一 CLI/runtime 的环境变量优先级；
 - 统一 session/workspace identity；
 - index 去绝对 root；
@@ -984,12 +985,12 @@ doctor --json 至少输出：
 - 在插件目录写 auth、metric-cli、可变 config；
 - 把宿主 cache 当作稳定可写目录；
 - 先删除 install --dir 再补迁移；
-- 默认对所有普通 prompt 做 wiki 注入；
+- 默认对所有普通 prompt 注入不受控的全量 wiki；
 - 继续把 auth blob 拼到模型可见 command。
 
 最推荐的最终方案是：
 
-> 用户只感知一个宿主插件；插件目录只读且可替换；持久数据进入宿主原生 dataRoot；密钥独立管理；项目产物进入 workspaceRoot；核心通过显式 Root Context 工作；默认按需触发；旧 runtime 通过迁移命令过渡。
+> 用户只感知一个宿主插件；插件目录只读且可替换；持久数据进入宿主原生 dataRoot；密钥独立管理；项目产物进入 workspaceRoot；核心通过显式 Root Context 工作；已启用项目默认自动构造受控 context；旧 runtime 通过迁移命令过渡。
 
 ## 20. 分阶段 TODO 清单
 
@@ -1006,7 +1007,7 @@ doctor --json 至少输出：
 #### 当前进度快照（更新于 2026-08-29）
 
 - 已完成 Root Context v1 的 CLI/runtime 实现、路径校验、五根 owner 映射、优先级解析、错误码和跨实现 fixture。
-- 已完成 PathResolver 双根分流、legacy `findRoot()` 隔离、结构化 context 接入、按需 hook、state schema/原子写入/基础锁与 stale-lock 恢复，以及 html-report 显式 roots 改造。
+- 已完成 PathResolver 双根分流、legacy `findRoot()` 隔离、结构化 context 接入、项目级 auto-context hook、state schema/原子写入/基础锁与 stale-lock 恢复，以及 html-report 显式 roots 改造。
 - 已完成 Codex golden-path 的决策记录、能力矩阵、验收矩阵、npm 层 `setup`/`paths`/结构化 `doctor`、hook envelope 转换、缺 workspace fail-closed 和显式 report wrapper。
 - 本轮新增并验证 `qdm-harness setup|paths|doctor|report` 入口；setup 产物固定在 `dataRoot`，report session 固定在 `stateRoot`，Codex hook 在 runtime 不可发现时给出可执行 setup 提示。
 - 已完成 auth `secretRef`/0600 文件通道的最小安全实现、敏感信息脱敏、wiki index 可重定位改造，以及 installer staging/plugins 修复。
@@ -1053,7 +1054,7 @@ doctor --json 至少输出：
 
 目标：先把边界、协议和安全决策冻结，阻塞后续代码实现。
 
-- [x] P0-01（产品）确认八项产品决策：on-demand、state 外置、wiki 版本策略、auth 本地 blob 范围、多宿主并行、旧 installer 支持版本、`analysis/main.md` 位置、无 workspace 时开放能力。
+- [x] P0-01（产品）确认八项产品决策：项目级 auto-context、state 外置、wiki 版本策略、auth 本地 blob 范围、多宿主并行、旧 installer 支持版本、`analysis/main.md` 位置、无 workspace 时开放能力。
 - [x] P0-02（核心）定义 Root Context schema v1：字段、类型、必填项、默认值、版本兼容范围和错误码。
 - [x] P0-03（核心）固化 `pluginRoot`、`dataRoot`、`secretRoot`、`workspaceRoot`、`stateRoot` 的 owner 映射和生命周期。
 - [x] P0-04（核心）定义路径校验：绝对路径、`realpath`、symlink 防漂移、根之间冲突检测、禁止隐式 `process.cwd()` 回退。
@@ -1069,7 +1070,7 @@ doctor --json 至少输出：
 退出条件：
 
 - [x] P0-EXIT-01：产品确认 `dataRoot`/`secretRoot` 是必需概念，pluginRoot 不作为数据盘。
-- [x] P0-EXIT-02：默认 hook 模式确定为 on-demand。
+- [x] P0-EXIT-02：默认 hook 模式确定为项目级 auto-context，并保留 on-demand 兼容覆盖。
 - [x] P0-EXIT-03：Root Context、state、auth transport、capability matrix 和验收清单均有可评审文档或 fixture。
 - [x] P0-EXIT-04：旧 installer 兼容窗口和迁移入口获得确认。
 
@@ -1108,12 +1109,12 @@ doctor --json 至少输出：
 - [x] P2-03（配置）实现幂等 `qdm-harness setup`：确认 dataRoot、下载/校验 metric-cli、创建非敏感配置、检查 secret reference、写 install manifest，且不创建项目 `.harness`。
 - [x] P2-04（诊断）实现 `qdm-harness doctor --json` 和 `qdm-harness paths --json`，输出五根、版本、runtime hash、secret source 类型和读写能力。
 - [x] P2-05（hook）实现宿主 hook envelope → Root Context 的转换和首次失败时的可执行 setup 提示。
-- [x] P2-06（入口）接入 explicit skill/command，并验证普通 prompt 默认不注入 wiki。
+- [x] P2-06（入口）接入 UserPromptSubmit auto-context，并验证普通 prompt 只注入受控 wiki context。
 - [x] P2-07（报告）接入 report/session state，显式 report/template 才创建 durable state。
 - [x] P2-08（生命周期）验证 reload/new-session 后 auth、runtime、state 和 report session 可恢复（自动化进程/插件替换模拟；Codex UI 实机留给 Phase 5）。
 - [x] P2-09（权限）在只读 pluginRoot + 可写 dataRoot 环境运行完整链路。
 - [x] P2-10（端到端）完成一次 explicit report flow，并保存可复核的输入、输出和诊断摘要。
-- [x] P2-11（副作用）验证普通 prompt 不创建 state、不创建 `.harness`，只读 doctor/status 不写盘。
+- [x] P2-11（副作用）验证普通 prompt 不保存完整 prompt、不创建项目 `.harness`，只读 doctor/status 不写盘。
 
 退出条件：
 
@@ -1179,7 +1180,7 @@ doctor --json 至少输出：
 
 #### P5-01 Claude
 
-- 已完成仓库级前置：原生 manifest、标准 hooks、可安装 marketplace、artifact wrapper、validate 和普通 prompt no-op smoke；真实 Claude CLI 已完成本地 marketplace discovery/install/enable/disable/enable 及 update/rollback 部分证据，以下完整宿主检查仍未标记完成。
+- 已完成仓库级前置：原生 manifest、标准 hooks、可安装 marketplace、artifact wrapper、validate 和普通 prompt auto-context/setup smoke；真实 Claude CLI 已完成本地 marketplace discovery/install/enable/disable/enable 及 update/rollback 部分证据，以下完整宿主检查仍未标记完成。
 - [ ] 完成 discovery/install/enablement 和 hook envelope 验证。
 - [ ] 完成 workspace/secret handoff、卸载重装、升级回滚 smoke；本地 CLI 的卸载重装和 update/rollback 已通过，真实 profile/secret handoff 仍待补。
 - [x] 记录 artifact、版本、能力和失败证据到 capability matrix/runbook；真实 profile/secret/reload 限制见 `docs/claude-phase5.md`。
@@ -1224,7 +1225,7 @@ doctor --json 至少输出：
 每个宿主的退出条件：
 
 - [ ] 可在任意项目目录启动并使用插件，不把 plugin cache 当 workspace/dataRoot。
-- [ ] 普通 prompt 无隐式 wiki 注入和 durable state；explicit skill/report flow 可运行。
+- [ ] 普通 prompt 可获得受控 wiki context，且无隐式 durable state；explicit skill/report flow 可运行。
 - [ ] reinstall/upgrade 不丢 auth、runtime、state、report。
 - [ ] 宿主独立 smoke test 可重复执行并有可复核 PASS 记录。
 

@@ -237,7 +237,9 @@ test("plugin setup enables hooks and MCP from arbitrary projects with isolated s
     input: `${JSON.stringify({ prompt: "请修复 CSS", cwd: f.projectA, session_id: "hook-a" })}\n`,
   });
   assert.equal(hook.status, 0, hook.stderr || hook.stdout);
-  assert.equal(hook.stdout.trim(), "");
+  const hookJSON = JSON.parse(hook.stdout);
+  assertCodexUserPromptSubmitOutput(hookJSON);
+  assert.match(hookJSON.hookSpecificOutput.additionalContext, /Harness mode: free/);
   assert.equal(existsSync(path.join(f.projectA, ".harness")), false);
 
   const mcpEnvA = {
@@ -419,7 +421,11 @@ test("Codex UserPromptSubmit materializes trusted sales context outside the work
     })}\n`,
   });
   assert.equal(ordinaryHook.status, 0, ordinaryHook.stderr || ordinaryHook.stdout);
-  assert.equal(ordinaryHook.stdout.trim(), "");
+  const ordinaryJSON = JSON.parse(ordinaryHook.stdout);
+  assertCodexUserPromptSubmitOutput(ordinaryJSON);
+  assert.match(ordinaryJSON.hookSpecificOutput.additionalContext, /Harness mode: free/);
+  assert.doesNotMatch(ordinaryJSON.hookSpecificOutput.additionalContext, /metrics[\\/]销售额[\\/]playbook\\.md/);
+  assert.equal(existsSync(path.join(f.projectA, ".harness")), false);
 });
 
 test("plugin setup fails closed and does not publish context without a secret", async (t) => {

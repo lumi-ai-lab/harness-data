@@ -71,5 +71,8 @@ test("host artifact matrix builds, verifies, and self-tests every supported host
     },
   });
   assert.equal(hook.status, 0, hook.stderr || hook.stdout);
-  assert.equal(hook.stdout.trim(), "");
+  const hookJSON = JSON.parse(hook.stdout);
+  assert.ok(hookJSON.hookSpecificOutput);
+  assert.equal(hookJSON.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.match(hookJSON.hookSpecificOutput.additionalContext, /QDM_SETUP_REQUIRED/);
 });

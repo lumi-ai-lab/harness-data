@@ -601,7 +601,11 @@ test("Codex clean-room writes setup resources in the Plugin without creating pro
       },
     });
     assert.equal(hook.status, 0, hook.stderr || hook.stdout);
-    assert.equal(hook.stdout.trim(), "", "ordinary prompt must remain on-demand");
+    const hookJSON = JSON.parse(hook.stdout);
+    assert.ok(hookJSON.hookSpecificOutput);
+    assert.equal(hookJSON.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+    assert.match(hookJSON.hookSpecificOutput.additionalContext, /Harness mode: free/);
+    assert.equal(fs.existsSync(path.join(f.workspaceRoot, ".harness")), false);
   }
 
   const status = JSON.parse(assertCliSuccess(runHarnessCli([

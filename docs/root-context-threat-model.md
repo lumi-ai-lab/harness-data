@@ -11,7 +11,7 @@ platform-specific work.
 | Path traversal escapes an owner root | `PathResolver.resolveOwned()` rejects absolute and `..` paths | Implemented |
 | Auth blob appears in model-visible argv | File/`secretRef` sources pass a canonical file path on Unix; inline env blobs remain a compatibility path | Unix MVP; Windows needs a safe file/host handoff |
 | Secret file is readable by another user | Existing secret files require regular-file semantics and mode `0600` on Unix | Implemented for JS/Node readers |
-| Ordinary prompt creates durable state | Structured hooks remain on-demand for prompts without a Harness match; Codex prompts with a known plan may build context and write only hashed structured state | Implemented for structured callers |
+| Ordinary prompt creates durable state | Enabled-project structured hooks may inject bounded context; ordinary Codex prompts still do not write raw prompt or project `.harness` state, and structured state stores only a hash when persistence is required | Implemented for structured callers |
 | Two hook processes overwrite one session | Structured state writes use a per-session lock, atomic rename, and stale-lock recovery | Basic lock implemented; conflict telemetry remains |
 | Workspace identity collides across projects | State root derives from canonical workspace path, host, and schema version | Implemented |
 | Invalid context silently falls back to cwd | Structured context errors surface stable `QDM_*` codes; legacy scanning is isolated behind compatibility APIs | Implemented in JS/Node entry points |

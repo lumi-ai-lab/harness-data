@@ -350,13 +350,13 @@ function shouldAutoRecall(context, prompt) {
 }
 
 /**
- * Structured plugin hooks default to on-demand context. Codex prompts that
- * match a known Harness plan are still injected automatically; legacy
- * string-root callers retain the historical auto-context behavior.
+ * Structured plugin hooks default to auto-context once a project has supplied
+ * a validated Root Context (the project-scoped plugin boundary). Callers that
+ * need the previous behavior can set QDM_HARNESS_HOOK_MODE=on-demand.
  */
 function isOnDemandContext(context, prompt, sessionID, root) {
   if (!context) return false;
-  const mode = String(process.env.QDM_HARNESS_HOOK_MODE || "on-demand").trim().toLowerCase();
+  const mode = String(process.env.QDM_HARNESS_HOOK_MODE || "auto-context").trim().toLowerCase();
   if (mode === "auto-context") return false;
   if (isExplicitContextPrompt(prompt)) return false;
   if (isContinuationPrompt(prompt)) {

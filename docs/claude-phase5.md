@@ -9,7 +9,7 @@
 - Claude 原生插件 manifest 已补齐：`.claude-plugin/plugin.json`，可通过 `claude plugin validate .agents/claude`。
 - Claude hooks 已迁移到标准 `hooks/hooks.json`，命令使用 `${CLAUDE_PLUGIN_ROOT}/scripts/data-harness-cli`，不再依赖项目目录或构建机路径。
 - host artifact 构建会绑定请求的 plugin version，并包含 artifact 内的 `scripts/data-harness-cli` wrapper。
-- `node --test scripts/host-artifact.test.mjs scripts/verify-artifact.test.mjs` 已通过；测试会构建七宿主 artifact、执行 wrapper `--help`，并对 Claude wrapper 执行普通 prompt hook no-op。
+- `node --test scripts/host-artifact.test.mjs scripts/verify-artifact.test.mjs` 已通过；测试会构建七宿主 artifact、执行 wrapper `--help`，并验证 Claude wrapper 在未完成项目 setup 时返回安全的 `QDM_SETUP_REQUIRED` context。
 - 新增 `scripts/build-claude-marketplace.mjs`，把通用 Claude artifact 展平为可直接被 Claude Code marketplace 发现和安装的原生目录，并补齐根目录 `.claude-plugin/plugin.json`、`hooks/hooks.json`、wrapper、vendor core 和 marketplace manifest。
 - 已在真实 Claude CLI `2.1.251` 上用临时本地 marketplace 完成一次 discovery/install/enable/disable/enable smoke；由于当前 profile 未登录，尚未执行需要模型会话的 hook、报告、secret provider 和 reload 验收。
 
