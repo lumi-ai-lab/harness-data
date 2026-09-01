@@ -64,6 +64,8 @@ class PluginConfig:
     runtime_dir: Path | None = None
     _metric_cli_path: str | None = None
     _sensitive_config_dir: str | None = None
+    # schema 2: 从 Root Context 的 pluginRoot 解析的 harness CLI 路径
+    _harness_cli_path: str | None = None
 
     @property
     def sensitive_config_dir(self) -> Path:
@@ -83,6 +85,8 @@ class PluginConfig:
 
     @property
     def data_harness_cli(self) -> Path:
+        if self._harness_cli_path:
+            return Path(self._harness_cli_path)
         if self.runtime_dir is None:
             return Path("data-harness-cli")
         return self.runtime_dir / "bin" / ("data-harness-cli.exe" if os.name == "nt" else "data-harness-cli")
@@ -136,6 +140,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
     context_path = _reference_path(raw.get("root_context_path"), "root_context_path", require_file=True)
     context = _load_root_context(context_path)
     metric_cli_path = _metric_cli_from_context(context, config_file)
+    harness_cli_path = _harness_cli_from_context(context)
     sensitive_dir = _sensitive_dir_from_reference(raw.get("secret_ref"), context)
 
     enabled = raw.get("enabled_agents") or []
@@ -156,6 +161,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         enabled_agents=tuple(enabled),
         _metric_cli_path=str(metric_cli_path),
         _sensitive_config_dir=str(sensitive_dir),
+        _harness_cli_path=str(harness_cli_path),
     )
 
 
@@ -275,6 +281,16 @@ def _metric_cli_from_context(context: dict[str, Any], config_file: Path) -> Path
     if not isinstance(metric, str) or not metric.strip() or not Path(metric).is_absolute():
         raise ConfigError("root context metricCliPath is invalid")
     return Path(metric)
+
+
+def _harness_cli_from_context(context: dict[str, Any]) -> Path:
+    plugin_root = context.get("pluginRoot") or context.get("artifactRoot")
+    if not isinstance(plugin_root, str) or not plugin_root.strip():
+        raise ConfigError("root context pluginRoot is invalid")
+    base = Path(plugin_root).expanduser()
+    if not base.is_absolute() or base.is_symlink() or not base.is_dir():
+        raise ConfigError("root context pluginRoot must be an absolute, non-symlink directory")
+    return base / "scripts" / ("data-harness-cli.exe" if os.name == "nt" else "data-harness-cli")
 
 
 def _sensitive_dir_from_reference(secret_ref: Any, context: dict[str, Any]) -> Path:

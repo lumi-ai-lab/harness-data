@@ -51,6 +51,71 @@ def _ensure_cli_executable(shim: Path | None = None) -> None:
         logger.warning("could not make CLI shim executable: %s", exc)
 
 
+def _tool_descriptor_for(tool_name: str, tool_func: Any, enabled: bool, description: str) -> Any:
+    """Return the host ToolDescriptor bound to *tool_func*, creating it lazily.
+
+    register_tool defers descriptor attachment to a startup hook; the
+    workspace re-injection below can run before that hook, so build the
+    descriptor with the same fields the host would attach.
+    """
+    descriptor = getattr(tool_func, "_tool_descriptor", None)
+    if descriptor is not None:
+        return descriptor
+    try:
+        import inspect
+
+        from qwenpaw.runtime.tool_registry import ToolDescriptor
+    except ImportError:
+        return None
+    descriptor = ToolDescriptor(
+        name=tool_name,
+        func=tool_func,
+        enabled_by_default=enabled,
+        async_execution=inspect.iscoroutinefunction(tool_func),
+        description=description,
+    )
+    tool_func._tool_descriptor = descriptor  # type: ignore[attr-defined]
+    return descriptor
+
+
+def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
+    """Re-inject the plugin tools into a (re)created workspace.
+
+    QwenPaw rebuilds Workspace objects on plugin force-reinstall and on
+    config-driven zero-downtime reloads; register_tool's startup hook does
+    not run again for those, so without this the tools silently vanish
+    from the agent toolkit until the host restarts.
+    """
+    workspace = workspace_info.get("workspace")
+    if workspace is None:
+        try:
+            from qwenpaw.plugins.registry import PluginRegistry
+
+            manager = PluginRegistry().get_workspace_manager()
+            workspace = (
+                manager.agents.get(workspace_info.get("agent_id"))
+                if manager is not None
+                else None
+            )
+        except Exception:
+            workspace = None
+    if workspace is None:
+        return
+    tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
+    if tool_registry is None:
+        return
+    for tool_name, tool_func, enabled, description, _icon in tool_specs:
+        descriptor = _tool_descriptor_for(tool_name, tool_func, enabled, description)
+        if descriptor is None:
+            continue
+        try:
+            if tool_name in tool_registry and hasattr(tool_registry, "unregister"):
+                tool_registry.unregister(tool_name)
+            tool_registry.register(descriptor)
+        except (TypeError, ValueError):
+            pass
+
+
 class QdmHarnessQwenPawPlugin:
     def register(self, api: PluginApi) -> None:
         _require_qwenpaw_21()
@@ -96,8 +161,30 @@ class QdmHarnessQwenPawPlugin:
         async def qdm_scope_summary() -> ToolChunk:
             return _scope_summary()
 
-        api.register_tool(tool_name="qdm_query", tool_func=qdm_query, description="执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", icon="📊", enabled=True, tool_type="internal")
-        api.register_tool(tool_name="qdm_scope_summary", tool_func=qdm_scope_summary, description="返回当前渠道用户的脱敏 QDM 数据权限摘要。", icon="🔐", enabled=True, tool_type="internal")
+        tool_specs = (
+            ("qdm_query", qdm_query, True, "执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", "📊"),
+            ("qdm_scope_summary", qdm_scope_summary, True, "返回当前渠道用户的脱敏 QDM 数据权限摘要。", "🔐"),
+        )
+        for tool_name, tool_func, enabled, description, icon in tool_specs:
+            api.register_tool(tool_name=tool_name, tool_func=tool_func, description=description, icon=icon, enabled=enabled, tool_type="internal")
+        register_ws_hook = getattr(api, "register_workspace_created_hook", None)
+        if callable(register_ws_hook):
+            try:
+                register_ws_hook(
+                    hook_name="qdm_harness_reinject_tools",
+                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    priority=90,
+                    reload_safe=True,
+                )
+            except TypeError:
+                # QwenPaw 2.1.x 的 workspace_created 钩子没有 reload_safe 参数。
+                register_ws_hook(
+                    hook_name="qdm_harness_reinject_tools",
+                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    priority=90,
+                )
+        else:
+            logger.warning("QwenPaw host lacks register_workspace_created_hook(); qdm tools may disappear after plugin hot-reload")
         logger.info("QDM Harness runtime hooks and constrained tools registered")
 
 
@@ -152,6 +239,7 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
     executor = QdmCliExecutor(
         config.qdm_metric_cli,
         harness_cli=Path(__file__).resolve().parent / "scripts" / "data-harness-cli",
+        context_file=config.root_context_path,
         success_bytes=config.query_limits.success_bytes,
         timeout_seconds=config.query_limits.timeout_seconds,
     )

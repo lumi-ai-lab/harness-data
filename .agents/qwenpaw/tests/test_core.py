@@ -194,10 +194,13 @@ class AuthorizationTests(unittest.TestCase):
             metric.write_bytes(b"x")
             secret_dir = root / "secrets"
             secret_dir.mkdir()
+            plugin_root = root / "plugin"
+            plugin_root.mkdir()
             config_dir.joinpath("settings.json").write_text(json.dumps({"schemaVersion": 1, "metricCliPath": str(metric)}), encoding="utf-8")
             context_file = instance / "context.json"
             context_file.write_text(json.dumps({
                 "schemaVersion": 1, "host": "qwenpaw",
+                "pluginRoot": str(plugin_root),
                 "resourceRoot": str(instance), "dataRoot": str(root / "data"),
                 "secretRoot": str(secret_dir), "configPath": str(config_dir / "settings.json"),
             }), encoding="utf-8")
@@ -527,6 +530,85 @@ class ToolBoundaryTests(unittest.TestCase):
             requester_context.reset(token)
         self.assertEqual(result.state, ToolResultState.ERROR)
         self.assertIn("QDM_CLI_UNAVAILABLE", result.content[0].text)
+
+    def test_reload_safe_hook_reinjects_tools_into_replacement_workspace(self) -> None:
+        from qwenpaw.runtime.tool_registry import ToolRegistry
+
+        class Api:
+            def __init__(self) -> None:
+                self.tools: dict[str, object] = {}
+                self.workspace_hooks: list = []
+
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
+                pass
+
+            def register_tool(self, **kwargs: object) -> None:
+                self.tools[str(kwargs["tool_name"])] = kwargs["tool_func"]
+
+            def register_workspace_created_hook(self, **kwargs: object) -> None:
+                self.workspace_hooks.append(kwargs)
+
+        api = Api()
+        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+        self.assertEqual(len(api.workspace_hooks), 1)
+        self.assertTrue(api.workspace_hooks[0]["reload_safe"])
+
+        # A replacement workspace (zero-downtime reload) starts with an empty
+        # ToolRegistry; the reload-safe hook must restore the qdm tools.
+        registry = ToolRegistry()
+        workspace = types.SimpleNamespace(
+            plugins=types.SimpleNamespace(tool_registry=registry),
+        )
+        api.workspace_hooks[0]["callback"](  # type: ignore[operator]
+            {"agent_id": "default", "workspace_dir": "/tmp", "workspace": workspace},
+        )
+        self.assertIn("qdm_query", registry.names())
+        self.assertIn("qdm_scope_summary", registry.names())
+        self.assertTrue(registry.get("qdm_query").async_execution)
+
+    def test_reload_safe_hook_skips_when_no_workspace_is_resolvable(self) -> None:
+        class Api:
+            def __init__(self) -> None:
+                self.workspace_hooks: list = []
+
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
+                pass
+
+            def register_tool(self, **kwargs: object) -> None:
+                pass
+
+            def register_workspace_created_hook(self, **kwargs: object) -> None:
+                self.workspace_hooks.append(kwargs)
+
+        api = Api()
+        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+        # No workspace key and no resolvable manager: must be a no-op, not a crash.
+        api.workspace_hooks[0]["callback"](  # type: ignore[operator]
+            {"agent_id": "default", "workspace_dir": "/tmp"},
+        )
+
+    def test_workspace_hook_falls_back_when_host_rejects_reload_safe(self) -> None:
+        class Api:
+            def __init__(self) -> None:
+                self.tools: dict[str, object] = {}
+                self.workspace_hooks: list = []
+
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
+                pass
+
+            def register_tool(self, **kwargs: object) -> None:
+                self.tools[str(kwargs["tool_name"])] = kwargs["tool_func"]
+
+            def register_workspace_created_hook(self, **kwargs: object) -> None:
+                if "reload_safe" in kwargs:
+                    raise TypeError("unexpected keyword argument 'reload_safe'")
+                self.workspace_hooks.append(kwargs)
+
+        api = Api()
+        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+        self.assertEqual(len(api.workspace_hooks), 1)
+        self.assertNotIn("reload_safe", api.workspace_hooks[0])
+        self.assertEqual(api.workspace_hooks[0]["hook_name"], "qdm_harness_reinject_tools")
 
     def test_qdm_tools_reject_an_unbound_console_request_before_reading_config(self) -> None:
         token = requester_context.set(None)

@@ -91,7 +91,7 @@ class QwenPawHarnessContextHook(HookBase):
             return HookResult()
         try:
             key = session_key(config.session_secret_file, requester.channel, str(getattr(ctx, "session_id", "")))
-            content = request_context(config.data_harness_cli, key, input_text(ctx), context_limits=config.context_limits, timeout_seconds=config.context_cli_timeout_seconds)
+            content = request_context(config.data_harness_cli, key, input_text(ctx), context_limits=config.context_limits, timeout_seconds=config.context_cli_timeout_seconds, context_file=config.root_context_path)
         except HarnessContextError as exc:
             logger.warning("qdm_harness_context_failed reason=%s", exc.reason)
             return HookResult(action=HookAction.SHORT_CIRCUIT, payload=_error_message("Harness 上下文不可用"))

@@ -63,6 +63,7 @@ def request_context(
     *,
     context_limits: ContextLimits | None = None,
     timeout_seconds: int = 60,
+    context_file: Path | None = None,
 ) -> str:
     """Build Harness context from the CLI's qwenpaw-hook output.
 
@@ -76,8 +77,18 @@ def request_context(
     if workspace:
         payload["cwd"] = workspace
     payload_json = json.dumps(payload, ensure_ascii=False)
+    argv = [str(cli_path)]
+    if context_file is not None:
+        if context_file.is_symlink() or not context_file.is_file():
+            raise HarnessContextError("context_file_unavailable")
+        argv += ["--context-file", str(context_file)]
+    argv += ["context", "--format", "qwenpaw-hook"]
+    env = dict(os.environ)
+    # QwenPaw is a read-only host whose plugin always expects the injected
+    # Harness manuals; the CLI's default on-demand mode would skip injection.
+    env["QDM_HARNESS_HOOK_MODE"] = "auto-context"
     try:
-        result = subprocess.run([str(cli_path), "context", "--format", "qwenpaw-hook"], input=payload_json, cwd=str(cli_path.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_seconds)
+        result = subprocess.run(argv, input=payload_json, cwd=str(cli_path.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_seconds, env=env)
     except subprocess.TimeoutExpired as exc:
         raise HarnessContextError("context_cli_timeout") from exc
     except OSError as exc:

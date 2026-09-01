@@ -52,9 +52,10 @@ class QueryScope:
 
 
 class QdmCliExecutor:
-    def __init__(self, cli_path: Path, *, harness_cli: Path | None = None, success_bytes: int | None = None, timeout_seconds: int = 120) -> None:
+    def __init__(self, cli_path: Path, *, harness_cli: Path | None = None, context_file: Path | None = None, success_bytes: int | None = None, timeout_seconds: int = 120) -> None:
         self._cli_path = cli_path
         self._harness_cli = harness_cli
+        self._context_file = context_file
         self._success_bytes = success_bytes
         self._timeout_seconds = timeout_seconds
 
@@ -116,8 +117,14 @@ class QdmCliExecutor:
             raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")
         payload = {"tool_name": "qdm_query", "tool_input": dict(query), "blob": blob}
         env = {key: value for key, value in os.environ.items() if key not in SENSITIVE_ENVIRONMENT}
+        argv = [str(harness)]
+        if self._context_file is not None:
+            if self._context_file.is_symlink() or not self._context_file.is_file():
+                raise QdmCliError("QDM_CONTEXT_UNAVAILABLE", "Root Context 不可用")
+            argv += ["--context-file", str(self._context_file)]
+        argv += ["authz-hook", "--agent", "qwenpaw", "--format", "adapter-envelope"]
         try:
-            result = subprocess.run([str(harness), "authz-hook", "--agent", "qwenpaw", "--format", "adapter-envelope"], input=json.dumps(payload), cwd=str(harness.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self._timeout_seconds, env=env)
+            result = subprocess.run(argv, input=json.dumps(payload), cwd=str(harness.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self._timeout_seconds, env=env)
         except subprocess.TimeoutExpired as exc:
             raise QdmCliError("QDM_CLI_TIMEOUT", "QDM 查询超时") from exc
         except OSError as exc:
