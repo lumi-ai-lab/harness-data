@@ -1,6 +1,6 @@
 {
   "name": "@lumi-ai-lab/harness-data",
-  "version": "0.0.55",
+  "version": "0.0.56",
   "description": "Internal Setup and compatibility implementation bundled with the Harness Data Codex Plugin",
   "type": "module",
   "bin": {
