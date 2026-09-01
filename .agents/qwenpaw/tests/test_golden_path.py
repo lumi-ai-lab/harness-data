@@ -117,6 +117,7 @@ class _Fixture:
             "HARNESS_WORKSPACE_ROOT": str(self.project),
             "HARNESS_SECRET_ROOT": str(self.secrets),
             "HARNESS_CONTEXT_FILE": str(self.instance / "context.json"),
+            "QDM_HARNESS_HOOK_MODE": "auto-context",
             "STUB_LOG": str(self.stub_log),
             "QDM_AUTH_USER_ID": "local-test-user",
         }

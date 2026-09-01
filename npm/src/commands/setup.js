@@ -35,6 +35,26 @@ export function isCodexPluginLayout(context) {
     path.resolve(pluginRoot) === path.resolve(resourceRoot);
 }
 
+/**
+ * Hosts whose setup owns a writable plugin-style layout (resources, config,
+ * runtimes, index and manifests) instead of the legacy dataRoot layout.
+ */
+export function isPluginLayout(context) {
+  return isCodexPluginLayout(context) || String(context?.host || "").toLowerCase() === "qwenpaw";
+}
+
+/**
+ * The writable root that owns plugin-style resources for the current host.
+ * Codex keeps them inside pluginRoot; QwenPaw keeps them inside resourceRoot
+ * because the host plugin directory (artifactRoot) is replaced on upgrade.
+ * Legacy installs keep everything under dataRoot.
+ */
+export function pluginLayoutRoot(context) {
+  if (String(context?.host || "").toLowerCase() === "qwenpaw") return context.resourceRoot;
+  if (isCodexPluginLayout(context)) return context.pluginRoot;
+  return context.dataRoot;
+}
+
 function assertCodexPluginLayout(context) {
   if (String(context?.host || "").toLowerCase() !== "codex") return false;
   const pluginRoot = path.resolve(String(context.pluginRoot || ""));
@@ -58,7 +78,7 @@ function assertCodexPluginLayout(context) {
 }
 
 export function installManifestPath(context) {
-  return path.join(isCodexPluginLayout(context) ? context.pluginRoot : context.dataRoot, "install-manifest.json");
+  return path.join(pluginLayoutRoot(context), "install-manifest.json");
 }
 
 export function settingsPath(context) {
@@ -173,14 +193,14 @@ export async function setupRootContext(context, options = {}) {
 }
 
 async function setupRootContextInner(context, options = {}) {
-  const pluginLayout = assertCodexPluginLayout(context) || isCodexPluginLayout(context);
-  const expectedConfigPath = path.join(pluginLayout ? context.pluginRoot : context.dataRoot, "config", "settings.json");
+  const layoutRoot = pluginLayoutRoot(context);
+  const expectedConfigPath = path.join(layoutRoot, "config", "settings.json");
   if (path.resolve(context.configPath) !== path.resolve(expectedConfigPath)) {
     throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.INVALID, `Plugin setup requires configPath ${expectedConfigPath}`);
   }
   const secret = inspectSecretReference(context);
   if (!options.noAuth && context.secretRef?.kind !== "file") {
-    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.SECRET_UNAVAILABLE, "Codex persisted setup requires a file secretRef");
+    throw new RootContextError(ROOT_CONTEXT_ERROR_CODES.SECRET_UNAVAILABLE, "persisted setup requires a file secretRef");
   }
   if (secret.status === "invalid" || (!options.noAuth && secret.status !== "configured")) {
     throw new RootContextError(
@@ -191,10 +211,10 @@ async function setupRootContextInner(context, options = {}) {
   const authUserId = await resolveAuthUserId(context, options);
   const workspacePlan = await resolveSetupWorkspaceRoots(context, options);
 
-  const writableRoot = pluginLayout ? context.pluginRoot : context.dataRoot;
+  const writableRoot = layoutRoot;
   assertWritableParent(writableRoot);
   fs.mkdirSync(writableRoot, { recursive: true, mode: 0o700 });
-  if (pluginLayout) fs.mkdirSync(context.dataRoot, { recursive: true, mode: 0o700 });
+  if (isPluginLayout(context)) fs.mkdirSync(context.dataRoot, { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.dirname(context.configPath), { recursive: true, mode: 0o700 });
   if (context.secretRoot) fs.mkdirSync(context.secretRoot, { recursive: true, mode: 0o700 });
 
@@ -281,7 +301,7 @@ async function setupRootContextInner(context, options = {}) {
     updatedAt: now,
   };
   writeJsonAtomic(context.configPath, settings, 0o600);
-  const persistedContextPath = writePersistedCodexContext(context, options);
+  const persistedContextPath = writePersistedContext(context, options);
 
   return {
     ok: true,
@@ -380,7 +400,7 @@ async function resolveLatestManifestForSetup(manifest, platform, options = {}) {
 
 export async function ensureMetricCli(context, options = {}) {
   const platform = platformKey();
-  const root = isCodexPluginLayout(context) ? context.pluginRoot : context.dataRoot;
+  const root = pluginLayoutRoot(context);
   const destination = path.join(root, "runtimes", platform, binaryName("qdm-metric-cli"));
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
 
@@ -584,11 +604,11 @@ const WIKIS_REPO = "lumi-ai-lab/harness-data";
 const WIKIS_ASSET_PREFIX = "harness-data-wikis-";
 
 export async function ensureWikis(context, options = {}) {
-  const pluginLayout = isCodexPluginLayout(context);
-  const target = pluginLayout
-    ? path.join(context.pluginRoot, "resources", "wikis")
+  const layout = isPluginLayout(context);
+  const target = layout
+    ? path.join(pluginLayoutRoot(context), "resources", "wikis")
     : path.join(context.dataRoot, "wikis");
-  if (options.skipWikis === true) return { status: "skipped", mode: pluginLayout ? "plugin" : "legacy", path: target };
+  if (options.skipWikis === true) return { status: "skipped", mode: layout ? "plugin" : "legacy", path: target };
 
   const bundledSources = [
     path.join(context.pluginRoot, "resources", "wikis"),
@@ -599,7 +619,7 @@ export async function ensureWikis(context, options = {}) {
   if (!options.force && isWikisRoot(target) && !options.wikisSource) {
     try {
       validateWikisSource(target);
-      return { status: pluginLayout ? "embedded" : "exists", mode: bundledSource === target ? "bundled" : "exists", path: target };
+      return { status: layout ? "embedded" : "exists", mode: bundledSource === target ? "bundled" : "exists", path: target };
     } catch (error) {
       return { status: "failed", error: error?.message || String(error), path: target };
     }
@@ -628,7 +648,7 @@ export async function ensureWikis(context, options = {}) {
       options,
     );
     const { tag, asset } = resolved;
-    const cacheRoot = pluginLayout ? context.pluginRoot : context.dataRoot;
+    const cacheRoot = layout ? pluginLayoutRoot(context) : context.dataRoot;
     const cacheDir = path.join(cacheRoot, ".bootstrap-cache");
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
     const archive = path.join(cacheDir, asset.name || `${WIKIS_ASSET_PREFIX}${tag}.zip`);
@@ -690,7 +710,7 @@ function writeHarnessConfigYaml(context, metricCli, authz = {}) {
   const content = [
     "# Harness Data configuration generated by setup.",
     "paths:",
-    `  knowledge: ${isCodexPluginLayout(context) ? "resources/wikis" : "wikis"}`,
+    `  knowledge: ${isPluginLayout(context) ? "resources/wikis" : "wikis"}`,
     "cli:",
     `  qdm_metric_cli: ${metricCli.path || ""}`,
     "authz:",
@@ -871,11 +891,11 @@ async function buildWikisIndex(context, options = {}) {
 }
 
 function createSetupSnapshot(context) {
-  const pluginLayout = isCodexPluginLayout(context);
+  const pluginLayout = isPluginLayout(context);
   const roots = pluginLayout
     ? [
       {
-        root: path.resolve(context.pluginRoot),
+        root: path.resolve(pluginLayoutRoot(context)),
         managed: ["config", "secrets", "runtimes", ".harness", ".bootstrap-cache", "resource-manifest.json", "install-manifest.json", "context.json", "resources/wikis"],
       },
       { root: path.resolve(context.dataRoot), managed: [] },
@@ -884,6 +904,9 @@ function createSetupSnapshot(context) {
       root: path.resolve(context.dataRoot),
       managed: ["runtimes", "wikis", ".harness", "config", ".bootstrap-cache", "resource-manifest.json", "install-manifest.json"],
     }];
+  if (String(context.host || "").toLowerCase() === "qwenpaw" && context.secretRoot) {
+    roots.push({ root: path.resolve(context.secretRoot), managed: ["auth.blob"] });
+  }
   const backupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qdm-setup-backup-"));
   const snapshots = roots.map((entry, index) => ({
     ...entry,
@@ -956,18 +979,31 @@ function writeJsonAtomic(filePath, value, mode = 0o600) {
   fs.renameSync(temp, filePath);
 }
 
-function writePersistedCodexContext(context, options = {}) {
-  if (context.host !== "codex") return "";
-  const env = options.env || process.env;
-  if (!env.CODEX_HOME && options.persistContext !== true && !isCodexPluginLayout(context)) return "";
-  const codexHome = path.resolve(String(env.CODEX_HOME || path.join(os.homedir(), ".codex")));
-  const filePath = isCodexPluginLayout(context)
-    ? path.join(context.pluginRoot, "context.json")
-    : path.join(codexHome, "qdm-harness", "context.json");
-  writeJsonAtomic(filePath, {
+function writePersistedContext(context, options = {}) {
+  const host = String(context.host || "").toLowerCase();
+  let filePath = "";
+  if (host === "codex") {
+    const env = options.env || process.env;
+    if (!env.CODEX_HOME && options.persistContext !== true && !isCodexPluginLayout(context)) return "";
+    const codexHome = path.resolve(String(env.CODEX_HOME || path.join(os.homedir(), ".codex")));
+    filePath = isCodexPluginLayout(context)
+      ? path.join(context.pluginRoot, "context.json")
+      : path.join(codexHome, "qdm-harness", "context.json");
+  } else if (host === "qwenpaw" && context.resourceRoot) {
+    filePath = path.join(context.resourceRoot, "context.json");
+  } else {
+    return "";
+  }
+  writeJsonAtomic(filePath, persistedContextValue(context, options), 0o600);
+  return filePath;
+}
+
+function persistedContextValue(context, options = {}) {
+  return {
     schemaVersion: context.schemaVersion,
     host: context.host,
     pluginRoot: context.pluginRoot,
+    artifactRoot: context.artifactRoot,
     resourceRoot: context.resourceRoot,
     dataRoot: context.dataRoot,
     secretRoot: context.secretRoot,
@@ -980,8 +1016,7 @@ function writePersistedCodexContext(context, options = {}) {
       hasStableSessionId: false,
       supportsSecretReference: options.noAuth ? false : Boolean(context.secretRef),
     },
-  }, 0o600);
-  return filePath;
+  };
 }
 
 function writeOutput(report, options, io) {
@@ -1018,6 +1053,7 @@ function discoverPluginVersion(pluginRoot) {
     path.join(pluginRoot, ".codex-plugin", "plugin.json"),
     path.join(pluginRoot, "agents", "codex", ".codex-plugin", "plugin.json"),
     path.join(pluginRoot, "agents", "workbuddy", ".codebuddy-plugin", "plugin.json"),
+    path.join(pluginRoot, "plugin.json"),
   ]) {
     try {
       const value = JSON.parse(fs.readFileSync(candidate, "utf8"));

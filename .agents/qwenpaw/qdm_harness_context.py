@@ -66,9 +66,13 @@ def request_context(
     """
     if cli_path.is_symlink() or not cli_path.is_file() or (os.name != "nt" and not cli_path.stat().st_mode & stat.S_IXUSR):
         raise HarnessContextError("context_cli_unavailable")
-    payload = json.dumps({"session_id": session_id, "prompt": prompt}, ensure_ascii=False)
+    payload: dict[str, Any] = {"session_id": session_id, "prompt": prompt}
+    workspace = os.environ.get("HARNESS_WORKSPACE_ROOT") or ""
+    if workspace:
+        payload["cwd"] = workspace
+    payload_json = json.dumps(payload, ensure_ascii=False)
     try:
-        result = subprocess.run([str(cli_path), "context", "--format", "agent-hook"], input=payload, cwd=str(cli_path.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_seconds)
+        result = subprocess.run([str(cli_path), "context", "--format", "agent-hook"], input=payload_json, cwd=str(cli_path.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         raise HarnessContextError("context_cli_timeout") from exc
     except OSError as exc:
