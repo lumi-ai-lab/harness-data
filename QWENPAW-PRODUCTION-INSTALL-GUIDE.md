@@ -30,6 +30,19 @@ harness-data qwenpaw setup \
   --auth-blob <qdm1enc... 内联值> --auth-user-id <用户 ID>
 ```
 
+企微/飞书等渠道授权场景(运行时由 `channel-auth.json` 提供各渠道用户的凭证,
+不需要 auth.blob 与 dev user id)可以改用 `--channel-auth-only`, 跳过
+`--auth-blob`/`--auth-user-id` 的强制校验, authz 保持开启:
+
+```bash
+harness-data qwenpaw setup \
+  --source qwenpaw-plugin \
+  --wikis-source <本地 wikis 目录或省略以走 Release 下载> \
+  --metric-cli <本地 qdm-metric-cli 或省略以走下载> \
+  --channel-auth-only \
+  --secret-dir <敏感目录, channel-auth.json 所在, 默认 /run/secrets>
+```
+
 完成后插件通过引用模型 `plugin-config.json` 指向 Root Context(instanceRoot), 工作区不再存放
 任何 Harness 资源。
 
@@ -37,18 +50,17 @@ harness-data qwenpaw setup \
 
 在 QwenPaw 后台「插件管理」页直接上传 ZIP 时, 后端用 Python `zipfile` 解压,
 **不会恢复 Unix 执行位**, 插件内的 `scripts/data-harness-cli` 会变成 0644。
-修复方式(二选一):
+常规流程无需手动处理:
+
+- `harness-data qwenpaw setup` 用 `node` 直跑 `main.js`, 不经过该 shim, 不依赖执行位;
+- 运行时 (authz-hook / context hook / report hook) 调用 shim 前有 `S_IXUSR` 预检查,
+  但那时插件必然已加载, `register()` 已在加载时自愈执行位(对重新安装/升级同样生效)。
+
+仅当插件尚未被宿主加载过、需要直接从 shell 手动调用 shim 时, 才需补一次:
 
 ```bash
-# 方式一: 手动补一次执行位(推荐, 同时修复运行时的 hook/tool 调用)
 chmod +x ~/.qwenpaw/plugins/qdm-harness-qwenpaw/scripts/data-harness-cli
-
-# 方式二: 所有命令行调用都加 node 前缀, 不依赖执行位
-node ~/.qwenpaw/plugins/qdm-harness-qwenpaw/scripts/data-harness-cli qwenpaw setup ...
 ```
-
-插件在 `register()` 加载时也会自愈执行位(对后续重新安装/升级同样生效), 但 Setup 本身
-需要先跑, 所以 UI 上传后仍建议先手动 `chmod +x`。
 
 ## 目录契约
 
