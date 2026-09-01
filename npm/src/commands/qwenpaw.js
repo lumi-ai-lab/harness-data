@@ -23,6 +23,12 @@ function defaultInstanceBase() {
   return path.join(os.homedir(), ".qdm", "harness-data");
 }
 
+function firstWorkspaceAllowlist(options) {
+  const value = options.workspaceAllowlist;
+  if (Array.isArray(value)) return String(value[0] || "").trim();
+  return String(value || "").trim();
+}
+
 export async function qwenpawCommand(options = {}) {
   const action = String(options._?.[0] || "").toLowerCase();
   if (!actions.has(action)) {
@@ -54,7 +60,8 @@ export async function setupQwenPaw(options = {}) {
     String(options.instanceRoot || path.join(defaultInstanceBase(), "instance", version)).trim(),
   );
   const dataRoot = path.resolve(String(options.dataRoot || path.join(defaultInstanceBase(), "data")).trim());
-  const workspaceRoot = path.resolve(String(options.workspaceRoot || options.workspaceAllowlist?.[0] || process.cwd()).trim());
+  const workspaceRoot = path.resolve(String(options.workspaceRoot || firstWorkspaceAllowlist(options) || process.cwd()).trim());
+  const secretRoot = path.resolve(String(options.secretDir || defaultSensitiveDir()).trim());
 
   const setupReport = await setupCommand({
     ...options,
@@ -63,6 +70,7 @@ export async function setupQwenPaw(options = {}) {
     resourceRoot: instanceRoot,
     dataRoot,
     workspaceRoot,
+    secretRoot,
     json: true,
   });
 

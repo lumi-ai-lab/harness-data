@@ -5,7 +5,10 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 import logging
 import hashlib
+import os
+import stat
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from agentscope.message import TextBlock, ToolResultState
@@ -30,9 +33,28 @@ class AuthorizationSnapshot:
     scope_fingerprint: str
 
 
+def _ensure_cli_executable(shim: Path | None = None) -> None:
+    """Restore the exec bit on the bundled CLI shim.
+
+    QwenPaw's backend installs an uploaded ZIP with zipfile.extractall(),
+    which drops Unix permission bits.  Without this the runtime bridges
+    (authz-hook / context hook) fail their S_IXUSR pre-checks.
+    """
+    if os.name == "nt":
+        return
+    shim = shim or (Path(__file__).resolve().parent / "scripts" / "data-harness-cli")
+    try:
+        mode = shim.stat().st_mode
+        if not mode & stat.S_IXUSR:
+            shim.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError as exc:
+        logger.warning("could not make CLI shim executable: %s", exc)
+
+
 class QdmHarnessQwenPawPlugin:
     def register(self, api: PluginApi) -> None:
         _require_qwenpaw_21()
+        _ensure_cli_executable()
         # QwenPaw's native Plugin API registers HookBase instances into every
         # workspace's HookRegistry on startup (register_runtime_hook).
         register_hook = getattr(api, "register_runtime_hook", None)

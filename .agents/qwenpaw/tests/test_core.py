@@ -701,6 +701,19 @@ class HookLifecycleTests(unittest.TestCase):
             self.assertTrue(getattr(hook, "name", None))
         self.assertEqual(api.tools, ["qdm_query", "qdm_scope_summary"])
 
+    def test_plugin_restores_cli_exec_bit_for_zip_installed_layouts(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX exec bits are not applicable on Windows")
+        with tempfile.TemporaryDirectory() as temp:
+            scripts = Path(temp) / "scripts"
+            scripts.mkdir()
+            shim = scripts / "data-harness-cli"
+            shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+            shim.chmod(0o644)  # QwenPaw backend zipfile.extractall drops exec bits
+            PLUGIN_MODULE._ensure_cli_executable(shim)
+            self.assertTrue(shim.stat().st_mode & stat.S_IXUSR)
+            self.assertFalse(shim.is_symlink())
+
     def test_qdm_query_public_contract_has_no_report_arguments(self) -> None:
         class Api:
             def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:

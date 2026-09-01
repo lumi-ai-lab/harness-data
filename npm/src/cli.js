@@ -27,8 +27,8 @@ function parse(argv) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       const value = inline ?? args[++i];
-      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace"].includes(key) && options[key] !== undefined) {
-        options[key] = Array.isArray(options[key]) ? [...options[key], value] : [options[key], value];
+      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace"].includes(key)) {
+        options[key] = Array.isArray(options[key]) ? [...options[key], value] : [value];
       } else {
         options[key] = value;
       }

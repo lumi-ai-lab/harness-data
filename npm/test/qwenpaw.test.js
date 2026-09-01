@@ -130,6 +130,8 @@ test("qwenpaw setup installs the native plugin and builds the reference config",
     assert.equal(config.plugin_version, "0.1.6");
     assert.equal(config.root_context_path, path.join(instance, "context.json"));
     assert.deepEqual(config.enabled_agents, ["qdmDataAgent"]);
+    assert.equal(config.secret_ref, secrets);
+    assert.ok(existsSync(path.join(secrets, "auth.blob")), "secret_ref dir must contain auth.blob");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
