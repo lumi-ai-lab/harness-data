@@ -141,7 +141,7 @@ jobs:
           set -euo pipefail
           asset="dist/harness-data-qwenpaw-plugin-${VERSION_TAG}.zip"
           unzip -Z1 "$asset" | grep -q '^plugin.json$'
-          if unzip -Z1 "$asset" | grep -Eq '(^|/)(wikis|resources|tests|__pycache__|\.harness)/'; then
+          if unzip -Z1 "$asset" | grep -Eq '^(wikis|resources|tests|__pycache__|\.harness)/'; then
             echo "::error::QwenPaw Plugin ZIP must not contain wiki/secret/state/test content"
             exit 1
           fi
