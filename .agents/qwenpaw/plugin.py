@@ -33,11 +33,13 @@ class AuthorizationSnapshot:
 class QdmHarnessQwenPawPlugin:
     def register(self, api: PluginApi) -> None:
         _require_qwenpaw_21()
-        register_now = getattr(api, "register_runtime_hook_now", None)
-        if not callable(register_now):
-            raise RuntimeError("QDM Harness requires QwenPaw 2.1.x register_runtime_hook_now()")
-        for hook_name, factory, priority in hook_factories():
-            register_now(hook_factory=factory, hook_name=hook_name, priority=priority, replace_legacy_same_name=False)
+        # QwenPaw's native Plugin API registers HookBase instances into every
+        # workspace's HookRegistry on startup (register_runtime_hook).
+        register_hook = getattr(api, "register_runtime_hook", None)
+        if not callable(register_hook):
+            raise RuntimeError("QDM Harness requires QwenPaw with register_runtime_hook()")
+        for _hook_name, factory, _priority in hook_factories():
+            register_hook(factory())
 
         async def qdm_query(
             metric: str,

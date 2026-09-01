@@ -120,6 +120,7 @@ export async function initializeQwenPawDev() {
     "--auth-blob-file", secret,
     "--auth-user-id", DEFAULT_AUTH_USER_ID,
     "--secret-dir", SECRET_DIR,
+    "--plugin-config-file", path.join(WORKING_DIR, "plugin-config.json"),
     "--json",
   ];
   const setup = run(process.execPath, [path.join(repoRoot, "npm", "bin", "harness-data.js"), ...setupArgs], { cwd: PROJECT_ROOT });
@@ -128,7 +129,7 @@ export async function initializeQwenPawDev() {
   console.log("[4/4] 验证插件实例");
   const doctor = run(
     process.execPath,
-    [path.join(repoRoot, "npm", "bin", "harness-data.js"), "qwenpaw", "doctor", "--json"],
+    [path.join(repoRoot, "npm", "bin", "harness-data.js"), "qwenpaw", "doctor", "--json", "--plugin-config-file", path.join(WORKING_DIR, "plugin-config.json")],
     { cwd: PROJECT_ROOT, allowFailure: true },
   );
   const report = JSON.parse(doctor.stdout || "{}");

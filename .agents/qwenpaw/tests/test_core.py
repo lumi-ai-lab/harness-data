@@ -510,7 +510,7 @@ class ToolBoundaryTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.tools: dict[str, object] = {}
 
-            def register_runtime_hook_now(self, **_kwargs: object) -> None:
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
                 pass
 
             def register_tool(self, **kwargs: object) -> None:
@@ -674,7 +674,8 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_plugin_only_uses_the_public_runtime_hook_registration_api(self) -> None:
         source = (ROOT / "plugin.py").read_text(encoding="utf-8")
-        self.assertIn("register_runtime_hook_now", source)
+        self.assertIn("register_runtime_hook", source)
+        self.assertNotIn("register_runtime_hook_now", source)
         self.assertNotIn("hook_registry", source)
         self.assertNotIn("_sorted_cache", source)
         self.assertNotIn("replace_plugin_hook", source)
@@ -682,11 +683,11 @@ class HookLifecycleTests(unittest.TestCase):
     def test_plugin_registers_all_hooks_with_the_public_api(self) -> None:
         class Api:
             def __init__(self) -> None:
-                self.hooks: list[dict[str, object]] = []
+                self.hooks: list[object] = []
                 self.tools: list[str] = []
 
-            def register_runtime_hook_now(self, **kwargs: object) -> None:
-                self.hooks.append(kwargs)
+            def register_runtime_hook(self, hook: object, **kwargs: object) -> None:
+                self.hooks.append(hook)
 
             def register_tool(self, **kwargs: object) -> None:
                 self.tools.append(str(kwargs["tool_name"]))
@@ -694,12 +695,15 @@ class HookLifecycleTests(unittest.TestCase):
         api = Api()
         QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
         self.assertEqual(len(api.hooks), len(hook_factories()))
-        self.assertTrue(all(item["replace_legacy_same_name"] is False for item in api.hooks))
+        for hook in api.hooks:
+            self.assertTrue(callable(getattr(hook, "run", None)))
+            self.assertTrue(getattr(hook, "phase", None) is not None)
+            self.assertTrue(getattr(hook, "name", None))
         self.assertEqual(api.tools, ["qdm_query", "qdm_scope_summary"])
 
     def test_qdm_query_public_contract_has_no_report_arguments(self) -> None:
         class Api:
-            def register_runtime_hook_now(self, **_kwargs: object) -> None:
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
                 pass
 
             def register_tool(self, **kwargs: object) -> None:
@@ -713,7 +717,7 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_plugin_startup_rejects_an_unsupported_qwenpaw_version(self) -> None:
         class Api:
-            register_runtime_hook_now = staticmethod(lambda **_kwargs: None)
+            register_runtime_hook = staticmethod(lambda _hook: None)
 
         with patch("qdm_harness_qwenpaw_test.plugin.version", return_value="2.3.0"):
             with self.assertRaisesRegex(RuntimeError, "QwenPaw 2.1.x or 2.2.x"):
@@ -721,7 +725,7 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_plugin_startup_accepts_22x_and_prerelease_versions(self) -> None:
         class Api:
-            def register_runtime_hook_now(self, **_kwargs: object) -> None:
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
                 pass
 
             def register_tool(self, **_kwargs: object) -> None:

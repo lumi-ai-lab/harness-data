@@ -92,8 +92,8 @@ export async function updateQwenPaw(options = {}) {
 
 export async function doctorQwenPaw(options = {}) {
   const json = options.json === true;
-  const findings = [];
-  const pluginRoot = path.resolve(String(options.pluginRoot || "").trim());
+  const rawPluginRoot = String(options.pluginRoot || "").trim();
+  const pluginRoot = rawPluginRoot ? path.resolve(rawPluginRoot) : "";
   const reference = readReferenceConfig(options);
   const contextPath = reference?.root_context_path
     ? path.resolve(reference.root_context_path)
@@ -201,7 +201,7 @@ function discoverPluginVersion(source) {
 }
 
 async function probeQwenPaw(python, source, options) {
-  const code = "import importlib.metadata; from qwenpaw.plugins.api import PluginApi; v=importlib.metadata.version('qwenpaw'); assert callable(getattr(PluginApi,'register_runtime_hook_now',None)), 'register_runtime_hook_now missing'; print(v)";
+  const code = "import importlib.metadata; from qwenpaw.plugins.api import PluginApi; v=importlib.metadata.version('qwenpaw'); assert callable(getattr(PluginApi,'register_runtime_hook',None)), 'register_runtime_hook missing'; print(v)";
   const result = await run(python, ["-c", code], { allowFailure: true, env: { ...process.env, QWENPAW_WORKING_DIR: String(options.qwenpawWorkingDir || "").trim() || undefined } });
   if (result.code !== 0) {
     throw new Error("QwenPaw 2.1.x with register_runtime_hook_now() is required (probe failed)");
