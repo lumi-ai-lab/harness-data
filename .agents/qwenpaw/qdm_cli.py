@@ -1,4 +1,10 @@
-"""Narrow, shell-free qdm-metric-cli execution."""
+"""Narrow, shell-free qdm-metric-cli execution.
+
+Authorization decisions (scope, filter normalization, deny mapping) come
+from ``data-harness-cli authz-hook --agent qwenpaw``; this module only
+validates the business shape, forwards the query for authorization and
+executes the analysis afterwards (plan.md §6).
+"""
 
 from __future__ import annotations
 
@@ -19,47 +25,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _FILTER_VALUE = re.compile(r"^[^\s,=\x00]{1,128}$")
 _STATISTIC_POLICIES = frozenset({"SUMMARY", "SALES_STORE_DAY_AVG"})
 _TIME_GRAINS = frozenset({"DAY", "WEEK", "MONTH"})
-SAFE_CLI_ERROR_CODES: dict[str, tuple[str, str]] = {
-    "FILTER_OUTSIDE_DATA_SCOPE": (
-        "QDM_FILTER_OUTSIDE_DATA_SCOPE", "请求的数据范围不在当前用户授权范围内",
-    ),
-    "AUTH_CAPABILITY_DENIED": (
-        "QDM_AUTH_CAPABILITY_DENIED", "当前用户没有 QDM 数据查询权限",
-    ),
-    "EMPTY_DATA_SCOPE": (
-        "QDM_EMPTY_DATA_SCOPE", "当前用户的数据授权范围为空或未配置完整",
-    ),
-    "AUTH_USER_DISABLED": (
-        "QDM_AUTH_USER_DISABLED", "当前用户的数据授权不可用",
-    ),
-    "AUTH_BLOB_DECRYPT_FAIL": (
-        "QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝",
-    ),
-    "AUTH_BLOB_INVALID": (
-        "QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝",
-    ),
-    "DIMENSION_NOT_FOUND": ("QDM_DIMENSION_NOT_FOUND", "查询维度不存在"),
-    "DIMENSION_NOT_SUPPORTED": ("QDM_DIMENSION_NOT_SUPPORTED", "当前指标不支持该查询维度"),
-    "EMPTY_FILTER_VALUES": ("QDM_FILTER_VALUE_INVALID", "筛选值不能为空"),
-    "INVALID_FILTER_VALUE": ("QDM_FILTER_VALUE_INVALID", "筛选值无效"),
-    "DUPLICATE_FILTER_VALUE": ("QDM_FILTER_VALUE_INVALID", "筛选值重复"),
-    "QUERY_LIMIT_EXCEEDED": ("QDM_QUERY_INVALID", "查询筛选条件超过限制"),
-}
-SAFE_SCOPE_DIMENSIONS: dict[str, tuple[str, str]] = {
-    "manageAreaId": ("QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
-    "manageAreaIds": ("QDM_AREA_AUTH_SCOPE_EMPTY", "当前用户的管理区域授权范围为空或未配置完整"),
-    "categoryLevel1Id": ("QDM_CATEGORY_OUTSIDE_DATA_SCOPE", "请求的商品分类不在当前用户授权范围内"),
-    "categoryLevel1Ids": ("QDM_CATEGORY_AUTH_SCOPE_EMPTY", "当前用户的商品分类授权范围为空或未配置完整"),
-    "sapArea2Id": ("QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
-    "dcSapArea2Id": ("QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
-    # Store authorization is optional in auth describe responses.  When the
-    # upstream CLI exposes storeId entries, they are resolved exactly like
-    # area/category entries; otherwise a store name is rejected fail-closed.
-    "storeId": ("QDM_STORE_OUTSIDE_DATA_SCOPE", "请求的门店不在当前用户授权范围内"),
-}
-_SAFE_ERROR_TEXT = re.compile(
-    r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, SAFE_CLI_ERROR_CODES)) + r")(?![A-Za-z0-9_])",
-)
+_QUERY_KEYS = frozenset({"metric", "start_date", "end_date", "statistic_policy", "agg_dims", "filters", "time_grain", "order_by", "page_size", "curr_page", "yoy", "mom"})
 
 
 class QdmCliError(RuntimeError):
@@ -86,14 +52,15 @@ class QueryScope:
 
 
 class QdmCliExecutor:
-    def __init__(self, cli_path: Path, *, success_bytes: int | None = None, timeout_seconds: int = 120) -> None:
+    def __init__(self, cli_path: Path, *, harness_cli: Path | None = None, success_bytes: int | None = None, timeout_seconds: int = 120) -> None:
         self._cli_path = cli_path
+        self._harness_cli = harness_cli
         self._success_bytes = success_bytes
         self._timeout_seconds = timeout_seconds
 
     def query(self, *, metric: str, start_date: str, end_date: str, statistic_policy: str = "SUMMARY", agg_dims: Sequence[str] | None = None, filters: Mapping[str, Sequence[str]] | None = None, time_grain: str | None = None, order_by: str | None = None, page_size: int | None = None, curr_page: int | None = None, yoy: bool = False, mom: bool = False, blob: str, scope: QueryScope | None = None) -> str:
-        # Validate the business shape before touching the CLI, then perform the
-        # mandatory authorization preflight before analysis execution.
+        # Validate the business shape before touching the CLI, then obtain the
+        # authorized decision + normalized filters from the JS authz-hook.
         args = _query_args(
             metric=metric,
             start_date=start_date,
@@ -108,9 +75,20 @@ class QdmCliExecutor:
             yoy=yoy,
             mom=mom,
         )
-        if scope is None:
-            scope = self.preflight_query(blob)
-        normalized_filters = normalize_authorized_filters(filters, scope)
+        _, normalized_filters = self.authorize(blob, {
+            "metric": metric,
+            "start_date": start_date,
+            "end_date": end_date,
+            "statistic_policy": statistic_policy,
+            "agg_dims": list(agg_dims) if agg_dims else None,
+            "filters": dict(filters) if filters else None,
+            "time_grain": time_grain,
+            "order_by": order_by,
+            "page_size": page_size,
+            "curr_page": curr_page,
+            "yoy": yoy,
+            "mom": mom,
+        }, scope=scope)
         args = _query_args(
             metric=metric,
             start_date=start_date,
@@ -128,37 +106,53 @@ class QdmCliExecutor:
         return self._run(["analysis", "execute", *args, "--data-auth", "--auth-blob", blob])
 
     def preflight_query(self, blob: str) -> QueryScope:
-        raw = self._run(["auth", "describe", "--auth-blob", blob])
+        scope, _ = self.authorize(blob, {})
+        return scope
+
+    def authorize(self, blob: str, query: Mapping[str, Any], *, scope: QueryScope | None = None) -> tuple[QueryScope, dict[str, list[str]] | None]:
+        """Ask the JS authz-hook for the decision, scope and normalized filters."""
+        harness = self._harness_cli
+        if harness is None or harness.is_symlink() or not harness.is_file() or (os.name != "nt" and not harness.stat().st_mode & stat.S_IXUSR):
+            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")
+        payload = {"tool_name": "qdm_query", "tool_input": dict(query), "blob": blob}
+        env = {key: value for key, value in os.environ.items() if key not in SENSITIVE_ENVIRONMENT}
         try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?") from exc
-        if not isinstance(payload, Mapping):
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
-        if payload.get("enabled") is not True:
-            raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "褰撳墠鐢ㄦ埛鐨勬暟鎹巿鏉冧笉鍙敤")
-        capabilities = payload.get("capabilities")
-        if not isinstance(capabilities, list) or not all(isinstance(item, str) for item in capabilities):
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
-        if "qdm.metric.query" not in capabilities:
-            raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "褰撳墠鐢ㄦ埛娌℃湁 QDM 鏁版嵁鏌ヨ鏉冮檺")
-        labels_resolved = payload.get("labelsResolved")
-        if not isinstance(labels_resolved, bool):
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 权限标签状态无效")
-        data_scope = _parse_data_scope(payload.get("dataScope"))
-        if not data_scope:
-            raise QdmCliError("QDM_EMPTY_DATA_SCOPE", "褰撳墠鐢ㄦ埛鐨勬暟鎹巿鏉冭寖鍥翠负绌烘垨鏈厤缃畬鏁?")
-        return QueryScope(True, frozenset(capabilities), data_scope, labels_resolved)
+            result = subprocess.run([str(harness), "authz-hook", "--agent", "qwenpaw", "--format", "adapter-envelope"], input=json.dumps(payload), cwd=str(harness.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self._timeout_seconds, env=env)
+        except subprocess.TimeoutExpired as exc:
+            raise QdmCliError("QDM_CLI_TIMEOUT", "QDM 查询超时") from exc
+        except OSError as exc:
+            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用") from exc
+        if result.returncode != 0:
+            raise QdmCliError("QDM_AUTHZ_UNAVAILABLE", "授权服务不可用")
+        try:
+            envelope: Any = json.loads(result.stdout)
+            status = envelope["status"]
+            hook_output = envelope.get("hookOutput") or {}
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效") from exc
+        if status == "disabled":
+            raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "当前用户没有 QDM 数据查询权限")
+        if status == "deny":
+            reason = str(hook_output.get("permissionDecisionReason") or "QDM_AUTHZ_DENIED: 请求被拒绝")
+            code, _, message = reason.partition(": ")
+            raise QdmCliError(code or "QDM_AUTHZ_DENIED", message or reason)
+        if status != "allow":
+            raise QdmCliError("QDM_AUTHZ_UNAVAILABLE", "授权服务不可用")
+        decision = hook_output.get("permissionDecision")
+        if decision != "allow":
+            raise QdmCliError("QDM_AUTHZ_UNAVAILABLE", "授权服务不可用")
+        authorized_scope = _parse_scope(hook_output.get("scope") or {}, scope)
+        normalized = _parse_normalized_filters(hook_output.get("normalizedFilters"))
+        return authorized_scope, normalized
 
     def scope_summary(self, blob: str) -> dict[str, Any]:
-        raw = self._run(["auth", "describe", "--auth-blob", blob])
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 权限摘要不可用") from exc
-        if not isinstance(payload, dict):
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 权限摘要不可用")
-        return {key: payload[key] for key in ("enabled", "capabilities", "dataScope", "labelsResolved") if key in payload}
+        scope, _ = self.authorize(blob, {})
+        return {
+            "enabled": scope.enabled,
+            "capabilities": sorted(scope.capabilities),
+            "dataScope": {k: [{"id": e.id, "name": e.name} for e in v] for k, v in scope.data_scope.items()},
+            "labelsResolved": scope.labels_resolved,
+        }
 
     def _run(self, argv: list[str]) -> str:
         if self._cli_path.is_symlink() or not self._cli_path.is_file() or (os.name != "nt" and not self._cli_path.stat().st_mode & stat.S_IXUSR):
@@ -263,16 +257,40 @@ def _filters(value: Any) -> list[tuple[str, list[str]]]:
     return result
 
 
+def _parse_scope(value: Any, cached: QueryScope | None) -> QueryScope:
+    if cached is not None:
+        return cached
+    if not isinstance(value, Mapping):
+        raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效")
+    enabled = value.get("enabled") is True
+    capabilities_raw = value.get("capabilities")
+    if not isinstance(capabilities_raw, list) or not all(isinstance(item, str) for item in capabilities_raw):
+        raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效")
+    data_scope = _parse_data_scope(value.get("dataScope"))
+    labels_resolved = value.get("labelsResolved") is not False
+    return QueryScope(enabled, frozenset(capabilities_raw), data_scope, labels_resolved)
+
+
+def _parse_normalized_filters(value: Any) -> dict[str, list[str]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效")
+    parsed: dict[str, list[str]] = {}
+    for dimension, values in value.items():
+        if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效")
+        parsed[str(dimension)] = values
+    return parsed
+
+
 def _parse_data_scope(value: Any) -> dict[str, tuple[ScopeEntry, ...]]:
     if not isinstance(value, Mapping):
-        raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
+        return {}
     parsed: dict[str, tuple[ScopeEntry, ...]] = {}
-    for dimension in SAFE_SCOPE_DIMENSIONS:
-        raw_entries = value.get(dimension)
-        if raw_entries is None:
-            continue
+    for dimension, raw_entries in value.items():
         if not isinstance(raw_entries, Sequence) or isinstance(raw_entries, (str, bytes)):
-            raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
+            continue
         entries: list[ScopeEntry] = []
         for raw in raw_entries:
             if isinstance(raw, Mapping):
@@ -280,116 +298,33 @@ def _parse_data_scope(value: Any) -> dict[str, tuple[ScopeEntry, ...]]:
             elif isinstance(raw, str):
                 entry_id = name = raw
             else:
-                raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟鎹寖鍥存棤鏁?")
+                continue
             if not isinstance(entry_id, str) or not entry_id.strip() or not isinstance(name, str):
-                raise QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 鏉冮檺鎴栨暟涓嶅畬鏁?")
+                continue
             entries.append(ScopeEntry(entry_id.strip(), name.strip()))
         if entries:
-            parsed[dimension] = tuple(entries)
+            parsed[str(dimension)] = tuple(entries)
     return parsed
-
-
-def normalize_authorized_filters(filters: Mapping[str, Sequence[str]] | None, scope: QueryScope) -> dict[str, list[str]] | None:
-    if filters is None:
-        return None
-    normalized: dict[str, list[str]] = {}
-    for dimension, values in filters.items():
-        if dimension not in SAFE_SCOPE_DIMENSIONS:
-            normalized[dimension] = list(values)
-            continue
-        entries = scope.data_scope.get(dimension)
-        if not entries:
-            raise QdmCliError(SAFE_SCOPE_DIMENSIONS[dimension][0], SAFE_SCOPE_DIMENSIONS[dimension][1])
-        result: list[str] = []
-        for value in values:
-            matches_by_id = [entry for entry in entries if value == entry.id]
-            if matches_by_id:
-                resolved = value
-            else:
-                matches_by_name = [entry for entry in entries if value == entry.name]
-                if len(matches_by_name) == 0:
-                    raise QdmCliError(SAFE_SCOPE_DIMENSIONS[dimension][0], SAFE_SCOPE_DIMENSIONS[dimension][1])
-                if len(matches_by_name) > 1:
-                    raise QdmCliError("QDM_FILTER_VALUE_INVALID", "绛涢€夊悕绉板尮閰嶅埌澶氫釜鎺堟潈 ID")
-                resolved = matches_by_name[0].id
-            if resolved in result:
-                raise QdmCliError("QDM_FILTER_VALUE_INVALID", "绛涢€夊€奸噸澶?")
-            result.append(resolved)
-        normalized[dimension] = result
-    return normalized
 
 
 def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _classify_cli_error(stderr: object, stdout: object) -> QdmCliError:
-    """Map only allow-listed upstream codes; never expose upstream text."""
-    for stream in (stderr, stdout):
-        payload = _parse_json(stream)
-        code = next((item for item in _json_error_codes(payload) if item in SAFE_CLI_ERROR_CODES), None)
-        if code is not None:
-            dimension = _json_scope_dimension(payload)
-            if code == "FILTER_OUTSIDE_DATA_SCOPE" and dimension in {"manageAreaId", "categoryLevel1Id"}:
-                plugin_code, message = SAFE_SCOPE_DIMENSIONS[dimension]
-                return QdmCliError(plugin_code, message)
-            if code == "EMPTY_DATA_SCOPE" and dimension in SAFE_SCOPE_DIMENSIONS:
-                plugin_code, message = SAFE_SCOPE_DIMENSIONS[dimension]
-                if plugin_code.startswith("QDM_AREA_"):
-                    return QdmCliError("QDM_AREA_AUTH_SCOPE_EMPTY", message)
-                return QdmCliError("QDM_CATEGORY_AUTH_SCOPE_EMPTY", message)
-            plugin_code, message = SAFE_CLI_ERROR_CODES[code]
-            return QdmCliError(plugin_code, message)
-        code = _extract_safe_error_code(stream)
-        if code is not None:
-            plugin_code, message = SAFE_CLI_ERROR_CODES[code]
-            return QdmCliError(plugin_code, message)
-    return QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 查询失败")
-
-
-def _parse_json(value: object) -> object:
-    try:
-        return json.loads(str(value or ""))
-    except (TypeError, json.JSONDecodeError):
-        return None
-
-
-def _json_scope_dimension(value: object) -> str | None:
-    """Read only the documented error.details dimension/claimField fields."""
-    if not isinstance(value, Mapping):
-        return None
-    error = value.get("error")
-    if not isinstance(error, Mapping):
-        return None
-    details = error.get("details")
-    if not isinstance(details, Mapping):
-        return None
-    for key in ("dimension", "claimField"):
-        candidate = details.get(key)
-        if isinstance(candidate, str) and candidate in SAFE_SCOPE_DIMENSIONS:
-            return candidate
-    return None
-
-
-def _extract_safe_error_code(value: object) -> str | None:
-    text = str(value or "")
-    match = _SAFE_ERROR_TEXT.search(text)
-    return match.group(0) if match else None
-
-
-def _json_error_codes(value: object):
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if key == "code" and isinstance(item, str):
-                yield item
-            yield from _json_error_codes(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _json_error_codes(item)
-
-
-def _truncate_success(value: object, *, limit: int | None = None) -> str:
+def _truncate_success(value: str, limit: int | None = None) -> str:
     redacted = _BLOB_PATTERN.sub("[REDACTED]", str(value or ""))
-    if limit is None or len(redacted.encode("utf-8")) <= limit:
+    if limit is None:
         return redacted
-    raise QdmCliError("QDM_RESULT_TOO_LARGE", "鏌ヨ缁撴灉瓒呰繃閰嶇疆闄愬埗锛岃鏀圭敤鍒嗘壒鏌ヨ")
+    if len(redacted) > limit:
+        raise QdmCliError("QDM_RESULT_TOO_LARGE", "QDM 查询结果过大")
+    return redacted
+
+
+def _classify_cli_error(stderr: object, stdout: object) -> QdmCliError:
+    """Fail closed: execute-time errors never surface upstream text or rule tables.
+
+    Authorization decisions and their codes come from the JS authz-hook before
+    execution; a non-zero execute exit is surfaced as a safe generic error.
+    """
+    del stderr, stdout
+    return QdmCliError("QDM_CLI_VALIDATION_FAILED", "QDM 查询失败")

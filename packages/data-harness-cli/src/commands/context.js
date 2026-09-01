@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { ExitError } from "../lib/exit.js";
 import { parseFlags } from "../lib/flags.js";
 import { printCompactJSON, printJSON } from "../lib/json-out.js";
 import { build } from "../lib/context/build.js";
 import { runClaudeHook, runWorkBuddyHook } from "../lib/context/hook.js";
+import { newPathResolver } from "../lib/harness.js";
 
 export async function runContext(root, args, io = process, context = null) {
   const parsed = parseFlags(args, {
@@ -38,6 +40,14 @@ export async function runContext(root, args, io = process, context = null) {
       }
       return;
     }
+    case "qwenpaw-hook": {
+      const input = await readStdin(io);
+      const { ok, output } = runClaudeHook(root, input, context, { env: io.env || process.env });
+      if (ok) {
+        printCompactJSON(toQwenPawHookJSON(root, output, context), io.stdout);
+      }
+      return;
+    }
     case "workbuddy-hook": {
       const input = await readStdin(io);
       const { ok, output } = runWorkBuddyHook(root, input, context, { env: io.env || process.env });
@@ -59,6 +69,27 @@ function toHookJSON(output, { includeContextFiles = false } = {}) {
     hook.contextFiles = output.hookSpecificOutput.contextFiles;
   }
   return { hookSpecificOutput: hook };
+}
+
+// QwenPaw has no file tools, so the CLI embeds the selected wiki manuals
+// directly into the additional context instead of exposing paths to read.
+function toQwenPawHookJSON(root, output, context) {
+  const hook = toHookJSON(output, { includeContextFiles: true });
+  const selected = output.hookSpecificOutput.contextFiles || [];
+  const resolver = newPathResolver(context || root);
+  const manuals = [];
+  for (const ref of selected) {
+    try {
+      const body = readFileSync(resolver.resolve(ref.path), "utf8");
+      manuals.push(`\n--- ${ref.path} ---\n${body}\n`);
+    } catch {
+      // A missing manual must not fail the context; the path list stays available.
+    }
+  }
+  if (manuals.length) {
+    hook.hookSpecificOutput.additionalContext += `\n\n# QDM Harness selected manuals\n${manuals.join("")}`;
+  }
+  return { hookSpecificOutput: hook.hookSpecificOutput };
 }
 
 function toWorkBuddyJSON(output) {

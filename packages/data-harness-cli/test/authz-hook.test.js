@@ -192,3 +192,72 @@ authz:
     if (prevUser != null) process.env[ENV_AUTH_USER_ID] = prevUser;
   }
 });
+
+const QWENPAW_SCOPE = JSON.stringify({
+  enabled: true,
+  capabilities: ["qdm.metric.query"],
+  labelsResolved: true,
+  dataScope: { manageAreaId: [{ id: "CN01", name: "华南区" }] },
+});
+
+function qwenpawHarnessRoot() {
+  const root = mkdtempSync(path.join(tmpdir(), "authz-qwenpaw-"));
+  mkdirSync(path.join(root, "bin"), { recursive: true });
+  mkdirSync(path.join(root, "config"), { recursive: true });
+  const metricPath = path.join(root, "bin", "qdm-metric-cli");
+  const script = `#!/bin/sh\ncase "$1" in\n  auth) printf '%s\\n' '${QWENPAW_SCOPE}';;\n  *) printf '%s\\n' '{}';;\nesac\n`;
+  writeFileSync(metricPath, script, { mode: 0o755 });
+  chmodSync(metricPath, 0o755);
+  writeFileSync(
+    path.join(root, "config", "harness-config.yaml"),
+    `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${metricPath}\n\nauthz:\n  mode: on\n  allow_local_blob: true\n`,
+  );
+  return root;
+}
+
+function qwenpawPayload(filters) {
+  return JSON.stringify({
+    tool_name: "qdm_query",
+    blob: testBlob,
+    tool_input: { metric: "saleAmt", filters },
+  });
+}
+
+async function runQwenPawEnvelope(root, input) {
+  let out = "";
+  await runAuthzHook(root, ["--agent", "qwenpaw", "--format", "adapter-envelope"], {
+    stdin: input,
+    stdout: { write(chunk) { out += String(chunk); } },
+  });
+  return JSON.parse(out);
+}
+
+test("authz-hook --agent qwenpaw allows and normalizes filters against the scope", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["华南区"] }));
+  assert.equal(envelope.status, "allow");
+  assert.equal(envelope.hookOutput.permissionDecision, "allow");
+  assert.deepEqual(envelope.hookOutput.normalizedFilters, { manageAreaId: ["CN01"] });
+  assert.ok(envelope.hookOutput.scope.capabilities.includes("qdm.metric.query"));
+});
+
+test("authz-hook --agent qwenpaw denies out-of-scope filters without executing", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["其他区"] }));
+  assert.equal(envelope.status, "deny");
+  assert.match(envelope.hookOutput.permissionDecisionReason, /QDM_AREA_OUTSIDE_DATA_SCOPE/);
+});
+
+test("authz-hook --agent qwenpaw is disabled when authz mode is off", async () => {
+  const root = writeHarnessConfig(`paths:
+  knowledge: wikis
+
+cli:
+  qdm_metric_cli: /abs/bin/qdm-metric-cli
+
+authz:
+  mode: off
+`);
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload(null));
+  assert.equal(envelope.status, "disabled");
+});

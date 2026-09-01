@@ -32,6 +32,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -267,18 +268,32 @@ class GoldenPathTests(unittest.TestCase):
         self.assertIn("saleAmt", content)
 
     def test_qdm_query_delegates_authorization_to_cli(self) -> None:
-        executor = QdmCliExecutor(self.fixture.metric_cli)
-        result = executor.query(
-            metric="saleAmt",
-            start_date="2026-08-24",
-            end_date="2026-08-24",
-            filters={"manageAreaId": ["CN01"]},
-            blob="qdm1enc.trusted",
-        )
+        executor = QdmCliExecutor(self.fixture.metric_cli, harness_cli=self.fixture.shim)
+        calls: list[list[str]] = []
+        real_run = subprocess.run
+
+        def recording_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            argv = args[0] if args else kwargs.get("args")
+            calls.append([str(part) for part in (argv or [])])
+            return real_run(*args, **kwargs)  # type: ignore[arg-type]
+
+        with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=recording_run):
+            result = executor.query(
+                metric="saleAmt",
+                start_date="2026-08-24",
+                end_date="2026-08-24",
+                filters={"manageAreaId": ["CN01"]},
+                blob="qdm1enc.trusted",
+            )
         self.assertIn("123.4", result)
-        calls = self.fixture.stub_log.read_text(encoding="utf-8").splitlines()
-        commands = [json.loads(line)[0] for line in calls if line.strip()]
-        self.assertNotIn("auth", commands, "Python bridge must not run qdm-metric-cli auth describe")
+        self.assertTrue(
+            any("authz-hook" in argv and "--agent" in argv and "qwenpaw" in argv for argv in calls),
+            "Python bridge must delegate authorization to authz-hook --agent qwenpaw",
+        )
+        self.assertTrue(
+            all(argv[1] != "auth" for argv in calls),
+            "Python bridge must not run qdm-metric-cli auth describe",
+        )
 
     def test_report_lifecycle_protocol_stays_available(self) -> None:
         payload = json.dumps({

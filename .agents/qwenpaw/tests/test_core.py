@@ -25,7 +25,7 @@ if PACKAGE not in sys.modules:
 from qdm_harness_qwenpaw_test.qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query_args, _truncate_success
 from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result
-from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _selected_wiki_manuals, _sanitize_embedded_context_instruction, request_context, session_key
+from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _sanitize_embedded_context_instruction, request_context, session_key
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
 from qdm_harness_qwenpaw_test.qdm_config import ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config
 from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
@@ -68,6 +68,41 @@ def _make_sensitive(path: Path) -> None:
     """Apply the 0600 permission expected for sensitive materials on POSIX."""
     if os.name != "nt":
         path.chmod(0o600)
+
+
+SCOPE_CN01 = {"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "CN01", "name": "区域"}]}}
+SCOPE_AREA001 = {"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "粤东区"}]}}
+SCOPE_STORE = {"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "华南"}], "storeId": [{"id": "S001", "name": "广州时代玫瑰"}]}}
+
+
+def _cli_pair(temp: str) -> tuple[Path, Path]:
+    cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
+    harness = Path(temp) / "bin" / "data-harness-cli.exe"
+    cli.parent.mkdir(parents=True)
+    _write_placeholder_cli(cli)
+    _write_placeholder_cli(harness)
+    return cli, harness
+
+
+def _allow_envelope(scope: object, normalized_filters: object | None = None) -> dict[str, object]:
+    hook: dict[str, object] = {"permissionDecision": "allow", "scope": scope}
+    if normalized_filters is not None:
+        hook["normalizedFilters"] = normalized_filters
+    return {"schemaVersion": 1, "status": "allow", "hookOutput": hook}
+
+
+def _deny_envelope(reason: str) -> dict[str, object]:
+    return {"schemaVersion": 1, "status": "deny", "hookOutput": {"permissionDecision": "deny", "permissionDecisionReason": reason}}
+
+
+def _routed_run(envelope: object, *, execute_out: str = "{}", execute_err: str = "", execute_rc: int = 0):
+    """Route subprocess invocations: authz-hook answers the envelope, others execute."""
+    def fake_run(argv: object, **kwargs: object) -> types.SimpleNamespace:
+        args = list(argv or [])
+        if "authz-hook" in args:
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(envelope), stderr="")
+        return types.SimpleNamespace(returncode=execute_rc, stdout=execute_out, stderr=execute_err)
+    return fake_run
 
 
 class _Message:
@@ -261,52 +296,41 @@ class ToolBoundaryTests(unittest.TestCase):
 
     def test_cli_only_receives_plugin_owned_authentication_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            completed = types.SimpleNamespace(returncode=0, stdout=json.dumps({"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "CN01", "name": "区域"}]}}), stderr="")
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed) as run:
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(_allow_envelope(SCOPE_CN01))) as run:
                 executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-            argv = run.call_args.args[0]
+            argv = run.call_args_list[-1].args[0]
             self.assertEqual(argv[:3], [str(cli), "analysis", "execute"])
             self.assertEqual(argv[-3:], ["--data-auth", "--auth-blob", "qdm1enc.trusted"])
 
-    def test_query_preflights_auth_and_resolves_authorized_display_name(self) -> None:
+    def test_query_resolves_authorized_display_name_through_authz_hook(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir(); _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            responses = [
-                types.SimpleNamespace(returncode=0, stdout=json.dumps({"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "粤东区"}]}}), stderr=""),
-                types.SimpleNamespace(returncode=0, stdout="{}", stderr=""),
-            ]
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=responses) as run:
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            envelope = _allow_envelope(SCOPE_AREA001, {"manageAreaId": ["AREA_001"]})
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(envelope)) as run:
                 executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", filters={"manageAreaId": ["粤东区"]}, blob="qdm1enc.trusted")
-            self.assertEqual(run.call_args_list[0].args[0][1:3], ["auth", "describe"])
-            self.assertIn("manageAreaId=AREA_001", run.call_args_list[1].args[0])
+            self.assertIn("authz-hook", run.call_args_list[0].args[0])
+            self.assertIn("manageAreaId=AREA_001", run.call_args_list[-1].args[0])
 
     def test_labels_unresolved_allows_id_only_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"; cli.parent.mkdir(); _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            response = types.SimpleNamespace(returncode=0, stdout=json.dumps({
-                "enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": False,
-                "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": ""}], "sapArea2Id": [{"id": "CN01", "name": ""}]},
-            }), stderr="")
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=response):
-                scope = executor.preflight_query("qdm1enc.test")
-            self.assertFalse(scope.labels_resolved)
-            self.assertEqual(scope.data_scope["manageAreaId"][0].id, "AREA_001")
-            self.assertEqual(scope.data_scope["manageAreaId"][0].name, "")
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            scope = {"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": False,
+                     "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": ""}], "sapArea2Id": [{"id": "CN01", "name": ""}]}}
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(_allow_envelope(scope))):
+                loaded = executor.preflight_query("qdm1enc.test")
+            self.assertFalse(loaded.labels_resolved)
+            self.assertEqual(loaded.data_scope["manageAreaId"][0].id, "AREA_001")
+            self.assertEqual(loaded.data_scope["manageAreaId"][0].name, "")
 
     def test_query_rejects_unauthorized_name_without_analysis_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir(); _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            response = types.SimpleNamespace(returncode=0, stdout=json.dumps({"enabled": True, "capabilities": ["qdm.metric.query"], "labelsResolved": True, "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "粤东区"}]}}), stderr="")
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=response) as run:
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(_deny_envelope("QDM_AREA_OUTSIDE_DATA_SCOPE: 请求的管理区域不在当前用户授权范围内"))) as run:
                 with self.assertRaises(QdmCliError) as raised:
                     executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", filters={"manageAreaId": ["华南区"]}, blob="qdm1enc.trusted")
             self.assertEqual(raised.exception.code, "QDM_AREA_OUTSIDE_DATA_SCOPE")
@@ -314,34 +338,19 @@ class ToolBoundaryTests(unittest.TestCase):
 
     def test_store_name_is_resolved_only_from_authorized_store_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir(); _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            responses = [
-                types.SimpleNamespace(returncode=0, stdout=json.dumps({
-                    "enabled": True, "capabilities": ["qdm.metric.query"],
-                    "labelsResolved": True,
-                    "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "华南"}],
-                                   "storeId": [{"id": "S001", "name": "广州时代玫瑰"}]},
-                }), stderr=""),
-                types.SimpleNamespace(returncode=0, stdout="{}", stderr=""),
-            ]
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=responses) as run:
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            envelope = _allow_envelope(SCOPE_STORE, {"storeId": ["S001"]})
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(envelope)) as run:
                 executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24",
                                filters={"storeId": ["广州时代玫瑰"]}, blob="qdm1enc.trusted")
-            self.assertIn("storeId=S001", run.call_args_list[1].args[0])
+            self.assertIn("storeId=S001", run.call_args_list[-1].args[0])
 
     def test_store_name_without_authorized_store_scope_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir(); _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            response = types.SimpleNamespace(returncode=0, stdout=json.dumps({
-                "enabled": True, "capabilities": ["qdm.metric.query"],
-                "labelsResolved": True,
-                "dataScope": {"manageAreaId": [{"id": "AREA_001", "name": "华南"}]},
-            }), stderr="")
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=response) as run:
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(_deny_envelope("QDM_STORE_OUTSIDE_DATA_SCOPE: 请求的门店不在当前用户授权范围内"))) as run:
                 with self.assertRaises(QdmCliError) as raised:
                     executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24",
                                    filters={"storeId": ["广州时代玫瑰"]}, blob="qdm1enc.trusted")
@@ -358,117 +367,49 @@ class ToolBoundaryTests(unittest.TestCase):
             _truncate_success(value, limit=1024)
         self.assertEqual(raised.exception.code, "QDM_RESULT_TOO_LARGE")
 
-    def test_cli_allowlisted_scope_error_is_stable_and_does_not_leak_diagnostics(self) -> None:
+    def test_execute_error_is_safe_and_does_not_leak_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            completed = types.SimpleNamespace(
-                returncode=1,
-                stdout="fallback FILTER_OUTSIDE_DATA_SCOPE",
-                stderr=json.dumps({"code": "FILTER_OUTSIDE_DATA_SCOPE", "message": "qdm1enc.secret requestId=abc"}),
-            )
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(
+                _allow_envelope(SCOPE_CN01),
+                execute_rc=1,
+                execute_out="fallback FILTER_OUTSIDE_DATA_SCOPE",
+                execute_err=json.dumps({"code": "FILTER_OUTSIDE_DATA_SCOPE", "message": "qdm1enc.secret requestId=abc"}),
+            )):
                 with self.assertRaises(QdmCliError) as raised:
                     executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-            self.assertEqual(raised.exception.code, "QDM_FILTER_OUTSIDE_DATA_SCOPE")
-            self.assertEqual(raised.exception.message, "请求的数据范围不在当前用户授权范围内")
+            self.assertEqual(raised.exception.code, "QDM_CLI_VALIDATION_FAILED")
             self.assertNotIn("qdm1enc", str(raised.exception))
-            self.assertNotIn("requestId", str(raised.exception))
+            self.assertNotIn("requestId=abc", str(raised.exception))
 
-    def test_cli_allowlisted_auth_errors_and_unknown_errors_are_classified_safely(self) -> None:
-        expected = {
-            "AUTH_CAPABILITY_DENIED": "QDM_AUTH_CAPABILITY_DENIED",
-            "EMPTY_DATA_SCOPE": "QDM_EMPTY_DATA_SCOPE",
-            "AUTH_USER_DISABLED": "QDM_AUTH_USER_DISABLED",
-            "AUTH_BLOB_DECRYPT_FAIL": "QDM_CHANNEL_AUTH_DENIED",
-            "AUTH_BLOB_INVALID": "QDM_CHANNEL_AUTH_DENIED",
-        }
+    def test_execute_unknown_error_is_safe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            for upstream, plugin_code in expected.items():
-                completed = types.SimpleNamespace(returncode=1, stdout="", stderr=json.dumps({"error": {"code": upstream}}))
-                with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
-                    with self.assertRaises(QdmCliError) as raised:
-                        executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-                self.assertEqual(raised.exception.code, plugin_code)
-            completed = types.SimpleNamespace(returncode=1, stdout="PROVIDER_SECRET requestId=abc", stderr="not json")
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(
+                _allow_envelope(SCOPE_CN01),
+                execute_rc=1,
+                execute_out="PROVIDER_SECRET requestId=abc",
+                execute_err="not json",
+            )):
                 with self.assertRaises(QdmCliError) as raised:
                     executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
             self.assertEqual(raised.exception.code, "QDM_CLI_VALIDATION_FAILED")
             self.assertNotIn("PROVIDER_SECRET", str(raised.exception))
             self.assertNotIn("requestId", str(raised.exception))
 
-    def test_cli_scope_error_preserves_only_an_allowlisted_dimension(self) -> None:
-        cases = (
-            ("manageAreaId", "QDM_AREA_OUTSIDE_DATA_SCOPE", "请求的管理区域不在当前用户授权范围内"),
-            ("categoryLevel1Id", "QDM_CATEGORY_OUTSIDE_DATA_SCOPE", "请求的商品分类不在当前用户授权范围内"),
-        )
+    def test_authz_deny_envelope_is_surfaced_without_extra_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            for dimension, expected_code, expected_message in cases:
-                completed = types.SimpleNamespace(
-                    returncode=1,
-                    stdout="",
-                    stderr=json.dumps({"code": "FILTER_OUTSIDE_DATA_SCOPE", "error": {"details": {"dimension": dimension, "requested": ["secret"], "requestId": "abc"}}}),
-                )
-                with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
-                    with self.assertRaises(QdmCliError) as raised:
-                        executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-                self.assertEqual(raised.exception.code, expected_code)
-                self.assertEqual(raised.exception.message, expected_message)
-                self.assertNotIn("secret", str(raised.exception))
-            unknown = types.SimpleNamespace(
-                returncode=1,
-                stdout="",
-                stderr=json.dumps({"code": "FILTER_OUTSIDE_DATA_SCOPE", "error": {"details": {"dimension": "storeId"}}}),
-            )
-            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=unknown):
+            cli, harness = _cli_pair(temp)
+            executor = QdmCliExecutor(cli, harness_cli=harness)
+            with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", side_effect=_routed_run(
+                _deny_envelope("QDM_AUTH_CAPABILITY_DENIED: 当前用户没有 QDM 数据查询权限"),
+            )) as run:
                 with self.assertRaises(QdmCliError) as raised:
                     executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-            self.assertEqual(raised.exception.code, "QDM_FILTER_OUTSIDE_DATA_SCOPE")
-            self.assertNotIn("storeId", str(raised.exception))
-
-    def test_cli_empty_scope_error_maps_only_documented_claim_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            for field, expected in (("manageAreaIds", "QDM_AREA_AUTH_SCOPE_EMPTY"), ("categoryLevel1Ids", "QDM_CATEGORY_AUTH_SCOPE_EMPTY")):
-                completed = types.SimpleNamespace(returncode=1, stdout="", stderr=json.dumps({"code": "EMPTY_DATA_SCOPE", "error": {"details": {"claimField": field}}}))
-                with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
-                    with self.assertRaises(QdmCliError) as raised:
-                        executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-                self.assertEqual(raised.exception.code, expected)
-
-    def test_cli_dimension_errors_do_not_become_permission_errors(self) -> None:
-        expected = {
-            "DIMENSION_NOT_FOUND": "QDM_DIMENSION_NOT_FOUND",
-            "DIMENSION_NOT_SUPPORTED": "QDM_DIMENSION_NOT_SUPPORTED",
-            "INVALID_FILTER_VALUE": "QDM_FILTER_VALUE_INVALID",
-            "DUPLICATE_FILTER_VALUE": "QDM_FILTER_VALUE_INVALID",
-            "QUERY_LIMIT_EXCEEDED": "QDM_QUERY_INVALID",
-        }
-        with tempfile.TemporaryDirectory() as temp:
-            cli = Path(temp) / "bin" / "qdm-metric-cli.exe"
-            cli.parent.mkdir()
-            _write_placeholder_cli(cli)
-            executor = QdmCliExecutor(cli)
-            for upstream, plugin_code in expected.items():
-                completed = types.SimpleNamespace(returncode=1, stdout="", stderr=json.dumps({"code": upstream}))
-                with patch("qdm_harness_qwenpaw_test.qdm_cli.subprocess.run", return_value=completed):
-                    with self.assertRaises(QdmCliError) as raised:
-                        executor.query(metric="saleAmt", start_date="2026-08-24", end_date="2026-08-24", blob="qdm1enc.trusted")
-                self.assertEqual(raised.exception.code, plugin_code)
+            self.assertEqual(raised.exception.code, "QDM_AUTH_CAPABILITY_DENIED")
+            self.assertEqual(run.call_count, 1)
 
     def test_report_lifecycle_accepts_only_bounded_structured_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -557,40 +498,6 @@ class HarnessContextTests(unittest.TestCase):
         sanitized = _sanitize_embedded_context_instruction("必须先读取以下 contextFiles：\nAll modes: read all contextFiles before running data CLI.")
         self.assertIn("禁止再次使用 Read", sanitized)
         self.assertIn("do not call Read", sanitized)
-    def test_selected_wiki_manuals_reads_only_allowlisted_markdown_under_runtime_wikis(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            playbook = root / "wikis" / "metrics" / "profit" / "playbook.md"
-            playbook.parent.mkdir(parents=True)
-            playbook.write_text("metric: profitRate", encoding="utf-8")
-            content = _selected_wiki_manuals(root, [{"path": "wikis/metrics/profit/playbook.md"}])
-            self.assertIn("profitRate", content)
-
-    def test_selected_wiki_manuals_rejects_paths_outside_wikis_and_templates(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / "wikis").mkdir()
-            for path in ("config/qwenpaw/channel-auth.json", "wikis/../config/qwenpaw/channel-auth.json", "wikis/templates/report.md"):
-                with self.assertRaises(HarnessContextError):
-                    _selected_wiki_manuals(root, [{"path": path}])
-
-    def test_context_limits_default_to_unlimited_and_enforce_configured_file_or_total_limits(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            first = root / "wikis" / "metrics" / "index.md"
-            second = root / "wikis" / "reports" / "index.md"
-            first.parent.mkdir(parents=True)
-            second.parent.mkdir(parents=True)
-            first.write_text("a" * 60, encoding="utf-8")
-            second.write_text("b" * 30, encoding="utf-8")
-            selected = [{"path": "wikis/metrics/index.md"}, {"path": "wikis/reports/index.md"}]
-            self.assertIn("a" * 60, _selected_wiki_manuals(root, selected, context_limits=ContextLimits()))
-            with self.assertRaisesRegex(HarnessContextError, "Harness 上下文不可用") as file_error:
-                _selected_wiki_manuals(root, selected, context_limits=ContextLimits(wiki_file_bytes=50))
-            self.assertEqual(file_error.exception.reason, "context_manuals_too_large")
-            with self.assertRaisesRegex(HarnessContextError, "Harness 上下文不可用") as total_error:
-                _selected_wiki_manuals(root, selected, context_limits=ContextLimits(wiki_total_bytes=80))
-            self.assertEqual(total_error.exception.reason, "context_manuals_too_large")
 
     def test_context_base_limit_is_applied_only_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -598,9 +505,6 @@ class HarnessContextTests(unittest.TestCase):
             cli = root / "bin" / "data-harness-cli.exe"
             cli.parent.mkdir()
             _write_placeholder_cli(cli)
-            wiki = root / "wikis" / "index.md"
-            wiki.parent.mkdir()
-            wiki.write_text("manual", encoding="utf-8")
             output = json.dumps({"hookSpecificOutput": {"additionalContext": "base context", "contextFiles": [{"path": "wikis/index.md"}]}})
             completed = types.SimpleNamespace(returncode=0, stdout=output, stderr="")
             with patch("qdm_harness_qwenpaw_test.qdm_harness_context.subprocess.run", return_value=completed):
@@ -611,6 +515,16 @@ class HarnessContextTests(unittest.TestCase):
                 with self.assertRaisesRegex(HarnessContextError, "Harness 上下文不可用") as error:
                     request_context(cli, "session", "prompt", context_limits=ContextLimits(base_context_bytes=4))
             self.assertEqual(error.exception.reason, "context_base_too_large")
+
+    def test_context_protocol_rejects_output_without_embedded_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "data-harness-cli.exe"
+            _write_placeholder_cli(cli)
+            completed = types.SimpleNamespace(returncode=0, stdout='{"unexpected": true}', stderr="")
+            with patch("qdm_harness_qwenpaw_test.qdm_harness_context.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(HarnessContextError, "Harness 上下文不可用") as error:
+                    request_context(cli, "session", "prompt")
+            self.assertEqual(error.exception.reason, "context_protocol_invalid")
 
     def test_context_cli_failure_diagnosis_does_not_return_cli_text(self) -> None:
         self.assertEqual(_context_cli_failure_reason("open .harness/index/wikis-index.json: no such file", ""), "missing_wiki_index")

@@ -105,6 +105,7 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
     provider = ChannelAuthProvider(config.auth_file, max_bytes=config.auth_file_max_bytes)
     executor = QdmCliExecutor(
         config.qdm_metric_cli,
+        harness_cli=Path(__file__).resolve().parent / "scripts" / "data-harness-cli",
         success_bytes=config.query_limits.success_bytes,
         timeout_seconds=config.query_limits.timeout_seconds,
     )
