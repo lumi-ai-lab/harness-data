@@ -35,7 +35,7 @@ scp harness-data-qwenpaw-0.0.56-amd64.tar.gz root@<服务器IP>:/tmp/
 docker load -i /tmp/harness-data-qwenpaw-0.0.56-amd64.tar.gz
 ```
 
-> 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
+> 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
 
 ## ③ 准备密钥(服务器)
 
@@ -66,11 +66,25 @@ docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即�
 ```text
 监听   127.0.0.1:8088(默认仅本机)
 内存   上限 8G
-时区   Asia/Shanghai(东八区)
+时区   Asia/Shanghai(容器 TZ + config.json 的 user_timezone)
 自启   --restart unless-stopped
 密钥   密钥目录只读挂载到容器 /run/secrets
 ```
 
 - 想调整内存上限: `export QWENPAW_MEM_LIMIT=16g` 后重跑 `run_docker.sh`。
+- 想换时区: `export QWENPAW_TZ=Asia/Tokyo` 后重跑 `run_docker.sh`。
 - 想让局域网/外部直连: `export QWENPAW_BIND=0.0.0.0` 后重跑 `run_docker.sh`(暴露后请自行用防火墙/反向代理限制来源)。
 - 国内环境直连即可, 无需代理。
+
+核对时区是否生效(应分别输出 `Asia/Shanghai` 与 CST/+0800):
+
+```bash
+docker exec qwenpaw python -c 'import json;print(json.load(open("/app/working/config.json"))["user_timezone"])'
+docker exec qwenpaw date
+```
+
+> 时区说明:`config.json` 只在文件不存在时才会从镜像里的 seed 复制,持久卷里遗留的
+> `user_timezone: Etc/UTC` 不会被新镜像覆盖。容器启动时 `entrypoint.sh` 会按运行时
+> `TZ` 把它对齐(仅修正未被人工设置过的默认值,你在控制台/接口里改过的时区会保留)。
+> 这一步影响的是相对日期解析:未对齐时,北京时间 00:00–08:00 之间 `get_current_time`
+> 会返回前一天,"昨天"会再往前错一天。

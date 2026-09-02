@@ -53,8 +53,12 @@ ARG QWENPAW_UID=10001
 ARG QWENPAW_GID=10001
 
 # 默认时区东八区(上海)。必须在 `qwenpaw init` 之前设置:config.json 的
-# user_timezone 用 detect_system_timezone() 派生,init 生成时读到 TZ 才会
-# 落库为 Asia/Shanghai;否则回退读 /etc/timezone 的 Etc/UTC。
+# user_timezone 用 detect_system_timezone() 派生(探测顺序 $TZ → /etc/timezone
+# → /etc/localtime),init 生成时读到 TZ 才会落库为 Asia/Shanghai;否则回退读
+# /etc/timezone 的 Etc/UTC。/etc/localtime 与 /etc/timezone 在下方一并写成同一
+# 个时区,让不读 $TZ 的进程也保持一致。
+# 注意:持久卷里已有的 config.json 不会被镜像里的 seed 覆盖,那部分由
+# entrypoint.sh 启动时按运行时 TZ 对齐。
 ENV TZ=Asia/Shanghai \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
@@ -80,7 +84,9 @@ RUN apt-get update \
   libmagic1 \
   nodejs \
   tini \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && ln -sf "/usr/share/zoneinfo/${TZ}" /etc/localtime \
+  && echo "${TZ}" > /etc/timezone
 
 RUN --mount=type=cache,target=/root/.cache/pip \
   python -m pip install --retries 10 --timeout 120 \
@@ -104,6 +110,7 @@ COPY --from=artifact-fetch --chmod=0755 /tmp/metric/qdm-metric-cli /tmp/qdm-metr
 COPY --from=artifact-fetch /tmp/wikis /tmp/harness-wikis/
 COPY --chmod=0755 deploy/qwenpaw/entrypoint.sh /opt/qdm/bin/entrypoint.sh
 COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model.py
+COPY --chmod=0755 deploy/qwenpaw/align_timezone.py /opt/qdm/bin/align_timezone.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
   && chmod -R a-w /opt/qdm/plugin-source \

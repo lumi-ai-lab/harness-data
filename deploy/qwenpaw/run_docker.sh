@@ -31,6 +31,8 @@ secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
 model_key=${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
 # 容器内存上限:默认 8GB,仅限制内存,不做其他资源限制
 mem_limit=${QWENPAW_MEM_LIMIT:-8g}
+# 容器时区:IANA 名称,同时用于修正持久卷里 config.json 的 user_timezone
+container_tz=${QWENPAW_TZ:-Asia/Shanghai}
 
 # 渠道授权文件:须为 0600 或更严格的普通文件(非软链),缺失即报错退出
 auth_file="$secret_dir/channel-auth.json"
@@ -67,7 +69,8 @@ set -- docker run -d --name "${name}" \
   --add-host host.docker.internal:host-gateway \
   -e QWENPAW_MODEL_API_KEY="${model_key}" \
   -e QWENPAW_MODEL_ID="${QWENPAW_MODEL_ID:-qwen3.8-flash}" \
-  -e QWENPAW_MODEL_BASE_URL="${QWENPAW_MODEL_BASE_URL:-https://aig.qdama.cn/api/v1}"
+  -e QWENPAW_MODEL_BASE_URL="${QWENPAW_MODEL_BASE_URL:-https://aig.qdama.cn/api/v1}" \
+  -e TZ="${container_tz}"
 
 if [ -n "${proxy}" ]; then
   set -- "$@" -e "http_proxy=${proxy}" -e "https_proxy=${proxy}"

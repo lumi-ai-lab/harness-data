@@ -11,6 +11,18 @@ if [ ! -f "${working}/config.json" ]; then
   cp -a "${seed}/." "${working}/"
 fi
 
+# config.json is seeded once: the copy baked into the image records whatever
+# TZ `qwenpaw init` saw at build time, and a reused working volume keeps its
+# existing file forever. So `ENV TZ` alone cannot fix an install whose
+# user_timezone was detected as Etc/UTC. Align it with the runtime TZ, but only
+# while it still holds an untouched default: a timezone the operator picked in
+# the UI/API must survive restarts.
+tz=${TZ:-}
+if [ -n "${tz}" ] && [ -f "${working}/config.json" ]; then
+  python /opt/qdm/bin/align_timezone.py "${working}/config.json" "${tz}" ||
+    echo "warning: user_timezone alignment skipped for ${working}/config.json" >&2
+fi
+
 # The plugin is image-managed while channel/model/session configuration lives
 # elsewhere in the persistent working volume. Refresh it on every container
 # start so rebuilding this Dockerfile cannot leave an older plugin behind in a
