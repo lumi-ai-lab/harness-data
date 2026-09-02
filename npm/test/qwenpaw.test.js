@@ -244,6 +244,119 @@ test("qwenpaw setup writes the agent scope from --enabled-agents patterns", () =
   }
 });
 
+function strictSetupFixture(root, home) {
+  const working = path.join(root, home);
+  for (const agentId of ["harness-data-east", "default"]) {
+    const dir = path.join(working, "workspaces", agentId);
+    mkdirSync(dir, { recursive: true });
+    const wide = {
+      read_file: { name: "read_file", enabled: true },
+      execute_shell_command: { name: "execute_shell_command", enabled: true },
+      // The host writes some entries without ``enabled``; those read as enabled.
+      web_search: { name: "web_search" },
+    };
+    writeFileSync(path.join(dir, "agent.json"), JSON.stringify({
+      id: agentId,
+      channels: { wecom: { enabled: agentId === "harness-data-east" } },
+      tools: { builtin_tools: wide },
+    }), "utf8");
+  }
+  writeFileSync(path.join(working, "config.json"), JSON.stringify({
+    agents: { profiles: { "harness-data-east": { id: "harness-data-east" }, default: { id: "default" } } },
+  }), "utf8");
+  return working;
+}
+
+function enabledTools(file) {
+  return Object.entries(JSON.parse(readFileSync(file, "utf8")).tools.builtin_tools)
+    .filter(([, value]) => value.enabled !== false)
+    .map(([name]) => name)
+    .sort();
+}
+
+test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tools", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-tool-policy-"));
+  try {
+    const source = stagePluginSource(root);
+    const python = writeFakePython(root);
+    const metric = writeMetricStub(root);
+    const wikis = path.join(root, "wikis");
+    seedWikis(wikis);
+    const project = path.join(root, "project");
+    const secrets = path.join(root, "secrets");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(secrets, { recursive: true });
+    const configFile = path.join(root, "plugin-config.json");
+    const args = (working, extra) => [
+      "qwenpaw", "setup",
+      "--source", source,
+      "--qwenpaw-python", python,
+      "--qwenpaw-working-dir", working,
+      "--instance-root", path.join(root, "instance"),
+      "--data-root", path.join(root, "data"),
+      "--workspace-root", project,
+      "--workspace-allowlist", project,
+      "--wikis-source", wikis,
+      "--metric-cli", metric,
+      "--channel-auth-only",
+      "--plugin-config-file", configFile,
+      "--secret-dir", secrets,
+      "--enabled-agents", "harness-data-*",
+      ...extra,
+      "--json",
+    ];
+
+    const working = strictSetupFixture(root, "home-strict");
+    const strict = runCli(args(working, ["--tool-policy", "strict"]), repoRoot);
+    assert.equal(strict.status, 0, strict.stderr || strict.stdout);
+    const narrowed = JSON.parse(readFileSync(path.join(working, "workspaces", "harness-data-east", "agent.json"), "utf8"));
+    assert.deepEqual(enabledTools(path.join(working, "workspaces", "harness-data-east", "agent.json")),
+      ["get_current_time", "qdm_query", "qdm_scope_summary"]);
+    assert.equal(narrowed.tools.builtin_tools.web_search.enabled, false, "an entry without ``enabled`` reads as enabled and must be switched off");
+    assert.deepEqual(
+      { id: narrowed.id, channels: narrowed.channels },
+      { id: "harness-data-east", channels: { wecom: { enabled: true } } },
+      "narrowing must not disturb the rest of the agent config",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(working, "workspaces", "harness-data-east", "agent.json"), "utf8"))
+        .light_context_config.tool_result_pruning_config.enabled,
+      false,
+      "QDM query results must not be pruned",
+    );
+    assert.deepEqual(
+      Object.keys(JSON.parse(readFileSync(path.join(working, "config.json"), "utf8")).agents.profiles).sort(),
+      ["default", "harness-data-east"],
+      "narrowing must write agent.json only, never the host agent list",
+    );
+    assert.deepEqual(
+      enabledTools(path.join(working, "workspaces", "default", "agent.json")),
+      ["execute_shell_command", "read_file", "web_search"],
+      "out-of-scope agents stay as the host left them",
+    );
+    assert.equal(JSON.parse(readFileSync(configFile, "utf8")).tool_policy, "strict");
+
+    // Re-running setup without the flag must keep the governed policy.
+    const carried = strictSetupFixture(root, "home-carried");
+    const again = runCli(args(carried, []), repoRoot);
+    assert.equal(again.status, 0, again.stderr || again.stdout);
+    assert.deepEqual(enabledTools(path.join(carried, "workspaces", "harness-data-east", "agent.json")),
+      ["get_current_time", "qdm_query", "qdm_scope_summary"]);
+
+    const rejected = runCli(args(strictSetupFixture(root, "home-bad"), ["--tool-policy", "loose"]), repoRoot);
+    assert.notEqual(rejected.status, 0, "an unknown policy must fail setup");
+
+    // A strict policy that cannot enumerate agents must fail, not pass silently.
+    const noList = path.join(root, "home-no-list");
+    mkdirSync(noList, { recursive: true });
+    const unenforceable = runCli(args(noList, ["--tool-policy", "strict"]), repoRoot);
+    assert.notEqual(unenforceable.status, 0, "strict must fail when there is no host agent list");
+    assert.match(unenforceable.stderr, /needs the host agent list/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function seedQwenPawHome(root, profiles) {
   const working = path.join(root, "qwenpaw-home");
   mkdirSync(working, { recursive: true });
@@ -275,6 +388,44 @@ test("qwenpaw doctor agent-scope fails when no host agent matches the scope", ()
 
     // No working dir: nothing to compare against, so the check must not block.
     assert.equal(scopeOf(["--qwenpaw-working-dir", path.join(root, "absent")]).ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("qwenpaw doctor tool-allowlist reports tools beyond the QDM set under strict", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-allowlist-doctor-"));
+  try {
+    const working = seedQwenPawHome(root, { "harness-data-east": { id: "harness-data-east" }, default: { id: "default" } });
+    const writeAgent = (agentId, tools) => {
+      const dir = path.join(working, "workspaces", agentId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "agent.json"), JSON.stringify({ tools: { builtin_tools: tools } }), "utf8");
+    };
+    const configFile = path.join(root, "plugin-config.json");
+    const writeConfig = (policy) => writeFileSync(configFile, JSON.stringify({
+      schema_version: 2, plugin_id: "qdm-harness-qwenpaw", plugin_version: "0.1.6",
+      root_context_path: path.join(root, "missing", "context.json"),
+      enabled_agents: ["harness-data-*"], user_id_display_mode: "off", tool_policy: policy,
+    }, null, 2) + "\n");
+    const allowlistOf = () => JSON.parse(
+      runCli(["qwenpaw", "doctor", "--plugin-config-file", configFile, "--qwenpaw-working-dir", working, "--json"], repoRoot).stdout,
+    ).checks.find((check) => check.name === "tool-allowlist");
+
+    writeConfig("preserve");
+    assert.match(allowlistOf().detail, /policy=preserve/);
+    assert.equal(allowlistOf().ok, true, "preserve must not gate the host's own tool config");
+
+    writeConfig("strict");
+    writeAgent("default", { read_file: { enabled: true } });
+    writeAgent("harness-data-east", { read_file: { enabled: true }, qdm_query: { enabled: true } });
+    const wide = allowlistOf();
+    assert.equal(wide.ok, false, "an in-scope agent with file tools still enabled must fail the check");
+    assert.match(wide.detail, /harness-data-east\(read_file\)/);
+    assert.doesNotMatch(wide.detail, /default/, "out-of-scope agents are not the QDM boundary");
+
+    writeAgent("harness-data-east", { get_current_time: { enabled: true }, qdm_query: {}, qdm_scope_summary: { enabled: true } });
+    assert.equal(allowlistOf().ok, true, "a missing enabled flag reads as enabled and stays allowed here");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

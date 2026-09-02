@@ -197,6 +197,33 @@ docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-dat
 
 未命中时 `qdm_query` 不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
 若配置里的作用域不可用,插件按 fail-closed 处理,同样不注册工具、不注入上下文。
+镜像对作用域内的 Agent 以 `--tool-policy strict` 建立,工具面被收窄到
+`qdm_query` / `qdm_scope_summary` / `get_current_time` 三个,同时关掉工具结果裁剪。这一步是
+授权边界的一部分:`/run/secrets/channel-auth.json` 与 `session-hmac.secret` 必须对容器运行
+UID 可读(插件进程内要按渠道用户解出 blob),所以 0600 不是隔离手段,真正的边界是"模型没有
+文件与命令工具可用"。代价是模型不能再自己去 grep wikis 找指标,答案完全依赖注入的上下文,
+因而 `context --format qwenpaw-hook` 的"选中的手册必须全部内嵌,否则整次请求失败"是它的
+前置条件。
+
+核对与回退:
+
+```bash
+# offenders=none 表示作用域内 Agent 的工具面确实只剩 QDM 三个
+docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data \
+  qwenpaw doctor --plugin-config-file /etc/qdm/qwenpaw/plugin-config.json \
+  --qwenpaw-working-dir /app/working --json | grep -A3 '"tool-allowlist"'
+```
+
+要放回宿主默认工具面,在 `Dockerfile` 的 setup 里去掉 `--tool-policy strict` 重新构建;
+`preserve` 下 setup 不写任何 `agent.json`。开发实例(`scripts/plugin-dev-init-qwenpaw.mjs`)
+故意保留 `preserve`,它把 `default` 也放进了作用域,strict 会连带削掉控制台在用的工具。
+
+> **升级期缺口**:`--tool-policy strict` 由 setup 施加,而 setup 只在**构建期**跑;持久卷上
+> 已有的 `agent.json` 不会在启动时被重新收窄(渠道绑定的 `ensure_qdm_agent.py` 每次启动都跑,
+> 工具面没有对应的一次)。老部署升级镜像后,请在第 ⑤ 步之后核一次 `tool-allowlist`;若报
+> offenders,重建镜像或手工把该 Agent 的工具关掉。把收窄并入启动期的 `ensure_qdm_agent.py`
+> 是这一步的后续改进项。
+
 引导逻辑本身有一组不依赖宿主的单测:
 
 ```bash

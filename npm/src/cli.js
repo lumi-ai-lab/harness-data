@@ -97,6 +97,7 @@ Root Context options (setup/doctor/paths/report):
   --skip-wikis                       Skip wikis validation/index build during setup
   --channel-auth-only                QwenPaw only: authorize via channel-auth.json; skip auth.blob and --auth-user-id
   --enabled-agents PATTERN           QwenPaw only: agent id or wildcard (harness-data-*, *) allowed to activate the plugin; repeatable (default: harness-data-*)
+  --tool-policy POLICY               QwenPaw only: preserve (default, host tools untouched) or strict (in-scope agents keep only qdm_query, qdm_scope_summary, get_current_time)
 
 Report options:
   report <start|status|advance|approve|retry|cancel|stop> --session ID

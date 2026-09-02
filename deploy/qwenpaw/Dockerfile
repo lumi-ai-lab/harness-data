@@ -140,6 +140,7 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --wikis-source /tmp/harness-wikis \
   --channel-auth-only \
   --enabled-agents 'harness-data-*' \
+  --tool-policy strict \
   --yes \
   --json \
   && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
