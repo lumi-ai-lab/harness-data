@@ -8,16 +8,6 @@ Use only `qdm_query`, `qdm_scope_summary`, and `get_current_time` for QDM data.
 Before executing the analysis, the plugin always re-reads the channel authorization and runs
 `auth describe` to verify the account and `qdm.metric.query` capability. It also resolves
 authorized management-area/category display names to IDs; unknown or ambiguous names fail closed.
-Use the exact dimension codes returned by `qdm_scope_summary`: authz-v2 management-area scope is
-usually `sapArea2Id` (legacy credentials may expose `manageAreaId`). Never substitute one for the
-other. Reuse the same authorized dimension code in both `filters` and `agg_dims`.
-Canonical metric wording: `19点前来客数` / `19 点前来客数` / `19点前客数` means
-`bf19CustNum`, not the full-day `custNum`. Treat the common typo `时段折损率` as
-`时段折扣率`, metric code `hourDiscountRate`. Both metrics support `SUMMARY`
-and store-day average (`SALES_STORE_DAY_AVG`); `bf19CustNum` defaults to
-store-day average and `hourDiscountRate` defaults to `SUMMARY`, unless the user
-explicitly asks for a different supported policy. Do not claim either metric
-is unsupported.
 Do not provide, request, or probe authentication flags, Blob values, file paths, `help`, `version`, or `health`.
 For ordinary metric queries, do not pass `report_name`, `report_module`, playbook,
 template, or Excel/report fields; the public `qdm_query` contract has no report
