@@ -143,6 +143,42 @@ def _scoped_config(patterns: tuple[str, ...], **extra: object) -> types.SimpleNa
     return types.SimpleNamespace(agent_scope=AgentScope(patterns), qdm_agent_id=patterns[0] if patterns else "", **extra)
 
 
+def _component_config() -> types.SimpleNamespace:
+    """A plugin config stub complete enough for ``_build_components``."""
+    return _scoped_config(
+        ("default",),
+        auth_file=Path("/tmp/qdm-channel-auth.json"),
+        auth_file_max_bytes=None,
+        qdm_metric_cli=Path("/tmp/qdm-metric-cli"),
+        root_context_path=Path("/tmp/context.json"),
+        query_limits=QueryLimits(),
+    )
+
+
+class _QdmRecorder:
+    """Stand in for the auth provider and executor, counting subprocess entry points."""
+
+    def __init__(self) -> None:
+        self.preflights = 0
+        self.queries = 0
+
+    @staticmethod
+    def blob_for(_requester: object) -> str:
+        return "qdm1enc.blob"
+
+    @staticmethod
+    def scope() -> types.SimpleNamespace:
+        return types.SimpleNamespace(capabilities=(), data_scope={})
+
+    def preflight_query(self, _blob: str) -> types.SimpleNamespace:
+        self.preflights += 1
+        return self.scope()
+
+    def query(self, **_kwargs: object) -> str:
+        self.queries += 1
+        return "1 行"
+
+
 class IdentityTests(unittest.TestCase):
     def test_single_chat_resolves_channel_and_user_only(self) -> None:
         actual = resolve_requester("wecom", {"wecom_sender_id": "zhangsan", "wecom_chatid": "chat-1"})
@@ -892,6 +928,47 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertEqual(len(api.workspace_hooks), 1)
         self.assertNotIn("reload_safe", api.workspace_hooks[0])
         self.assertEqual(api.workspace_hooks[0]["hook_name"], "qdm_harness_apply_agent_scope")
+
+    def test_authorization_snapshot_reuse_keeps_the_executor_available(self) -> None:
+        """A reused scope must never come back without live components."""
+        requester = Requester(1, "resolved", "wecom", "zhangsan", "single")
+        recorder = _QdmRecorder()
+        snapshot = PLUGIN_MODULE.AuthorizationSnapshot(
+            requester, "qdm1enc.blob", recorder.scope(), "cred-fp", "scope-fp",
+        )
+        requester_token = requester_context.set(requester)
+        snapshot_token = RUNTIME_HOOKS_MODULE.authorization_snapshot_context.set(snapshot)
+        try:
+            with patch.object(PLUGIN_MODULE, "load_config", _component_config), \
+                    patch.object(PLUGIN_MODULE, "ChannelAuthProvider", lambda *_a, **_k: recorder), \
+                    patch.object(PLUGIN_MODULE, "QdmCliExecutor", lambda *_a, **_k: recorder):
+                provider, executor, _config = PLUGIN_MODULE._trusted_components()
+            self.assertIsNotNone(provider)
+            self.assertIsNotNone(executor)
+            self.assertEqual(recorder.preflights, 0)
+        finally:
+            RUNTIME_HOOKS_MODULE.authorization_snapshot_context.reset(snapshot_token)
+            requester_context.reset(requester_token)
+
+    def test_two_queries_in_one_context_both_succeed_and_reuse_the_scope(self) -> None:
+        """The host copies per-call contexts; this pins the same-context case."""
+        requester = Requester(1, "resolved", "wecom", "zhangsan", "single")
+        recorder = _QdmRecorder()
+        requester_token = requester_context.set(requester)
+        snapshot_token = RUNTIME_HOOKS_MODULE.authorization_snapshot_context.set(None)
+        try:
+            with patch.object(PLUGIN_MODULE, "load_config", _component_config), \
+                    patch.object(PLUGIN_MODULE, "ChannelAuthProvider", lambda *_a, **_k: recorder), \
+                    patch.object(PLUGIN_MODULE, "QdmCliExecutor", lambda *_a, **_k: recorder):
+                first = PLUGIN_MODULE._query(metric="saleAmt", start_date="2026-08-01", end_date="2026-08-02")
+                second = PLUGIN_MODULE._query(metric="profitRate", start_date="2026-08-01", end_date="2026-08-02")
+            self.assertEqual(first.state, ToolResultState.SUCCESS)
+            self.assertEqual(second.state, ToolResultState.SUCCESS)
+            self.assertEqual(recorder.preflights, 1)
+            self.assertEqual(recorder.queries, 2)
+        finally:
+            RUNTIME_HOOKS_MODULE.authorization_snapshot_context.reset(snapshot_token)
+            requester_context.reset(requester_token)
 
     def test_qdm_tools_reject_an_unbound_console_request_before_reading_config(self) -> None:
         token = requester_context.set(None)

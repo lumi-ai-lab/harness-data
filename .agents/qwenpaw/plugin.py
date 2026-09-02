@@ -465,18 +465,8 @@ def _require_qwenpaw_21() -> None:
         raise RuntimeError(f"QDM Harness requires QwenPaw 2.1.x or 2.2.x (found {installed})")
 
 
-def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
-    requester = requester_context.get()
-    if requester is None or requester.status != "resolved":
-        raise QdmCliError(
-            "QDM_CHANNEL_IDENTITY_UNAVAILABLE",
-            "当前会话不支持 QDM 数据查询。请通过已配置的企微或飞书机器人发起请求。",
-        )
-    existing = authorization_snapshot_context.get()
-    if isinstance(existing, AuthorizationSnapshot):
-        if existing.requester != requester:
-            raise QdmCliError("QDM_CHANNEL_IDENTITY_MISMATCH", "当前请求身份与授权上下文不一致")
-        return None, None, existing  # type: ignore[return-value]
+def _build_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
+    """Build the auth provider and CLI executor for one call (no subprocess)."""
     try:
         config = load_config()
     except ConfigError as exc:
@@ -489,6 +479,24 @@ def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
         success_bytes=config.query_limits.success_bytes,
         timeout_seconds=config.query_limits.timeout_seconds,
     )
+    return provider, executor, config
+
+
+def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
+    requester = requester_context.get()
+    if requester is None or requester.status != "resolved":
+        raise QdmCliError(
+            "QDM_CHANNEL_IDENTITY_UNAVAILABLE",
+            "当前会话不支持 QDM 数据查询。请通过已配置的企微或飞书机器人发起请求。",
+        )
+    provider, executor, config = _build_components()
+    existing = authorization_snapshot_context.get()
+    if isinstance(existing, AuthorizationSnapshot):
+        if existing.requester != requester:
+            raise QdmCliError("QDM_CHANNEL_IDENTITY_MISMATCH", "当前请求身份与授权上下文不一致")
+        # The snapshot only carries an already-authenticated scope; the caller
+        # still gets live components so it never has to be re-derived.
+        return provider, executor, config
     blob = provider.blob_for(requester)
     scope = executor.preflight_query(blob)
     snapshot = AuthorizationSnapshot(requester, blob, scope,
