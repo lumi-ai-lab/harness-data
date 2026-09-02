@@ -66,6 +66,7 @@ docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即�
 ```text
 监听   127.0.0.1:8088(默认仅本机)
 内存   上限 8G
+时区   Asia/Shanghai(东八区)
 自启   --restart unless-stopped
 密钥   密钥目录只读挂载到容器 /run/secrets
 ```

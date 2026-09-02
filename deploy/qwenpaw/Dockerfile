@@ -52,7 +52,11 @@ ARG QWENPAW_VERSION=2.1.0
 ARG QWENPAW_UID=10001
 ARG QWENPAW_GID=10001
 
-ENV LANG=C.UTF-8 \
+# 默认时区东八区(上海)。必须在 `qwenpaw init` 之前设置:config.json 的
+# user_timezone 用 detect_system_timezone() 派生,init 生成时读到 TZ 才会
+# 落库为 Asia/Shanghai;否则回退读 /etc/timezone 的 Etc/UTC。
+ENV TZ=Asia/Shanghai \
+  LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
   PYTHONUNBUFFERED=1 \
   PIP_DISABLE_PIP_VERSION_CHECK=1 \
