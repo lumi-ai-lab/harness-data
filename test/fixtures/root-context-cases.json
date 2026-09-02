@@ -9,6 +9,7 @@
   "valid": {
     "schemaVersion": 1,
     "host": "codex",
+    "surface": "codex",
     "pluginRoot": "${PLUGIN_ROOT}",
     "resourceRoot": "${DATA_ROOT}",
     "dataRoot": "${DATA_ROOT}",

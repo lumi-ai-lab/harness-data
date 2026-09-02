@@ -3,6 +3,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rm
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireDistBuildLock } from "../plugins/harness-data/scripts/dist-build-lock.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_REL = path.join("plugins", "harness-data");
@@ -13,9 +14,16 @@ const SOURCE_PLUGIN_PATHS = [
   "hooks/hooks.json",
   "mcp/kernel-loader.mjs",
   "mcp/runtime-resolver.mjs",
+  "mcp/host-adapter.mjs",
+  "mcp/local-bridge.mjs",
+  "mcp/bridge-server.mjs",
+  "mcp/chatgpt-desktop-adapter.mjs",
+  "mcp/codex-host-adapter.mjs",
+  "mcp/bridge.mjs",
   "mcp/server.mjs",
   "scripts/setup.mjs",
   "scripts/context-store.mjs",
+  "scripts/dist-build-lock.mjs",
   "scripts/data-harness-cli",
   "skills/html-report/SKILL.md",
 ];
@@ -25,6 +33,8 @@ const RELEASE_PLUGIN_PATHS = [
   "dist/harness-data-installer/src/cli.js",
   "dist/data-harness-cli/src/main.js",
   "dist/harness-runtime-node/src/root-context.mjs",
+  "dist/harness-runtime-node/src/host-context.mjs",
+  "dist/harness-runtime-node/src/local-bridge.mjs",
   "dist/html-report-kernel/src/index.mjs",
 ];
 const SETUP_MANAGED_PATHS = new Set([
@@ -47,22 +57,28 @@ export function buildCodexMarketplace({ outputDir, version, repo = repoRoot } = 
   const sourceRoot = requireAbsoluteDirectory(repo, "repo");
   const output = requireAbsolutePath(outputDir, "outputDir");
   const pluginVersion = requireString(version, "version");
-  verifyCodexRepository({ repoRoot: sourceRoot });
-  ensureReleaseInputs(sourceRoot);
+  const dist = path.join(sourceRoot, PLUGIN_REL, "dist");
+  const lock = acquireDistBuildLock(dist);
+  try {
+    verifyCodexRepository({ repoRoot: sourceRoot });
+    ensureReleaseInputs(sourceRoot);
 
-  rmSync(output, { recursive: true, force: true });
-  mkdirSync(output, { recursive: true });
-  copyTree(path.join(sourceRoot, ".agents", "plugins"), path.join(output, ".agents", "plugins"));
-  copyTree(path.join(sourceRoot, PLUGIN_REL), path.join(output, PLUGIN_REL));
-  const targetPlugin = path.join(output, PLUGIN_REL);
-  stripReleaseExcluded(targetPlugin);
-  copyPluginDist(sourceRoot, targetPlugin);
-  copyPluginBootstrap(sourceRoot, targetPlugin);
-  const manifestPath = path.join(targetPlugin, ".codex-plugin", "plugin.json");
-  const manifest = readJSON(manifestPath);
-  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version: pluginVersion }, null, 2)}\n`);
-  verifyCodexMarketplace({ outputDir: output, version: pluginVersion });
-  return { outputDir: output, pluginRoot: targetPlugin, version: pluginVersion };
+    rmSync(output, { recursive: true, force: true });
+    mkdirSync(output, { recursive: true });
+    copyTree(path.join(sourceRoot, ".agents", "plugins"), path.join(output, ".agents", "plugins"));
+    copyTree(path.join(sourceRoot, PLUGIN_REL), path.join(output, PLUGIN_REL));
+    const targetPlugin = path.join(output, PLUGIN_REL);
+    stripReleaseExcluded(targetPlugin);
+    copyPluginDist(sourceRoot, targetPlugin);
+    copyPluginBootstrap(sourceRoot, targetPlugin);
+    const manifestPath = path.join(targetPlugin, ".codex-plugin", "plugin.json");
+    const manifest = readJSON(manifestPath);
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version: pluginVersion }, null, 2)}\n`);
+    verifyCodexMarketplace({ outputDir: output, version: pluginVersion });
+    return { outputDir: output, pluginRoot: targetPlugin, version: pluginVersion };
+  } finally {
+    lock.release();
+  }
 }
 
 export function packCodexMarketplaceZip({ zipPath, version, repo = repoRoot, stageDir = "" } = {}) {
@@ -214,7 +230,8 @@ function copyTree(source, destination) {
     recursive: true,
     filter: (current) => {
       const name = path.basename(current);
-      return name !== ".git" && name !== ".harness" && name !== "node_modules" && name !== "test" && name !== "tests";
+      return name !== ".git" && name !== ".harness" && name !== "node_modules" && name !== "test" && name !== "tests" &&
+        name !== "dist.lock" && !name.startsWith("dist.tmp-") && !name.startsWith("dist.previous-");
     },
   });
 }

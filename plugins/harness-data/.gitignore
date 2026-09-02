@@ -12,5 +12,8 @@ secrets/
 
 # Build artifacts and vendored wikis (generated, not source)
 dist/
+dist.lock
+dist.tmp-*
+dist.previous-*
 bootstrap/
 resources/wikis/

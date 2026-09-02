@@ -9,6 +9,7 @@ compatibility path.
 {
   "schemaVersion": 1,
   "host": "codex",
+  "surface": "codex",
   "pluginRoot": "/absolute/path/to/plugin",
   "resourceRoot": "/absolute/path/to/data",
   "dataRoot": "/absolute/path/to/data",
@@ -26,6 +27,10 @@ compatibility path.
   }
 }
 ```
+
+`surface` is `codex` for the Codex host and `chat` or `work` for the
+ChatGPT Desktop adapter. It is metadata for the host boundary; the shared
+report tools do not change with the surface.
 
 Rules:
 
@@ -68,5 +73,6 @@ Stable validation codes implemented in v1 are:
 - `QDM_STATE_LOCKED`
 - `QDM_RESOURCE_MISMATCH`
 - `QDM_SECRET_UNAVAILABLE`
+- `QDM_SESSION_UNAVAILABLE`
 - `QDM_SETUP_REQUIRED`
 - `QDM_MIGRATION_REQUIRED`

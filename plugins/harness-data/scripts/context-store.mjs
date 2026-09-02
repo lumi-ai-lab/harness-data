@@ -74,6 +74,7 @@ export function setupEnvironment({ pluginRoot, env = process.env } = {}) {
     ...env,
     CODEX_HOME: codexHome,
     HARNESS_HOST: "codex",
+    HARNESS_SURFACE: env.HARNESS_SURFACE || "codex",
     HARNESS_PLUGIN_ROOT: resolvedPluginRoot,
     HARNESS_CONTEXT_FILE: env.HARNESS_CONTEXT_FILE || path.join(resolvedPluginRoot, PLUGIN_CONTEXT_FILE_NAME),
     HARNESS_WORKSPACE_POLICY: env.HARNESS_WORKSPACE_POLICY || path.join(resolvedPluginRoot, "config", "workspace-policy.json"),

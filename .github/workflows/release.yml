@@ -123,6 +123,7 @@ jobs:
           node --test packages/data-harness-cli/test/*.test.js
           node --test packages/harness-runtime-node/src/*.test.mjs
           node --test plugins/harness-data/mcp/server.test.mjs
+          node --test plugins/harness-data/mcp/host-adapter.test.mjs
           node --test plugins/harness-data/test/clean-room-setup.test.mjs
           node --test scripts/build-codex-marketplace.test.mjs
           node --test scripts/build-qwenpaw-plugin.test.mjs

@@ -87,6 +87,8 @@ Root Context options (setup/doctor/paths/report):
   --state-root PATH                  Explicit state root (default: dataRoot/state)
   --secret-ref VALUE                 file path or {kind, ...} reference
   --session-id ID                    Stable host session identifier
+  --host HOST                        Host adapter (codex or chatgpt-desktop)
+  --surface SURFACE                  Host surface (codex, chat, or work)
   --workspace-policy PATH             Workspace allowlist JSON path
   --workspace-allowlist PATH         Project directory to enable this plugin (not the plugin cache; repeatable; created if missing)
   --enable-workspace PATH            Alias of --workspace-allowlist

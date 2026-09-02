@@ -9,6 +9,12 @@ This skill drives the html-report pipeline through a local MCP server.
 It works on **both Codex CLI and ChatGPT Desktop App** — no `codex` binary
 required on the production path.
 
+Codex supplies the trusted workspace through its project context. ChatGPT
+Desktop uses the same MCP tools through `ChatGPTDesktopAdapter` with
+`surface: "chat"` or `surface: "work"`; Desktop does not require or execute
+Codex Hooks. If Desktop cannot launch local stdio, the adapter may expose the
+authenticated loopback Bridge, while all state and report writes remain local.
+
 The MCP server exposes six tools. Call them in order:
 
 ```
@@ -46,6 +52,10 @@ Call `html_report_start` with the user's question:
 ```json
 { "sessionId": "<unique-id>", "userQuestion": "<the user's original question>" }
 ```
+
+If the host does not expose a stable session ID, `sessionId` must be supplied
+explicitly; the MCP server will fail closed instead of creating a transient
+cross-turn session.
 
 The MCP server creates a session directory and opens `qdm-metric-cli ui`.
 Tell the user:

@@ -59,3 +59,19 @@ export {
   workspaceIdentity,
   isPathWithin,
 } from "./root-context.mjs";
+export {
+  HOST_SURFACES,
+  HOST_CONTEXT_ERROR_CODES,
+  HostContextProvider,
+  createHostContextProvider,
+  normalizeHostSurface,
+  normalizeHostCapabilities,
+  buildHostCapabilities,
+  HostCapabilities,
+  createHostCapabilities,
+} from "./host-context.mjs";
+export {
+  LOCAL_BRIDGE_STATES,
+  LocalBridge,
+  createLocalBridge,
+} from "./local-bridge.mjs";

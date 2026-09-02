@@ -245,6 +245,20 @@ test("MCP blocks a disallowed workspace before creating a report session", async
   assert.equal(existsSync(sessionDirFor(sessionId, workspace)), false);
 });
 
+test("MCP refuses an auto-generated session when the host has no stable session id", async (t) => {
+  const { rpc, callTool } = startServer(t, {
+    env: {
+      ...process.env,
+      HARNESS_SESSION_ID: "",
+      HTML_REPORT_METRIC_CLI_UI_OPEN: "0",
+    },
+  });
+  await rpc("initialize", {});
+  const result = await callTool("html_report_start", { userQuestion: "必须显式 session" });
+  assert.match(result.error?.message || "", /QDM_SESSION_UNAVAILABLE/);
+  assert.equal(existsSync(join(stateRootFor(), "html-report")), false);
+});
+
 test("MCP loader and server do not import PI agent directories", async () => {
   const files = [
     serverPath,
