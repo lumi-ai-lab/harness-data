@@ -38,7 +38,11 @@ from .qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from .qdm_cli import QdmCliError, QdmCliExecutor, QueryScope
 from .qdm_config import ConfigError, load_config
 from .qdm_debug_identity import record_reload_bridge_state
-from .qdm_runtime_hooks import authorization_snapshot_context, hook_factories, requester_context
+from .qdm_runtime_hooks import (
+    authorization_snapshot_context,
+    hook_factories,
+    requester_context,
+)
 
 
 logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
@@ -265,12 +269,40 @@ def _apply_agent_scope_to_existing_workspaces(tool_specs: tuple) -> None:
 _LEGACY_RELOAD_BRIDGE_STATE = "_qdm_harness_reload_bridge_state"
 _PLUGIN_ID = "qdm-harness-qwenpaw"
 _AGENT_SCOPE_HOOK_NAME = "qdm_harness_apply_agent_scope"
+_QDM_TOOL_NAMES = ("qdm_query", "qdm_scope_summary")
 
 
-async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[str, Any]) -> None:
-    """Run this plugin's in-memory workspace callbacks on QwenPaw 2.1."""
+def _qdm_hook_names() -> set[str]:
+    return {str(getattr(factory(), "name", "")) for _, factory, _ in hook_factories()}
+
+
+def _expected_workspace_bridges() -> set[str]:
+    """Host bridge hook names this plugin relies on being replayed after a reload.
+
+    ``register_runtime_hook`` is mirrored per workspace by a workspace_created
+    hook the host names ``rt_hook_ws_<plugin_id>_<hook>``; the plugin may not
+    touch a workspace hook registry directly, so replaying those bridges is the
+    only supported way to restore state, and their presence is what we verify.
+    """
+    prefix = f"rt_hook_ws_{_PLUGIN_ID}_"
+    return {f"{prefix}{name}" for name in _qdm_hook_names()} | {_AGENT_SCOPE_HOOK_NAME}
+
+
+def _warn_on_missing_tools(workspace: Any, agent_id: Any) -> None:
+    """Report QDM tools that vanished from a replacement workspace."""
+    tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
+    if tool_registry is None or not _agent_scope_allows(agent_id):
+        return
+    absent = [tool for tool in _QDM_TOOL_NAMES if tool not in set(tool_registry.names())]
+    if absent:
+        logger.warning("qdm_reload_tools_missing agent=%s names=%s", agent_id, ",".join(absent))
+
+
+async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[str, Any]) -> set[str]:
+    """Run this plugin's in-memory workspace callbacks and report their names."""
     import inspect
 
+    replayed: set[str] = set()
     runtime_prefix = f"rt_hook_ws_{_PLUGIN_ID}_"
     for registration in registry.get_workspace_created_hooks():
         if getattr(registration, "plugin_id", "") != _PLUGIN_ID:
@@ -282,6 +314,8 @@ async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[st
         result = callback(workspace_info)
         if inspect.isawaitable(result):
             await result
+        replayed.add(hook_name)
+    return replayed
 
 
 def _install_legacy_reload_bridge(
@@ -340,8 +374,16 @@ def _install_legacy_reload_bridge(
                 "workspace_dir": str(getattr(workspace, "workspace_dir", "")),
                 "workspace": workspace,
             }
-            await _run_legacy_workspace_callbacks(current["registry"], workspace_info)
-            logger.info("QDM Harness plugin state restored after QwenPaw 2.1 workspace reload")
+            replayed = await _run_legacy_workspace_callbacks(current["registry"], workspace_info)
+            missing = sorted(_expected_workspace_bridges() - replayed)
+            _warn_on_missing_tools(workspace, agent_id)
+            if missing:
+                logger.warning(
+                    "qdm_reload_bridge_incomplete agent=%s replayed=%d missing=%s",
+                    agent_id, len(replayed), ",".join(missing),
+                )
+            else:
+                logger.info("QDM Harness plugin state restored after QwenPaw 2.1 workspace reload")
         except Exception:
             logger.exception("QDM Harness failed to restore plugin state after workspace reload")
         return result

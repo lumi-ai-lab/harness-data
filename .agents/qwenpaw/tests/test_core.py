@@ -885,6 +885,50 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertIn("qdm_query", workspace.plugins.tool_registry.names())
         self.assertIn("qdm_scope_summary", workspace.plugins.tool_registry.names())
 
+    def test_reload_bridge_reports_when_the_host_renames_its_bridges(self) -> None:
+        """A renamed host bridge must not let the bridge log a false success."""
+        from qwenpaw.runtime.tool_registry import ToolRegistry
+
+        workspace = types.SimpleNamespace(
+            agent_id="default",
+            workspace_dir=Path("/tmp/qdm-reload-renamed"),
+            plugins=types.SimpleNamespace(tool_registry=ToolRegistry()),
+        )
+
+        class Manager:
+            def __init__(self) -> None:
+                self.agents: dict[str, object] = {}
+
+            async def reload_agent(self, agent_id: str) -> bool:
+                self.agents[agent_id] = workspace
+                return True
+
+        class RenamedRegistry:
+            """Serves only foreign bridge names, so the replay matches nothing."""
+
+            def __init__(self, manager: Manager) -> None:
+                self.manager = manager
+
+            def get_workspace_manager(self) -> Manager:
+                return self.manager
+
+            def get_workspace_created_hooks(self) -> list[object]:
+                return [types.SimpleNamespace(
+                    plugin_id="qdm-harness-qwenpaw",
+                    hook_name="ws_rt_bridge_v3_qdm-harness-qwenpaw_identity",
+                    callback=lambda _info: None,
+                )]
+
+        manager = Manager()
+        with self.assertLogs("qwenpaw.plugins.qdm_harness", level="WARNING") as logs:
+            self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=RenamedRegistry(manager)))
+            with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("default",))):
+                self.assertTrue(asyncio.run(manager.reload_agent("default")))
+        captured = "\n".join(logs.output)
+        self.assertIn("qdm_reload_bridge_incomplete", captured)
+        self.assertIn("qdm_harness_apply_agent_scope", captured)
+        self.assertIn("qdm_reload_tools_missing", captured)
+
     def test_reload_safe_hook_skips_when_no_workspace_is_resolvable(self) -> None:
         class Api:
             def __init__(self) -> None:
