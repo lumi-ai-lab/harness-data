@@ -87,14 +87,16 @@ dimension `sapArea2Id`; the QwenPaw skill tells the model to reuse the exact
 dimension codes returned by `qdm_scope_summary`.
 
 For a long-running instance, set `QDM_CHANNEL_SECRET_DIR` and
-`QWENPAW_MODEL_API_KEY`, then use `docker-compose.yml`. The service binds the
-host port to `127.0.0.1` by default and checks `/healthz`.
-
-`deploy/qwenpaw/run_docker.sh` is the `docker run` equivalent: it generates
+`QWENPAW_MODEL_API_KEY`, then run `deploy/qwenpaw/run_docker.sh`. The image has
+to be built first (`build-docker-image.sh`). The script generates
 `session-hmac.secret` (48 random bytes, mode `0600`) in
 `QDM_CHANNEL_SECRET_DIR` on first use and never overwrites an existing file,
-mirrors the owner of `channel-auth.json`, then starts the container. It needs
-the image built first (`build-docker-image.sh`).
+mirrors the owner of `channel-auth.json`, then starts the container with
+`--restart unless-stopped`.
+
+The service binds the host port to `127.0.0.1` by default, and the image
+healthcheck polls `/healthz`; read the result with
+`docker inspect --format '{{json .State.Health}}' qwenpaw`.
 
 Proxying is opt-in and read from the caller's environment. The model gateway and
 the WeCom APIs are reachable directly in mainland China, so by default
