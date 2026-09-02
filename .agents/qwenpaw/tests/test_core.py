@@ -995,7 +995,6 @@ class InstallerTests(unittest.TestCase):
                 patch.object(INSTALLER, "DEFAULT_PLUGIN_CONFIG_FILE", config),
                 patch.object(INSTALLER, "_validate_qwenpaw"),
                 patch.object(INSTALLER, "_validate_windows_acl"),
-                patch.object(INSTALLER, "_validate_linux_material"),
                 patch.object(INSTALLER, "_sensitive_material_paths", return_value=(auth, secret)),
                 patch.object(INSTALLER, "_run_qwenpaw", side_effect=lambda _p, _w, command: calls.append(command)),
             ):
@@ -1026,7 +1025,6 @@ class InstallerTests(unittest.TestCase):
                 patch.object(INSTALLER, "DEFAULT_PLUGIN_CONFIG_FILE", config),
                 patch.object(INSTALLER, "_validate_qwenpaw"),
                 patch.object(INSTALLER, "_validate_windows_acl"),
-                patch.object(INSTALLER, "_validate_linux_material"),
                 patch.object(INSTALLER, "_sensitive_material_paths", return_value=(auth, secret)),
                 patch.object(INSTALLER, "_run_qwenpaw", side_effect=RuntimeError("simulated failure")),
             ):
@@ -1052,7 +1050,6 @@ class InstallerTests(unittest.TestCase):
             path.write_text('{"credentials": {}}', encoding="utf-8")
             with (
                 patch.object(INSTALLER, "_validate_windows_acl"),
-                patch.object(INSTALLER, "_validate_linux_material"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "格式无效"):
                     INSTALLER._validate_channel_auth(path)

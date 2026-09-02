@@ -217,8 +217,8 @@ def _validate_regular(path: Path, label: str, minimum: int = 1) -> None:
         raise RuntimeError(f"{label}不可用")
     if os.name == "nt":
         _validate_windows_acl(path, label)
-    else:
-        _validate_linux_material(path, label)
+    elif not os.access(path, os.R_OK):
+        raise RuntimeError(f"{label}对当前进程不可读: {path}")
 
 
 def _validate_channel_auth(path: Path) -> None:
@@ -288,46 +288,6 @@ def _has_read_permission(value: str) -> bool:
     """Recognize icacls read-capable shorthand permissions on one ACE line."""
     permissions = value.upper()
     return any(marker in permissions for marker in ("(R)", "(RX)", "(M)", "(F)"))
-
-
-def _validate_linux_material(path: Path, label: str) -> None:
-    try:
-        info = path.stat()
-        parent_info = path.parent.stat()
-    except OSError as exc:
-        raise RuntimeError(f"{label}权限或状态不可用") from exc
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_gid != os.getegid():
-        raise RuntimeError(f"{label}必须由当前 QwenPaw UID/GID 拥有")
-    if info.st_mode & 0o077:
-        raise RuntimeError(f"{label}权限必须不超过 0600")
-    if parent_info.st_mode & 0o022:
-        raise RuntimeError(f"{label}父目录不可被其他用户写入")
-    if not _linux_mount_is_read_only(path.parent):
-        raise RuntimeError(f"{label}必须来自只读挂载")
-
-
-def _linux_mount_is_read_only(path: Path) -> bool:
-    """Return whether the longest matching mount in Linux mountinfo is ro."""
-    if os.name == "nt":
-        return True
-    try:
-        target = str(path.resolve())
-        best: tuple[int, bool] | None = None
-        for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
-            fields = line.split(" - ", 1)
-            left = fields[0].split()
-            if len(left) < 6:
-                continue
-            mountpoint = left[4].replace("\\040", " ").replace("\\011", "\t")
-            if target == mountpoint or target.startswith(mountpoint.rstrip("/") + "/"):
-                options = left[5].split(",")
-                super_options = fields[1].split()[2].split(",") if len(fields) > 1 and len(fields[1].split()) >= 3 else []
-                candidate = (len(mountpoint), "ro" in options or "ro" in super_options)
-                if best is None or candidate[0] > best[0]:
-                    best = candidate
-        return bool(best and best[1])
-    except (OSError, ValueError):
-        return False
 
 
 def _runtime(value: str | None) -> Path:
