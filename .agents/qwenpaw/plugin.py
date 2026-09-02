@@ -4,7 +4,8 @@
 - 注册 qdm_query / qdm_scope_summary 两个受限工具,只允许查询当前渠道用户
   (企微/飞书)授权范围内的 QDM 指标;
 - 借助 qdm_runtime_hooks 注入请求身份与授权快照上下文,保证查询身份和
-  授权状态一致,身份缺失时返回 QDM_CHANNEL_IDENTITY_UNAVAILABLE;
+  授权状态一致,钩子未绑定时返回 QDM_HARNESS_HOOK_NOT_BOUND,渠道身份
+  不可用时返回 QDM_CHANNEL_IDENTITY_UNAVAILABLE;
 - 宿主会把插件的钩子和工具注入到每一个 workspace,因此 enabled_agents
   作用域同时门控这两侧:命中的 Agent 拿到工具,未命中的 Agent 连工具
   都不注册,避免留下可见但必然报错的 qdm_query;
@@ -36,6 +37,7 @@ from qwenpaw.plugins.api import PluginApi
 from .qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from .qdm_cli import QdmCliError, QdmCliExecutor, QueryScope
 from .qdm_config import ConfigError, load_config
+from .qdm_debug_identity import record_reload_bridge_state
 from .qdm_runtime_hooks import authorization_snapshot_context, hook_factories, requester_context
 
 
@@ -292,8 +294,8 @@ def _install_legacy_reload_bridge(
     but does not run workspace-created plugin hooks for that replacement.  The
     globally exported tool functions remain visible while the request identity
     hooks disappear, causing every real channel query to fail with
-    QDM_CHANNEL_IDENTITY_UNAVAILABLE.  Newer hosts expose workspace setup hooks
-    and do not need this compatibility bridge.
+    QDM_HARNESS_HOOK_NOT_BOUND.  Newer hosts expose workspace setup hooks and do
+    not need this compatibility bridge.
     """
     if registry is None:
         try:
@@ -301,17 +303,21 @@ def _install_legacy_reload_bridge(
 
             registry = PluginRegistry()
         except Exception:
+            record_reload_bridge_state("unavailable")
             return False
     if callable(getattr(registry, "get_workspace_setup_hooks", None)):
+        record_reload_bridge_state("not_needed")
         return False
     manager = getattr(registry, "get_workspace_manager", lambda: None)()
     if manager is None or not callable(getattr(manager, "reload_agent", None)):
         logger.warning("QwenPaw 2.1 reload bridge unavailable: workspace manager not ready")
+        record_reload_bridge_state("unavailable")
         return False
 
     existing = getattr(manager, _LEGACY_RELOAD_BRIDGE_STATE, None)
     if isinstance(existing, dict):
         existing["registry"] = registry
+        record_reload_bridge_state("installed")
         return True
 
     state = {
@@ -342,6 +348,7 @@ def _install_legacy_reload_bridge(
 
     manager.reload_agent = MethodType(reload_agent_with_qdm, manager)
     logger.info("Installed QwenPaw 2.1 workspace reload compatibility bridge")
+    record_reload_bridge_state("installed")
     return True
 
 
@@ -484,7 +491,16 @@ def _build_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
 
 def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
     requester = requester_context.get()
-    if requester is None or requester.status != "resolved":
+    if requester is None:
+        # The PRE_EXECUTE hook never bound an identity, i.e. this plugin's runtime
+        # hooks are absent from the workspace serving this request.
+        logger.error("qdm_identity_hook_missing reason=requester_context_unbound")
+        raise QdmCliError(
+            "QDM_HARNESS_HOOK_NOT_BOUND",
+            "QDM 运行时钩子未绑定到本次执行，本次查询未发起。请稍后重试；"
+            "若持续出现，请运维检查 QwenPaw 插件在工作区重载后的状态。",
+        )
+    if requester.status != "resolved":
         raise QdmCliError(
             "QDM_CHANNEL_IDENTITY_UNAVAILABLE",
             "当前会话不支持 QDM 数据查询。请通过已配置的企微或飞书机器人发起请求。",

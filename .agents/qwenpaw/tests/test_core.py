@@ -24,7 +24,7 @@ if PACKAGE not in sys.modules:
 
 from qdm_harness_qwenpaw_test.qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query_args, _truncate_success
-from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result
+from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result, record_reload_bridge_state
 from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _sanitize_embedded_context_instruction, request_context, session_key
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
 from qdm_harness_qwenpaw_test.qdm_config import AgentScope, ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config, parse_agent_scope, DEFAULT_AGENT_SCOPE_PATTERNS
@@ -974,6 +974,16 @@ class ToolBoundaryTests(unittest.TestCase):
         token = requester_context.set(None)
         try:
             with patch.object(PLUGIN_MODULE, "load_config", side_effect=AssertionError("must not read config")):
+                with self.assertRaisesRegex(QdmCliError, "QDM_HARNESS_HOOK_NOT_BOUND"):
+                    PLUGIN_MODULE._trusted_components()
+        finally:
+            requester_context.reset(token)
+
+    def test_an_unresolved_channel_request_keeps_the_unavailable_code(self) -> None:
+        requester = Requester(1, "unavailable", "wecom", "", "group", reason="missing_or_non_person_sender")
+        token = requester_context.set(requester)
+        try:
+            with patch.object(PLUGIN_MODULE, "load_config", side_effect=AssertionError("must not read config")):
                 with self.assertRaisesRegex(QdmCliError, "QDM_CHANNEL_IDENTITY_UNAVAILABLE"):
                     PLUGIN_MODULE._trusted_components()
         finally:
@@ -987,6 +997,26 @@ class ToolBoundaryTests(unittest.TestCase):
         enabled = debug_result(_Context(DEBUG_COMMAND), requester, "command")
         self.assertEqual(enabled.action, HookAction.SHORT_CIRCUIT)
         self.assertIn("ou_123", enabled.payload.get_text_content())
+
+    def test_debug_command_explains_an_unrun_identity_hook(self) -> None:
+        record_reload_bridge_state("unavailable")
+        try:
+            result = debug_result(_Context(DEBUG_COMMAND), None, "command")
+        finally:
+            record_reload_bridge_state("unknown")
+        text = result.payload.get_text_content()
+        self.assertIn("身份解析钩子：未运行", text)
+        self.assertIn("热重载兼容桥：未安装", text)
+
+    def test_debug_command_reports_the_bridge_outcome(self) -> None:
+        requester = Requester(1, "resolved", "wecom", "zhangsan", "single")
+        record_reload_bridge_state("not_needed")
+        try:
+            text = debug_result(_Context(DEBUG_COMMAND), requester, "command").payload.get_text_content()
+        finally:
+            record_reload_bridge_state("unknown")
+        self.assertIn("zhangsan", text)
+        self.assertIn("热重载兼容桥：不需要", text)
 
     def test_debug_command_only_explains_group_rejection_in_command_mode(self) -> None:
         requester = Requester(1, "unavailable", "wecom", "", "group", reason="group_not_confirmed_mentioned")

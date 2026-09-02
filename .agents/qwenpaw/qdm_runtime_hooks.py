@@ -71,8 +71,6 @@ class QdmDebugIdentityHook(HookBase):
         if config is None:
             return HookResult()
         requester = _requester(ctx)
-        if requester is None:
-            return HookResult()
         return debug_result(ctx, requester, config.user_id_display_mode) or HookResult()
 
 
