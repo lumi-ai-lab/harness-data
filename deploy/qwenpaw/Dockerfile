@@ -23,6 +23,8 @@ FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS artifact-fetch
 
 ARG HARNESS_VERSION=0.0.56
 ARG QDM_METRIC_CLI_VERSION=v0.1.19
+# OfficeCLI: 与技能 SKILL.md 共用同一个 release tag, 保证二进制和技能版本一致。
+ARG OFFICECLI_VERSION=1.0.146
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -44,6 +46,32 @@ RUN set -eu; \
   "https://gitee.com/git_pengmd/harness-release/releases/download/v${HARNESS_VERSION}/harness-data-wikis-v${HARNESS_VERSION}.zip"; \
   unzip -q -P qdm-dev /tmp/harness-data-wikis.zip -d /tmp/wikis; \
   test -f /tmp/wikis/index.md
+
+# OfficeCLI: 单文件静态二进制(无 Office 依赖), 随 release 固定版本 + SHA256 校验。
+# bookworm 是 glibc 环境, 用非 alpine 资产; arm64 构建同样覆盖。
+RUN set -eu; \
+  case "${TARGETARCH}" in \
+    amd64) asset="officecli-linux-x64" ;; \
+    arm64) asset="officecli-linux-arm64" ;; \
+    *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac; \
+  url="https://github.com/iOfficeAI/OfficeCLI/releases/download/v${OFFICECLI_VERSION}"; \
+  curl -fsSL -o /tmp/officecli "${url}/${asset}"; \
+  curl -fsSL -o /tmp/officecli.SHA256SUMS "${url}/SHA256SUMS"; \
+  grep -F " ${asset}" /tmp/officecli.SHA256SUMS | (cd /tmp && sha256sum -c -); \
+  chmod 0755 /tmp/officecli; \
+  file /tmp/officecli | grep -q 'x86-64' || file /tmp/officecli | grep -q 'aarch64'; \
+  echo "OfficeCLI ${OFFICECLI_VERSION} (${asset}) verified"
+
+# OfficeCLI 技能目录(每个技能一个含 SKILL.md 的目录, 与二进制同 tag 固定)。
+RUN set -eu; \
+  mkdir -p /tmp/officecli-skills; \
+  url="https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/v${OFFICECLI_VERSION}/skills"; \
+  for name in officecli-xlsx officecli-docx officecli-pptx; do \
+    mkdir -p "/tmp/officecli-skills/${name}"; \
+    curl -fsSL -o "/tmp/officecli-skills/${name}/SKILL.md" "${url}/${name}/SKILL.md"; \
+    head -n 1 "/tmp/officecli-skills/${name}/SKILL.md" | grep -q '^---$'; \
+  done
 
 FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS runtime
 
@@ -112,10 +140,15 @@ RUN groupadd --gid "${QWENPAW_GID}" qwenpaw \
 COPY --from=plugin-builder /out/qdm-harness-qwenpaw /opt/qdm/plugin-source
 COPY --from=artifact-fetch --chmod=0755 /tmp/metric/qdm-metric-cli /tmp/qdm-metric-cli
 COPY --from=artifact-fetch /tmp/wikis /tmp/harness-wikis/
+# OfficeCLI: 二进制进 /usr/local/bin(PATH 内置), 对所有 agent/渠道共享;
+# 技能目录作为构建期安装源, 随后按 agent 分发到各自 workspace。
+COPY --from=artifact-fetch --chmod=0755 /tmp/officecli /usr/local/bin/officecli
+COPY --from=artifact-fetch /tmp/officecli-skills /opt/qdm/officecli-skills
 COPY --chmod=0755 deploy/qwenpaw/entrypoint.sh /opt/qdm/bin/entrypoint.sh
 COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model.py
 COPY --chmod=0755 deploy/qwenpaw/align_timezone.py /opt/qdm/bin/align_timezone.py
 COPY --chmod=0755 deploy/qwenpaw/ensure_qdm_agent.py /opt/qdm/bin/ensure_qdm_agent.py
+COPY --chmod=0755 deploy/qwenpaw/seed_officecli_skills.py /opt/qdm/bin/seed_officecli_skills.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
   && chmod -R a-w /opt/qdm/plugin-source \
@@ -140,7 +173,7 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --wikis-source /tmp/harness-wikis \
   --channel-auth-only \
   --enabled-agents 'harness-data-*' \
-  --tool-policy strict \
+  --tool-policy preserve \
   --yes \
   --json \
   && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
@@ -149,6 +182,32 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
   --qwenpaw-working-dir /app/working \
   --json
+
+# QwenPaw 技能是 per-agent 的(无全局注册): 每个 agent 都要在自己对应的默认
+# 工作目录(workspaces/<agent-id>/skills)放一份 SKILL.md, 并在该 workspace 的
+# skill.json 里 enabled=true 才会被运行时加载; 以后运行时新建的 agent 需要
+# 再走一遍 enable。
+# - officecli-* 装到镜像内已有的 default 与 QDM agent(default 之外的宿主内置
+#   QA agent 不在 QDM 作用域且自带 QwenPaw 工具限制, 不装);
+# - qdm-harness 只装到 QDM agent(没有 QDM 工具的 agent 上无意义), 源取插件
+#   安装目录的 skills/。
+# 注意: --tool-policy preserve 保留 QwenPaw 默认全量工具(strict 收窄见
+# ensure_qdm_agent.py / install-qwenpaw-plugin.py), officecli 依赖 shell/文件工具。
+RUN set -eu; \
+  officecli --version; \
+  for agent in default "${QWENPAW_QDM_AGENT_ID}"; do \
+    skills_dir="${QWENPAW_WORKING_DIR}/workspaces/${agent}/skills"; \
+    mkdir -p "${skills_dir}"; \
+    cp -a /opt/qdm/officecli-skills/. "${skills_dir}/"; \
+    python -m qwenpaw skills enable officecli-xlsx officecli-docx officecli-pptx \
+      --agent-id "${agent}"; \
+  done; \
+  qdm_agent="${QWENPAW_QDM_AGENT_ID}"; \
+  qdm_skills_dir="${QWENPAW_WORKING_DIR}/workspaces/${qdm_agent}/skills"; \
+  mkdir -p "${qdm_skills_dir}"; \
+  cp -a "${QWENPAW_WORKING_DIR}/plugins/qdm-harness-qwenpaw/skills/qdm-harness" \
+    "${qdm_skills_dir}/"; \
+  python -m qwenpaw skills enable qdm-harness --agent-id "${qdm_agent}"
 
 USER root
 

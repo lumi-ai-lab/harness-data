@@ -12,10 +12,11 @@
    一份企微/飞书凭证就是双份连接、消息被消费两次；
 3. `active_agent` 仍是未被改动过的 `default` 时，把它指到新 Agent；运维改过的
    选择一律保留，与 align_timezone.py 同样的"只修正未动过的默认值"约定；
-4. 把该 Agent 的工具面收窄到 strict 白名单（3 个工具 + 关工具结果裁剪）。
-   收窄由插件 setup 在**构建期**施加到 seed；持久卷升级时本脚本运行期新建的
-   Agent 不会带上 seed 的工具面，于是每次启动幂等重放，保住"模型没有文件与
-   命令工具可用"这条 QDM 授权边界。
+4. 按工具策略对齐该 Agent 的工具面（策略取插件配置 tool_policy，默认 preserve）：
+   preserve 时把内置工具放开为 QwenPaw 默认全量（officecli 等通用工具依赖
+   shell/文件工具）；strict 时收窄到 3 个 QDM 工具（保留历史授权边界，需显式
+   配置）。持久卷升级时本脚本运行期新建/已有的 Agent 每次启动幂等重放，保证
+   与构建期 seed 的工具面一致。
 
 任何一步无法完成都返回退出码 78，在 QwenPaw 主进程启动前快速失败。
 """
@@ -101,6 +102,83 @@ def apply_strict_tool_policy(agent_json_path: str) -> bool:
         os.unlink(temp_path)
         raise
     return True
+
+
+def apply_open_tool_policy(agent_json_path: str) -> bool:
+    """把某 Agent 的工具面放开为 QwenPaw 默认全量（所有内置工具启用）。
+
+    与 strict 互为反向，同样只改 enabled 位与结果裁剪开关，幂等，
+    无差异时不落盘。工具结果裁剪维持关闭：qdm_query 的长结果必须完整
+    （与插件 preserve 语义一致）。
+    """
+    with open(agent_json_path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise RuntimeError(f"agent config is not a JSON object: {agent_json_path}")
+
+    light = data.setdefault("light_context_config", {})
+    if not isinstance(light, dict):
+        raise RuntimeError("agent.json light_context_config 配置无效")
+    pruning = light.setdefault("tool_result_pruning_config", {})
+    if not isinstance(pruning, dict):
+        raise RuntimeError("agent.json tool_result_pruning_config 配置无效")
+
+    tools = data.setdefault("tools", {})
+    if not isinstance(tools, dict):
+        raise RuntimeError("agent.json tools 配置无效")
+    builtin = tools.setdefault("builtin_tools", {})
+    if not isinstance(builtin, dict):
+        raise RuntimeError("agent.json tools.builtin_tools 配置无效")
+
+    changed = False
+    if pruning.get("enabled") is not False:
+        pruning["enabled"] = False
+        changed = True
+    for name, entry in builtin.items():
+        if isinstance(entry, dict) and entry.get("enabled") is not True:
+            entry["enabled"] = True
+            changed = True
+
+    if not changed:
+        return False
+
+    serialized = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    with open(agent_json_path, encoding="utf-8") as handle:
+        if handle.read() == serialized:
+            return False
+
+    mode = os.stat(agent_json_path).st_mode & 0o7777
+    fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(agent_json_path), prefix=".agent.json.", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, agent_json_path)
+    except BaseException:
+        os.unlink(temp_path)
+        raise
+    return True
+
+
+def configured_tool_policy() -> str:
+    """Return the effective tool policy: plugin config, or an env override.
+
+    ``QWENPAW_QDM_TOOL_POLICY``（strict|preserve）优先；未设置时读插件配置
+    ``tool_policy``；两者都拿不到时回退 ``preserve``（放开默认全量工具）。
+    """
+    override = os.environ.get("QWENPAW_QDM_TOOL_POLICY", "").strip().lower()
+    if override in {"preserve", "strict"}:
+        return override
+    plugin_config_path = os.environ.get(
+        "HARNESS_PLUGIN_CONFIG",
+        "/etc/qdm/qwenpaw/plugin-config.json",
+    )
+    try:
+        with open(plugin_config_path, encoding="utf-8") as handle:
+            policy = str(json.load(handle).get("tool_policy", "preserve")).strip().lower()
+    except Exception:
+        return "preserve"
+    return policy if policy in {"preserve", "strict"} else "preserve"
 
 
 def qdm_agent_id() -> str:
@@ -195,14 +273,25 @@ def ensure() -> list[str]:
         save_config(config)
         actions.append(f"active_agent -> {agent_id}")
 
-    # 工具收窄放在最后: 上面的 agents create / save_agent_config 都会重写
-    # agent.json, 收窄要作用在最终落盘的内容上。构建期 seed 尚未生成时这里照跑,
-    # 由随后的插件 setup 覆盖成一致状态, 幂等无副作用。
+    # 工具面对齐放在最后: 上面的 agents create / save_agent_config 都会重写
+    # agent.json, 收敛要作用在最终落盘的内容上。构建期 seed 尚未生成时这里照跑,
+    # 由随后的插件 setup 覆盖成一致状态, 幂等无副作用。策略默认 preserve =
+    # 放开 QwenPaw 默认全量工具(officecli 等通用工具依赖 shell/文件工具);
+    # 显式配置 strict 才收窄到 QDM 白名单。
+    policy = configured_tool_policy()
     agent_json = os.path.join(
         os.environ.get("QWENPAW_WORKING_DIR", ""), "workspaces", agent_id, "agent.json",
     )
-    if os.path.isfile(agent_json) and apply_strict_tool_policy(agent_json):
-        actions.append(f"narrowed tools of {agent_id} to the QDM strict allowlist")
+    if os.path.isfile(agent_json):
+        if policy == "strict":
+            if apply_strict_tool_policy(agent_json):
+                actions.append(
+                    f"narrowed tools of {agent_id} to the QDM strict allowlist",
+                )
+        elif apply_open_tool_policy(agent_json):
+            actions.append(
+                f"opened tools of {agent_id} to the QwenPaw default allowlist",
+            )
 
     for action in actions:
         print(f"qdm agent bootstrap: {action}")
