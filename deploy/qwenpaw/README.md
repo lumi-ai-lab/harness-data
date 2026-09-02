@@ -57,6 +57,11 @@ namei -l "$QDM_CHANNEL_SECRET_DIR"   # 每一级目录都要有 o+x, 否则容�
 > (或 `0640` 且容器 GID 能组读)。`run_docker.sh` 会在启动前以容器 UID 实测一次可读性, 读不到就直接报错退出。
 > `session-hmac.secret` 不需要准备, 首次运行由 `run_docker.sh` 生成并 chown 给容器 UID。
 
+> 该文件**已存在时脚本不会改动它的属主**(重新生成或改派生材料会让所有企微会话 key 漂移),
+> 而旧版脚本是按 `channel-auth.json` 的属主来 chown 它的。老机器升级后先核一次:
+> `stat -c '%a %U:%G' "$QDM_CHANNEL_SECRET_DIR/session-hmac.secret"`, 不是容器 UID 可读就
+> `chown 10001:10001` 修一次, 不要删除重建。
+
 > 密钥目录是宿主机目录, 运行 `run_docker.sh` 时自动只读挂载到容器 `/run/secrets`, 无需手动挂载。
 > 注意是**整个目录**挂进去: 建议用一个只放上述文件的专用目录, 别把无关的私钥/配置也放进去。
 
