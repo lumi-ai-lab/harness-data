@@ -1,0 +1,27 @@
+services:
+  qwenpaw:
+    image: ${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-amd64}
+    platform: linux/amd64
+    user: "${QWENPAW_UID:-10001}:${QWENPAW_GID:-10001}"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QWENPAW_PORT:-8088}:8088"
+    environment:
+      http_proxy: ${QWENPAW_HTTP_PROXY:-http://host.docker.internal:1082}
+      https_proxy: ${QWENPAW_HTTPS_PROXY:-http://host.docker.internal:1082}
+      QWENPAW_MODEL_REQUIRED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - qwenpaw-working:/app/working
+      - qwenpaw-secret:/app/working.secret
+      - qwenpaw-backups:/app/working.backups
+      - qdm-data:/app/qdm-data
+      - ${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}:/run/secrets:ro
+      - ${QWENPAW_MODEL_SECRET_DIR:?set QWENPAW_MODEL_SECRET_DIR}:/run/qwenpaw-model-secret:ro
+
+volumes:
+  qwenpaw-working:
+  qwenpaw-secret:
+  qwenpaw-backups:
+  qdm-data:
