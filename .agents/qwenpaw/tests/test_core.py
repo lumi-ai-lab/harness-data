@@ -1109,6 +1109,10 @@ class HarnessContextTests(unittest.TestCase):
 
     def test_context_cli_failure_diagnosis_does_not_return_cli_text(self) -> None:
         self.assertEqual(_context_cli_failure_reason("open .harness/index/wikis-index.json: no such file", ""), "missing_wiki_index")
+        self.assertEqual(
+            _context_cli_failure_reason("qwenpaw-hook: failed to embed selected manuals: metrics/x/playbook.md (ENOENT)", ""),
+            "missing_selected_manual",
+        )
         self.assertEqual(_context_cli_failure_reason("unexpected failure", ""), "context_cli_failed")
 
 

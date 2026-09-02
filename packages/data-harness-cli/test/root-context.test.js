@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -396,4 +396,84 @@ test("Codex hook envelopes hydrate workspace and session fields without using pr
   assert.equal(context.stateRoot.startsWith(base.dataRoot), true);
   assert.equal(context.capabilities.canWriteWorkspace, true);
   assert.equal(context.capabilities.hasStableSessionId, true);
+});
+
+function qdmSalesWikiFixture(seed) {
+  const roots = makeRoots();
+  mkdirSync(path.join(roots.dataRoot, "config"), { recursive: true });
+  writeFileSync(path.join(roots.dataRoot, "config", "harness-config.yaml"), "paths:\n  knowledge: .\n");
+  const metricDir = path.join(roots.dataRoot, "metrics", "销售额");
+  mkdirSync(metricDir, { recursive: true });
+  writeFileSync(path.join(metricDir, "spec.md"), "# 销售额指标说明\n");
+  writeFileSync(path.join(metricDir, "playbook.md"), `# 可信销售额取数手册 ${seed}\n`);
+  mkdirSync(path.join(roots.dataRoot, ".harness", "index"), { recursive: true });
+  const runtimeIndex = {
+    meta: {
+      resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: 1,
+      wikiContentVersion: createHash("sha256").update(seed).digest("hex"),
+      resourceVersion: createHash("sha256").update(seed).digest("hex"),
+      paths: { knowledge: ".", spec: "spec", playbooks: "playbooks", templates: "templates" },
+    },
+    docsByPath: {
+      "metrics/销售额/spec.md": { path: "metrics/销售额/spec.md", kind: "spec", specType: "metric" },
+      "metrics/销售额/playbook.md": { path: "metrics/销售额/playbook.md", kind: "playbook" },
+    },
+    recall: [{ term: "销售额", targetPath: "metrics/销售额/spec.md" }],
+    templateSelection: [],
+  };
+  for (const name of ["wikis-index.json", "wikis-runtime-index.json"]) {
+    writeFileSync(path.join(roots.dataRoot, ".harness", "index", name), `${JSON.stringify(runtimeIndex)}\n`);
+  }
+  writeRuntimeResourceManifest(roots.dataRoot, runtimeIndex);
+  const contextFile = path.join(roots.base, "context.json");
+  writeFileSync(contextFile, `${JSON.stringify(normalizeRootContext(fixtureContext(roots)))}\n`);
+  return { roots, contextFile };
+}
+
+function qwenpawHookIO(roots) {
+  const chunks = [];
+  return {
+    chunks,
+    io: {
+      env: { QDM_HARNESS_HOOK_MODE: "auto-context" },
+      stdin: JSON.stringify({ session_id: "qwenpaw-hook-session", cwd: roots.workspaceRoot, prompt: "查看昨天的销售额" }),
+      stdout: { write(value) { chunks.push(String(value)); } },
+      stderr: { write() {} },
+    },
+  };
+}
+
+test("qwenpaw-hook embeds every selected manual and declares the embedded list", async () => {
+  const { roots, contextFile } = qdmSalesWikiFixture("qwenpaw-embed-all");
+  const { chunks, io } = qwenpawHookIO(roots);
+  await run(["--context-file", contextFile, "context", "--format", "qwenpaw-hook"], io);
+  const hook = JSON.parse(chunks.join("")).hookSpecificOutput;
+  const selected = hook.contextFiles.map((ref) => ref.path);
+  assert.ok(selected.includes("metrics/销售额/playbook.md"));
+  assert.deepEqual(hook.embeddedContextFiles, selected);
+  assert.match(hook.additionalContext, /# QDM Harness selected manuals/);
+  assert.match(hook.additionalContext, /可信销售额取数手册 qwenpaw-embed-all/);
+});
+
+test("qwenpaw-hook fails closed when a selected manual cannot be embedded", { skip: process.platform === "win32" }, async () => {
+  const { roots, contextFile } = qdmSalesWikiFixture("qwenpaw-embed-partial");
+  // Unreadable rather than absent: the selection follows the wiki index, so a
+  // deleted file simply shrinks the selection instead of proving the failure.
+  chmodSync(path.join(roots.dataRoot, "metrics", "销售额", "playbook.md"), 0o000);
+  const { chunks, io } = qwenpawHookIO(roots);
+  try {
+    await assert.rejects(
+      () => run(["--context-file", contextFile, "context", "--format", "qwenpaw-hook"], io),
+      (error) => {
+        assert.match(error.message, /failed to embed selected manuals/);
+        assert.match(error.message, /metrics\/销售额\/playbook\.md/);
+        assert.equal(error.code, 2);
+        return true;
+      },
+    );
+    assert.equal(chunks.join(""), "");
+  } finally {
+    chmodSync(path.join(roots.dataRoot, "metrics", "销售额", "playbook.md"), 0o600);
+  }
 });

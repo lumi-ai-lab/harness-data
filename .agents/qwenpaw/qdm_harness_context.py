@@ -131,6 +131,8 @@ def _exceeds_limit(actual: int, limit: int | None) -> bool:
 def _context_cli_failure_reason(stderr: str, stdout: str) -> str:
     """Classify a known setup error without recording untrusted CLI text."""
     text = f"{stderr}\n{stdout}".casefold()
+    if "failed to embed selected manuals" in text:
+        return "missing_selected_manual"
     if "wikis-index.json" in text or "wikis-runtime-index.json" in text:
         return "missing_wiki_index"
     return "context_cli_failed"
