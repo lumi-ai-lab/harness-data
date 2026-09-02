@@ -39,7 +39,7 @@ scp harness-data-qwenpaw-0.0.56-amd64.tar.gz root@<服务器IP>:/tmp/
 docker load -i /tmp/harness-data-qwenpaw-0.0.56-amd64.tar.gz
 ```
 
-> 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
+> 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py`、`ensure_qdm_agent.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
 
 ## ③ 准备密钥(服务器)
 
