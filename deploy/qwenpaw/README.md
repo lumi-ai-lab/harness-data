@@ -23,19 +23,26 @@ deployment. `build-docker-image.sh` runs the build directly with pinned values
 deploy/qwenpaw/build-docker-image.sh
 ```
 
-The build takes the host network as-is; only the `apt-get` and `pip` steps need
-`deb.debian.org` and `pypi.org`, and the Gitee artifact downloads go direct. On
-a host that cannot reach those two without a proxy, export
-`QWENPAW_BUILD_PROXY` and the script passes it as the `http_proxy` and
-`https_proxy` build arguments:
+The build carries no proxy configuration: `apt-get`, `pip` and the Gitee
+downloads all go over the container's normal egress. Bump `HARNESS_VERSION` and
+`QDM_METRIC_CLI_VERSION` in the script when building a new release.
+
+If a specific host really cannot reach `deb.debian.org` or `pypi.org` directly,
+pass the build arguments by hand. A shell `export` is not enough — `docker
+buildx` does not forward proxy variables from the client environment into `RUN`
+steps — and inside a build the host loopback is unreachable, so use
+`host.docker.internal` rather than `127.0.0.1`:
 
 ```bash
-QWENPAW_BUILD_PROXY=http://host.docker.internal:1082 \
-  deploy/qwenpaw/build-docker-image.sh
+docker buildx build --load --platform linux/amd64 \
+  --file deploy/qwenpaw/Dockerfile \
+  --tag harness-data-qwenpaw:0.0.56-amd64 \
+  --build-arg HARNESS_VERSION=0.0.56 \
+  --build-arg QDM_METRIC_CLI_VERSION=v0.1.19 \
+  --build-arg http_proxy=http://host.docker.internal:1082 \
+  --build-arg https_proxy=http://host.docker.internal:1082 \
+  .
 ```
-
-Bump `HARNESS_VERSION` and `QDM_METRIC_CLI_VERSION` in the script when building
-a new release.
 
 ## Runtime secrets
 
@@ -89,6 +96,22 @@ host port to `127.0.0.1` by default and checks `/healthz`.
 mirrors the owner of `channel-auth.json`, then starts the container. It needs
 the image built first (`build-docker-image.sh`).
 
+Proxying is opt-in and read from the caller's environment. The model gateway and
+the WeCom APIs are reachable directly in mainland China, so by default
+`run_docker.sh` passes no proxy variables at all. When an endpoint does need
+one, configure it in the host shell before starting the script — for example the
+local Shadowrocket HTTP proxy:
+
+```bash
+# Shadowrocket 代理设置
+export http_proxy=http://127.0.0.1:1082
+export https_proxy=http://127.0.0.1:1082
+```
+
+`run_docker.sh` forwards those values into the container and rewrites a loopback
+host to `host.docker.internal`, because `127.0.0.1` inside the container is the
+container itself and cannot reach the proxy port on the host.
+
 A plain `docker run` needs the same environment instead of any model secret
 mount, for example:
 
@@ -99,8 +122,6 @@ docker run -d --name qwenpaw \
   -e QWENPAW_MODEL_API_KEY="${QWENPAW_MODEL_API_KEY}" \
   -e QWENPAW_MODEL_ID=qwen3.8-flash \
   -e QWENPAW_MODEL_BASE_URL=https://aig.qdama.cn/api/v1 \
-  -e http_proxy=http://host.docker.internal:1082 \
-  -e https_proxy=http://host.docker.internal:1082 \
   -v qwenpaw-working:/app/working \
   -v qwenpaw-secret:/app/working.secret \
   -v qwenpaw-backups:/app/working.backups \

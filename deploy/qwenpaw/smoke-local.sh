@@ -6,7 +6,13 @@ channel_auth=${QDM_CHANNEL_AUTH_FILE:-/Users/pengmd/tmp/channel-auth.json}
 pi_auth=${PI_AUTH_JSON:-${HOME}/.config/pi/auth.json}
 runtime_uid=${QWENPAW_UID:-10001}
 runtime_gid=${QWENPAW_GID:-10001}
-runtime_proxy=${QWENPAW_RUNTIME_PROXY:-http://host.docker.internal:1082}
+# 代理从调用环境继承(见 run_docker.sh 顶部说明);容器内的 127.0.0.1 到不了
+# 宿主机代理端口,所以回环地址改写成 host.docker.internal
+runtime_proxy=${QWENPAW_RUNTIME_PROXY:-${https_proxy:-${http_proxy:-}}}
+if [ -n "${runtime_proxy}" ]; then
+  runtime_proxy=$(printf '%s' "${runtime_proxy}" |
+    sed -E 's#^(https?://)?(127\.0\.0\.1|localhost)([/:]|$)#\1host.docker.internal\3#')
+fi
 prefix="qwenpaw-harness-smoke-$$"
 container="${prefix}-query"
 channel_volume="${prefix}-channel"
@@ -56,12 +62,16 @@ docker run --rm --platform linux/amd64 --user 0:0 --entrypoint /bin/sh \
   --mount "type=volume,src=${data_volume},dst=/app/qdm-data" \
   "${image}" -c "chown -R ${runtime_uid}:${runtime_gid} /app/working /app/working.secret /app/working.backups /app/qdm-data; chmod 0700 /app/working /app/working.secret /app/working.backups /app/qdm-data"
 
-docker run --name "${container}" --platform linux/amd64 \
+set -- docker run --name "${container}" --platform linux/amd64 \
   --user "${runtime_uid}:${runtime_gid}" \
   --add-host host.docker.internal:host-gateway \
-  --env "http_proxy=${runtime_proxy}" \
-  --env "https_proxy=${runtime_proxy}" \
-  --env "QWENPAW_MODEL_API_KEY=${model_key}" \
+  --env "QWENPAW_MODEL_API_KEY=${model_key}"
+
+if [ -n "${runtime_proxy}" ]; then
+  set -- "$@" --env "http_proxy=${runtime_proxy}" --env "https_proxy=${runtime_proxy}"
+fi
+
+set -- "$@" \
   --mount "type=volume,src=${channel_volume},dst=/run/secrets,readonly" \
   --mount "type=volume,src=${working_volume},dst=/app/working" \
   --mount "type=volume,src=${secret_volume},dst=/app/working.secret" \
@@ -69,3 +79,5 @@ docker run --name "${container}" --platform linux/amd64 \
   --mount "type=volume,src=${data_volume},dst=/app/qdm-data" \
   "${image}" python /opt/qdm/bin/smoke_query.py \
     --output /app/qdm-data/qwenpaw-smoke-result.json
+
+"$@"

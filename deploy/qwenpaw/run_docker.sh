@@ -1,16 +1,35 @@
 #!/bin/sh
 set -eu
 
+# 代理设置(可选,默认不走代理):模型网关 aig.qdama.cn 与企业微信 API
+# 国内均可直连,直连即可。端点在海外的话,启动前在宿主机 shell 里配好
+# 代理就够了,本脚本会把它透传进容器:
+#
+#   # Shadowrocket 代理设置
+#   export http_proxy=http://127.0.0.1:1082
+#   export https_proxy=http://127.0.0.1:1082
+#
+# 容器内的 127.0.0.1 是容器自身,连不到宿主机上的代理端口,所以脚本会把
+# 回环地址改写成 host.docker.internal(配合下面的 --add-host 使用)。
+
+# 镜像引用:标签要和 build-docker-image.sh 产出的 tag 保持一致
 image=${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-amd64}
+# 容器名:同名容器已存在时 docker run 会失败,需改名或先 docker rm -f
 name=${QWENPAW_CONTAINER_NAME:-qwenpaw}
+# 宿主机发布端口:只绑 127.0.0.1,容器内固定监听 8088
 port=${QWENPAW_PORT:-8088}
+# 容器运行用户 uid:必须与挂载进来的密钥文件属主一致,镜像内置默认 10001
 runtime_uid=${QWENPAW_UID:-10001}
+# 容器运行用户 gid:同上,属主不符会让 validate_runtime 的 owner 校验失败
 runtime_gid=${QWENPAW_GID:-10001}
-proxy=${QWENPAW_HTTP_PROXY:-http://host.docker.internal:1082}
+# 渠道密钥目录:只读挂载到容器 /run/secrets,必须存放 channel-auth.json
 secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
+# 模型网关 API Key:启动时由 QwenPaw 加密写入可写 secret 卷,不进镜像层
 model_key=${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
 
+# 渠道授权文件:须为 0600 或更严格的普通文件(非软链),缺失即报错退出
 auth_file="$secret_dir/channel-auth.json"
+# 会话 HMAC 密钥文件:派生企微会话 key 的长期签名密钥,不存在时由下方生成
 hmac_file="$secret_dir/session-hmac.secret"
 
 test -f "$auth_file" || { echo "missing regular file: $auth_file" >&2; exit 1; }
@@ -29,16 +48,26 @@ if [ ! -f "$hmac_file" ]; then
   fi
 fi
 
-docker run -d --name "${name}" \
+proxy=${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}
+if [ -n "${proxy}" ]; then
+  proxy=$(printf '%s' "${proxy}" |
+    sed -E 's#^(https?://)?(127\.0\.0\.1|localhost)([/:]|$)#\1host.docker.internal\3#')
+fi
+
+set -- docker run -d --name "${name}" \
   --platform linux/amd64 \
   --user "${runtime_uid}:${runtime_gid}" \
   --restart unless-stopped \
   --add-host host.docker.internal:host-gateway \
   -e QWENPAW_MODEL_API_KEY="${model_key}" \
   -e QWENPAW_MODEL_ID="${QWENPAW_MODEL_ID:-qwen3.8-flash}" \
-  -e QWENPAW_MODEL_BASE_URL="${QWENPAW_MODEL_BASE_URL:-https://aig.qdama.cn/api/v1}" \
-  -e http_proxy="${proxy}" \
-  -e https_proxy="${proxy}" \
+  -e QWENPAW_MODEL_BASE_URL="${QWENPAW_MODEL_BASE_URL:-https://aig.qdama.cn/api/v1}"
+
+if [ -n "${proxy}" ]; then
+  set -- "$@" -e "http_proxy=${proxy}" -e "https_proxy=${proxy}"
+fi
+
+set -- "$@" \
   -v qwenpaw-working:/app/working \
   -v qwenpaw-secret:/app/working.secret \
   -v qwenpaw-backups:/app/working.backups \
@@ -46,3 +75,5 @@ docker run -d --name "${name}" \
   -v "${secret_dir}:/run/secrets:ro" \
   -p "127.0.0.1:${port}:8088" \
   "${image}"
+
+"$@"

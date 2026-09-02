@@ -7,8 +7,10 @@ services:
     ports:
       - "127.0.0.1:${QWENPAW_PORT:-8088}:8088"
     environment:
-      http_proxy: ${QWENPAW_HTTP_PROXY:-http://host.docker.internal:1082}
-      https_proxy: ${QWENPAW_HTTPS_PROXY:-http://host.docker.internal:1082}
+      # 代理默认关闭:模型网关与企业微信 API 国内可直连。需要时取消注释,
+      # 容器内必须用 host.docker.internal,127.0.0.1 指向容器自身。
+      # http_proxy: http://host.docker.internal:1082
+      # https_proxy: http://host.docker.internal:1082
       QWENPAW_MODEL_REQUIRED: "1"
       QWENPAW_MODEL_API_KEY: ${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
     extra_hosts:
