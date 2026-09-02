@@ -10,6 +10,7 @@ services:
       http_proxy: ${QWENPAW_HTTP_PROXY:-http://host.docker.internal:1082}
       https_proxy: ${QWENPAW_HTTPS_PROXY:-http://host.docker.internal:1082}
       QWENPAW_MODEL_REQUIRED: "1"
+      QWENPAW_MODEL_API_KEY: ${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -18,7 +19,6 @@ services:
       - qwenpaw-backups:/app/working.backups
       - qdm-data:/app/qdm-data
       - ${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}:/run/secrets:ro
-      - ${QWENPAW_MODEL_SECRET_DIR:?set QWENPAW_MODEL_SECRET_DIR}:/run/qwenpaw-model-secret:ro
 
 volumes:
   qwenpaw-working:

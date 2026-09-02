@@ -17,33 +17,42 @@ https://gitee.com/git_pengmd/harness-release         -> harness-data-wikis-v<ver
 The release zip password (`qdm-dev`) is hardcoded in the Dockerfile as a
 dev-stage placeholder; rotate it and update the Dockerfile before production
 deployment. `build-docker-image.sh` runs the build directly with pinned values
-(image tag, versions, proxy) baked into the command:
+(image tag, versions) baked into the command:
 
 ```bash
 deploy/qwenpaw/build-docker-image.sh
 ```
 
-The build routes outbound traffic through the local proxy at
-`host.docker.internal:1082` (Docker Desktop). Delete the `--build-arg
-http_proxy` / `https_proxy` lines only on hosts with clean direct internet
-access. Bump `HARNESS_VERSION` and `QDM_METRIC_CLI_VERSION` in the script when
-building a new release.
+The build takes the host network as-is; only the `apt-get` and `pip` steps need
+`deb.debian.org` and `pypi.org`, and the Gitee artifact downloads go direct. On
+a host that cannot reach those two without a proxy, export
+`QWENPAW_BUILD_PROXY` and the script passes it as the `http_proxy` and
+`https_proxy` build arguments:
+
+```bash
+QWENPAW_BUILD_PROXY=http://host.docker.internal:1082 \
+  deploy/qwenpaw/build-docker-image.sh
+```
+
+Bump `HARNESS_VERSION` and `QDM_METRIC_CLI_VERSION` in the script when building
+a new release.
 
 ## Runtime secrets
 
 Run as the same non-root UID/GID that owns the mounted files (the image default
-is `10001:10001`). Both directories must be read-only mounts.
+is `10001:10001`). The channel secret directory must be a read-only mount.
 
 ```text
 /run/secrets/channel-auth.json
 /run/secrets/session-hmac.secret
-/run/qwenpaw-model-secret/api-key
 ```
 
-The first two files must be regular, non-symlink files with mode `0600` or
-stricter. `session-hmac.secret` must contain at least 32 bytes. The model key is
-read at startup, encrypted by QwenPaw into its writable secret volume, and is
-never stored in an image layer.
+Both files must be regular, non-symlink files with mode `0600` or stricter.
+`session-hmac.secret` must contain at least 32 bytes.
+
+The model API key is supplied at startup through the `QWENPAW_MODEL_API_KEY`
+environment variable. It is read at startup, encrypted by QwenPaw into its
+writable secret volume, and is never stored in an image layer.
 
 The runtime configures the OpenAI-compatible provider `qdm-market` at
 `https://aig.qdama.cn/api/v1` and activates `qwen3.8-flash`.
@@ -71,5 +80,35 @@ dimension `sapArea2Id`; the QwenPaw skill tells the model to reuse the exact
 dimension codes returned by `qdm_scope_summary`.
 
 For a long-running instance, set `QDM_CHANNEL_SECRET_DIR` and
-`QWENPAW_MODEL_SECRET_DIR`, then use `docker-compose.yml`. The service binds the
+`QWENPAW_MODEL_API_KEY`, then use `docker-compose.yml`. The service binds the
 host port to `127.0.0.1` by default and checks `/healthz`.
+
+`deploy/qwenpaw/run_docker.sh` is the `docker run` equivalent: it generates
+`session-hmac.secret` (48 random bytes, mode `0600`) in
+`QDM_CHANNEL_SECRET_DIR` on first use and never overwrites an existing file,
+mirrors the owner of `channel-auth.json`, then starts the container. It needs
+the image built first (`build-docker-image.sh`).
+
+A plain `docker run` needs the same environment instead of any model secret
+mount, for example:
+
+```bash
+docker run -d --name qwenpaw \
+  --platform linux/amd64 --user 10001:10001 \
+  --add-host host.docker.internal:host-gateway \
+  -e QWENPAW_MODEL_API_KEY="${QWENPAW_MODEL_API_KEY}" \
+  -e QWENPAW_MODEL_ID=qwen3.8-flash \
+  -e QWENPAW_MODEL_BASE_URL=https://aig.qdama.cn/api/v1 \
+  -e http_proxy=http://host.docker.internal:1082 \
+  -e https_proxy=http://host.docker.internal:1082 \
+  -v qwenpaw-working:/app/working \
+  -v qwenpaw-secret:/app/working.secret \
+  -v qwenpaw-backups:/app/working.backups \
+  -v qdm-data:/app/qdm-data \
+  -v "${QDM_CHANNEL_SECRET_DIR}:/run/secrets:ro" \
+  -p 127.0.0.1:8088:8088 \
+  harness-data-qwenpaw:0.0.56-amd64
+```
+
+Note that an environment variable is visible to `docker inspect`; mount the
+secret file instead if the key must stay out of container metadata.

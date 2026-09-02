@@ -1,50 +1,38 @@
 #!/usr/bin/env python3
-"""Configure the runtime QwenPaw model without baking credentials into the image."""
+"""容器启动时自动配置 QwenPaw 的 LLM 模型连接,无需在后台手动配置。
+
+由 entrypoint.sh 在每次容器启动时调用:从 QWENPAW_MODEL_API_KEY 环境变量
+读取 API key,注册 OpenAI 兼容提供商 qdm-market,添加并激活模型,再把
+default Agent 的 active_model 指向该模型。密钥因此不会烧进镜像。任何一步
+失败都返回退出码 78,在 QwenPaw 主进程启动前快速失败。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
-import stat
 import sys
 
 
-def _read_api_key(path: Path) -> str:
-    try:
-        info = path.lstat()
-    except OSError as exc:
-        raise RuntimeError(f"model API key file is unavailable: {path}: {exc}") from exc
-    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
-        raise RuntimeError(f"model API key must be a regular non-symlink file: {path}")
-    if info.st_uid != os.geteuid() or info.st_gid != os.getegid():
-        raise RuntimeError("model API key owner must match the QwenPaw process uid/gid")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise RuntimeError("model API key permissions must be 0600 or stricter")
-    try:
-        from validate_runtime import _require_read_only_mount
-
-        _require_read_only_mount(path.parent)
-    except ImportError as exc:
-        raise RuntimeError("runtime validator is unavailable") from exc
-    key = path.read_text(encoding="utf-8").strip()
-    if not key:
-        raise RuntimeError("model API key file is empty")
-    return key
-
-
 async def _configure() -> None:
-    from qwenpaw.config.config import ModelSlotConfig, load_agent_config, save_agent_config
+    from qwenpaw.config.config import (
+        ModelSlotConfig,
+        load_agent_config,
+        save_agent_config,
+    )
     from qwenpaw.providers.provider import ModelInfo, ProviderInfo
     from qwenpaw.providers.provider_manager import ProviderManager
 
     provider_id = os.environ.get("QWENPAW_MODEL_PROVIDER_ID", "qdm-market").strip()
     model_id = os.environ.get("QWENPAW_MODEL_ID", "qwen3.8-flash").strip()
-    base_url = os.environ.get("QWENPAW_MODEL_BASE_URL", "https://aig.qdama.cn/api/v1").strip()
-    key_path = Path(os.environ.get("QWENPAW_MODEL_API_KEY_FILE", "/run/qwenpaw-model-secret/api-key"))
+    base_url = os.environ.get(
+        "QWENPAW_MODEL_BASE_URL", "https://aig.qdama.cn/api/v1"
+    ).strip()
     if not provider_id or not model_id or not base_url:
         raise RuntimeError("model provider id, model id, and base URL are required")
-    api_key = _read_api_key(key_path)
+    api_key = os.environ.get("QWENPAW_MODEL_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("QWENPAW_MODEL_API_KEY is required")
 
     manager = ProviderManager.get_instance()
     provider = manager.get_provider(provider_id)

@@ -15,9 +15,9 @@ COPY packages packages
 COPY scripts/build-plugin-manifest.mjs scripts/build-qwenpaw-plugin.mjs scripts/
 
 RUN node scripts/build-qwenpaw-plugin.mjs \
-      --output-dir /out \
-      --version "${HARNESS_VERSION}" \
-      --verify
+  --output-dir /out \
+  --version "${HARNESS_VERSION}" \
+  --verify
 
 FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS artifact-fetch
 
@@ -25,25 +25,25 @@ ARG HARNESS_VERSION=0.0.56
 ARG QDM_METRIC_CLI_VERSION=v0.1.19
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      curl \
-      file \
-      unzip \
-    && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  file \
+  unzip \
+  && rm -rf /var/lib/apt/lists/*
 
 # Release zips are password-protected; qdm-dev is the dev-stage password.
 # Rotate the password here before production deployment.
 RUN set -eu; \
-    curl -fsSL -o /tmp/qdm-metric-cli.zip \
-      "https://gitee.com/git_pengmd/harness-metric-release/releases/download/${QDM_METRIC_CLI_VERSION}/qdm-metric-cli-${QDM_METRIC_CLI_VERSION}-linux-amd64.zip"; \
-    unzip -q -P qdm-dev /tmp/qdm-metric-cli.zip -d /tmp/metric; \
-    chmod 0755 /tmp/metric/qdm-metric-cli; \
-    file /tmp/metric/qdm-metric-cli | grep -q 'x86-64'; \
-    curl -fsSL -o /tmp/harness-data-wikis.zip \
-      "https://gitee.com/git_pengmd/harness-release/releases/download/v${HARNESS_VERSION}/harness-data-wikis-v${HARNESS_VERSION}.zip"; \
-    unzip -q -P qdm-dev /tmp/harness-data-wikis.zip -d /tmp/wikis; \
-    test -f /tmp/wikis/index.md
+  curl -fsSL -o /tmp/qdm-metric-cli.zip \
+  "https://gitee.com/git_pengmd/harness-metric-release/releases/download/${QDM_METRIC_CLI_VERSION}/qdm-metric-cli-${QDM_METRIC_CLI_VERSION}-linux-amd64.zip"; \
+  unzip -q -P qdm-dev /tmp/qdm-metric-cli.zip -d /tmp/metric; \
+  chmod 0755 /tmp/metric/qdm-metric-cli; \
+  file /tmp/metric/qdm-metric-cli | grep -q 'x86-64'; \
+  curl -fsSL -o /tmp/harness-data-wikis.zip \
+  "https://gitee.com/git_pengmd/harness-release/releases/download/v${HARNESS_VERSION}/harness-data-wikis-v${HARNESS_VERSION}.zip"; \
+  unzip -q -P qdm-dev /tmp/harness-data-wikis.zip -d /tmp/wikis; \
+  test -f /tmp/wikis/index.md
 
 FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS runtime
 
@@ -53,48 +53,47 @@ ARG QWENPAW_UID=10001
 ARG QWENPAW_GID=10001
 
 ENV LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    QWENPAW_WORKING_DIR=/app/working \
-    QWENPAW_SECRET_DIR=/app/working.secret \
-    QWENPAW_BACKUP_DIR=/app/working.backups \
-    QWENPAW_PORT=8088 \
-    QWENPAW_MODEL_PROVIDER_ID=qdm-market \
-    QWENPAW_MODEL_ID=qwen3.8-flash \
-    QWENPAW_MODEL_BASE_URL=https://aig.qdama.cn/api/v1 \
-    QWENPAW_MODEL_API_KEY_FILE=/run/qwenpaw-model-secret/api-key \
-    QWENPAW_MODEL_REQUIRED=1 \
-    HARNESS_INSTANCE_ROOT=/opt/qdm/harness-data/instance/${HARNESS_VERSION} \
-    HARNESS_DATA_ROOT=/app/qdm-data \
-    HARNESS_PLUGIN_CONFIG=/etc/qdm/qwenpaw/plugin-config.json
+  LC_ALL=C.UTF-8 \
+  PYTHONUNBUFFERED=1 \
+  PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  QWENPAW_WORKING_DIR=/app/working \
+  QWENPAW_SECRET_DIR=/app/working.secret \
+  QWENPAW_BACKUP_DIR=/app/working.backups \
+  QWENPAW_PORT=8088 \
+  QWENPAW_MODEL_PROVIDER_ID=qdm-market \
+  QWENPAW_MODEL_ID=qwen3.8-flash \
+  QWENPAW_MODEL_BASE_URL=https://aig.qdama.cn/api/v1 \
+  QWENPAW_MODEL_REQUIRED=1 \
+  HARNESS_INSTANCE_ROOT=/opt/qdm/harness-data/instance/${HARNESS_VERSION} \
+  HARNESS_DATA_ROOT=/app/qdm-data \
+  HARNESS_PLUGIN_CONFIG=/etc/qdm/qwenpaw/plugin-config.json
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      curl \
-      git \
-      libmagic1 \
-      nodejs \
-      tini \
-    && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  git \
+  libmagic1 \
+  nodejs \
+  tini \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --retries 10 --timeout 120 \
-      "setuptools<82" \
-      "qwenpaw==${QWENPAW_VERSION}"
+  python -m pip install --retries 10 --timeout 120 \
+  "setuptools<82" \
+  "qwenpaw==${QWENPAW_VERSION}"
 
 RUN groupadd --gid "${QWENPAW_GID}" qwenpaw \
-    && useradd --uid "${QWENPAW_UID}" --gid "${QWENPAW_GID}" --create-home --home-dir /home/qwenpaw --shell /bin/sh qwenpaw \
-    && install -d -o qwenpaw -g qwenpaw -m 0700 \
-      /app/working \
-      /app/working.secret \
-      /app/working.backups \
-      /app/qdm-data \
-      /opt/qdm/harness-data/instance \
-      /etc/qdm/qwenpaw \
-    && install -d -o qwenpaw -g qwenpaw -m 0555 /run/secrets \
-    && install -d -o root -g root -m 0755 /opt/qdm/bin /opt/qdm/plugin-source /opt/qdm/qwenpaw-seed
+  && useradd --uid "${QWENPAW_UID}" --gid "${QWENPAW_GID}" --create-home --home-dir /home/qwenpaw --shell /bin/sh qwenpaw \
+  && install -d -o qwenpaw -g qwenpaw -m 0700 \
+  /app/working \
+  /app/working.secret \
+  /app/working.backups \
+  /app/qdm-data \
+  /opt/qdm/harness-data/instance \
+  /etc/qdm/qwenpaw \
+  && install -d -o qwenpaw -g qwenpaw -m 0555 /run/secrets \
+  && install -d -o root -g root -m 0755 /opt/qdm/bin /opt/qdm/plugin-source /opt/qdm/qwenpaw-seed
 
 COPY --from=plugin-builder /out/qdm-harness-qwenpaw /opt/qdm/plugin-source
 COPY --from=artifact-fetch --chmod=0755 /tmp/metric/qdm-metric-cli /tmp/qdm-metric-cli
@@ -105,40 +104,40 @@ COPY --chmod=0755 deploy/qwenpaw/smoke_query.py /opt/qdm/bin/smoke_query.py
 COPY --chmod=0755 deploy/qwenpaw/validate_runtime.py /opt/qdm/bin/validate_runtime.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
-    && chmod -R a-w /opt/qdm/plugin-source \
-    && chmod 0755 /tmp/qdm-metric-cli
+  && chmod -R a-w /opt/qdm/plugin-source \
+  && chmod 0755 /tmp/qdm-metric-cli
 
 USER qwenpaw
 WORKDIR /app/working
 
 RUN python -m qwenpaw init --defaults --accept-security \
-    && /opt/qdm/plugin-source/scripts/harness-data qwenpaw setup \
-      --source /opt/qdm/plugin-source \
-      --qwenpaw-python /usr/local/bin/python \
-      --qwenpaw-working-dir /app/working \
-      --instance-root "${HARNESS_INSTANCE_ROOT}" \
-      --data-root "${HARNESS_DATA_ROOT}" \
-      --workspace-root /app/working/workspaces/default \
-      --workspace-allowlist /app/working/workspaces/default \
-      --secret-dir /run/secrets \
-      --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
-      --metric-cli /tmp/qdm-metric-cli \
-      --wikis-source /tmp/harness-wikis \
-      --channel-auth-only \
-      --agent-id default \
-      --yes \
-      --json \
-    && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
-    && /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data qwenpaw doctor \
-      --plugin-root /app/working/plugins/qdm-harness-qwenpaw \
-      --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
-      --json
+  && /opt/qdm/plugin-source/scripts/harness-data qwenpaw setup \
+  --source /opt/qdm/plugin-source \
+  --qwenpaw-python /usr/local/bin/python \
+  --qwenpaw-working-dir /app/working \
+  --instance-root "${HARNESS_INSTANCE_ROOT}" \
+  --data-root "${HARNESS_DATA_ROOT}" \
+  --workspace-root /app/working/workspaces/default \
+  --workspace-allowlist /app/working/workspaces/default \
+  --secret-dir /run/secrets \
+  --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
+  --metric-cli /tmp/qdm-metric-cli \
+  --wikis-source /tmp/harness-wikis \
+  --channel-auth-only \
+  --agent-id default \
+  --yes \
+  --json \
+  && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
+  && /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data qwenpaw doctor \
+  --plugin-root /app/working/plugins/qdm-harness-qwenpaw \
+  --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
+  --json
 
 USER root
 
 RUN cp -a /app/working/. /opt/qdm/qwenpaw-seed/ \
-    && chown -R qwenpaw:qwenpaw /opt/qdm/qwenpaw-seed \
-    && rm -rf /tmp/harness-wikis /tmp/qdm-metric-cli /opt/qdm/plugin-source
+  && chown -R qwenpaw:qwenpaw /opt/qdm/qwenpaw-seed \
+  && rm -rf /tmp/harness-wikis /tmp/qdm-metric-cli /opt/qdm/plugin-source
 
 USER qwenpaw
 WORKDIR /app/working

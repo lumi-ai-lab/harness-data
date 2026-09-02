@@ -10,7 +10,6 @@ runtime_proxy=${QWENPAW_RUNTIME_PROXY:-http://host.docker.internal:1082}
 prefix="qwenpaw-harness-smoke-$$"
 container="${prefix}-query"
 channel_volume="${prefix}-channel"
-model_volume="${prefix}-model"
 working_volume="${prefix}-working"
 secret_volume="${prefix}-secret"
 backup_volume="${prefix}-backups"
@@ -24,7 +23,6 @@ cleanup() {
   docker rm -f "${container}" >/dev/null 2>&1 || true
   docker volume rm \
     "${channel_volume}" \
-    "${model_volume}" \
     "${working_volume}" \
     "${secret_volume}" \
     "${backup_volume}" \
@@ -34,7 +32,6 @@ trap cleanup EXIT INT TERM
 
 for volume in \
   "${channel_volume}" \
-  "${model_volume}" \
   "${working_volume}" \
   "${secret_volume}" \
   "${backup_volume}" \
@@ -48,10 +45,9 @@ docker run --rm --platform linux/amd64 --user 0:0 --entrypoint /bin/sh \
   --mount "type=bind,src=${channel_auth},dst=/source/channel-auth.json,readonly" \
   "${image}" -c "set -eu; cp /source/channel-auth.json /dest/channel-auth.json; head -c 48 /dev/urandom > /dest/session-hmac.secret; chown ${runtime_uid}:${runtime_gid} /dest/channel-auth.json /dest/session-hmac.secret; chmod 0600 /dest/channel-auth.json /dest/session-hmac.secret; chmod 0555 /dest"
 
-docker run --rm --platform linux/amd64 --user 0:0 --entrypoint /usr/local/bin/python \
-  --mount "type=volume,src=${model_volume},dst=/dest" \
+model_key=$(docker run --rm --platform linux/amd64 --user 0:0 --entrypoint /usr/local/bin/python \
   --mount "type=bind,src=${pi_auth},dst=/source/auth.json,readonly" \
-  "${image}" -c "import json, os; d=json.load(open('/source/auth.json', encoding='utf-8')); r=d.get('qdm-market') or {}; k=r.get('api_key') or r.get('apiKey') or r.get('key'); assert isinstance(k, str) and k.strip(), 'qdm-market api key missing'; p='/dest/api-key'; open(p, 'w', encoding='utf-8').write(k.strip()+'\\n'); os.chown(p, ${runtime_uid}, ${runtime_gid}); os.chmod(p, 0o600); os.chmod('/dest', 0o555)"
+  "${image}" -c "import json; d=json.load(open('/source/auth.json', encoding='utf-8')); r=d.get('qdm-market') or {}; k=r.get('api_key') or r.get('apiKey') or r.get('key'); assert isinstance(k, str) and k.strip(), 'qdm-market api key missing'; print(k.strip())")
 
 docker run --rm --platform linux/amd64 --user 0:0 --entrypoint /bin/sh \
   --mount "type=volume,src=${working_volume},dst=/app/working" \
@@ -65,8 +61,8 @@ docker run --name "${container}" --platform linux/amd64 \
   --add-host host.docker.internal:host-gateway \
   --env "http_proxy=${runtime_proxy}" \
   --env "https_proxy=${runtime_proxy}" \
+  --env "QWENPAW_MODEL_API_KEY=${model_key}" \
   --mount "type=volume,src=${channel_volume},dst=/run/secrets,readonly" \
-  --mount "type=volume,src=${model_volume},dst=/run/qwenpaw-model-secret,readonly" \
   --mount "type=volume,src=${working_volume},dst=/app/working" \
   --mount "type=volume,src=${secret_volume},dst=/app/working.secret" \
   --mount "type=volume,src=${backup_volume},dst=/app/working.backups" \

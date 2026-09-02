@@ -32,11 +32,11 @@ chmod -R a-w "${plugin_target}"
 python /opt/qdm/bin/validate_runtime.py
 
 model_required=${QWENPAW_MODEL_REQUIRED:-1}
-model_key_file=${QWENPAW_MODEL_API_KEY_FILE:-/run/qwenpaw-model-secret/api-key}
-if [ -f "${model_key_file}" ]; then
+model_key=${QWENPAW_MODEL_API_KEY:-}
+if [ -n "${model_key}" ]; then
   python /opt/qdm/bin/configure_model.py
 elif [ "${model_required}" = "1" ]; then
-  echo "QwenPaw model configuration failed: required key file is unavailable: ${model_key_file}" >&2
+  echo "QwenPaw model configuration failed: QWENPAW_MODEL_API_KEY is unset" >&2
   exit 78
 fi
 
