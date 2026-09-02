@@ -26,6 +26,8 @@ runtime_gid=${QWENPAW_GID:-10001}
 secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
 # 模型网关 API Key:启动时由 QwenPaw 加密写入可写 secret 卷,不进镜像层
 model_key=${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
+# 容器内存上限:默认 8GB,仅限制内存,不做其他资源限制
+mem_limit=${QWENPAW_MEM_LIMIT:-8g}
 
 # 渠道授权文件:须为 0600 或更严格的普通文件(非软链),缺失即报错退出
 auth_file="$secret_dir/channel-auth.json"
@@ -58,6 +60,7 @@ set -- docker run -d --name "${name}" \
   --platform linux/amd64 \
   --user "${runtime_uid}:${runtime_gid}" \
   --restart unless-stopped \
+  --memory "${mem_limit}" \
   --add-host host.docker.internal:host-gateway \
   -e QWENPAW_MODEL_API_KEY="${model_key}" \
   -e QWENPAW_MODEL_ID="${QWENPAW_MODEL_ID:-qwen3.8-flash}" \
