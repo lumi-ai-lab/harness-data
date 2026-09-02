@@ -20,6 +20,7 @@ import { validatePluginManifest } from "../packages/data-harness-cli/src/lib/plu
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const QWENPAW_SOURCE = path.join(REPO_ROOT, ".agents", "qwenpaw");
 const PLUGIN_NAME = "qdm-harness-qwenpaw";
+const INSTALLER_PACKAGE = "harness-data-installer";
 
 const ADAPTER_REQUIRED = [
   "plugin.json",
@@ -87,6 +88,10 @@ export function stageQwenPawPlugin({ artifactRoot, version = "", repoRoot = REPO
   for (const name of CORE_PACKAGES) {
     cpSync(path.join(root, "packages", name), path.join(dist, name), { recursive: true, filter: includeDistFile });
   }
+  cpSync(path.join(root, "npm"), path.join(dist, INSTALLER_PACKAGE), {
+    recursive: true,
+    filter: includeDistFile,
+  });
 
   const bootstrap = path.join(target, "bootstrap");
   mkdirSync(bootstrap, { recursive: true });
@@ -94,8 +99,13 @@ export function stageQwenPawPlugin({ artifactRoot, version = "", repoRoot = REPO
 
   const scripts = path.join(target, "scripts");
   mkdirSync(scripts, { recursive: true });
-  writeFileSync(path.join(scripts, "data-harness-cli"), cliShim(), { mode: 0o755 });
-  if (process.platform !== "win32") chmodSync(path.join(scripts, "data-harness-cli"), 0o755);
+  for (const [name, content] of [
+    ["data-harness-cli", coreCliShim()],
+    ["harness-data", lifecycleCliShim()],
+  ]) {
+    writeFileSync(path.join(scripts, name), content, { mode: 0o755 });
+    if (process.platform !== "win32") chmodSync(path.join(scripts, name), 0o755);
+  }
 
   const manifest = path.join(target, "plugin-manifest.json");
   writeFileSync(manifest, `${JSON.stringify(buildPluginManifestRecord({ artifactRoot: target, version }), null, 2)}\n`);
@@ -111,18 +121,32 @@ function buildPluginManifestRecord({ artifactRoot, version }) {
   }).manifest;
 }
 
-function cliShim() {
+function executableNodeShim(relativeEntry, { host = "", fullArgv = false } = {}) {
   return [
     "#!/usr/bin/env node",
-    'import { dirname } from "node:path";',
-    'import { fileURLToPath } from "node:url";',
-    'import { main } from "../dist/data-harness-cli/src/main.js";',
-    "const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));",
-    'process.env.HARNESS_PLUGIN_ROOT = pluginRoot;',
-    'process.env.HARNESS_HOST = "qwenpaw";',
-    "await main();",
+    'const path = require("node:path");',
+    'const { pathToFileURL } = require("node:url");',
+    "(async () => {",
+    "  const pluginRoot = path.dirname(path.dirname(__filename));",
+    '  process.env.HARNESS_PLUGIN_ROOT = pluginRoot;',
+    ...(host ? [`  process.env.HARNESS_HOST = ${JSON.stringify(host)};`] : []),
+    `  const entry = pathToFileURL(path.join(pluginRoot, ...${JSON.stringify(relativeEntry.split("/"))})).href;`,
+    "  const { main } = await import(entry);",
+    `  await main(${fullArgv ? "process.argv" : ""});`,
+    "})().catch((error) => {",
+    '  process.stderr.write(`error: ${error?.message || error}\\n`);',
+    "  process.exitCode = 1;",
+    "});",
     "",
   ].join("\n");
+}
+
+function coreCliShim() {
+  return executableNodeShim("dist/data-harness-cli/src/main.js", { host: "qwenpaw" });
+}
+
+function lifecycleCliShim() {
+  return executableNodeShim(`dist/${INSTALLER_PACKAGE}/src/cli.js`, { fullArgv: true });
 }
 
 export function resolvedVersion(artifactRoot, version) {
@@ -145,6 +169,10 @@ export function verifyQwenPawPlugin({ artifactRoot, version = "" } = {}) {
   }
   const cliMain = path.join(root, "dist", "data-harness-cli", "src", "main.js");
   if (!existsSync(cliMain)) throw new Error(`QwenPaw plugin is missing dist CLI main: ${cliMain}`);
+  const lifecycleMain = path.join(root, "dist", INSTALLER_PACKAGE, "src", "cli.js");
+  if (!existsSync(lifecycleMain)) {
+    throw new Error(`QwenPaw plugin is missing lifecycle CLI main: ${lifecycleMain}`);
+  }
   for (const name of ["harness-runtime-node", "html-report-kernel"]) {
     if (!existsSync(path.join(root, "dist", name, "package.json"))) {
       throw new Error(`QwenPaw plugin is missing dist package: ${name}`);
@@ -152,6 +180,9 @@ export function verifyQwenPawPlugin({ artifactRoot, version = "" } = {}) {
   }
   const shim = path.join(root, "scripts", "data-harness-cli");
   if (!existsSync(shim)) throw new Error("QwenPaw plugin is missing scripts/data-harness-cli");
+  if (!existsSync(path.join(root, "scripts", "harness-data"))) {
+    throw new Error("QwenPaw plugin is missing scripts/harness-data");
+  }
 
   const manifestPath = path.join(root, "plugin-manifest.json");
   const manifest = readJSON(manifestPath, "plugin-manifest.json");

@@ -566,6 +566,96 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertIn("qdm_scope_summary", registry.names())
         self.assertTrue(registry.get("qdm_query").async_execution)
 
+    def test_qwenpaw_21_reload_bridge_restores_identity_hooks_and_tools(self) -> None:
+        from qwenpaw.runtime.hooks import HookRegistry
+        from qwenpaw.runtime.tool_registry import ToolRegistry
+
+        workspace = types.SimpleNamespace(
+            agent_id="default",
+            workspace_dir=Path("/tmp/qdm-reload-test"),
+            plugins=types.SimpleNamespace(
+                hook_registry=HookRegistry(),
+                tool_registry=ToolRegistry(),
+            ),
+        )
+
+        class Manager:
+            def __init__(self) -> None:
+                self.agents: dict[str, object] = {}
+                self.reload_calls = 0
+
+            async def reload_agent(self, agent_id: str) -> bool:
+                self.reload_calls += 1
+                self.agents[agent_id] = workspace
+                return True
+
+        class LegacyRegistry:
+            def __init__(self, manager: Manager, registrations: list[object]) -> None:
+                self.manager = manager
+                self.registrations = registrations
+
+            def get_workspace_manager(self) -> Manager:
+                return self.manager
+
+            def get_workspace_created_hooks(self) -> list[object]:
+                return self.registrations
+
+        async def qdm_query() -> None:
+            return None
+
+        async def qdm_scope_summary() -> None:
+            return None
+
+        manager = Manager()
+        hook_specs = hook_factories()
+        tool_specs = (
+            ("qdm_query", qdm_query, True, "query", ""),
+            ("qdm_scope_summary", qdm_scope_summary, True, "scope", ""),
+        )
+
+        def restore_hooks(workspace_info: dict[str, object]) -> None:
+            target = workspace_info["workspace"]
+            for _name, factory, _priority in hook_specs:
+                target.plugins.hook_registry.register(factory())  # type: ignore[union-attr]
+
+        def restore_tools(workspace_info: dict[str, object]) -> None:
+            PLUGIN_MODULE._reinject_tools_into_workspace(workspace_info, tool_specs)
+
+        unrelated_called: list[bool] = []
+        registry = LegacyRegistry(manager, [
+            types.SimpleNamespace(
+                plugin_id="qdm-harness-qwenpaw",
+                hook_name="rt_hook_ws_qdm-harness-qwenpaw_identity",
+                callback=restore_hooks,
+            ),
+            types.SimpleNamespace(
+                plugin_id="qdm-harness-qwenpaw",
+                hook_name="qdm_harness_reinject_tools",
+                callback=restore_tools,
+            ),
+            types.SimpleNamespace(
+                plugin_id="other-plugin",
+                hook_name="rt_hook_ws_other-plugin_hook",
+                callback=lambda _info: unrelated_called.append(True),
+            ),
+        ])
+
+        self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
+        self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
+        self.assertTrue(asyncio.run(manager.reload_agent("default")))
+        self.assertEqual(manager.reload_calls, 1)
+        self.assertEqual(unrelated_called, [])
+        pre_build_names = {
+            hook.name for hook in workspace.plugins.hook_registry.hooks_for(Phase.PRE_AGENT_BUILD)
+        }
+        pre_execute_names = {
+            hook.name for hook in workspace.plugins.hook_registry.hooks_for(Phase.PRE_EXECUTE)
+        }
+        self.assertIn("qdm_harness.requester_identity", pre_build_names)
+        self.assertIn("qdm_harness.requester_bind", pre_execute_names)
+        self.assertIn("qdm_query", workspace.plugins.tool_registry.names())
+        self.assertIn("qdm_scope_summary", workspace.plugins.tool_registry.names())
+
     def test_reload_safe_hook_skips_when_no_workspace_is_resolvable(self) -> None:
         class Api:
             def __init__(self) -> None:
@@ -783,18 +873,22 @@ class HookLifecycleTests(unittest.TestCase):
             self.assertTrue(getattr(hook, "name", None))
         self.assertEqual(api.tools, ["qdm_query", "qdm_scope_summary"])
 
-    def test_plugin_restores_cli_exec_bit_for_zip_installed_layouts(self) -> None:
+    def test_plugin_restores_cli_exec_bits_for_zip_installed_layouts(self) -> None:
         if os.name == "nt":
             self.skipTest("POSIX exec bits are not applicable on Windows")
         with tempfile.TemporaryDirectory() as temp:
-            scripts = Path(temp) / "scripts"
+            plugin_root = Path(temp)
+            scripts = plugin_root / "scripts"
             scripts.mkdir()
-            shim = scripts / "data-harness-cli"
-            shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-            shim.chmod(0o644)  # QwenPaw backend zipfile.extractall drops exec bits
-            PLUGIN_MODULE._ensure_cli_executable(shim)
-            self.assertTrue(shim.stat().st_mode & stat.S_IXUSR)
-            self.assertFalse(shim.is_symlink())
+            shims = tuple(scripts / name for name in ("data-harness-cli", "harness-data"))
+            for shim in shims:
+                shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+                shim.chmod(0o644)  # QwenPaw backend zipfile.extractall drops exec bits
+            with patch.object(PLUGIN_MODULE, "__file__", str(plugin_root / "plugin.py")):
+                PLUGIN_MODULE._ensure_cli_executable()
+            for shim in shims:
+                self.assertTrue(shim.stat().st_mode & stat.S_IXUSR)
+                self.assertFalse(shim.is_symlink())
 
     def test_qdm_query_public_contract_has_no_report_arguments(self) -> None:
         class Api:

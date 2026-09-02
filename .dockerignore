@@ -1,0 +1,17 @@
+.git
+.github
+.bootstrap-cache*
+.codex
+.claude
+.qdm-auth
+.harness
+bin
+dist
+docs
+node_modules
+plan
+wikis
+**/__pycache__
+**/*.pyc
+**/*.log
+**/*.tmp

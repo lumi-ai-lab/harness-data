@@ -9,6 +9,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from types import MethodType
 from typing import Any
 
 from agentscope.message import TextBlock, ToolResultState
@@ -34,21 +35,29 @@ class AuthorizationSnapshot:
 
 
 def _ensure_cli_executable(shim: Path | None = None) -> None:
-    """Restore the exec bit on the bundled CLI shim.
+    """Restore the exec bit on bundled CLI shims.
 
     QwenPaw's backend installs an uploaded ZIP with zipfile.extractall(),
     which drops Unix permission bits.  Without this the runtime bridges
-    (authz-hook / context hook) fail their S_IXUSR pre-checks.
+    (authz-hook / context hook) and lifecycle commands fail to start.
     """
     if os.name == "nt":
         return
-    shim = shim or (Path(__file__).resolve().parent / "scripts" / "data-harness-cli")
-    try:
-        mode = shim.stat().st_mode
-        if not mode & stat.S_IXUSR:
-            shim.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except OSError as exc:
-        logger.warning("could not make CLI shim executable: %s", exc)
+    shims = (
+        (shim,)
+        if shim is not None
+        else tuple(
+            Path(__file__).resolve().parent / "scripts" / name
+            for name in ("data-harness-cli", "harness-data")
+        )
+    )
+    for candidate in shims:
+        try:
+            mode = candidate.stat().st_mode
+            if not mode & stat.S_IXUSR:
+                candidate.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError as exc:
+            logger.warning("could not make CLI shim executable (%s): %s", candidate, exc)
 
 
 def _tool_descriptor_for(tool_name: str, tool_func: Any, enabled: bool, description: str) -> Any:
@@ -78,14 +87,7 @@ def _tool_descriptor_for(tool_name: str, tool_func: Any, enabled: bool, descript
     return descriptor
 
 
-def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
-    """Re-inject the plugin tools into a (re)created workspace.
-
-    QwenPaw rebuilds Workspace objects on plugin force-reinstall and on
-    config-driven zero-downtime reloads; register_tool's startup hook does
-    not run again for those, so without this the tools silently vanish
-    from the agent toolkit until the host restarts.
-    """
+def _workspace_from_info(workspace_info: dict[str, Any]) -> Any | None:
     workspace = workspace_info.get("workspace")
     if workspace is None:
         try:
@@ -99,6 +101,12 @@ def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: t
             )
         except Exception:
             workspace = None
+    return workspace
+
+
+def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
+    """Re-inject the plugin tools into a (re)created workspace."""
+    workspace = _workspace_from_info(workspace_info)
     if workspace is None:
         return
     tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
@@ -116,6 +124,90 @@ def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: t
             pass
 
 
+_LEGACY_RELOAD_BRIDGE_STATE = "_qdm_harness_reload_bridge_state"
+_PLUGIN_ID = "qdm-harness-qwenpaw"
+
+
+async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[str, Any]) -> None:
+    """Run this plugin's in-memory workspace callbacks on QwenPaw 2.1."""
+    import inspect
+
+    runtime_prefix = f"rt_hook_ws_{_PLUGIN_ID}_"
+    for registration in registry.get_workspace_created_hooks():
+        if getattr(registration, "plugin_id", "") != _PLUGIN_ID:
+            continue
+        hook_name = str(getattr(registration, "hook_name", ""))
+        if not (hook_name.startswith(runtime_prefix) or hook_name == "qdm_harness_reinject_tools"):
+            continue
+        callback = registration.callback
+        result = callback(workspace_info)
+        if inspect.isawaitable(result):
+            await result
+
+
+def _install_legacy_reload_bridge(
+    *,
+    registry: Any | None = None,
+) -> bool:
+    """Backport plugin-state reinjection for QwenPaw 2.1 zero-downtime reloads.
+
+    QwenPaw 2.1 rebuilds a Workspace after channel/agent configuration changes
+    but does not run workspace-created plugin hooks for that replacement.  The
+    globally exported tool functions remain visible while the request identity
+    hooks disappear, causing every real channel query to fail with
+    QDM_CHANNEL_IDENTITY_UNAVAILABLE.  Newer hosts expose workspace setup hooks
+    and do not need this compatibility bridge.
+    """
+    if registry is None:
+        try:
+            from qwenpaw.plugins.registry import PluginRegistry
+
+            registry = PluginRegistry()
+        except Exception:
+            return False
+    if callable(getattr(registry, "get_workspace_setup_hooks", None)):
+        return False
+    manager = getattr(registry, "get_workspace_manager", lambda: None)()
+    if manager is None or not callable(getattr(manager, "reload_agent", None)):
+        logger.warning("QwenPaw 2.1 reload bridge unavailable: workspace manager not ready")
+        return False
+
+    existing = getattr(manager, _LEGACY_RELOAD_BRIDGE_STATE, None)
+    if isinstance(existing, dict):
+        existing["registry"] = registry
+        return True
+
+    state = {
+        "original": manager.reload_agent,
+        "registry": registry,
+    }
+    setattr(manager, _LEGACY_RELOAD_BRIDGE_STATE, state)
+
+    async def reload_agent_with_qdm(self: Any, agent_id: str) -> bool:
+        current = getattr(self, _LEGACY_RELOAD_BRIDGE_STATE, state)
+        result = await current["original"](agent_id)
+        if not result:
+            return result
+        try:
+            workspace = self.agents.get(agent_id)
+            if workspace is None:
+                return result
+            workspace_info = {
+                "agent_id": agent_id,
+                "workspace_dir": str(getattr(workspace, "workspace_dir", "")),
+                "workspace": workspace,
+            }
+            await _run_legacy_workspace_callbacks(current["registry"], workspace_info)
+            logger.info("QDM Harness plugin state restored after QwenPaw 2.1 workspace reload")
+        except Exception:
+            logger.exception("QDM Harness failed to restore plugin state after workspace reload")
+        return result
+
+    manager.reload_agent = MethodType(reload_agent_with_qdm, manager)
+    logger.info("Installed QwenPaw 2.1 workspace reload compatibility bridge")
+    return True
+
+
 class QdmHarnessQwenPawPlugin:
     def register(self, api: PluginApi) -> None:
         _require_qwenpaw_21()
@@ -125,7 +217,8 @@ class QdmHarnessQwenPawPlugin:
         register_hook = getattr(api, "register_runtime_hook", None)
         if not callable(register_hook):
             raise RuntimeError("QDM Harness requires QwenPaw with register_runtime_hook()")
-        for _hook_name, factory, _priority in hook_factories():
+        runtime_hook_specs = hook_factories()
+        for _hook_name, factory, _priority in runtime_hook_specs:
             register_hook(factory())
 
         async def qdm_query(
@@ -163,7 +256,7 @@ class QdmHarnessQwenPawPlugin:
 
         tool_specs = (
             ("qdm_query", qdm_query, True, "执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", "📊"),
-            ("qdm_scope_summary", qdm_scope_summary, True, "返回当前渠道用户的脱敏 QDM 数据权限摘要。", "🔐"),
+            ("qdm_scope_summary", qdm_scope_summary, True, "返回当前渠道用户的脱敏 QDM 数据权限摘要。后续查询必须原样使用摘要中的维度代码（例如 authz-v2 的 sapArea2Id），不得擅自替换为旧维度名。", "🔐"),
         )
         for tool_name, tool_func, enabled, description, icon in tool_specs:
             api.register_tool(tool_name=tool_name, tool_func=tool_func, description=description, icon=icon, enabled=enabled, tool_type="internal")
@@ -185,6 +278,15 @@ class QdmHarnessQwenPawPlugin:
                 )
         else:
             logger.warning("QwenPaw host lacks register_workspace_created_hook(); qdm tools may disappear after plugin hot-reload")
+        register_startup_hook = getattr(api, "register_startup_hook", None)
+        if callable(register_startup_hook):
+            register_startup_hook(
+                hook_name="qdm_harness_install_reload_bridge",
+                callback=_install_legacy_reload_bridge,
+                priority=95,
+            )
+        else:
+            _install_legacy_reload_bridge()
         logger.info("QDM Harness runtime hooks and constrained tools registered")
 
 
