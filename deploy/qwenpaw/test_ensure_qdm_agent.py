@@ -8,8 +8,10 @@ writing config.json are exercised against a real QwenPaw working dir.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from types import SimpleNamespace
@@ -91,6 +93,114 @@ class AgentIdContractTests(unittest.TestCase):
                 del os.environ["QWENPAW_QDM_AGENT_ID"]
             else:
                 os.environ["QWENPAW_QDM_AGENT_ID"] = previous
+
+
+class ToolPolicyTests(unittest.TestCase):
+    """apply_strict_tool_policy 的纯文件级行为, 与插件 _configure_allowlist 对齐。"""
+
+    def _write_agent(self, tools: dict | None = None, extra: dict | None = None, mode: int = 0o600) -> str:
+        path = tempfile.NamedTemporaryFile(prefix="agent-test-", suffix=".json", delete=False)
+        path.close()
+        data: dict = {"id": "harness-data-default", "name": "QDM 数据助手"}
+        if tools is not None:
+            data["tools"] = {"builtin_tools": tools}
+        if extra:
+            data.update(extra)
+        os.chmod(path.name, mode)
+        with open(path.name, "w", encoding="utf-8") as handle:
+            # 与模块内序列化格式一致(indent=2 + 结尾换行), 干净的收窄态才能逐字节命中
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        return path.name
+
+    def _read(self, path: str) -> dict:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_strict_policy_disables_host_tools_and_keeps_the_allowlist(self) -> None:
+        path = self._write_agent({
+            "qdm_query": {"name": "qdm_query", "enabled": True},
+            "qdm_scope_summary": {"name": "qdm_scope_summary", "enabled": True},
+            "get_current_time": {"name": "get_current_time", "enabled": True},
+            "read_file": {"name": "read_file", "enabled": True},
+            "web_search": {"name": "web_search", "enabled": True},
+        })
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path))
+            tools = self._read(path)["tools"]["builtin_tools"]
+            self.assertTrue(tools["qdm_query"]["enabled"])
+            self.assertTrue(tools["qdm_scope_summary"]["enabled"])
+            self.assertTrue(tools["get_current_time"]["enabled"])
+            self.assertFalse(tools["read_file"]["enabled"])
+            self.assertFalse(tools["web_search"]["enabled"])
+        finally:
+            os.unlink(path)
+
+    def test_strict_policy_is_idempotent_and_does_not_rewrite_when_clean(self) -> None:
+        path = self._write_agent({
+            "qdm_query": {"name": "qdm_query", "enabled": True},
+            "qdm_scope_summary": {"name": "qdm_scope_summary", "enabled": True},
+            "get_current_time": {"name": "get_current_time", "enabled": True},
+            "read_file": {"name": "read_file", "enabled": False},
+        }, extra={"light_context_config": {"tool_result_pruning_config": {"enabled": False}}})
+        try:
+            with open(path, encoding="utf-8") as handle:
+                before = handle.read()
+            self.assertFalse(MODULE.apply_strict_tool_policy(path), "已是收窄状态就不该重写")
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), before, "无改动时必须保持文件原样")
+        finally:
+            os.unlink(path)
+
+    def test_strict_policy_preserves_other_config_and_file_mode(self) -> None:
+        channels = {"channels": {"wecom": {"enabled": True}, "console": {"enabled": True}}}
+        path = self._write_agent({
+            "qdm_query": {"name": "qdm_query", "enabled": True},
+            "execute_shell_command": {"name": "execute_shell_command", "enabled": True},
+        }, extra=channels, mode=0o640)
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path))
+            data = self._read(path)
+            self.assertEqual(data["channels"], channels["channels"], "收窄不能动渠道配置")
+            self.assertEqual(os.stat(path).st_mode & 0o7777, 0o640, "必须保留原文件权限位")
+        finally:
+            os.unlink(path)
+
+    def test_strict_policy_turns_off_tool_result_pruning(self) -> None:
+        path = self._write_agent({"qdm_query": {"name": "qdm_query", "enabled": True}})
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path))
+            pruning = self._read(path)["light_context_config"]["tool_result_pruning_config"]
+            self.assertIs(pruning["enabled"], False)
+        finally:
+            os.unlink(path)
+
+    def test_an_entry_without_enabled_reads_as_enabled_and_is_disabled(self) -> None:
+        path = self._write_agent({
+            "read_file": {"name": "read_file"},
+            "qdm_query": {"name": "qdm_query"},
+        })
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path))
+            tools = self._read(path)["tools"]["builtin_tools"]
+            self.assertFalse(tools["read_file"]["enabled"], "缺省 enabled 视作启用, 必须被关掉")
+            self.assertTrue(tools["qdm_query"]["enabled"])
+        finally:
+            os.unlink(path)
+
+    def test_strict_policy_tolerates_a_missing_tools_section(self) -> None:
+        path = self._write_agent(extra={"active_model": {"provider_id": "qdm-market"}})
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path))
+            data = self._read(path)
+            self.assertIs(data["light_context_config"]["tool_result_pruning_config"]["enabled"], False)
+            self.assertEqual(data["tools"]["builtin_tools"], {})
+            self.assertEqual(data["active_model"]["provider_id"], "qdm-market")
+        finally:
+            os.unlink(path)
+
+    def test_the_allowlist_is_exactly_the_qdm_trio(self) -> None:
+        self.assertEqual(set(MODULE.STRICT_ALLOWED_TOOLS), {"qdm_query", "qdm_scope_summary", "get_current_time"})
 
 
 if __name__ == "__main__":
