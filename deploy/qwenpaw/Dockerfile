@@ -51,6 +51,9 @@ ARG HARNESS_VERSION=0.0.56
 ARG QWENPAW_VERSION=2.1.0
 ARG QWENPAW_UID=10001
 ARG QWENPAW_GID=10001
+# QDM 专用 Agent 的 id。必须落在插件默认作用域 `harness-data-*` 里，且要与下面
+# --workspace-root/--workspace-allowlist 使用的目录同名（宿主按 id 建 workspace 目录）。
+ARG QWENPAW_QDM_AGENT_ID=harness-data-default
 
 # 默认时区东八区(上海)。必须在 `qwenpaw init` 之前设置:config.json 的
 # user_timezone 用 detect_system_timezone() 派生(探测顺序 $TZ → /etc/timezone
@@ -74,7 +77,8 @@ ENV TZ=Asia/Shanghai \
   QWENPAW_MODEL_REQUIRED=1 \
   HARNESS_INSTANCE_ROOT=/opt/qdm/harness-data/instance/${HARNESS_VERSION} \
   HARNESS_DATA_ROOT=/app/qdm-data \
-  HARNESS_PLUGIN_CONFIG=/etc/qdm/qwenpaw/plugin-config.json
+  HARNESS_PLUGIN_CONFIG=/etc/qdm/qwenpaw/plugin-config.json \
+  QWENPAW_QDM_AGENT_ID=${QWENPAW_QDM_AGENT_ID}
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -111,6 +115,7 @@ COPY --from=artifact-fetch /tmp/wikis /tmp/harness-wikis/
 COPY --chmod=0755 deploy/qwenpaw/entrypoint.sh /opt/qdm/bin/entrypoint.sh
 COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model.py
 COPY --chmod=0755 deploy/qwenpaw/align_timezone.py /opt/qdm/bin/align_timezone.py
+COPY --chmod=0755 deploy/qwenpaw/ensure_qdm_agent.py /opt/qdm/bin/ensure_qdm_agent.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
   && chmod -R a-w /opt/qdm/plugin-source \
@@ -120,21 +125,21 @@ USER qwenpaw
 WORKDIR /app/working
 
 RUN python -m qwenpaw init --defaults --accept-security \
+  && python /opt/qdm/bin/ensure_qdm_agent.py \
   && /opt/qdm/plugin-source/scripts/harness-data qwenpaw setup \
   --source /opt/qdm/plugin-source \
   --qwenpaw-python /usr/local/bin/python \
   --qwenpaw-working-dir /app/working \
   --instance-root "${HARNESS_INSTANCE_ROOT}" \
   --data-root "${HARNESS_DATA_ROOT}" \
-  --workspace-root /app/working/workspaces/default \
-  --workspace-allowlist /app/working/workspaces/default \
+  --workspace-root "/app/working/workspaces/${QWENPAW_QDM_AGENT_ID}" \
+  --workspace-allowlist "/app/working/workspaces/${QWENPAW_QDM_AGENT_ID}" \
   --secret-dir /run/secrets \
   --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
   --metric-cli /tmp/qdm-metric-cli \
   --wikis-source /tmp/harness-wikis \
   --channel-auth-only \
   --enabled-agents 'harness-data-*' \
-  --enabled-agents default \
   --yes \
   --json \
   && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \

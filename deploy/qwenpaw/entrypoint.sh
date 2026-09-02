@@ -41,6 +41,12 @@ fi
 mv "${plugin_stage}" "${plugin_target}"
 chmod -R a-w "${plugin_target}"
 
+# The QDM agent has to exist before the model is pointed at it. This is also the
+# upgrade path for a persistent volume created by an older image: the seed above
+# is copied only when config.json is absent, so the agent and the WeCom/Feishu
+# binding are adopted here instead.
+python /opt/qdm/bin/ensure_qdm_agent.py
+
 model_required=${QWENPAW_MODEL_REQUIRED:-1}
 model_key=${QWENPAW_MODEL_API_KEY:-}
 if [ -n "${model_key}" ]; then

@@ -2,9 +2,10 @@
 """容器启动时自动配置 QwenPaw 的 LLM 模型连接,无需在后台手动配置。
 
 由 entrypoint.sh 在每次容器启动时调用:从 QWENPAW_MODEL_API_KEY 环境变量
-读取 API key,注册 OpenAI 兼容提供商 qdm-market,添加并激活模型,再把
-default Agent 的 active_model 指向该模型。密钥因此不会烧进镜像。任何一步
-失败都返回退出码 78,在 QwenPaw 主进程启动前快速失败。
+读取 API key,注册 OpenAI 兼容提供商 qdm-market,添加并激活模型,再把 QDM
+专用 Agent(``QWENPAW_QDM_AGENT_ID``,默认 harness-data-default)的
+active_model 指向该模型。密钥因此不会烧进镜像。任何一步失败都返回退出码
+78,在 QwenPaw 主进程启动前快速失败。
 """
 
 from __future__ import annotations
@@ -65,10 +66,11 @@ async def _configure() -> None:
         raise RuntimeError(f"failed to persist model provider: {provider_id}")
     await manager.activate_model(provider_id, model_id)
 
-    agent = load_agent_config("default")
+    agent_id = os.environ.get("QWENPAW_QDM_AGENT_ID", "harness-data-default").strip() or "harness-data-default"
+    agent = load_agent_config(agent_id)
     agent.active_model = ModelSlotConfig(provider_id=provider_id, model=model_id)
-    save_agent_config("default", agent)
-    print(f"configured QwenPaw model provider={provider_id} model={model_id}")
+    save_agent_config(agent_id, agent)
+    print(f"configured QwenPaw model provider={provider_id} model={model_id} agent={agent_id}")
 
 
 def main() -> int:
