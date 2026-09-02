@@ -1,120 +1,72 @@
-# Harness Data QwenPaw image
+# QwenPaw Docker 部署
 
-This image pins QwenPaw `2.1.0`, installs the native Harness Data plugin during
-the build, and targets `linux/amd64`. The image never contains channel
-authorization, the session HMAC secret, or the LLM API key.
-
-## Local build
-
-The Dockerfile downloads the metric CLI binary and the wikis tree from the
-Gitee release mirrors and unzips them during the build:
+镜像固定 QwenPaw 2.1.0 + Harness Data 插件, 不含任何密钥。镜像在开发机(本机)构建, 导出压缩后上传服务器加载, 共 4 步:
 
 ```text
-https://gitee.com/git_pengmd/harness-metric-release  -> qdm-metric-cli-v<ver>-linux-amd64.zip
-https://gitee.com/git_pengmd/harness-release         -> harness-data-wikis-v<ver>.zip
+┌──────────────┐    ┌────────────────────┐    ┌──────────────┐    ┌────────────────┐
+│ ① 本机构建镜像  │ →  │ ② 导出压缩上传并加载 │ →  │ ③ 准备密钥     │ →  │ ④ 运行并验证     │
+│ build-docker │    │ docker save + gzip │    │ 2 个 export  │    │ run_docker.sh  │
+│ -image.sh    │    │ + scp + docker load│    │ channel-auth │    │ + docker inspect│
+└──────────────┘    └────────────────────┘    └──────────────┘    └────────────────┘
+ (本机)               (本机 → 服务器)            (服务器)           (服务器)
 ```
 
-The release zip password (`qdm-dev`) is hardcoded in the Dockerfile as a
-dev-stage placeholder; rotate it and update the Dockerfile before production
-deployment. `build-docker-image.sh` runs the build directly with pinned values
-(image tag, versions) baked into the command:
+## ① 本机构建镜像
 
 ```bash
 deploy/qwenpaw/build-docker-image.sh
 ```
 
-The build carries no proxy configuration: `apt-get`, `pip` and the Gitee
-downloads all go over the container's normal egress. Bump `HARNESS_VERSION` and
-`QDM_METRIC_CLI_VERSION` in the script when building a new release.
+- 直接运行即用脚本内固定版本; 或加 `--latest-release`, 自动按 Gitee 最新 Release 解析版本(脚本会打印解析出的版本号与镜像 tag)。
+- 产出镜像 tag 为 `harness-data-qwenpaw:0.0.56-amd64`(默认版本), 与下面步骤及 `run_docker.sh` 中的引用保持一致; 用 `--latest-release` 时以脚本打印的 tag 为准。
 
-If a specific host really cannot reach `deb.debian.org` or `pypi.org` directly,
-pass the build arguments by hand. A shell `export` is not enough — `docker
-buildx` does not forward proxy variables from the client environment into `RUN`
-steps — and inside a build the host loopback is unreachable, so use
-`host.docker.internal` rather than `127.0.0.1`:
+## ② 导出压缩上传并加载
+
+本机导出镜像并压缩, SCP 上传到服务器, 再在服务器上加载(`docker load` 可直接读 gzip, 无需先解压):
 
 ```bash
-docker buildx build --load --platform linux/amd64 \
-  --file deploy/qwenpaw/Dockerfile \
-  --tag harness-data-qwenpaw:0.0.56-amd64 \
-  --build-arg HARNESS_VERSION=0.0.56 \
-  --build-arg QDM_METRIC_CLI_VERSION=v0.1.19 \
-  --build-arg http_proxy=http://host.docker.internal:1082 \
-  --build-arg https_proxy=http://host.docker.internal:1082 \
-  .
+# 本机:导出并压缩
+docker save harness-data-qwenpaw:0.0.56-amd64 | gzip > harness-data-qwenpaw-0.0.56-amd64.tar.gz
+
+# 本机:上传到服务器(换成实际的服务器地址与登录用户)
+scp harness-data-qwenpaw-0.0.56-amd64.tar.gz root@<服务器IP>:/tmp/
+
+# 服务器:加载镜像, tag 与构建时保持一致
+docker load -i /tmp/harness-data-qwenpaw-0.0.56-amd64.tar.gz
 ```
 
-## Runtime secrets
+## ③ 准备密钥(服务器)
 
-Run as the same non-root UID/GID that owns the mounted files (the image default
-is `10001:10001`). The channel secret directory must be a read-only mount.
+先导出 2 个变量:
+
+```bash
+export QDM_CHANNEL_SECRET_DIR=<密钥目录>
+export QWENPAW_MODEL_API_KEY=<模型API Key>
+```
+
+再在密钥目录下放置渠道授权文件(唯一需要准备的密钥文件), 并设置属主与权限:
+
+```bash
+chown 10001:10001 "$QDM_CHANNEL_SECRET_DIR/channel-auth.json" && chmod 600 "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
+```
+
+> 密钥目录是宿主机目录, 运行 `run_docker.sh` 时自动只读挂载到容器 `/run/secrets`, 无需手动挂载。
+
+## ④ 运行并验证(服务器)
+
+```bash
+deploy/qwenpaw/run_docker.sh
+docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即成功
+```
+
+脚本已内置以下参数, 无需额外配置:
 
 ```text
-/run/secrets/channel-auth.json
-/run/secrets/session-hmac.secret
+监听   127.0.0.1:8088
+内存   上限 8G
+自启   --restart unless-stopped
+密钥   密钥目录只读挂载到容器 /run/secrets
 ```
 
-Both files must be regular, non-symlink files with mode `0600` or stricter.
-`session-hmac.secret` must contain at least 32 bytes.
-
-The model API key is supplied at startup through the `QWENPAW_MODEL_API_KEY`
-environment variable. It is read at startup, encrypted by QwenPaw into its
-writable secret volume, and is never stored in an image layer.
-
-The runtime configures the OpenAI-compatible provider `qdm-market` at
-`https://aig.qdama.cn/api/v1` and activates `qwen3.8-flash`.
-
-The Harness plugin directory is image-managed and refreshed from the immutable
-image seed on every container start. Reusing an existing `/app/working` volume
-therefore preserves QwenPaw channel/session configuration without retaining an
-older plugin implementation after an image rebuild.
-
-For a long-running instance, set `QDM_CHANNEL_SECRET_DIR` and
-`QWENPAW_MODEL_API_KEY`, then run `deploy/qwenpaw/run_docker.sh`. The image has
-to be built first (`build-docker-image.sh`). The script generates
-`session-hmac.secret` (48 random bytes, mode `0600`) in
-`QDM_CHANNEL_SECRET_DIR` on first use and never overwrites an existing file,
-mirrors the owner of `channel-auth.json`, then starts the container with
-`--restart unless-stopped`.
-
-The service binds the host port to `127.0.0.1` by default, and the image
-healthcheck polls `/healthz`; read the result with
-`docker inspect --format '{{json .State.Health}}' qwenpaw`.
-
-Proxying is opt-in and read from the caller's environment. The model gateway and
-the WeCom APIs are reachable directly in mainland China, so by default
-`run_docker.sh` passes no proxy variables at all. When an endpoint does need
-one, configure it in the host shell before starting the script — for example the
-local Shadowrocket HTTP proxy:
-
-```bash
-# Shadowrocket 代理设置
-export http_proxy=http://127.0.0.1:1082
-export https_proxy=http://127.0.0.1:1082
-```
-
-`run_docker.sh` forwards those values into the container and rewrites a loopback
-host to `host.docker.internal`, because `127.0.0.1` inside the container is the
-container itself and cannot reach the proxy port on the host.
-
-A plain `docker run` needs the same environment instead of any model secret
-mount, for example:
-
-```bash
-docker run -d --name qwenpaw \
-  --platform linux/amd64 --user 10001:10001 \
-  --add-host host.docker.internal:host-gateway \
-  -e QWENPAW_MODEL_API_KEY="${QWENPAW_MODEL_API_KEY}" \
-  -e QWENPAW_MODEL_ID=qwen3.8-flash \
-  -e QWENPAW_MODEL_BASE_URL=https://aig.qdama.cn/api/v1 \
-  -v qwenpaw-working:/app/working \
-  -v qwenpaw-secret:/app/working.secret \
-  -v qwenpaw-backups:/app/working.backups \
-  -v qdm-data:/app/qdm-data \
-  -v "${QDM_CHANNEL_SECRET_DIR}:/run/secrets:ro" \
-  -p 127.0.0.1:8088:8088 \
-  harness-data-qwenpaw:0.0.56-amd64
-```
-
-Note that an environment variable is visible to `docker inspect`; mount the
-secret file instead if the key must stay out of container metadata.
+- 想调整内存上限: `export QWENPAW_MEM_LIMIT=16g` 后重跑 `run_docker.sh`。
+- 国内环境直连即可, 无需代理。
