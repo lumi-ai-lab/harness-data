@@ -69,23 +69,6 @@ image seed on every container start. Reusing an existing `/app/working` volume
 therefore preserves QwenPaw channel/session configuration without retaining an
 older plugin implementation after an image rebuild.
 
-## Acceptance smoke
-
-The local smoke script creates temporary Docker volumes, copies the runtime
-secrets with the correct Linux ownership, executes the real QwenPaw lifespan,
-and removes every temporary container and volume on exit:
-
-```bash
-QWENPAW_IMAGE=harness-data-qwenpaw:0.0.56-amd64 \
-  deploy/qwenpaw/smoke-local.sh
-```
-
-It asks the exact acceptance question and requires at least four recognizable
-metric values in the final QwenPaw response. “8 月 31 日” is fixed to
-`2026-08-31`. Authorization uses the canonical authz-v2 management-area
-dimension `sapArea2Id`; the QwenPaw skill tells the model to reuse the exact
-dimension codes returned by `qdm_scope_summary`.
-
 For a long-running instance, set `QDM_CHANNEL_SECRET_DIR` and
 `QWENPAW_MODEL_API_KEY`, then run `deploy/qwenpaw/run_docker.sh`. The image has
 to be built first (`build-docker-image.sh`). The script generates
