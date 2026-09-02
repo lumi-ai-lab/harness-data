@@ -9,6 +9,78 @@ import { setupCommand } from "./setup.js";
 
 const PLUGIN_ID = "qdm-harness-qwenpaw";
 const actions = new Set(["setup", "doctor", "migrate", "update", "install", "uninstall"]);
+// Mirrors DEFAULT_AGENT_SCOPE_PATTERNS in .agents/qwenpaw/qdm_config.py.  The
+// host registers one plugin's hooks and tools in every workspace, so the
+// plugin narrows itself back down with these agent id patterns.
+const DEFAULT_AGENT_SCOPE_PATTERNS = ["harness-data-*"];
+const AGENT_SCOPE_PATTERN = /^(\*|[A-Za-z0-9][A-Za-z0-9_.*?-]*)$/;
+const MAX_AGENT_SCOPE_PATTERNS = 32;
+const MAX_AGENT_SCOPE_PATTERN_CHARS = 64;
+
+function normalizeAgentScope(values) {
+  const patterns = [];
+  for (const value of values.flat().flatMap((item) => String(item ?? "").split(","))) {
+    const pattern = value.trim();
+    if (!pattern) continue;
+    if (pattern.length > MAX_AGENT_SCOPE_PATTERN_CHARS || !AGENT_SCOPE_PATTERN.test(pattern)) {
+      throw new Error(`invalid QwenPaw agent id pattern: ${pattern}`);
+    }
+    if (!patterns.includes(pattern)) patterns.push(pattern);
+  }
+  if (patterns.length > MAX_AGENT_SCOPE_PATTERNS) throw new Error("too many --enabled-agents patterns");
+  return patterns;
+}
+
+function agentScopeAllows(patterns, agentId) {
+  return patterns.some((pattern) => {
+    if (pattern === agentId) return true;
+    if (!pattern.includes("*") && !pattern.includes("?")) return false;
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    return new RegExp(`^${escaped}$`).test(agentId || "");
+  });
+}
+
+function qwenPawWorkingDir(options) {
+  const explicit = String(options.qwenpawWorkingDir || "").trim();
+  return explicit || path.join(os.homedir(), ".qwenpaw");
+}
+
+function listQwenPawAgentIds(options) {
+  const file = path.join(qwenPawWorkingDir(options), "config.json");
+  if (!isRegularFile(file)) return { file, agents: null };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    const profiles = parsed?.agents?.profiles;
+    if (!profiles || typeof profiles !== "object") return { file, agents: null };
+    return { file, agents: Object.keys(profiles).sort() };
+  } catch {
+    return { file, agents: null };
+  }
+}
+
+function agentScopeCheck(reference, options) {
+  let patterns;
+  try {
+    patterns = normalizeAgentScope([reference.enabled_agents ?? [], reference.qdm_agent_id ?? []]);
+  } catch (error) {
+    return { name: "agent-scope", ok: false, detail: error.message };
+  }
+  const scope = patterns.length ? patterns : [...DEFAULT_AGENT_SCOPE_PATTERNS];
+  const { file, agents } = listQwenPawAgentIds(options);
+  if (agents === null && !fs.existsSync(file)) {
+    // Nothing to compare against yet: a fresh image seed before any agent exists.
+    return { name: "agent-scope", ok: true, detail: `patterns=${scope.join(",")} (no ${file})` };
+  }
+  if (agents === null) return { name: "agent-scope", ok: false, detail: `patterns=${scope.join(",")} unreadable ${file}` };
+  const matched = agents.filter((agentId) => agentScopeAllows(scope, agentId));
+  // An empty match means every runtime hook stands down and the tools stay
+  // hidden: the install looks healthy while still answering "QDM 数据查询不可用".
+  return {
+    name: "agent-scope",
+    ok: matched.length > 0,
+    detail: `patterns=${scope.join(",")} matched=${matched.join(",") || "none"} agents=${agents.join(",")}`,
+  };
+}
 
 function pluginConfigFile() {
   if (process.platform === "win32") return path.join("C:", "ProgramData", "QDM", "qwenpaw", "plugin-config.json");
@@ -149,6 +221,9 @@ export async function doctorQwenPaw(options = {}) {
       detail: secretDir,
     });
   }
+  if (reference) {
+    checks.push(agentScopeCheck(reference, options));
+  }
   const failures = checks.filter((check) => !check.ok);
   const report = {
     ok: failures.length === 0,
@@ -240,16 +315,25 @@ async function installNativePlugin(python, source, options) {
   return path.join(workingBase, "plugins", PLUGIN_ID);
 }
 
+function resolveAgentScopePatterns(options) {
+  const requested = normalizeAgentScope([options.enabledAgents ?? [], options.agentId ?? []]);
+  if (requested.length) return requested;
+  const previous = readReferenceConfig(options);
+  const carried = normalizeAgentScope([previous?.enabled_agents ?? [], previous?.qdm_agent_id ?? []]);
+  // Re-running setup must never silently re-scope a working install.
+  if (carried.length) return carried;
+  return [...DEFAULT_AGENT_SCOPE_PATTERNS];
+}
+
 function writeReferenceConfig({ installedRoot, instanceRoot, version, options, setupReport }) {
-  const agentId = String(options.agentId || "qdmDataAgent").trim();
+  const patterns = resolveAgentScopePatterns(options);
   const config = {
     schema_version: 2,
     plugin_id: PLUGIN_ID,
     plugin_version: version,
     root_context_path: path.join(instanceRoot, "context.json"),
     secret_ref: String(options.secretDir || defaultSensitiveDir()).trim(),
-    enabled_agents: [agentId],
-    qdm_agent_id: agentId,
+    enabled_agents: patterns,
     user_id_display_mode: String(options.userIdDisplayMode || "off").trim(),
     tool_policy: "preserve",
     context_limits: { base_context_bytes: null, wiki_file_bytes: null, wiki_total_bytes: null },
@@ -273,6 +357,8 @@ function readReferenceConfig(options) {
       plugin_version: String(parsed.plugin_version || ""),
       root_context_path: String(parsed.root_context_path || ""),
       secret_ref: String(parsed.secret_ref || ""),
+      enabled_agents: Array.isArray(parsed.enabled_agents) ? parsed.enabled_agents : [],
+      qdm_agent_id: String(parsed.qdm_agent_id || ""),
     };
   } catch {
     return null;

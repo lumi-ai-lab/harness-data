@@ -133,13 +133,15 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --metric-cli /tmp/qdm-metric-cli \
   --wikis-source /tmp/harness-wikis \
   --channel-auth-only \
-  --agent-id default \
+  --enabled-agents 'harness-data-*' \
+  --enabled-agents default \
   --yes \
   --json \
   && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
   && /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data qwenpaw doctor \
   --plugin-root /app/working/plugins/qdm-harness-qwenpaw \
   --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
+  --qwenpaw-working-dir /app/working \
   --json
 
 USER root

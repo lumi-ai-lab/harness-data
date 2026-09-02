@@ -5,6 +5,9 @@
   (企微/飞书)授权范围内的 QDM 指标;
 - 借助 qdm_runtime_hooks 注入请求身份与授权快照上下文,保证查询身份和
   授权状态一致,身份缺失时返回 QDM_CHANNEL_IDENTITY_UNAVAILABLE;
+- 宿主会把插件的钩子和工具注入到每一个 workspace,因此 enabled_agents
+  作用域同时门控这两侧:命中的 Agent 拿到工具,未命中的 Agent 连工具
+  都不注册,避免留下可见但必然报错的 qdm_query;
 - 通过 workspace_created / startup 钩子及旧版重载兼容桥,在 QwenPaw 工作区
   重建或插件热重载后恢复工具与运行时状态。
 
@@ -15,10 +18,12 @@ qdm_config.py(配置加载)、qdm_runtime_hooks.py(身份/授权钩子)。
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+import json
 import logging
 import hashlib
 import os
 import stat
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
@@ -116,13 +121,117 @@ def _workspace_from_info(workspace_info: dict[str, Any]) -> Any | None:
     return workspace
 
 
-def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
-    """Re-inject the plugin tools into a (re)created workspace."""
+_HOST_SHARED_AGENT_ID = "default"
+_SHARED_AGENT_WARNINGS: set[str] = set()
+
+
+def _agent_scope_allows(agent_id: Any) -> bool:
+    """Whether this plugin serves *agent_id*, per the operator-written scope.
+
+    Fails closed: an absent or invalid plugin config activates nothing, which
+    mirrors the runtime hooks bailing out on ``ConfigError``.
+    """
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        logger.warning("QDM plugin config unusable (%s); QDM tools stay hidden", exc)
+        return False
+    name = str(agent_id or "")
+    scope = config.agent_scope
+    if not scope.allows(name):
+        return False
+    if name == _HOST_SHARED_AGENT_ID and not scope.allows_by_exact_name(name):
+        _warn_on_shared_agent(name)
+    return True
+
+
+def _warn_on_shared_agent(name: str) -> None:
+    """Warn once that a wildcard swept in the host's built-in shared agent."""
+    if name in _SHARED_AGENT_WARNINGS:
+        return
+    _SHARED_AGENT_WARNINGS.add(name)
+    logger.warning(
+        "QDM tools activated on the host's built-in '%s' agent via a wildcard "
+        "enabled_agents entry; that agent's tool allowlist was not narrowed by "
+        "`harness-data qwenpaw setup`. Name '%s' explicitly in enabled_agents, "
+        "or bind the channel to a dedicated 'harness-data-*' agent.",
+        name, name,
+    )
+
+
+def _sync_registered_tool_entries(agent_id: Any, workspace_dir: Any, tool_names: tuple[str, ...], enabled: bool) -> None:
+    """Flip host-written tool entries in an agent's own ``agent.json``.
+
+    The host persists a ``builtin_tools`` entry for a plugin tool under
+    whichever agent happened to be current when the plugin started, so an agent
+    that never opted in can still list ``qdm_query`` on its settings page. Only
+    workspaces that already carry our entries are rewritten — an agent without
+    them is never created, read-modified or touched — and a failed write does
+    not affect the runtime gating the caller already performed.
+
+    The written scope is the authority for both directions: re-adding an agent
+    to ``enabled_agents`` restores an entry this sweep had to disable. To keep
+    QDM off one served agent, take it out of the scope instead of toggling the
+    entry in the console.
+    """
+    if not str(workspace_dir or "").strip():
+        return
+    agent_file = Path(workspace_dir) / "agent.json"
+    try:
+        if agent_file.is_symlink() or not agent_file.is_file():
+            return
+        data = json.loads(agent_file.read_text(encoding="utf-8"))
+        entries = (data.get("tools") or {}).get("builtin_tools") if isinstance(data, dict) else None
+        if not isinstance(entries, dict):
+            return
+        stale = []
+        for name in tool_names:
+            entry = entries.get(name)
+            # Mirror the host's gate: a missing ``enabled`` reads as enabled.
+            if isinstance(entry, dict) and bool(entry.get("enabled", True)) is not enabled:
+                stale.append(entry)
+        if not stale:
+            return
+        for entry in stale:
+            entry["enabled"] = enabled
+        content = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        with tempfile.NamedTemporaryFile(dir=agent_file.parent, delete=False) as handle:
+            handle.write(content)
+            temp = Path(handle.name)
+        try:
+            os.chmod(temp, agent_file.stat().st_mode & 0o777)
+            os.replace(temp, agent_file)
+        finally:
+            temp.unlink(missing_ok=True)
+        logger.info("QDM agent scope set tool entries enabled=%s for agent '%s'", enabled, agent_id)
+    except Exception:
+        logger.warning("QDM could not sync tool entries for agent '%s'", agent_id, exc_info=True)
+
+
+def _apply_agent_scope_to_workspace(workspace_info: dict[str, Any], tool_specs: tuple) -> None:
+    """Show the QDM tools on a served agent's workspace, hide them everywhere else.
+
+    The host bridges plugin tools into every workspace, so hiding them here is
+    what stops the runtime-hook gate from leaving a visible-but-broken
+    ``qdm_query`` in an unrelated agent's menu.
+    """
     workspace = _workspace_from_info(workspace_info)
     if workspace is None:
         return
     tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
     if tool_registry is None:
+        return
+    agent_id = workspace_info.get("agent_id")
+    names = tuple(str(spec[0]) for spec in tool_specs)
+    workspace_dir = workspace_info.get("workspace_dir") or getattr(workspace, "workspace_dir", "")
+    if not _agent_scope_allows(agent_id):
+        for tool_name, *_unused in tool_specs:
+            try:
+                if tool_name in tool_registry and hasattr(tool_registry, "unregister"):
+                    tool_registry.unregister(tool_name)
+            except (TypeError, ValueError):
+                pass
+        _sync_registered_tool_entries(agent_id, workspace_dir, names, False)
         return
     for tool_name, tool_func, enabled, description, _icon in tool_specs:
         descriptor = _tool_descriptor_for(tool_name, tool_func, enabled, description)
@@ -134,10 +243,26 @@ def _reinject_tools_into_workspace(workspace_info: dict[str, Any], tool_specs: t
             tool_registry.register(descriptor)
         except (TypeError, ValueError):
             pass
+    _sync_registered_tool_entries(agent_id, workspace_dir, names, True)
+
+
+def _apply_agent_scope_to_existing_workspaces(tool_specs: tuple) -> None:
+    """Apply the activation scope to workspaces created before plugin startup."""
+    try:
+        from qwenpaw.plugins.registry import PluginRegistry
+
+        manager = PluginRegistry().get_workspace_manager()
+        workspaces = dict(getattr(manager, "agents", None) or {}) if manager is not None else {}
+    except Exception:
+        logger.warning("QDM agent scope could not sweep existing workspaces")
+        return
+    for agent_id, workspace in workspaces.items():
+        _apply_agent_scope_to_workspace({"agent_id": agent_id, "workspace": workspace}, tool_specs)
 
 
 _LEGACY_RELOAD_BRIDGE_STATE = "_qdm_harness_reload_bridge_state"
 _PLUGIN_ID = "qdm-harness-qwenpaw"
+_AGENT_SCOPE_HOOK_NAME = "qdm_harness_apply_agent_scope"
 
 
 async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[str, Any]) -> None:
@@ -149,7 +274,7 @@ async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[st
         if getattr(registration, "plugin_id", "") != _PLUGIN_ID:
             continue
         hook_name = str(getattr(registration, "hook_name", ""))
-        if not (hook_name.startswith(runtime_prefix) or hook_name == "qdm_harness_reinject_tools"):
+        if not (hook_name.startswith(runtime_prefix) or hook_name == _AGENT_SCOPE_HOOK_NAME):
             continue
         callback = registration.callback
         result = callback(workspace_info)
@@ -276,22 +401,29 @@ class QdmHarnessQwenPawPlugin:
         if callable(register_ws_hook):
             try:
                 register_ws_hook(
-                    hook_name="qdm_harness_reinject_tools",
-                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    hook_name=_AGENT_SCOPE_HOOK_NAME,
+                    callback=lambda workspace_info: _apply_agent_scope_to_workspace(workspace_info, tool_specs),
                     priority=90,
                     reload_safe=True,
                 )
             except TypeError:
                 # QwenPaw 2.1.x 的 workspace_created 钩子没有 reload_safe 参数。
                 register_ws_hook(
-                    hook_name="qdm_harness_reinject_tools",
-                    callback=lambda workspace_info: _reinject_tools_into_workspace(workspace_info, tool_specs),
+                    hook_name=_AGENT_SCOPE_HOOK_NAME,
+                    callback=lambda workspace_info: _apply_agent_scope_to_workspace(workspace_info, tool_specs),
                     priority=90,
                 )
         else:
             logger.warning("QwenPaw host lacks register_workspace_created_hook(); qdm tools may disappear after plugin hot-reload")
         register_startup_hook = getattr(api, "register_startup_hook", None)
         if callable(register_startup_hook):
+            # Priority 90 runs after the host has bridged plugin tools into every
+            # workspace (50) and registered runtime hooks (65).
+            register_startup_hook(
+                hook_name=f"{_AGENT_SCOPE_HOOK_NAME}_startup",
+                callback=lambda: _apply_agent_scope_to_existing_workspaces(tool_specs),
+                priority=90,
+            )
             register_startup_hook(
                 hook_name="qdm_harness_install_reload_bridge",
                 callback=_install_legacy_reload_bridge,

@@ -27,12 +27,13 @@ from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query
 from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result
 from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _sanitize_embedded_context_instruction, request_context, session_key
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
-from qdm_harness_qwenpaw_test.qdm_config import ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config
+from qdm_harness_qwenpaw_test.qdm_config import AgentScope, ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config, parse_agent_scope, DEFAULT_AGENT_SCOPE_PATTERNS
 from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
 from qdm_harness_qwenpaw_test.plugin import QdmHarnessQwenPawPlugin
 from qdm_harness_qwenpaw_test.qdm_runtime_hooks import QdmRequesterContextHook, QdmRequesterIdentityHook, QwenPawHarnessContextHook, UNAUTHORIZED_SESSION_CONSTRAINT, hook_factories, requester_context
 from qwenpaw.runtime.hooks import HookAction, HookBase, HookRegistry
 from qwenpaw.runtime.phases import Phase
+from qwenpaw.runtime.tool_registry import ToolDescriptor, ToolRegistry
 from agentscope.message import ToolResultState
 
 
@@ -126,15 +127,20 @@ class _Request:
 
 
 class _AgentContext(_Context):
-    def __init__(self, channel: str, channel_meta: dict[str, object], text: str = "你好") -> None:
+    def __init__(self, channel: str, channel_meta: dict[str, object], text: str = "你好", agent_id: str = "qdmDataAgent") -> None:
         super().__init__(text)
-        self.agent_id = "qdmDataAgent"
+        self.agent_id = agent_id
         self.request = _Request(channel, channel_meta)
         self.extras: dict[str, object] = {}
         self.injected: list[tuple[str, int, str]] = []
 
     def inject_context(self, content: str, *, priority: int, source: str) -> None:
         self.injected.append((content, priority, source))
+
+
+def _scoped_config(patterns: tuple[str, ...], **extra: object) -> types.SimpleNamespace:
+    """A plugin config stub whose only job is the agent activation scope."""
+    return types.SimpleNamespace(agent_scope=AgentScope(patterns), qdm_agent_id=patterns[0] if patterns else "", **extra)
 
 
 class IdentityTests(unittest.TestCase):
@@ -331,6 +337,185 @@ class AuthorizationTests(unittest.TestCase):
             config.write_text(json.dumps({"schema_version": 1, "runtime_dir": str(link), "qdm_agent_id": "qdmDataAgent", "user_id_display_mode": "off"}), encoding="utf-8")
             with self.assertRaises(ConfigError):
                 load_config(config)
+
+
+class AgentScopeTests(unittest.TestCase):
+    """The activation scope decides which agents get hooks *and* get the tools."""
+
+    def test_default_scope_is_the_prefix_convention_alone(self) -> None:
+        scope = AgentScope()
+        self.assertEqual(scope.patterns, DEFAULT_AGENT_SCOPE_PATTERNS)
+        self.assertTrue(scope.allows("harness-data-east"))
+        self.assertFalse(scope.allows("default"), "the host's shared default agent must be opted in explicitly")
+        self.assertFalse(scope.allows("qdmDataAgent"))
+        self.assertFalse(scope.allows(""))
+        self.assertFalse(scope.allows(None))
+
+    def test_matching_stays_case_sensitive_on_every_platform(self) -> None:
+        self.assertFalse(AgentScope(("harness-data-*",)).allows("HARNESS-DATA-EAST"))
+
+    def test_named_entry_differs_from_a_wildcard_sweep(self) -> None:
+        wildcard = AgentScope(("*",))
+        self.assertTrue(wildcard.allows("default"))
+        self.assertFalse(wildcard.allows_by_exact_name("default"))
+        named = AgentScope(("default", "harness-data-*"))
+        self.assertTrue(named.allows_by_exact_name("default"))
+
+    def test_absent_enabled_agents_falls_back_to_legacy_id_or_default(self) -> None:
+        self.assertEqual(parse_agent_scope(None, "qdmDataAgent").patterns, ("qdmDataAgent",))
+        self.assertEqual(parse_agent_scope(None).patterns, DEFAULT_AGENT_SCOPE_PATTERNS)
+
+    def test_legacy_id_merges_into_an_explicit_scope(self) -> None:
+        scope = parse_agent_scope(["harness-data-*"], "qdmDataAgent")
+        self.assertEqual(scope.patterns, ("harness-data-*", "qdmDataAgent"))
+        self.assertTrue(scope.allows("qdmDataAgent"))
+        self.assertTrue(scope.allows("harness-data-north"))
+        self.assertEqual(parse_agent_scope(["qdmDataAgent"], "qdmDataAgent").patterns, ("qdmDataAgent",))
+
+    def test_explicit_empty_scope_is_a_kill_switch(self) -> None:
+        scope = parse_agent_scope([])
+        self.assertEqual(scope.patterns, ())
+        self.assertFalse(scope.allows("harness-data-east"))
+
+    def test_invalid_patterns_fail_closed(self) -> None:
+        for bad in (["has space"], ["a/b"], ["a\\b"], ["-lead"], ["[abc]*"], [""], ["x" * 65], ["harness-data-*", "harness-data-*", "has space"]):
+            with self.assertRaises(ConfigError, msg=str(bad)):
+                parse_agent_scope(bad)
+        for bad_shape in ("harness-data-*", 1, [1], {"a": 1}, [None]):
+            with self.assertRaises(ConfigError, msg=str(bad_shape)):
+                parse_agent_scope(bad_shape)
+        with self.assertRaises(ConfigError):
+            parse_agent_scope([f"harness-data-{index}" for index in range(33)])
+
+    def test_legacy_runtime_config_accepts_enabled_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp) / "runtime"
+            runtime.mkdir()
+            config = Path(temp) / "plugin-config.json"
+            config.write_text(json.dumps({
+                "schema_version": 1, "runtime_dir": str(runtime),
+                "qdm_agent_id": "qdmDataAgent", "user_id_display_mode": "off",
+                "enabled_agents": ["harness-data-*"],
+            }), encoding="utf-8")
+            loaded = load_config(config)
+            self.assertEqual(loaded.enabled_agents, ("harness-data-*", "qdmDataAgent"))
+            self.assertTrue(loaded.agent_scope.allows("harness-data-east"))
+            self.assertTrue(loaded.agent_scope.allows("qdmDataAgent"))
+
+    def test_reference_config_without_legacy_agent_id_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "instance" / "config").mkdir(parents=True)
+            (root / "secrets").mkdir()
+            (root / "plugin").mkdir()
+            metric = root / "metric"
+            metric.write_bytes(b"x")
+            settings = root / "instance" / "config" / "settings.json"
+            settings.write_text(json.dumps({"schemaVersion": 1, "metricCliPath": str(metric)}), encoding="utf-8")
+            context_file = root / "instance" / "context.json"
+            context_file.write_text(json.dumps({
+                "schemaVersion": 1, "host": "qwenpaw", "pluginRoot": str(root / "plugin"),
+                "resourceRoot": str(root / "instance"), "dataRoot": str(root / "data"),
+                "secretRoot": str(root / "secrets"), "configPath": str(settings),
+            }), encoding="utf-8")
+            config = root / "plugin-config.json"
+            config.write_text(json.dumps({
+                "schema_version": 2, "plugin_id": "qdm-harness-qwenpaw",
+                "root_context_path": str(context_file), "secret_ref": str(root / "secrets"),
+                "user_id_display_mode": "off",
+            }), encoding="utf-8")
+            loaded = load_config(config)
+            self.assertEqual(loaded.qdm_agent_id, "")
+            self.assertEqual(loaded.enabled_agents, DEFAULT_AGENT_SCOPE_PATTERNS)
+
+    def test_configured_scope_gates_every_runtime_hook(self) -> None:
+        """An out-of-scope agent must see no QDM behaviour at all, even with a
+        resolvable channel user."""
+        config = _scoped_config(("harness-data-*",), session_secret_file=Path("missing.secret"), data_harness_cli=Path("missing-cli"))
+        for factory in (QdmRequesterIdentityHook, QdmRequesterContextHook, QwenPawHarnessContextHook):
+            outside = _AgentContext("wecom", {"is_group": False, "wecom_sender_id": "zhangsan"}, agent_id="coding")
+            with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
+                result = asyncio.run(factory().run(outside))
+            self.assertIsNone(result.payload, factory.__name__)
+            self.assertEqual(outside.injected, [], factory.__name__)
+            self.assertNotIn("qdm_harness_requester_token", outside.extras, factory.__name__)
+            self.assertEqual(outside.request.request_context, {}, factory.__name__)
+
+        # Positive control: the same request on an in-scope agent does bind.
+        inside = _AgentContext("wecom", {"is_group": False, "wecom_sender_id": "zhangsan"}, agent_id="harness-data-east")
+        with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
+            asyncio.run(QdmRequesterIdentityHook().run(inside))
+        self.assertIn("qdm_requester", inside.request.request_context)
+
+    def test_wildcard_match_on_the_shared_default_agent_warns_once(self) -> None:
+        registry = ToolRegistry()
+        workspace = types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=registry))
+        info = {"agent_id": "default", "workspace": workspace}
+        specs = (("qdm_query", lambda: None, True, "d", ""),)
+        PLUGIN_MODULE._SHARED_AGENT_WARNINGS.clear()
+        try:
+            with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("*",))):
+                with self.assertLogs("qwenpaw.plugins.qdm_harness", level="WARNING") as logs:
+                    PLUGIN_MODULE._apply_agent_scope_to_workspace(info, specs)
+                    PLUGIN_MODULE._apply_agent_scope_to_workspace(info, specs)
+            self.assertIn("qdm_query", registry.names())
+            self.assertEqual(sum("built-in 'default' agent" in line for line in logs.output), 1)
+        finally:
+            PLUGIN_MODULE._SHARED_AGENT_WARNINGS.clear()
+
+    def test_out_of_scope_agent_has_its_stale_tool_entry_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            agent_file = workspace / "agent.json"
+            agent_file.write_text(json.dumps({"name": "Default", "tools": {"builtin_tools": {
+                "qdm_query": {"name": "qdm_query", "enabled": True},
+                "web_search": {"name": "web_search", "enabled": True},
+            }}}), encoding="utf-8")
+            before = agent_file.stat().st_mode
+
+            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
+            data = json.loads(agent_file.read_text(encoding="utf-8"))
+            self.assertFalse(data["tools"]["builtin_tools"]["qdm_query"]["enabled"])
+            self.assertTrue(data["tools"]["builtin_tools"]["web_search"]["enabled"], "must not touch other tools")
+            self.assertTrue(data["name"] == "Default", "must preserve the rest of agent.json")
+            self.assertEqual(agent_file.stat().st_mode, before, "must preserve the file mode")
+
+            # Already correct: the file is left untouched, so no rewrite churn.
+            agent_file.write_text(agent_file.read_text(encoding="utf-8") + "  \n", encoding="utf-8")
+            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
+            self.assertTrue(agent_file.read_text(encoding="utf-8").endswith("  \n"))
+
+            # An entry that omits ``enabled`` reads as enabled, matching the host gate.
+            agent_file.write_text(json.dumps({"tools": {"builtin_tools": {"qdm_scope_summary": {"name": "qdm_scope_summary"}}}}), encoding="utf-8")
+            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_scope_summary",), False)
+            self.assertFalse(json.loads(agent_file.read_text(encoding="utf-8"))["tools"]["builtin_tools"]["qdm_scope_summary"]["enabled"])
+
+    def test_tool_entry_sync_never_creates_a_missing_agent_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            missing = Path(temp) / "nope"
+            missing.mkdir()
+            PLUGIN_MODULE._sync_registered_tool_entries("coding", missing, ("qdm_query",), False)
+            self.assertFalse((missing / "agent.json").exists())
+            PLUGIN_MODULE._sync_registered_tool_entries("coding", "", ("qdm_query",), False)
+            PLUGIN_MODULE._sync_registered_tool_entries("coding", None, ("qdm_query",), False)
+
+    def test_a_symlinked_agent_file_is_not_written_through(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp) / "outside.json"
+            outside.write_text(json.dumps({"tools": {"builtin_tools": {"qdm_query": {"enabled": True}}}}), encoding="utf-8")
+            workspace = Path(temp) / "ws"
+            workspace.mkdir()
+            (workspace / "agent.json").symlink_to(outside)
+            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
+            self.assertTrue(json.loads(outside.read_text(encoding="utf-8"))["tools"]["builtin_tools"]["qdm_query"]["enabled"])
+
+    def test_an_unusable_config_hides_the_tools(self) -> None:
+        registry = ToolRegistry()
+        registry.register(ToolDescriptor(name="qdm_query", func=lambda: None, description=""))
+        workspace = types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=registry))
+        with patch.object(PLUGIN_MODULE, "load_config", side_effect=ConfigError("plugin config is unavailable")):
+            PLUGIN_MODULE._apply_agent_scope_to_workspace({"agent_id": "harness-data-east", "workspace": workspace}, (("qdm_query", lambda: None, True, "d", ""),))
+        self.assertEqual(registry.names(), [])
 
 
 class ToolBoundaryTests(unittest.TestCase):
@@ -531,8 +716,8 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertEqual(result.state, ToolResultState.ERROR)
         self.assertIn("QDM_CLI_UNAVAILABLE", result.content[0].text)
 
-    def test_reload_safe_hook_reinjects_tools_into_replacement_workspace(self) -> None:
-        from qwenpaw.runtime.tool_registry import ToolRegistry
+    def test_reload_safe_hook_applies_agent_scope_to_replacement_workspace(self) -> None:
+        from qwenpaw.runtime.tool_registry import ToolDescriptor, ToolRegistry
 
         class Api:
             def __init__(self) -> None:
@@ -554,17 +739,24 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertTrue(api.workspace_hooks[0]["reload_safe"])
 
         # A replacement workspace (zero-downtime reload) starts with an empty
-        # ToolRegistry; the reload-safe hook must restore the qdm tools.
-        registry = ToolRegistry()
-        workspace = types.SimpleNamespace(
-            plugins=types.SimpleNamespace(tool_registry=registry),
-        )
-        api.workspace_hooks[0]["callback"](  # type: ignore[operator]
-            {"agent_id": "default", "workspace_dir": "/tmp", "workspace": workspace},
-        )
-        self.assertIn("qdm_query", registry.names())
-        self.assertIn("qdm_scope_summary", registry.names())
-        self.assertTrue(registry.get("qdm_query").async_execution)
+        # ToolRegistry; the reload-safe hook must restore the qdm tools, but only
+        # for an agent inside the configured scope.
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("harness-data-*",))):
+            served = ToolRegistry()
+            api.workspace_hooks[0]["callback"](  # type: ignore[operator]
+                {"agent_id": "harness-data-east", "workspace_dir": "/tmp", "workspace": types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=served))},
+            )
+            self.assertIn("qdm_query", served.names())
+            self.assertIn("qdm_scope_summary", served.names())
+            self.assertTrue(served.get("qdm_query").async_execution)
+
+            other = ToolRegistry()
+            other.register(ToolDescriptor(name="qdm_query", func=lambda: None, description=""))
+            other.register(ToolDescriptor(name="qdm_scope_summary", func=lambda: None, description=""))
+            api.workspace_hooks[0]["callback"](  # type: ignore[operator]
+                {"agent_id": "default", "workspace_dir": "/tmp", "workspace": types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=other))},
+            )
+            self.assertEqual(other.names(), [])
 
     def test_qwenpaw_21_reload_bridge_restores_identity_hooks_and_tools(self) -> None:
         from qwenpaw.runtime.hooks import HookRegistry
@@ -619,7 +811,7 @@ class ToolBoundaryTests(unittest.TestCase):
                 target.plugins.hook_registry.register(factory())  # type: ignore[union-attr]
 
         def restore_tools(workspace_info: dict[str, object]) -> None:
-            PLUGIN_MODULE._reinject_tools_into_workspace(workspace_info, tool_specs)
+            PLUGIN_MODULE._apply_agent_scope_to_workspace(workspace_info, tool_specs)
 
         unrelated_called: list[bool] = []
         registry = LegacyRegistry(manager, [
@@ -630,7 +822,7 @@ class ToolBoundaryTests(unittest.TestCase):
             ),
             types.SimpleNamespace(
                 plugin_id="qdm-harness-qwenpaw",
-                hook_name="qdm_harness_reinject_tools",
+                hook_name="qdm_harness_apply_agent_scope",
                 callback=restore_tools,
             ),
             types.SimpleNamespace(
@@ -642,7 +834,8 @@ class ToolBoundaryTests(unittest.TestCase):
 
         self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
         self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
-        self.assertTrue(asyncio.run(manager.reload_agent("default")))
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("default",))):
+            self.assertTrue(asyncio.run(manager.reload_agent("default")))
         self.assertEqual(manager.reload_calls, 1)
         self.assertEqual(unrelated_called, [])
         pre_build_names = {
@@ -698,7 +891,7 @@ class ToolBoundaryTests(unittest.TestCase):
         QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
         self.assertEqual(len(api.workspace_hooks), 1)
         self.assertNotIn("reload_safe", api.workspace_hooks[0])
-        self.assertEqual(api.workspace_hooks[0]["hook_name"], "qdm_harness_reinject_tools")
+        self.assertEqual(api.workspace_hooks[0]["hook_name"], "qdm_harness_apply_agent_scope")
 
     def test_qdm_tools_reject_an_unbound_console_request_before_reading_config(self) -> None:
         token = requester_context.set(None)
@@ -775,7 +968,7 @@ class ConsoleChannelTests(unittest.TestCase):
         self.assertEqual(payload["version"], "0.1.6")
 
     def test_pre_execute_rebinds_requester_from_current_channel_message(self) -> None:
-        config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent", session_secret_file=Path("missing.secret"))
+        config = _scoped_config(("qdmDataAgent",), session_secret_file=Path("missing.secret"))
         ctx = _AgentContext("wecom", {"is_group": True, "wecom_sender_id": "user-1"})
         with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
             async def exercise():
@@ -791,7 +984,7 @@ class ConsoleChannelTests(unittest.TestCase):
         self.assertEqual(second.user_id, "user-2")
         self.assertEqual(ctx.request.request_context["qdm_requester"]["user_id"], "user-2")
     def test_console_allows_normal_reply_but_binds_no_qdm_requester(self) -> None:
-        config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent")
+        config = _scoped_config(("qdmDataAgent",))
         ctx = _AgentContext("console", {})
         with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
             asyncio.run(QdmRequesterIdentityHook().run(ctx))
@@ -802,7 +995,7 @@ class ConsoleChannelTests(unittest.TestCase):
             self.assertIsNone(requester_context.get())
 
     def test_unmentioned_group_remains_blocked_before_model_or_cli(self) -> None:
-        config = types.SimpleNamespace(qdm_agent_id="qdmDataAgent")
+        config = _scoped_config(("qdmDataAgent",))
         ctx = _AgentContext("feishu", {"is_group": True, "feishu_sender_id": "ou_123"})
         with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
             asyncio.run(QdmRequesterIdentityHook().run(ctx))

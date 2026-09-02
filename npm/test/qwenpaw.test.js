@@ -129,7 +129,8 @@ test("qwenpaw setup installs the native plugin and builds the reference config",
     assert.equal(config.plugin_id, "qdm-harness-qwenpaw");
     assert.equal(config.plugin_version, "0.1.6");
     assert.equal(config.root_context_path, path.join(instance, "context.json"));
-    assert.deepEqual(config.enabled_agents, ["qdmDataAgent"]);
+    assert.deepEqual(config.enabled_agents, ["harness-data-*"], "setup must default to the prefix convention");
+    assert.equal("qdm_agent_id" in config, false, "the single-value field is no longer written");
     assert.equal(config.secret_ref, secrets);
     assert.ok(existsSync(path.join(secrets, "auth.blob")), "secret_ref dir must contain auth.blob");
   } finally {
@@ -185,6 +186,95 @@ test("qwenpaw setup --channel-auth-only authorizes via channel-auth.json without
     const config = JSON.parse(readFileSync(configFile, "utf8"));
     assert.equal(config.schema_version, 2);
     assert.equal(config.secret_ref, secrets, "reference config must point at the dir holding channel-auth.json");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("qwenpaw setup writes the agent scope from --enabled-agents patterns", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-scope-"));
+  try {
+    const source = stagePluginSource(root);
+    const python = writeFakePython(root);
+    const metric = writeMetricStub(root);
+    const wikis = path.join(root, "wikis");
+    seedWikis(wikis);
+    const instance = path.join(root, "instance");
+    const project = path.join(root, "project");
+    const secrets = path.join(root, "secrets");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(secrets, { recursive: true });
+    const configFile = path.join(root, "plugin-config.json");
+    // Each run gets its own QwenPaw home: the fake installer copies the plugin
+    // tree in and refuses to overwrite an existing target.
+    const baseArgs = (home) => [
+      "qwenpaw", "setup",
+      "--source", source,
+      "--qwenpaw-python", python,
+      "--qwenpaw-working-dir", path.join(root, home),
+      "--instance-root", instance,
+      "--data-root", path.join(root, "data"),
+      "--workspace-root", project,
+      "--workspace-allowlist", project,
+      "--wikis-source", wikis,
+      "--metric-cli", metric,
+      "--channel-auth-only",
+      "--plugin-config-file", configFile,
+      "--secret-dir", secrets,
+      "--json",
+    ];
+
+    const patterns = runCli([...baseArgs("home-patterns"), "--enabled-agents", "harness-data-*", "--enabled-agents", "default"], repoRoot);
+    assert.equal(patterns.status, 0, patterns.stderr || patterns.stdout);
+    assert.deepEqual(JSON.parse(readFileSync(configFile, "utf8")).enabled_agents, ["harness-data-*", "default"]);
+
+    const single = runCli([...baseArgs("home-single"), "--agent-id", "qdmDataAgent"], repoRoot);
+    assert.equal(single.status, 0, single.stderr || single.stdout);
+    assert.deepEqual(JSON.parse(readFileSync(configFile, "utf8")).enabled_agents, ["qdmDataAgent"]);
+
+    // Re-running setup without a scope flag must not re-scope a working install.
+    const carried = runCli(baseArgs("home-carried"), repoRoot);
+    assert.equal(carried.status, 0, carried.stderr || carried.stdout);
+    assert.deepEqual(JSON.parse(readFileSync(configFile, "utf8")).enabled_agents, ["qdmDataAgent"]);
+
+    const rejected = runCli([...baseArgs("home-rejected"), "--enabled-agents", "has space"], repoRoot);
+    assert.notEqual(rejected.status, 0, "an invalid pattern must fail setup");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function seedQwenPawHome(root, profiles) {
+  const working = path.join(root, "qwenpaw-home");
+  mkdirSync(working, { recursive: true });
+  writeFileSync(path.join(working, "config.json"), JSON.stringify({ agents: { profiles, active_agent: Object.keys(profiles)[0] } }), "utf8");
+  return working;
+}
+
+test("qwenpaw doctor agent-scope fails when no host agent matches the scope", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-scope-doctor-"));
+  try {
+    const working = seedQwenPawHome(root, { default: { id: "default" }, a3f9Kq: { id: "a3f9Kq" } });
+    const configFile = path.join(root, "plugin-config.json");
+    const writeScope = (patterns) => writeFileSync(configFile, JSON.stringify({
+      schema_version: 2, plugin_id: "qdm-harness-qwenpaw", plugin_version: "0.1.6",
+      root_context_path: path.join(root, "missing", "context.json"),
+      enabled_agents: patterns, user_id_display_mode: "off",
+    }, null, 2) + "\n");
+    const scopeOf = (extraArgs) => JSON.parse(runCli(["qwenpaw", "doctor", "--plugin-config-file", configFile, "--json", ...extraArgs], repoRoot).stdout)
+      .checks.find((check) => check.name === "agent-scope");
+
+    writeScope(["harness-data-*"]);
+    const mismatch = scopeOf(["--qwenpaw-working-dir", working]);
+    assert.equal(mismatch.ok, false, "an install that activates no agent must be reported as a failure");
+    assert.match(mismatch.detail, /matched=none/);
+    assert.match(mismatch.detail, /agents=a3f9Kq,default/);
+
+    writeScope(["harness-data-*", "default"]);
+    assert.equal(scopeOf(["--qwenpaw-working-dir", working]).ok, true);
+
+    // No working dir: nothing to compare against, so the check must not block.
+    assert.equal(scopeOf(["--qwenpaw-working-dir", path.join(root, "absent")]).ok, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

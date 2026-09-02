@@ -29,11 +29,16 @@ UNAUTHORIZED_SESSION_CONSTRAINT = (
 
 
 def _config_for_agent(ctx: Any) -> PluginConfig | None:
+    """Return the plugin config when *ctx* targets an agent we serve.
+
+    The host registers these hooks in every workspace, so this is the single
+    activation predicate shared with the tool-visibility sweep in ``plugin``.
+    """
     try:
         config = load_config()
     except ConfigError:
         return None
-    return config if getattr(ctx, "agent_id", "") == config.qdm_agent_id else None
+    return config if config.agent_scope.allows(getattr(ctx, "agent_id", "")) else None
 
 
 class QdmRequesterIdentityHook(HookBase):

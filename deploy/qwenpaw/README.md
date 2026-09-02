@@ -107,3 +107,35 @@ docker exec qwenpaw date
 > `TZ` 把它对齐(仅修正未被人工设置过的默认值,你在控制台/接口里改过的时区会保留)。
 > 这一步影响的是相对日期解析:未对齐时,北京时间 00:00–08:00 之间 `get_current_time`
 > 会返回前一天,"昨天"会再往前错一天。
+
+## ⑤ QDM Agent 的作用域
+
+QwenPaw 会把插件的运行时钩子和工具注入到**每一个** Agent 的 workspace,所以插件自己按
+Agent ID 收窄。镜像里写死的作用域是:
+
+```text
+enabled_agents = ["harness-data-*", "default"]
+                 ↑ 约定的专用 Agent    ↑ 本镜像使用内置 Agent,显式点名
+```
+
+对应到运维:
+
+- 本镜像开箱可用——渠道绑在 `default` 上即可,`default` 是镜像里显式声明的,不是隐式例外。
+- 想在同一实例上再开一个 QDM 入口:新建 Agent 时把 **ID**(不是显示名)填成 `harness-data-xxx`。
+  ID 创建后不可修改;留空会让宿主生成随机短 UUID,插件不会激活。
+- 复制或派生出的 Agent 拿到的是随机 ID,不会激活;要多个入口请逐个新建并手填 ID。
+- 想收紧(不允许 `default`):编辑容器内 `/etc/qdm/qwenpaw/plugin-config.json` 的
+  `enabled_agents`,去掉 `"default"` 后重启容器。
+
+确认作用域真的命中了某个 Agent(`matched=none` 表示插件处于"装了但谁都不服务"的状态):
+
+```bash
+docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data \
+  qwenpaw doctor \
+  --plugin-root /app/working/plugins/qdm-harness-qwenpaw \
+  --plugin-config-file /etc/qdm/qwenpaw/plugin-config.json \
+  --qwenpaw-working-dir /app/working --json | grep -A3 '"agent-scope"'
+```
+
+未命中时 `qdm_query` 工具不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
+若配置里的作用域不可用,插件按 fail-closed 处理,同样不注册工具、不注入上下文。

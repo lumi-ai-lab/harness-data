@@ -121,6 +121,10 @@ export async function initializeQwenPawDev() {
     "--auth-user-id", DEFAULT_AUTH_USER_ID,
     "--secret-dir", SECRET_DIR,
     "--plugin-config-file", path.join(WORKING_DIR, "plugin-config.json"),
+    // The development instance talks to QwenPaw's built-in agent, so opt it in
+    // explicitly — the plugin's own default is the `harness-data-*` convention.
+    "--enabled-agents", "harness-data-*",
+    "--enabled-agents", "default",
     "--json",
   ];
   const setup = run(process.execPath, [path.join(repoRoot, "npm", "bin", "harness-data.js"), ...setupArgs], { cwd: PROJECT_ROOT });
@@ -129,7 +133,13 @@ export async function initializeQwenPawDev() {
   console.log("[4/4] 验证插件实例");
   const doctor = run(
     process.execPath,
-    [path.join(repoRoot, "npm", "bin", "harness-data.js"), "qwenpaw", "doctor", "--json", "--plugin-config-file", path.join(WORKING_DIR, "plugin-config.json")],
+    [
+      path.join(repoRoot, "npm", "bin", "harness-data.js"), "qwenpaw", "doctor", "--json",
+      "--plugin-config-file", path.join(WORKING_DIR, "plugin-config.json"),
+      // Pin the agent list to this isolated home; the default would read the
+      // developer's own ~/.qwenpaw.
+      "--qwenpaw-working-dir", WORKING_DIR,
+    ],
     { cwd: PROJECT_ROOT, allowFailure: true },
   );
   const report = JSON.parse(doctor.stdout || "{}");
