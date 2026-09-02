@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
-// Build the QwenPaw native Plugin ZIP from the repository source tree.
+// 用途: 把仓库源码打包成 QwenPaw 原生插件 ZIP,供用户导入 QwenPaw 使用
+// (默认输出: dist/harness-data-qwenpaw-plugin-v<version>.zip)。
 //
-// The ZIP follows the QwenPaw plugin contract (plugin.json at the archive
-// root) and ships only executable plugin code: adapter sources, skills, the
-// bundled JS packages under dist/, bootstrap/cli-manifest.json and a
-// generated plugin-manifest.json binding the Harness core.  Private wikis,
-// metric-cli, secrets, state, config and tests are intentionally excluded;
-// setup downloads/creates them into the instanceRoot after install.
+// ZIP 遵循 QwenPaw 插件契约(压缩包根目录必须有 plugin.json),只包含可执行的
+// 插件代码: 适配器源码、skills、dist/ 下的打包 JS 包、bootstrap/cli-manifest.json,
+// 以及绑定 Harness 核心的 plugin-manifest.json。私有 wikis、metric-cli、secrets、
+// state、config 和 tests 有意排除在外;安装后由 setup 下载/创建到 instanceRoot 中。
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
