@@ -46,19 +46,33 @@ export QDM_CHANNEL_SECRET_DIR=<密钥目录>
 export QWENPAW_MODEL_API_KEY=<模型API Key>
 ```
 
-再在密钥目录下放置渠道授权文件(唯一需要准备的密钥文件), 并设置属主与权限:
+把渠道授权文件放到密钥目录, 只要求"容器能读到", 不要求改属主:
 
 ```bash
-chown 10001:10001 "$QDM_CHANNEL_SECRET_DIR/channel-auth.json" && chmod 600 "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
+chmod 644 "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
+namei -l "$QDM_CHANNEL_SECRET_DIR"   # 每一级目录都要有 o+x, 否则容器内读不到
 ```
 
+> `channel-auth.json` 可以由导出任务(如 ztadmin 的 cron)拥有并保持每日重写, 只要权限是 `0644`
+> (或 `0640` 且容器 GID 能组读)。`run_docker.sh` 会在启动前以容器 UID 实测一次可读性, 读不到就直接报错退出。
+> `session-hmac.secret` 不需要准备, 首次运行由 `run_docker.sh` 生成并 chown 给容器 UID。
+
 > 密钥目录是宿主机目录, 运行 `run_docker.sh` 时自动只读挂载到容器 `/run/secrets`, 无需手动挂载。
+> 注意是**整个目录**挂进去: 建议用一个只放上述文件的专用目录, 别把无关的私钥/配置也放进去。
 
 ## ④ 运行并验证(服务器)
 
 ```bash
 deploy/qwenpaw/run_docker.sh
 docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即成功
+```
+
+> `healthy` 只代表 webserver 活着(`/healthz`), **不代表密钥可用**。密钥读不到时容器照样 healthy,
+> 表现是企微里回"QDM 渠道授权不可用或被拒绝"或"Harness 上下文不可用"。确认密钥本身:
+
+```bash
+docker exec qwenpaw python -c 'import os;print([os.access("/run/secrets/"+f, os.R_OK) for f in ("channel-auth.json","session-hmac.secret")])'
+docker logs --since 10m qwenpaw 2>&1 | grep -E 'qdm_query_failed|qdm_harness_context_failed' || echo "无授权/上下文失败"
 ```
 
 脚本已内置以下参数, 无需额外配置:

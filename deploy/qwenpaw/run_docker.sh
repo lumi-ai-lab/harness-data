@@ -21,9 +21,10 @@ port=${QWENPAW_PORT:-8088}
 # 宿主机绑定地址:默认仅 127.0.0.1(不对局域网/公网暴露)。需要外部直连时
 # export QWENPAW_BIND=0.0.0.0 再跑本脚本;暴露后请自行用防火墙/反代限制来源。
 bind_addr=${QWENPAW_BIND:-127.0.0.1}
-# 容器运行用户 uid:必须与挂载进来的密钥文件属主一致,镜像内置默认 10001
+# 容器运行用户 uid:决定容器内进程能读到哪些密钥文件,镜像内置默认 10001
 runtime_uid=${QWENPAW_UID:-10001}
-# 容器运行用户 gid:同上,属主不符会导致容器内进程读不到密钥文件
+# 容器运行用户 gid:同上;密钥文件属主可以是别的账号(如 cron 的导出账号),
+# 只要权限让该 UID/GID 可读即可,下方会实测一次
 runtime_gid=${QWENPAW_GID:-10001}
 # 渠道密钥目录:只读挂载到容器 /run/secrets,必须存放 channel-auth.json
 secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
@@ -34,7 +35,8 @@ mem_limit=${QWENPAW_MEM_LIMIT:-8g}
 # 容器时区:IANA 名称,同时用于修正持久卷里 config.json 的 user_timezone
 container_tz=${QWENPAW_TZ:-Asia/Shanghai}
 
-# 渠道授权文件:须为 0600 或更严格的普通文件(非软链),缺失即报错退出
+# 渠道授权文件:由导出任务(可能是另一个账号)每日重写,属主不限,
+# 但必须对上面的容器运行 UID/GID 可读(推荐 0644),缺失即报错退出
 auth_file="$secret_dir/channel-auth.json"
 # 会话 HMAC 密钥文件:派生企微会话 key 的长期签名密钥,不存在时由下方生成
 hmac_file="$secret_dir/session-hmac.secret"
@@ -47,12 +49,27 @@ if [ ! -f "$hmac_file" ]; then
   umask 077
   head -c 48 /dev/urandom > "$hmac_file"
   chmod 600 "$hmac_file"
-  # 与 channel-auth.json 保持相同属主,否则容器内进程读不到该文件
-  stat_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1"; }
-  stat_gid() { stat -c %g "$1" 2>/dev/null || stat -f %g "$1"; }
-  if ! chown "$(stat_uid "$auth_file"):$(stat_gid "$auth_file")" "$hmac_file" 2>/dev/null; then
-    echo "warning: cannot chown $hmac_file; ensure its owner matches the QwenPaw process uid/gid (${runtime_uid}:${runtime_gid})" >&2
+  # 该文件没有第二个写者,保持 0600 独占即可,只需让容器运行 UID/GID 成为属主。
+  # 无 chown 权限时放宽到 0644:保证容器读得到优先于收紧权限位。
+  if ! chown "${runtime_uid}:${runtime_gid}" "$hmac_file" 2>/dev/null; then
+    chmod 644 "$hmac_file"
+    echo "warning: cannot chown $hmac_file to ${runtime_uid}:${runtime_gid}; relaxed to 0644" >&2
   fi
+fi
+
+# 部署期以容器视角实测一次可读性。channel-auth.json 的属主现在可以是导出账号,
+# 单看权限位猜不到目录遍历位、UID 不匹配这类问题,直接以运行 UID 读一次最可靠。
+docker image inspect "${image}" >/dev/null 2>&1 \
+  || { echo "本地没有镜像 ${image},请先 docker load -i <镜像包>" >&2; exit 1; }
+if ! docker run --rm --platform linux/amd64 \
+    --entrypoint /bin/sh \
+    --user "${runtime_uid}:${runtime_gid}" \
+    -v "${secret_dir}:/run/secrets:ro" "${image}" \
+    -c 'test -r /run/secrets/channel-auth.json && test -r /run/secrets/session-hmac.secret' >/dev/null 2>&1; then
+  echo "密钥对容器运行 UID/GID ${runtime_uid}:${runtime_gid} 不可读: ${secret_dir}" >&2
+  echo "  channel-auth.json 属主不限,但需 chmod 644(或 0640 且容器 GID 能组读)" >&2
+  echo "  并确认 ${secret_dir} 每一级目录都有其他用户的遍历位 o+x" >&2
+  exit 1
 fi
 
 proxy=${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}
