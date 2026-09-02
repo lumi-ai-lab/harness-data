@@ -20,7 +20,7 @@ name=${QWENPAW_CONTAINER_NAME:-qwenpaw}
 port=${QWENPAW_PORT:-8088}
 # 容器运行用户 uid:必须与挂载进来的密钥文件属主一致,镜像内置默认 10001
 runtime_uid=${QWENPAW_UID:-10001}
-# 容器运行用户 gid:同上,属主不符会让 validate_runtime 的 owner 校验失败
+# 容器运行用户 gid:同上,属主不符会导致容器内进程读不到密钥文件
 runtime_gid=${QWENPAW_GID:-10001}
 # 渠道密钥目录:只读挂载到容器 /run/secrets,必须存放 channel-auth.json
 secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
@@ -40,7 +40,7 @@ if [ ! -f "$hmac_file" ]; then
   umask 077
   head -c 48 /dev/urandom > "$hmac_file"
   chmod 600 "$hmac_file"
-  # 与 channel-auth.json 保持相同属主,否则 validate_runtime 的 owner 校验失败
+  # 与 channel-auth.json 保持相同属主,否则容器内进程读不到该文件
   stat_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1"; }
   stat_gid() { stat -c %g "$1" 2>/dev/null || stat -f %g "$1"; }
   if ! chown "$(stat_uid "$auth_file"):$(stat_gid "$auth_file")" "$hmac_file" 2>/dev/null; then

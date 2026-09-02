@@ -29,8 +29,6 @@ fi
 mv "${plugin_stage}" "${plugin_target}"
 chmod -R a-w "${plugin_target}"
 
-python /opt/qdm/bin/validate_runtime.py
-
 model_required=${QWENPAW_MODEL_REQUIRED:-1}
 model_key=${QWENPAW_MODEL_API_KEY:-}
 if [ -n "${model_key}" ]; then

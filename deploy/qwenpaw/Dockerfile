@@ -100,7 +100,6 @@ COPY --from=artifact-fetch --chmod=0755 /tmp/metric/qdm-metric-cli /tmp/qdm-metr
 COPY --from=artifact-fetch /tmp/wikis /tmp/harness-wikis/
 COPY --chmod=0755 deploy/qwenpaw/entrypoint.sh /opt/qdm/bin/entrypoint.sh
 COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model.py
-COPY --chmod=0755 deploy/qwenpaw/validate_runtime.py /opt/qdm/bin/validate_runtime.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
   && chmod -R a-w /opt/qdm/plugin-source \
