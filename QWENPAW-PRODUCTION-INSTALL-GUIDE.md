@@ -43,6 +43,10 @@ harness-data qwenpaw setup \
   --secret-dir <敏感目录, channel-auth.json 所在, 默认 /run/secrets>
 ```
 
+> `--secret-dir` 里的 `channel-auth.json` 只要求对宿主上运行 QwenPaw 的 UID/GID 可读
+> (`0644`, 或同组 `0640`), 不要求属主一致: 由导出任务每天重写该文件的场景, 可以把该目录
+> 直接指向任务的产出目录, 不需要改属主。Docker 部署见 `deploy/qwenpaw/README.md` 步骤③。
+
 完成后插件通过引用模型 `plugin-config.json` 指向 Root Context(instanceRoot), 工作区不再存放
 任何 Harness 资源。
 

@@ -3,13 +3,14 @@
 The Linux bundle uses `/etc/qdm/qwenpaw/plugin-config.json`,
 `/run/secrets/channel-auth.json`, and `/run/secrets/session-hmac.secret`.
 Mount the runtime read-only at `/opt/qdm/harness-data-runtime` and mount the
-secret directory read-only. Run QwenPaw as the same non-root UID/GID that owns
-the two secret files. The files must be regular, non-symlink files with mode
-`0600`; the plugin rejects writable secret mounts, broad permissions, and
-non-executable runtime binaries.
+secret directory read-only. Both secret files must be regular, non-symlink
+files that the QwenPaw runtime UID/GID can read: `0644`, or `0640` with the
+runtime GID as group. Ownership does not have to match the runtime UID, so an
+export job running as another account can own `channel-auth.json` and rewrite
+it daily. Runtime binaries still need the owner execute bit.
 
-For a host-managed secret directory, run
-`prepare-qwenpaw-materials.sh /srv/qdm-secrets` before creating the container,
-then bind-mount that directory to `/run/secrets:ro`. The Linux tarball preserves
-the executable bits for `bin/data-harness-cli`, `bin/qdm-metric-cli`, and the
-preparation script.
+`session-hmac.secret` has no second writer, so `run_docker.sh` creates it with
+mode `0600` and chowns it to the runtime UID/GID. `deploy/qwenpaw/run_docker.sh`
+probes both files from inside the image as the runtime UID before starting the
+container and exits non-zero when either is unreadable; that check also covers
+a missing `o+x` traverse bit on any parent directory of the secret dir.
