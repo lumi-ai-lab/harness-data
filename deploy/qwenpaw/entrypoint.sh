@@ -47,9 +47,10 @@ chmod -R a-w "${plugin_target}"
 # binding are adopted here instead.
 python /opt/qdm/bin/ensure_qdm_agent.py
 
-# OfficeCLI 技能随镜像刷新到宿主 default 与每个 harness-data-* agent(持久卷
-# 升级、运行时新建的 agent 都由这一步幂等覆盖, 与 plugin 刷新同策略: 镜像版本为唯一真相)。
-python /opt/qdm/bin/seed_officecli_skills.py
+# 镜像托管技能(officecli-*、charts-cli)随镜像刷新到宿主 default 与每个
+# harness-data-* agent(持久卷升级、运行时新建的 agent 都由这一步幂等覆盖,
+# 与 plugin 刷新同策略: 镜像版本为唯一真相)。
+python /opt/qdm/bin/seed_image_skills.py
 
 model_required=${QWENPAW_MODEL_REQUIRED:-1}
 model_key=${QWENPAW_MODEL_API_KEY:-}
