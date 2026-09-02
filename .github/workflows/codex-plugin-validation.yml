@@ -49,4 +49,7 @@ jobs:
           node --test plugins/harness-data/mcp/server.test.mjs
           node --test plugins/harness-data/test/clean-room-setup.test.mjs
           node --test scripts/plugin-dev-init.test.mjs
-          node --test scripts/verify-pinned-wikis.test.mjs scripts/verify-wikis-relocation.test.mjs
+          # verify-wikis-relocation.test.mjs needs plugins/harness-data/resources/wikis;
+          # private Wikis ship as an encrypted release ZIP now, so the repo has no such
+          # directory and the relocation check can only run where it is materialized.
+          node --test scripts/verify-pinned-wikis.test.mjs
