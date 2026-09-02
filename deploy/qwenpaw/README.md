@@ -6,28 +6,28 @@ authorization, the session HMAC secret, or the LLM API key.
 
 ## Local build
 
-The local builder uses the adjacent source repositories to avoid copying an
-encrypted Release password into a Docker build:
+The Dockerfile downloads the metric CLI binary and the wikis tree from the
+Gitee release mirrors and unzips them during the build:
 
 ```text
-../qdm-metric-cli       -> cross-compiled linux/amd64 binary
-../harness-data-wikis   -> setup --wikis-source
+https://gitee.com/git_pengmd/harness-metric-release  -> qdm-metric-cli-v<ver>-linux-amd64.zip
+https://gitee.com/git_pengmd/harness-release         -> harness-data-wikis-v<ver>.zip
 ```
 
-Build the final image:
+The release zip password (`qdm-dev`) is hardcoded in the Dockerfile as a
+dev-stage placeholder; rotate it and update the Dockerfile before production
+deployment. `build-docker-image.sh` runs the build directly with pinned values
+(image tag, versions, proxy) baked into the command:
 
 ```bash
-QWENPAW_IMAGE=harness-data-qwenpaw:0.0.56-amd64 \
-  deploy/qwenpaw/build-local.sh
+deploy/qwenpaw/build-docker-image.sh
 ```
 
-`QWENPAW_BUILD_PROXY` defaults to
-`http://host.docker.internal:1082` for Docker Desktop. Set it to an empty value
-when the builder has direct network access.
-
-Production automation may prepare the same two BuildKit contexts from verified
-Release assets instead. `metric_cli_artifact` must contain an executable named
-`qdm-metric-cli`; `harness_wikis` must be a valid Wiki root.
+The build routes outbound traffic through the local proxy at
+`host.docker.internal:1082` (Docker Desktop). Delete the `--build-arg
+http_proxy` / `https_proxy` lines only on hosts with clean direct internet
+access. Bump `HARNESS_VERSION` and `QDM_METRIC_CLI_VERSION` in the script when
+building a new release.
 
 ## Runtime secrets
 

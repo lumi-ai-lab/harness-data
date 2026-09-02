@@ -19,6 +19,32 @@ RUN node scripts/build-qwenpaw-plugin.mjs \
       --version "${HARNESS_VERSION}" \
       --verify
 
+FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS artifact-fetch
+
+ARG HARNESS_VERSION=0.0.56
+ARG QDM_METRIC_CLI_VERSION=v0.1.19
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      file \
+      unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Release zips are password-protected; qdm-dev is the dev-stage password.
+# Rotate the password here before production deployment.
+RUN set -eu; \
+    curl -fsSL -o /tmp/qdm-metric-cli.zip \
+      "https://gitee.com/git_pengmd/harness-metric-release/releases/download/${QDM_METRIC_CLI_VERSION}/qdm-metric-cli-${QDM_METRIC_CLI_VERSION}-linux-amd64.zip"; \
+    unzip -q -P qdm-dev /tmp/qdm-metric-cli.zip -d /tmp/metric; \
+    chmod 0755 /tmp/metric/qdm-metric-cli; \
+    file /tmp/metric/qdm-metric-cli | grep -q 'x86-64'; \
+    curl -fsSL -o /tmp/harness-data-wikis.zip \
+      "https://gitee.com/git_pengmd/harness-release/releases/download/v${HARNESS_VERSION}/harness-data-wikis-v${HARNESS_VERSION}.zip"; \
+    unzip -q -P qdm-dev /tmp/harness-data-wikis.zip -d /tmp/wikis; \
+    test -f /tmp/wikis/index.md
+
 FROM --platform=$TARGETPLATFORM ${PYTHON_IMAGE} AS runtime
 
 ARG HARNESS_VERSION=0.0.56
@@ -71,8 +97,8 @@ RUN groupadd --gid "${QWENPAW_GID}" qwenpaw \
     && install -d -o root -g root -m 0755 /opt/qdm/bin /opt/qdm/plugin-source /opt/qdm/qwenpaw-seed
 
 COPY --from=plugin-builder /out/qdm-harness-qwenpaw /opt/qdm/plugin-source
-COPY --from=metric_cli_artifact --chmod=0755 /qdm-metric-cli /tmp/qdm-metric-cli
-COPY --from=harness_wikis / /tmp/harness-wikis/
+COPY --from=artifact-fetch --chmod=0755 /tmp/metric/qdm-metric-cli /tmp/qdm-metric-cli
+COPY --from=artifact-fetch /tmp/wikis /tmp/harness-wikis/
 COPY --chmod=0755 deploy/qwenpaw/entrypoint.sh /opt/qdm/bin/entrypoint.sh
 COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model.py
 COPY --chmod=0755 deploy/qwenpaw/smoke_query.py /opt/qdm/bin/smoke_query.py
