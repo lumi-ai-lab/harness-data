@@ -64,11 +64,12 @@ docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即�
 脚本已内置以下参数, 无需额外配置:
 
 ```text
-监听   127.0.0.1:8088
+监听   127.0.0.1:8088(默认仅本机)
 内存   上限 8G
 自启   --restart unless-stopped
 密钥   密钥目录只读挂载到容器 /run/secrets
 ```
 
 - 想调整内存上限: `export QWENPAW_MEM_LIMIT=16g` 后重跑 `run_docker.sh`。
+- 想让局域网/外部直连: `export QWENPAW_BIND=0.0.0.0` 后重跑 `run_docker.sh`(暴露后请自行用防火墙/反向代理限制来源)。
 - 国内环境直连即可, 无需代理。

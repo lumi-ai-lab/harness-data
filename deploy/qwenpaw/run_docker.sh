@@ -16,8 +16,11 @@ set -eu
 image=${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-amd64}
 # 容器名:同名容器已存在时 docker run 会失败,需改名或先 docker rm -f
 name=${QWENPAW_CONTAINER_NAME:-qwenpaw}
-# 宿主机发布端口:只绑 127.0.0.1,容器内固定监听 8088
+# 宿主机发布端口:容器内固定监听 8088
 port=${QWENPAW_PORT:-8088}
+# 宿主机绑定地址:默认仅 127.0.0.1(不对局域网/公网暴露)。需要外部直连时
+# export QWENPAW_BIND=0.0.0.0 再跑本脚本;暴露后请自行用防火墙/反代限制来源。
+bind_addr=${QWENPAW_BIND:-127.0.0.1}
 # 容器运行用户 uid:必须与挂载进来的密钥文件属主一致,镜像内置默认 10001
 runtime_uid=${QWENPAW_UID:-10001}
 # 容器运行用户 gid:同上,属主不符会导致容器内进程读不到密钥文件
@@ -76,7 +79,7 @@ set -- "$@" \
   -v qwenpaw-backups:/app/working.backups \
   -v qdm-data:/app/qdm-data \
   -v "${secret_dir}:/run/secrets:ro" \
-  -p "127.0.0.1:${port}:8088" \
+  -p "${bind_addr}:${port}:8088" \
   "${image}"
 
 "$@"
