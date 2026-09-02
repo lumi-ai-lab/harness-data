@@ -54,6 +54,9 @@ plan/*
 *-cmr-response.json
 scripts/*.json
 
+# QwenPaw 镜像导出产物(deploy/qwenpaw README 步骤②: docker save | gzip)
+harness-data-qwenpaw-*.tar.gz
+
 # Node dependencies
 node_modules/
 
