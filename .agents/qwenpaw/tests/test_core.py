@@ -1107,6 +1107,47 @@ class HarnessContextTests(unittest.TestCase):
                     request_context(cli, "session", "prompt")
             self.assertEqual(error.exception.reason, "context_protocol_invalid")
 
+    def _context_with(self, cli: Path, envelope: dict) -> str:
+        completed = types.SimpleNamespace(
+            returncode=0, stdout=json.dumps({"hookSpecificOutput": envelope}), stderr="",
+        )
+        with patch("qdm_harness_qwenpaw_test.qdm_harness_context.subprocess.run", return_value=completed):
+            return request_context(cli, "session", "prompt")
+
+    def test_a_missing_embedded_manifest_is_logged_without_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "data-harness-cli.exe"
+            _write_placeholder_cli(cli)
+            envelope = {"additionalContext": "ctx", "contextFiles": [{"path": "metrics/a/playbook.md"}]}
+            with self.assertLogs("qwenpaw.plugins.qdm_harness", level="WARNING") as logs:
+                self.assertIn("ctx", self._context_with(cli, envelope))
+            self.assertIn("kind=missing_manifest selected=1", "\n".join(logs.output))
+
+    def test_a_mismatched_embedded_manifest_is_logged_without_failing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "data-harness-cli.exe"
+            _write_placeholder_cli(cli)
+            envelope = {
+                "additionalContext": "ctx",
+                "contextFiles": [{"path": "metrics/a/playbook.md"}, {"path": "metrics/b/playbook.md"}],
+                "embeddedContextFiles": ["metrics/a/playbook.md"],
+            }
+            with self.assertLogs("qwenpaw.plugins.qdm_harness", level="WARNING") as logs:
+                self.assertIn("ctx", self._context_with(cli, envelope))
+            self.assertIn("kind=set_mismatch selected=2 embedded=1", "\n".join(logs.output))
+
+    def test_a_complete_embedded_manifest_stays_quiet(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "data-harness-cli.exe"
+            _write_placeholder_cli(cli)
+            envelope = {
+                "additionalContext": "ctx",
+                "contextFiles": [{"path": "metrics/a/playbook.md"}],
+                "embeddedContextFiles": ["metrics/a/playbook.md"],
+            }
+            with self.assertNoLogs("qwenpaw.plugins.qdm_harness", level="WARNING"):
+                self.assertIn("ctx", self._context_with(cli, envelope))
+
     def test_context_cli_failure_diagnosis_does_not_return_cli_text(self) -> None:
         self.assertEqual(_context_cli_failure_reason("open .harness/index/wikis-index.json: no such file", ""), "missing_wiki_index")
         self.assertEqual(
