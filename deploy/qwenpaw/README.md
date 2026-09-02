@@ -1,15 +1,19 @@
 # QwenPaw Docker 部署
 
-镜像固定 QwenPaw 2.1.0 + Harness Data 插件, 不含任何密钥。镜像在开发机(本机)构建, 导出压缩后上传服务器加载, 共 4 步:
+镜像固定 QwenPaw 2.1.0 + Harness Data 插件, 不含任何密钥。镜像在开发机(本机)构建, 导出压缩后上传服务器加载, 共 5 步:
 
 ```text
-┌──────────────┐    ┌────────────────────┐    ┌──────────────┐    ┌────────────────┐
-│ ① 本机构建镜像  │ →  │ ② 导出压缩上传并加载 │ →  │ ③ 准备密钥     │ →  │ ④ 运行并验证     │
-│ build-docker │    │ docker save + gzip │    │ 2 个 export  │    │ run_docker.sh  │
-│ -image.sh    │    │ + scp + docker load│    │ channel-auth │    │ + docker inspect│
-└──────────────┘    └────────────────────┘    └──────────────┘    └────────────────┘
- (本机)               (本机 → 服务器)            (服务器)           (服务器)
+┌──────────────┐    ┌────────────────────┐    ┌──────────────┐    ┌────────────────┐    ┌────────────────┐
+│ ① 本机构建镜像  │ →  │ ② 导出压缩上传并加载 │ →  │ ③ 准备密钥     │ →  │ ④ 运行并验证     │ →  │ ⑤ 切 Agent 并   │
+│ build-docker │    │ docker save + gzip │    │ 2 个 export  │    │ run_docker.sh  │    │   绑定渠道       │
+│ -image.sh    │    │ + scp + docker load│    │ channel-auth │    │ + docker inspect│   │ (绑到专用 Agent) │
+└──────────────┘    └────────────────────┘    └──────────────┘    └────────────────┘    └────────────────┘
+ (本机)               (本机 → 服务器)            (服务器)           (服务器)               (服务器/浏览器)
 ```
+
+> 第 ⑤ 步不能跳:QDM 渠道必须绑在专用 Agent **`harness-data-default`** 上,绑到内置
+> `default` 时插件不激活,企微里会回"当前会话不支持 QDM 数据查询"。操作见「⑤ 绑定渠道」,
+> 原理与排查见「⑥ QDM Agent 与作用域」。
 
 ## ① 本机构建镜像
 
@@ -108,24 +112,78 @@ docker exec qwenpaw date
 > 这一步影响的是相对日期解析:未对齐时,北京时间 00:00–08:00 之间 `get_current_time`
 > 会返回前一天,"昨天"会再往前错一天。
 
-## ⑤ QDM Agent 的作用域
+## ⑤ 绑定渠道(必须先切 Agent)
 
-QwenPaw 会把插件的运行时钩子和工具注入到**每一个** Agent 的 workspace,所以插件自己按
-Agent ID 收窄。镜像里写死的作用域是:
+容器 healthy 之后,企微/飞书还没接上:渠道要绑到专用 Agent 上才算配置完成。**这一步最容易踩空**。
+
+1. 打开控制台。默认只监听 `127.0.0.1:8088`,从 workstation 访问要先做端口转发
+   (`ssh -L 8088:127.0.0.1:8088 root@<服务器IP>`),或按 ④ 的说明用 `QWENPAW_BIND=0.0.0.0`。
+2. **先把左侧栏顶部的 "Current Agent" 切到「QDM 数据助手」。** 下拉项第二行会显示
+   `ID: harness-data-default`,以这个 ID 为准,别按显示名认。
+3. 进 Channels 页(路由 `/channels`)配置 wecom 或 feishu,保存。
+4. 验证渠道真的落在了专用 Agent 上(而不是 `default`):
+
+```bash
+docker exec qwenpaw python -c 'import json;c=json.load(open("/app/working/workspaces/harness-data-default/agent.json"))["channels"];print({k:c[k]["enabled"] for k in ("wecom","feishu")})'
+# 期望 {'wecom': True, 'feishu': False} 这类至少一项为 True；
+# 两项都是 False 说明渠道配到了别的 Agent 上,回到第 2 步确认切对了 Agent
+```
+
+> **为什么必须手切一次:** 侧边栏的 "Current Agent" 初值由**前端**固定在字面量 `default`
+> (优先级:本标签页记忆 → 上次使用的 Agent → 字面量 `default`),**不读**宿主的
+> `active_agent`。镜像虽然已经把 `active_agent` 指到 `harness-data-default`,那只管
+> 不带显式 Agent 的服务端请求(API/ACP)兜底路由,管不到控制台的选择框。
+> 切换一次后浏览器会记住(存在 localStorage),后续新标签页会直接落在专用 Agent 上。
+>
+> 配错的典型症状:企微里提问后回"当前会话不支持 QDM 数据查询",或该 Agent 的工具列表里
+> 根本没有 `qdm_query`——那是作用域没命中,见下一节。
+
+## ⑥ QDM Agent 与作用域
+
+镜像不使用宿主内置的 `default` Agent 跑 QDM,而是在构建期新建一个符合命名约定的专用
+Agent **`harness-data-default`**,并把它的 `active_agent` 指向它。`default` 仍然保留
+(宿主不允许删除或禁用内置 Agent),但它不再注册任何 QDM 工具。
 
 ```text
-enabled_agents = ["harness-data-*", "default"]
-                 ↑ 约定的专用 Agent    ↑ 本镜像使用内置 Agent,显式点名
+镜像里的 agent        default(内置)          harness-data-default(QDM 专用)
+渠道                  仅 console              wecom/feishu 搬到这里
+active_model          不设置                  configure_model.py 写入
+插件 enabled_agents   不命中 → 工具不注册      harness-data-* 命中 → 激活
 ```
 
 对应到运维:
 
-- 本镜像开箱可用——渠道绑在 `default` 上即可,`default` 是镜像里显式声明的,不是隐式例外。
-- 想在同一实例上再开一个 QDM 入口:新建 Agent 时把 **ID**(不是显示名)填成 `harness-data-xxx`。
-  ID 创建后不可修改;留空会让宿主生成随机短 UUID,插件不会激活。
-- 复制或派生出的 Agent 拿到的是随机 ID,不会激活;要多个入口请逐个新建并手填 ID。
-- 想收紧(不允许 `default`):编辑容器内 `/etc/qdm/qwenpaw/plugin-config.json` 的
-  `enabled_agents`,去掉 `"default"` 后重启容器。
+- 渠道必须绑在 `harness-data-default` 上,首次进控制台要先切一次 Agent,原因与操作见
+  上一节 ⑤。
+- `active_agent` 也一并指向该 Agent:它管的是不带显式 Agent 的服务端请求(API/ACP 等)兜底路由,
+  不影响控制台的选择框。
+- 老部署升级镜像时会自动完成两件事,无需手工搬配置:新建 `harness-data-default`,并把
+  `default` 上**已启用**的 wecom/feishu 渠道连同凭证**搬移**过去(`default` 侧同时置为禁用)。
+  必须是搬移而不是复制:每个启用中的 Agent 都会各自启动一份渠道管理器,两边同时持有同一份
+  凭证就是双份连接、消息被消费两次。日志里以 `qdm agent bootstrap: moved …` 打印。
+- 若某个渠道在新旧两个 Agent 上都已启用,脚本只告警不擅自关闭任何一个,需要人工二选一:
+  `left wecom enabled on both default and harness-data-default; disable one of them…`
+- 想再开一个 QDM 入口:新建 Agent 时把 **ID**(不是显示名)填成 `harness-data-xxx`,零配置生效。
+  ID 创建后不可修改;留空会让宿主生成随机短 UUID,复制/派生出的 Agent 同理,都不会激活。
+- 想换专用 Agent 的 id:改 `Dockerfile` 里的 `ARG QWENPAW_QDM_AGENT_ID` 默认值。它同时决定
+  workspace 目录名与插件作用域,`build-docker-image.sh` 不转发这个参数,也不要在运行期单独
+  覆盖 `QWENPAW_QDM_AGENT_ID`——那会让镜像烘焙进去的 workspace 白名单和实际 Agent 对不上。
+
+改名做不到"把 default 变成 harness-data-default":宿主在每次启动都会无条件补建
+`profiles.default`(且 `/healthz` 的就绪门以它是否启动成功为开关,删掉它会让容器
+永久停在 starting),所以这里只能是"新增专用 Agent + 改指向",`default` 与内建 QA
+Agent 会一直保留在列表里。
+
+QDM 职责挪出 `default` 之后,有三件事的作用对象仍然是 `default`(宿主按 id 写死,不是本
+部署能改的),如果依赖请到 `default` 上配置:
+
+```text
+cron / 定时任务   CronManager 取的是 default 的 workspace,`/crons/*` 与 slash 命令
+                  管理不到 harness-data-default 的 jobs.json
+治理策略目录      按 workspace 目录名归属,在 default 上调过的策略不会跟到新 Agent
+CLI 配渠道        `qwenpaw channels config` 的 --agent-id 默认值就是 default,
+                  用脚本配渠道时必须显式传 --agent-id harness-data-default
+```
 
 确认作用域真的命中了某个 Agent(`matched=none` 表示插件处于"装了但谁都不服务"的状态):
 
@@ -137,5 +195,10 @@ docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-dat
   --qwenpaw-working-dir /app/working --json | grep -A3 '"agent-scope"'
 ```
 
-未命中时 `qdm_query` 工具不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
+未命中时 `qdm_query` 不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
 若配置里的作用域不可用,插件按 fail-closed 处理,同样不注册工具、不注入上下文。
+引导逻辑本身有一组不依赖宿主的单测:
+
+```bash
+python3 -m unittest discover -s deploy/qwenpaw -p 'test_*.py'
+```
