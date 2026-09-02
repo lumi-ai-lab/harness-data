@@ -1,4 +1,16 @@
-"""Entry point for the QDM Harness QwenPaw plugin."""
+"""QDM Harness 的 QwenPaw 插件入口。
+
+作用:
+- 注册 qdm_query / qdm_scope_summary 两个受限工具,只允许查询当前渠道用户
+  (企微/飞书)授权范围内的 QDM 指标;
+- 借助 qdm_runtime_hooks 注入请求身份与授权快照上下文,保证查询身份和
+  授权状态一致,身份缺失时返回 QDM_CHANNEL_IDENTITY_UNAVAILABLE;
+- 通过 workspace_created / startup 钩子及旧版重载兼容桥,在 QwenPaw 工作区
+  重建或插件热重载后恢复工具与运行时状态。
+
+相关模块: qdm_channel_auth.py(渠道授权)、qdm_cli.py(CLI 查询执行)、
+qdm_config.py(配置加载)、qdm_runtime_hooks.py(身份/授权钩子)。
+"""
 
 from __future__ import annotations
 
