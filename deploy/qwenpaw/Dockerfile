@@ -27,6 +27,8 @@ ARG QDM_METRIC_CLI_VERSION=v0.1.19
 ARG OFFICECLI_VERSION=1.0.146
 # charts-cli: 与技能 SKILL.md 共用同一个 release tag。
 ARG CHARTS_CLI_VERSION=0.4.2
+# buildkit 自动平台参数按资产选型用, 必须显式声明才在 RUN 里可见。
+ARG TARGETARCH
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -59,9 +61,10 @@ RUN set -eu; \
     *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac; \
   url="https://github.com/iOfficeAI/OfficeCLI/releases/download/v${OFFICECLI_VERSION}"; \
-  curl -fsSL -o /tmp/officecli "${url}/${asset}"; \
+  curl -fsSL -o "/tmp/${asset}" "${url}/${asset}"; \
   curl -fsSL -o /tmp/officecli.SHA256SUMS "${url}/SHA256SUMS"; \
   grep -F " ${asset}" /tmp/officecli.SHA256SUMS | (cd /tmp && sha256sum -c -); \
+  mv "/tmp/${asset}" /tmp/officecli; \
   chmod 0755 /tmp/officecli; \
   file /tmp/officecli | grep -q 'x86-64' || file /tmp/officecli | grep -q 'aarch64'; \
   echo "OfficeCLI ${OFFICECLI_VERSION} (${asset}) verified"
@@ -190,6 +193,8 @@ RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
 USER qwenpaw
 WORKDIR /app/working
 
+# setup 会把 surface 写进 ${HARNESS_INSTANCE_ROOT}/context.json, 而 CLI 每次读取都重新
+# 校验它: 这里显式固定为 chat(企微/飞书是消息渠道宿主), 与 host=qwenpaw 的派生值一致。
 RUN python -m qwenpaw init --defaults --accept-security \
   && python /opt/qdm/bin/ensure_qdm_agent.py \
   && /opt/qdm/plugin-source/scripts/harness-data qwenpaw setup \
@@ -207,6 +212,7 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --channel-auth-only \
   --enabled-agents 'harness-data-*' \
   --tool-policy preserve \
+  --surface chat \
   --yes \
   --json \
   && python -m qwenpaw plugin validate /app/working/plugins/qdm-harness-qwenpaw \
@@ -226,6 +232,9 @@ RUN python -m qwenpaw init --defaults --accept-security \
 #   安装目录的 skills/。
 # 注意: --tool-policy preserve 保留 QwenPaw 默认全量工具(strict 收窄见
 # ensure_qdm_agent.py / install-qwenpaw-plugin.py), 这些 CLI 都依赖 shell/文件工具。
+# qwenpaw==2.1.0 的 skills CLI 没有 enable 子命令(后续版本才有), 这里与其运行时
+# seed_image_skills.py 一样走内部 API: reconcile 把磁盘技能目录登记进 skill.json
+# (新条目默认 enabled=false), 再逐条 enable_skill 置位。
 RUN set -eu; \
   officecli --version; \
   charts schema --list >/dev/null; \
@@ -234,15 +243,35 @@ RUN set -eu; \
     mkdir -p "${skills_dir}"; \
     cp -a /opt/qdm/officecli-skills/. "${skills_dir}/"; \
     cp -a /opt/qdm/charts-cli-skills/. "${skills_dir}/"; \
-    python -m qwenpaw skills enable officecli-xlsx officecli-docx officecli-pptx charts-cli \
-      --agent-id "${agent}"; \
   done; \
   qdm_agent="${QWENPAW_QDM_AGENT_ID}"; \
-  qdm_skills_dir="${QWENPAW_WORKING_DIR}/workspaces/${qdm_agent}/skills"; \
-  mkdir -p "${qdm_skills_dir}"; \
+  mkdir -p "${QWENPAW_WORKING_DIR}/workspaces/${qdm_agent}/skills"; \
   cp -a "${QWENPAW_WORKING_DIR}/plugins/qdm-harness-qwenpaw/skills/qdm-harness" \
-    "${qdm_skills_dir}/"; \
-  python -m qwenpaw skills enable qdm-harness --agent-id "${qdm_agent}"
+    "${QWENPAW_WORKING_DIR}/workspaces/${qdm_agent}/skills/"
+RUN python - <<'PY'
+import os
+from pathlib import Path
+
+from qwenpaw.agents.skill_system.registry import reconcile_workspace_manifest
+from qwenpaw.agents.skill_system.workspace_service import SkillService
+
+working = Path(os.environ["QWENPAW_WORKING_DIR"])
+qdm_agent = os.environ["QWENPAW_QDM_AGENT_ID"]
+common = ("officecli-xlsx", "officecli-docx", "officecli-pptx", "charts-cli")
+targets = {
+    "default": common,
+    qdm_agent: (*common, "qdm-harness"),
+}
+for agent_id, skill_names in targets.items():
+    workspace = working / "workspaces" / agent_id
+    reconcile_workspace_manifest(workspace)
+    service = SkillService(workspace)
+    for name in skill_names:
+        result = service.enable_skill(name)
+        if not result.get("success"):
+            raise SystemExit(f"enable {name} for {agent_id} failed: {result}")
+        print(f"enabled {name} for {agent_id}")
+PY
 
 USER root
 
