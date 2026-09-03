@@ -182,6 +182,11 @@ test("qwenpaw setup --channel-auth-only authorizes via channel-auth.json without
 
     const persisted = JSON.parse(readFileSync(path.join(instance, "context.json"), "utf8"));
     assert.equal(persisted.secretRef, null);
+    // setup 把派生出的 surface 落进 context.json, CLI 每次读取都会重新校验它:
+    // 值必须合法而且能被自己读回来, 否则企微会话的上下文注入整次失败。
+    assert.equal(persisted.surface, "chat", "qwenpaw context.json must carry a valid surface");
+    const reread = runCli(["paths", "--context-file", path.join(instance, "context.json"), "--json"], repoRoot);
+    assert.equal(reread.status, 0, reread.stderr || reread.stdout);
 
     const config = JSON.parse(readFileSync(configFile, "utf8"));
     assert.equal(config.schema_version, 2);

@@ -38,7 +38,10 @@ function invalid(message, code = ROOT_CONTEXT_ERROR_CODES.INVALID) {
 
 export function normalizeHostSurface(surface, host = "unknown") {
   const value = String(surface || "").trim().toLowerCase();
-  if (value && !["codex", "desktop", "chat", "work", "cli"].includes(value)) {
+  // "unknown" is what the derivation below returns for hosts outside the
+  // explicit map, and Root Context persists it; accepting it here keeps a
+  // written context readable instead of failing the whole hook.
+  if (value && !["codex", "desktop", "chat", "work", "cli", "unknown"].includes(value)) {
     throw invalid(`surface must be one of codex, desktop, chat, work, cli: ${value}`, HOST_CONTEXT_ERROR_CODES.SURFACE_INVALID);
   }
   if (value === "cli") return "codex";
@@ -46,6 +49,8 @@ export function normalizeHostSurface(surface, host = "unknown") {
   const normalizedHost = String(host || "").trim().toLowerCase();
   if (normalizedHost === "codex") return "codex";
   if (normalizedHost === "chatgpt-desktop" || normalizedHost === "chatgpt") return "desktop";
+  // QwenPaw is a messaging-channel host (WeCom/Feishu), i.e. a chat surface.
+  if (normalizedHost === "qwenpaw") return "chat";
   return "unknown";
 }
 

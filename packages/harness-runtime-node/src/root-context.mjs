@@ -292,7 +292,11 @@ export function normalizeRootContext(input, { source = "root context", requireWo
 
 function normalizeSurface(value, host) {
   const surface = String(value || "").trim().toLowerCase();
-  if (surface && !["codex", "desktop", "chat", "work", "cli"].includes(surface)) {
+  // "unknown" is a value this function itself derives (see the fallback below)
+  // and setup persists it into context.json, so re-reading that file must not
+  // reject it. Without this the writer and the validator disagree for every
+  // host outside the explicit map.
+  if (surface && !["codex", "desktop", "chat", "work", "cli", "unknown"].includes(surface)) {
     throw invalid(`surface must be one of codex, desktop, chat, work, cli: ${surface}`);
   }
   if (surface === "cli") return "codex";
@@ -300,6 +304,8 @@ function normalizeSurface(value, host) {
   const normalizedHost = String(host || "").trim().toLowerCase();
   if (normalizedHost === "codex") return "codex";
   if (normalizedHost === "chatgpt" || normalizedHost === "chatgpt-desktop") return "desktop";
+  // QwenPaw is a messaging-channel host (WeCom/Feishu), i.e. a chat surface.
+  if (normalizedHost === "qwenpaw") return "chat";
   return "unknown";
 }
 

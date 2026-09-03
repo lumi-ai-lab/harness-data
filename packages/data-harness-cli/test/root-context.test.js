@@ -112,6 +112,26 @@ test("RootContext v1 normalizes the shared fixture and derives a workspace state
   assert.deepEqual(context.capabilities, fixture.valid.capabilities);
 });
 
+test("RootContext derives qwenpaw to the chat surface and keeps \"unknown\" readable", () => {
+  const roots = makeRoots();
+
+  const qwenpaw = fixtureContext(roots);
+  qwenpaw.host = "qwenpaw";
+  qwenpaw.surface = "";
+  assert.equal(normalizeRootContext(qwenpaw).surface, "chat");
+
+  // setup persists the derived surface into context.json; re-reading the
+  // sentinel for an unmapped host must not be a hard failure.
+  const legacy = fixtureContext(roots);
+  legacy.host = "workbuddy";
+  legacy.surface = "unknown";
+  assert.equal(normalizeRootContext(legacy).surface, "unknown");
+
+  const invalid = fixtureContext(roots);
+  invalid.surface = "mobile";
+  assert.throws(() => normalizeRootContext(invalid), /surface must be one of/);
+});
+
 test("RootContext canonicalizes symlinked roots and rejects overlapping primary roots", () => {
   const roots = makeRoots();
   const pluginLink = path.join(roots.base, "plugin-link");

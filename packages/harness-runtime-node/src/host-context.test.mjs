@@ -62,3 +62,12 @@ test("host surface normalization rejects unknown values", () => {
   assert.equal(normalizeHostSurface("work", "chatgpt-desktop"), "work");
   assert.throws(() => normalizeHostSurface("mobile", "chatgpt-desktop"), /surface must be one of/);
 });
+
+test("host surface derivation survives a persisted Root Context", () => {
+  // setup writes the derived surface back into context.json, so re-reading the
+  // sentinel produced for unmapped hosts must not fail, and QwenPaw (a
+  // messaging-channel host) must resolve to a real surface.
+  assert.equal(normalizeHostSurface("", "qwenpaw"), "chat");
+  assert.equal(normalizeHostSurface("unknown", "qwenpaw"), "unknown");
+  assert.equal(normalizeHostSurface("unknown", "codex"), "unknown");
+});
