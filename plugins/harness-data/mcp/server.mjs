@@ -36,8 +36,12 @@ function resolvePluginVersion() {
   }
 }
 
-function requireContext() {
-  return getRootContext(process.env, { requireWorkspace: true });
+function requireContext(args = {}) {
+  return getRootContext({
+    ...process.env,
+    HARNESS_WORKSPACE_ROOT: String(args?.workspaceRoot || "").trim(),
+    CODEX_WORKSPACE_ROOT: "",
+  }, { requireWorkspace: true });
 }
 
 let cachedHostAdapter = null;
@@ -114,14 +118,14 @@ function normalizedSessionId(sessionId) {
  * Keep the MCP side byte-for-byte compatible with its workbuddy hash so that
  * the UI's result.json and the pipeline state always share one directory.
  */
-function sessionDirFor(sessionId, context = requireContext()) {
+function sessionDirFor(sessionId, context) {
   const safe = normalizedSessionId(sessionId);
   const key = createHash("sha256").update(`workbuddy:${safe}`).digest("hex");
   return join(context.stateRoot, "html-report", key);
 }
 
 /** Workspace-local sessions are read only for one-time compatibility recovery. */
-function legacySessionDirsFor(sessionId, context = requireContext()) {
+function legacySessionDirsFor(sessionId, context) {
   const safe = normalizedSessionId(sessionId);
   const key = createHash("sha256").update(`workbuddy:${safe}`).digest("hex");
   const base = join(context.workspaceRoot, ".harness", "state", "html-report");
@@ -199,8 +203,7 @@ async function migrateLegacySessionTrees(canonical, sources, workspaceRoot) {
  * while qdm-metric-cli saved result.json in the canonical hashed directory.
  * Migrate both validated trees into stateRoot without mutating the workspace.
  */
-async function resolveSessionDir(sessionId) {
-  const context = requireContext();
+async function resolveSessionDir(sessionId, context) {
   const canonical = sessionDirFor(sessionId, context);
   if (existsSync(statePath(canonical))) return canonical;
 
@@ -247,11 +250,11 @@ async function metricCliUiStatus(sessionDir) {
   };
 }
 
-async function closeMetricCliUi(sessionId) {
-  const sessionDir = await resolveSessionDir(sessionId);
+async function closeMetricCliUi(sessionId, context) {
+  const sessionDir = await resolveSessionDir(sessionId, context);
   try {
     const { stopMetricCliUi } = await loadRuntime("open-metric-cli-ui.mjs");
-    const stopped = await stopMetricCliUi({ context: requireContext(), sessionId });
+    const stopped = await stopMetricCliUi({ context, sessionId });
     return {
       ...(await metricCliUiStatus(sessionDir)),
       closeRequested: true,
@@ -327,10 +330,9 @@ async function reportProgress(sessionDir, state) {
  * html_report_start: create session, open qdm-metric-cli ui.
  * The UI lifetime is tied to this MCP server process via --watch-pid.
  */
-async function htmlReportStart(args) {
+async function htmlReportStart(args, context) {
   const requestedSessionId = String(args.sessionId || "").trim();
   const adapter = hostAdapter();
-  const context = requireContext();
   const hostSessionId = adapter.getSessionId();
   if (!requestedSessionId && !hostSessionId && !adapter.getCapabilities().hasStableSessionId) {
     throw new Error("QDM_SESSION_UNAVAILABLE: host did not provide a stable sessionId; pass sessionId explicitly");
@@ -378,10 +380,10 @@ async function htmlReportStart(args) {
  * a_config → B0 preflight → B2_WRITER (per-card fetch + evidence)
  * all cards captioned → compose-main.mjs → B2_MAIN
  */
-async function htmlReportNext(args) {
+async function htmlReportNext(args, context) {
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const sessionDir = await resolveSessionDir(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId, context);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
 
@@ -398,7 +400,6 @@ async function htmlReportNext(args) {
 
     // B0 preflight: validate result.json + metric CLI (no PI Agent check)
     const { loadAuthzConfig, resolveMetricCliPath } = await loadRuntime("authz-config.mjs");
-    const context = requireContext();
     const config = loadAuthzConfig(context);
     const cliPath = resolveMetricCliPath(context, config);
     if (!existsSync(cliPath)) {
@@ -424,8 +425,8 @@ async function htmlReportNext(args) {
     state.currentIndex = 0;
     await writeState(sessionDir, state);
 
-    const ui = await closeMetricCliUi(sessionId);
-    const next = await fetchCurrentCard(sessionDir, sessionId, result, state);
+    const ui = await closeMetricCliUi(sessionId, context);
+    const next = await fetchCurrentCard(sessionDir, sessionId, result, state, context);
     return { ...next, ui };
   }
 
@@ -437,7 +438,6 @@ async function htmlReportNext(args) {
       // compose-main.mjs
       const { composeMain } = await loadKernel("artifacts/compose-main.mjs");
       await composeMain(sessionDir);
-      const context = requireContext();
       state.stage = "b2_main";
       state.sessionMainPath = join(sessionDir, "analysis", "main.md");
       state.mainPath = await publishWorkspaceArtifact(context, state.sessionMainPath, "main.md");
@@ -470,7 +470,7 @@ async function htmlReportNext(args) {
 
     const resultPath = join(sessionDir, "result.json");
     const result = JSON.parse(await readFile(resultPath, "utf8"));
-    return await fetchCurrentCard(sessionDir, sessionId, result, state);
+    return await fetchCurrentCard(sessionDir, sessionId, result, state, context);
   }
 
   // ── B2_MAIN: already done ──
@@ -479,7 +479,7 @@ async function htmlReportNext(args) {
     const html = await htmlExportSummary(sessionDir);
     return {
       stage: "b2_main",
-      mainPath: state.mainPath || join(requireContext().workspaceRoot, "analysis", "main.md"),
+      mainPath: state.mainPath || join(context.workspaceRoot, "analysis", "main.md"),
       html: html.status,
       ...(html.status === "awaiting_confirmation" ? { htmlConfirmation: "生成 HTML" } : {}),
       htmlPath: html.htmlPath,
@@ -494,7 +494,7 @@ async function htmlReportNext(args) {
 }
 
 /** Fetch data for the current card and prepare caption evidence. */
-async function fetchCurrentCard(sessionDir, sessionId, result, state) {
+async function fetchCurrentCard(sessionDir, sessionId, result, state, context) {
   const cardIdx = state.currentIndex;
   const card = result.cards[cardIdx];
   if (!card) throw new Error(`no card at index ${cardIdx}`);
@@ -503,7 +503,6 @@ async function fetchCurrentCard(sessionDir, sessionId, result, state) {
 
   // fetch-entry.mjs (CLI)
   const { fetchAllEntries } = await loadKernel("data/fetch-entry.mjs");
-  const context = requireContext();
   const fetchResult = await fetchAllEntries(resultPath, { cardId: card.id, context, projectRoot: context.workspaceRoot });
   const cardResult = fetchResult.cards.find((c) => c.cardId === card.id || c.id === card.id);
   if (!cardResult || cardResult.fetchStatus === "failed") {
@@ -531,7 +530,7 @@ async function fetchCurrentCard(sessionDir, sessionId, result, state) {
 /**
  * html_report_submit_writer: validate and write the host's caption.
  */
-async function htmlReportSubmitWriter(args) {
+async function htmlReportSubmitWriter(args, context) {
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
   const cardId = String(args.cardId || "").trim();
@@ -539,7 +538,7 @@ async function htmlReportSubmitWriter(args) {
   const paragraphs = Array.isArray(args.paragraphs) ? args.paragraphs : [];
   const pointers = Array.isArray(args.pointers) ? args.pointers : [];
 
-  const sessionDir = await resolveSessionDir(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId, context);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
   if (state.stage !== "b2_writer") {
@@ -592,15 +591,15 @@ function rejectUnexpectedArgs(args, allowed, toolName) {
  * html_report_generate_html: optional sibling HTML export after B2_MAIN.
  * Skill must obtain explicit user confirmation before calling this tool.
  */
-async function htmlReportGenerateHtml(args) {
-  rejectUnexpectedArgs(args, new Set(["sessionId", "confirmation"]), "html_report_generate_html");
+async function htmlReportGenerateHtml(args, context) {
+  rejectUnexpectedArgs(args, new Set(["workspaceRoot", "sessionId", "confirmation"]), "html_report_generate_html");
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
   const confirmation = String(args.confirmation || "").trim();
   if (confirmation !== "生成 HTML") {
     throw new Error('explicit user confirmation is required; pass confirmation="生成 HTML" only after the user agrees');
   }
-  const sessionDir = await resolveSessionDir(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId, context);
   const state = await readState(sessionDir);
   if (!state) throw new Error(`no active session: ${sessionId}`);
   if (state.stage !== "b2_main") {
@@ -609,7 +608,7 @@ async function htmlReportGenerateHtml(args) {
   const { exportMainHtml } = await loadKernel("artifacts/export-main-html.mjs");
   const exported = await exportMainHtml(sessionDir);
   if (exported?.htmlPath && existsSync(exported.htmlPath)) {
-    exported.workspaceHtmlPath = await publishWorkspaceArtifact(requireContext(), exported.htmlPath, "main.html");
+    exported.workspaceHtmlPath = await publishWorkspaceArtifact(context, exported.htmlPath, "main.html");
     state.htmlGeneration = { required: false, confirmedAt: new Date().toISOString() };
     await writeState(sessionDir, state);
   }
@@ -619,11 +618,11 @@ async function htmlReportGenerateHtml(args) {
 /**
  * html_report_close_ui: explicitly close the UI without deleting report state.
  */
-async function htmlReportCloseUi(args) {
-  rejectUnexpectedArgs(args, new Set(["sessionId"]), "html_report_close_ui");
+async function htmlReportCloseUi(args, context) {
+  rejectUnexpectedArgs(args, new Set(["workspaceRoot", "sessionId"]), "html_report_close_ui");
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const ui = await closeMetricCliUi(sessionId);
+  const ui = await closeMetricCliUi(sessionId, context);
   return {
     sessionId,
     ui,
@@ -636,10 +635,10 @@ async function htmlReportCloseUi(args) {
 /**
  * html_report_status: return current session state.
  */
-async function htmlReportStatus(args) {
+async function htmlReportStatus(args, context) {
   const sessionId = String(args.sessionId || "").trim();
   if (!sessionId) throw new Error("sessionId is required");
-  const sessionDir = await resolveSessionDir(sessionId);
+  const sessionDir = await resolveSessionDir(sessionId, context);
   const state = await readState(sessionDir);
   const adapter = hostAdapter();
   if (!state) {
@@ -677,6 +676,11 @@ async function htmlReportStatus(args) {
 
 // ── MCP tool schemas ──────────────────────────────────────────────────
 
+const WORKSPACE_ROOT = {
+  type: "string",
+  description: "Absolute path of the active task workspace.",
+};
+
 export const TOOLS = [
   {
     name: "html_report_start",
@@ -684,9 +688,11 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string", description: "Unique session identifier. Auto-generated if omitted." },
         userQuestion: { type: "string", description: "The user's original analysis question." },
       },
+      required: ["workspaceRoot"],
     },
   },
   {
@@ -695,9 +701,10 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string", description: "Session ID from html_report_start." },
       },
-      required: ["sessionId"],
+      required: ["workspaceRoot", "sessionId"],
     },
   },
   {
@@ -706,9 +713,10 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string", description: "Session ID from html_report_start." },
       },
-      required: ["sessionId"],
+      required: ["workspaceRoot", "sessionId"],
     },
   },
   {
@@ -717,12 +725,13 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string" },
         cardId: { type: "string" },
         paragraphs: { type: "array", items: { type: "string" }, description: "1-3 short caption paragraphs." },
         pointers: { type: "array", items: { type: "string" }, description: "JSON pointers to evidence views you used, e.g. /views/<id>. Row-level paths such as /views/<id>/rows/0/metricValue are folded to that view. Omit or pass [] to default to all views." },
       },
-      required: ["sessionId", "cardId", "paragraphs"],
+      required: ["workspaceRoot", "sessionId", "cardId", "paragraphs"],
     },
   },
   {
@@ -731,10 +740,11 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string", description: "Session ID from html_report_start." },
         confirmation: { type: "string", description: "The exact user confirmation phrase: 生成 HTML." },
       },
-      required: ["sessionId", "confirmation"],
+      required: ["workspaceRoot", "sessionId", "confirmation"],
     },
   },
   {
@@ -743,9 +753,10 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        workspaceRoot: WORKSPACE_ROOT,
         sessionId: { type: "string" },
       },
-      required: ["sessionId"],
+      required: ["workspaceRoot", "sessionId"],
     },
   },
 ];
@@ -789,7 +800,8 @@ export async function dispatchMcpRequest(request) {
         const name = params?.name;
         const handler = HANDLERS[name];
         if (!handler) throw new Error(`unknown tool: ${name}`);
-        const result = await handler(params.arguments || {});
+        const args = params.arguments || {};
+        const result = await handler(args, requireContext(args));
         return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] } };
       }
       default:

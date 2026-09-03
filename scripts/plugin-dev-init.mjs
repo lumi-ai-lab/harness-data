@@ -222,9 +222,9 @@ export async function initializeCodexDev() {
     if (setup.stdout) process.stdout.write(setup.stdout);
 
     console.log("[4/4] 验证 Plugin、Hook 和 MCP");
-    const pluginList = run("codex", ["plugin", "list", "--json"]);
+    const pluginList = run("codex", ["plugin", "list", "--json"], { cwd: PROJECT_ROOT });
     if (!pluginList.stdout.includes("harness-data")) throw new Error("harness-data is not installed");
-    const mcpList = run("codex", ["mcp", "list"]);
+    const mcpList = run("codex", ["mcp", "list"], { cwd: PROJECT_ROOT });
     if (!/^html-report\s+.*enabled/m.test(mcpList.stdout)) throw new Error(`html-report MCP is not enabled: ${mcpList.output}`);
     runNode(path.join(pluginRoot, "mcp", "server.mjs"), ["--self-test"]);
 

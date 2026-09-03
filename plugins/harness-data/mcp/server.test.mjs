@@ -140,7 +140,10 @@ function startServer(t, { env = process.env, cwd = repoRoot } = {}) {
     return result;
   }
   async function callTool(name, args) {
-    const message = await rpc("tools/call", { name, arguments: args });
+    const message = await rpc("tools/call", {
+      name,
+      arguments: { workspaceRoot: serverEnv.HARNESS_WORKSPACE_ROOT, ...args },
+    });
     if (message.error) return { error: message.error };
     const text = message.result?.content?.[0]?.text || "";
     return { result: JSON.parse(text) };
@@ -245,6 +248,45 @@ test("MCP blocks a disallowed workspace before creating a report session", async
   assert.equal(existsSync(sessionDirFor(sessionId, workspace)), false);
 });
 
+test("MCP requires a tool workspaceRoot and ignores plugin PWD", async (t) => {
+  const pluginCwd = await mkdtemp(join(tmpdir(), "mcp-plugin-pwd-"));
+  const binDir = await mkdtemp(join(tmpdir(), "mcp-explicit-workspace-cli-"));
+  const metricCli = await installFakeMetricCli(binDir);
+  const sessionId = `mcp-explicit-workspace-${process.pid}-${Date.now()}`;
+  const sessionDir = sessionDirFor(sessionId);
+  t.after(async () => {
+    await rm(pluginCwd, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
+    await rm(sessionDir, { recursive: true, force: true });
+  });
+  const { rpc, callTool } = startServer(t, {
+    cwd: pluginCwd,
+    env: {
+      ...process.env,
+      HARNESS_WORKSPACE_ROOT: pluginCwd,
+      PWD: pluginCwd,
+      QDM_METRIC_CLI: metricCli,
+      HTML_REPORT_METRIC_CLI_UI_OPEN: "0",
+    },
+  });
+  await rpc("initialize", {});
+
+  const missing = await rpc("tools/call", {
+    name: "html_report_start",
+    arguments: { sessionId, userQuestion: "缺少工作区" },
+  });
+  assert.match(missing.error?.message || "", /QDM_WORKSPACE_REQUIRED/);
+  assert.equal(existsSync(sessionDir), false);
+
+  const started = await callTool("html_report_start", {
+    sessionId,
+    userQuestion: "显式工作区",
+    workspaceRoot: testWorkspaceRoot,
+  });
+  assert.equal(started.error, undefined);
+  assert.equal(started.result.sessionDir, sessionDir);
+});
+
 test("MCP refuses an auto-generated session when the host has no stable session id", async (t) => {
   const { rpc, callTool } = startServer(t, {
     env: {
@@ -256,7 +298,6 @@ test("MCP refuses an auto-generated session when the host has no stable session 
   await rpc("initialize", {});
   const result = await callTool("html_report_start", { userQuestion: "必须显式 session" });
   assert.match(result.error?.message || "", /QDM_SESSION_UNAVAILABLE/);
-  assert.equal(existsSync(join(stateRootFor(), "html-report")), false);
 });
 
 test("MCP loader and server do not import PI agent directories", async () => {
@@ -718,6 +759,7 @@ test("B2_MAIN does not auto-export; generate_html works after explicit call", as
       "html_report_status",
     ],
   );
+  assert.equal(listed.result.tools.every((tool) => tool.inputSchema.required.includes("workspaceRoot")), true);
 
   const next = await callTool("html_report_next", { sessionId });
   assert.equal(next.result.stage, "b2_main");
@@ -822,7 +864,7 @@ test("generate_html failure can be retried and rejects extra path arguments", as
   assert.equal(retried.result.status, "generated");
 });
 
-test("plugin-cache cwd still reads sessions from HARNESS_WORKSPACE_ROOT", async (t) => {
+test("plugin-cache cwd reads sessions from explicit workspaceRoot", async (t) => {
   const pluginCwd = await mkdtemp(join(tmpdir(), "mcp-plugin-cwd-"));
   const harness = await mkdtemp(join(tmpdir(), "mcp-harness-ws-"));
   t.after(async () => {

@@ -26,6 +26,10 @@ html_report_generate_html  → optional analysis/main.md → sibling main.html
 html_report_status         → query current state
 ```
 
+Set `workspaceRoot` to the active Codex task's absolute workspace path. Pass
+the same value in **every** MCP Tool call; never infer it from `PWD` or the
+MCP process working directory.
+
 ## Pipeline (first version)
 
 ```
@@ -50,7 +54,11 @@ is optional and only after explicit user confirmation.
 Call `html_report_start` with the user's question:
 
 ```json
-{ "sessionId": "<unique-id>", "userQuestion": "<the user's original question>" }
+{
+  "workspaceRoot": "<absolute-active-workspace-path>",
+  "sessionId": "<unique-id>",
+  "userQuestion": "<the user's original question>"
+}
 ```
 
 If the host does not expose a stable session ID, `sessionId` must be supplied
@@ -71,7 +79,10 @@ Tell the user:
 After the user replies **继续**, call `html_report_next`:
 
 ```json
-{ "sessionId": "<the-id-from-start>" }
+{
+  "workspaceRoot": "<same-absolute-active-workspace-path>",
+  "sessionId": "<the-id-from-start>"
+}
 ```
 
 The server validates `result.json` (B0). On a successful preflight it closes
@@ -82,7 +93,10 @@ The browser tab itself is not closed automatically.
 If the user explicitly cancels or asks to close the editor, call:
 
 ```json
-{ "sessionId": "<the-id-from-start>" }
+{
+  "workspaceRoot": "<same-absolute-active-workspace-path>",
+  "sessionId": "<the-id-from-start>"
+}
 ```
 
 with `html_report_close_ui`. This stops the UI but keeps the report session
@@ -125,6 +139,7 @@ Then call `html_report_submit_writer`:
 
 ```json
 {
+  "workspaceRoot": "<same-absolute-active-workspace-path>",
   "sessionId": "<id>",
   "cardId": "<from-next>",
   "paragraphs": ["..."],
@@ -148,7 +163,7 @@ After `html_report_next` returns `stage: "b2_main"`, ask the user exactly:
 - If the user **explicitly agrees** (e.g. 生成 HTML / 要 / 是), call only:
 
 ```json
-html_report_generate_html({ "sessionId": "<id>", "confirmation": "生成 HTML" })
+html_report_generate_html({ "workspaceRoot": "<same-absolute-active-workspace-path>", "sessionId": "<id>", "confirmation": "生成 HTML" })
 ```
 
 - If the user declines or says 继续 / 暂不生成 HTML, **do not** call the tool.
@@ -160,6 +175,7 @@ html_report_generate_html({ "sessionId": "<id>", "confirmation": "生成 HTML" }
 ## Rules
 
 - **Never** write `entry.json`, `entry.meta.json`, `caption.md`, `main.md`, or `main.html` yourself.
+- **Always** pass the active task's absolute `workspaceRoot` to every MCP Tool call.
 - **Never** call `qdm-metric-cli` or `md2html` directly — all data and HTML export come through the MCP tools.
 - **Never** invent numbers. Every value must trace to an evidence view.
 - **Never** skip the user's **继续** reply after A_CONFIG.
