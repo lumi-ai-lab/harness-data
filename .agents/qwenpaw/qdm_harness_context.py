@@ -107,6 +107,10 @@ def request_context(
         raise HarnessContextError("context_protocol_invalid") from exc
     if not isinstance(content, str) or not content.strip():
         raise HarnessContextError("context_empty")
+    # Root Context 不合法时 CLI 走的是 "safety output": exit 0 + 错误码文本当正文。
+    # QwenPaw 的注入内容是授权边界的一部分, 不能把错误串当成手册喂给模型。
+    if content.lstrip().startswith("QDM_"):
+        raise HarnessContextError(_context_cli_failure_reason(content, ""))
     _warn_on_embedded_manuals(envelope)
     # The generic Harness prompt historically told agents to read contextFiles
     # with their host file tool. QwenPaw has no such tool; the CLI has already
@@ -163,6 +167,10 @@ def _context_cli_failure_reason(stderr: str, stdout: str) -> str:
         return "missing_selected_manual"
     if "wikis-index.json" in text or "wikis-runtime-index.json" in text:
         return "missing_wiki_index"
+    # Root Context 自身的 surface/host 值不合法时 CLI 也是整次失败, 单独分类
+    # 出来, 免得日志里只剩一个 context_cli_failed 需要进容器复现。
+    if "surface must be one of" in text or "qdm_context_invalid" in text:
+        return "invalid_root_context"
     return "context_cli_failed"
 
 

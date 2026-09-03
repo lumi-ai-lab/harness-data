@@ -1244,7 +1244,28 @@ class HarnessContextTests(unittest.TestCase):
             _context_cli_failure_reason("qwenpaw-hook: failed to embed selected manuals: metrics/x/playbook.md (ENOENT)", ""),
             "missing_selected_manual",
         )
+        self.assertEqual(
+            _context_cli_failure_reason(
+                "QDM_CONTEXT_INVALID: surface must be one of codex, desktop, chat, work, cli: unknown", ""
+            ),
+            "invalid_root_context",
+        )
         self.assertEqual(_context_cli_failure_reason("unexpected failure", ""), "context_cli_failed")
+
+    def test_a_cli_safety_stub_is_refused_instead_of_injected(self) -> None:
+        # Root Context 校验失败时 CLI 以 exit 0 + 错误码文本返回, 这类内容不能
+        # 当成 Harness 手册注入, 否则模型拿到的是错误信息而不是上下文。
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "data-harness-cli.exe"
+            _write_placeholder_cli(cli)
+            envelope = {
+                "additionalContext": "QDM_CONTEXT_INVALID: surface must be one of codex, desktop, chat, work, cli: unknown",
+                "contextFiles": [],
+                "embeddedContextFiles": [],
+            }
+            with self.assertRaises(HarnessContextError) as caught:
+                self._context_with(cli, envelope)
+            self.assertEqual(caught.exception.reason, "invalid_root_context")
 
 
 class ConsoleChannelTests(unittest.TestCase):
