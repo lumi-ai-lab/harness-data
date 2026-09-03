@@ -61,6 +61,15 @@ namei -l "$QDM_CHANNEL_SECRET_DIR"   # 每一级目录都要有 o+x, 否则容�
 > (或 `0640` 且容器 GID 能组读)。`run_docker.sh` 会在启动前以容器 UID 实测一次可读性, 读不到就直接报错退出。
 > `session-hmac.secret` 不需要准备, 首次运行由 `run_docker.sh` 生成并 chown 给容器 UID。
 
+> 导出任务通常把文件生成在别处(如 `/data/qdm-auth-center/channel-auth.json`), **拷进密钥目录这一步
+> 得单独安排**, 否则密钥目录里永远是首次部署那天的旧数据。要改属主就得用 root crontab, 排在导出之后:
+>
+> ```cron
+> 10 8 * * * install -o 10001 -g 10001 -m 600 /data/qdm-auth-center/channel-auth.json "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
+> ```
+>
+> `install` 会整体替换文件(cron 的覆盖写同样如此), 容器读到的是新的 inode, 不影响运行中的进程。
+
 > 该文件**已存在时脚本不会改动它的属主**(重新生成或改派生材料会让所有企微会话 key 漂移),
 > 而旧版脚本是按 `channel-auth.json` 的属主来 chown 它的。老机器升级后先核一次:
 > `stat -c '%a %U:%G' "$QDM_CHANNEL_SECRET_DIR/session-hmac.secret"`, 不是容器 UID 可读就
@@ -84,10 +93,22 @@ docker exec qwenpaw python -c 'import os;print([os.access("/run/secrets/"+f, os.
 docker logs --since 10m qwenpaw 2>&1 | grep -E 'qdm_query_failed|qdm_harness_context_failed' || echo "无授权/上下文失败"
 ```
 
-脚本已内置以下参数, 无需额外配置:
+密钥可读、`reason` 却不是授权类的失败, 先核 Root Context 的 `surface`:
+
+```bash
+docker exec qwenpaw python -c 'import json;print(json.load(open("/opt/qdm/harness-data/instance/0.0.56/context.json"))["surface"])'
+```
+
+必须落在 `chat` / `codex` / `desktop` / `work` 里。`unknown` 或字段缺失会让整次上下文注入
+失败(企微回"Harness 上下文不可用", 日志 `reason=invalid_root_context`): setup 会把按 host
+派生出的 surface 写进这个文件, 而 CLI 每次读取都重新校验它, 两边口径必须一致 —— 现在
+host `qwenpaw` 派生为 `chat`, `Dockerfile` 里也显式传了 `--surface chat`。
+
+脚本已内置以下参数, 无需额外配置(脚本可重复执行: 同名容器含运行中的会在启动前被停掉并
+删除, 配置和数据都在命名卷里, 不会因此丢失):
 
 ```text
-监听   127.0.0.1:8088(默认仅本机)
+监听   0.0.0.0:8088(默认对局域网开放)
 内存   上限 8G
 时区   Asia/Shanghai(容器 TZ + config.json 的 user_timezone)
 自启   --restart unless-stopped
@@ -96,7 +117,8 @@ docker logs --since 10m qwenpaw 2>&1 | grep -E 'qdm_query_failed|qdm_harness_con
 
 - 想调整内存上限: `export QWENPAW_MEM_LIMIT=16g` 后重跑 `run_docker.sh`。
 - 想换时区: `export QWENPAW_TZ=Asia/Tokyo` 后重跑 `run_docker.sh`。
-- 想让局域网/外部直连: `export QWENPAW_BIND=0.0.0.0` 后重跑 `run_docker.sh`(暴露后请自行用防火墙/反向代理限制来源)。
+- 想收回仅本机访问: `export QWENPAW_BIND=127.0.0.1` 后重跑 `run_docker.sh`, 控制台改用 ⑤ 的端口转发访问。
+- 默认 `0.0.0.0` 意味着同网段任何人都能打开控制台(默认不做登录鉴权), 请自行用防火墙/反向代理限制来源。
 - 国内环境直连即可, 无需代理。
 
 核对时区是否生效(应分别输出 `Asia/Shanghai` 与 CST/+0800):
@@ -116,8 +138,9 @@ docker exec qwenpaw date
 
 容器 healthy 之后,企微/飞书还没接上:渠道要绑到专用 Agent 上才算配置完成。**这一步最容易踩空**。
 
-1. 打开控制台。默认只监听 `127.0.0.1:8088`,从 workstation 访问要先做端口转发
-   (`ssh -L 8088:127.0.0.1:8088 root@<服务器IP>`),或按 ④ 的说明用 `QWENPAW_BIND=0.0.0.0`。
+1. 打开控制台。默认监听 `0.0.0.0:8088`, 浏览器直接访问 `http://<服务器IP>:8088`;
+   若按 ④ 把监听收回过仅本机(`QWENPAW_BIND=127.0.0.1`), 从 workstation 访问要先做端口
+   转发(`ssh -L 8088:127.0.0.1:8088 root@<服务器IP>`)。
 2. **先把左侧栏顶部的 "Current Agent" 切到「QDM 数据助手」。** 下拉项第二行会显示
    `ID: harness-data-default`,以这个 ID 为准,别按显示名认。
 3. 进 Channels 页(路由 `/channels`)配置 wecom 或 feishu,保存。
@@ -197,32 +220,38 @@ docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-dat
 
 未命中时 `qdm_query` 不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
 若配置里的作用域不可用,插件按 fail-closed 处理,同样不注册工具、不注入上下文。
-镜像对作用域内的 Agent 以 `--tool-policy strict` 建立,工具面被收窄到
-`qdm_query` / `qdm_scope_summary` / `get_current_time` 三个,同时关掉工具结果裁剪。这一步是
-授权边界的一部分:`/run/secrets/channel-auth.json` 与 `session-hmac.secret` 必须对容器运行
-UID 可读(插件进程内要按渠道用户解出 blob),所以 0600 不是隔离手段,真正的边界是"模型没有
-文件与命令工具可用"。代价是模型不能再自己去 grep wikis 找指标,答案完全依赖注入的上下文,
-因而 `context --format qwenpaw-hook` 的"选中的手册必须全部内嵌,否则整次请求失败"是它的
-前置条件。
+
+工具面口径由 `Dockerfile` 里 setup 的 `--tool-policy` 决定,写进插件配置的 `tool_policy`,
+**当前镜像是 `preserve`**:作用域内的 Agent 保留宿主默认的全量工具(shell/文件都在),
+这样企微里发来的 xlsx、截图才能交给 `officecli-*` / `charts-cli` 技能处理。
+
+改成 `--tool-policy strict` 会把作用域内 Agent 的工具面收窄到 `qdm_query` /
+`qdm_scope_summary` / `get_current_time` 三个,同时关掉工具结果裁剪。这是更强的一层:
+`/run/secrets/channel-auth.json` 与 `session-hmac.secret` 必须对容器运行 UID 可读(插件
+进程内要按渠道用户解出 blob),0600 不是隔离手段,`preserve` 下渠道用户能让模型跑 shell,
+`strict` 才把这条路关掉。代价是模型不能再自己 grep wikis 或用 shell 分析上传的文件,
+答案完全依赖注入的上下文,因而 `context --format qwenpaw-hook` 的"选中的手册必须全部内嵌,
+否则整次请求失败"是它的前置条件。
 
 核对与回退:
 
 ```bash
-# offenders=none 表示作用域内 Agent 的工具面确实只剩 QDM 三个
+# 打印当前口径; strict 下 detail 里的 offenders=none 才表示确实只剩 QDM 三个
 docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data \
   qwenpaw doctor --plugin-config-file /etc/qdm/qwenpaw/plugin-config.json \
   --qwenpaw-working-dir /app/working --json | grep -A3 '"tool-allowlist"'
 ```
 
-要放回宿主默认工具面,在 `Dockerfile` 的 setup 里去掉 `--tool-policy strict` 重新构建;
-`preserve` 下 setup 不写任何 `agent.json`。开发实例(`scripts/plugin-dev-init-qwenpaw.mjs`)
-故意保留 `preserve`,它把 `default` 也放进了作用域,strict 会连带削掉控制台在用的工具。
+两个方向都靠改 `Dockerfile` 里 setup 的 `--tool-policy` 再重新构建; `preserve` 下 setup 不写
+任何 `agent.json`。开发实例(`scripts/plugin-dev-init-qwenpaw.mjs`)故意保留 `preserve`,它把
+`default` 也放进了作用域,strict 会连带削掉控制台在用的工具。
 
-> **升级期缺口**:`--tool-policy strict` 由 setup 施加,而 setup 只在**构建期**跑;持久卷上
-> 已有的 `agent.json` 不会在启动时被重新收窄(渠道绑定的 `ensure_qdm_agent.py` 每次启动都跑,
-> 工具面没有对应的一次)。老部署升级镜像后,请在第 ⑤ 步之后核一次 `tool-allowlist`;若报
-> offenders,重建镜像或手工把该 Agent 的工具关掉。把收窄并入启动期的 `ensure_qdm_agent.py`
-> 是这一步的后续改进项。
+> 工具面每次启动都会被对齐: `ensure_qdm_agent.py` 读插件配置的 `tool_policy`
+> (`QWENPAW_QDM_TOOL_POLICY` 可临时覆盖),strict 收窄、preserve 放开,幂等。所以老部署升级
+> 镜像不会遗留旧口径 —— 日志里 `opened tools ... to the QwenPaw default allowlist` 就是
+> preserve, `narrowed tools ... to the QDM strict allowlist` 就是 strict。只用环境变量覆盖
+> 会让运行中进程与烘焙进 `/etc/qdm/qwenpaw/plugin-config.json` 的口径不一致(插件自身的工具
+> 可见性读的是那份配置),长期切换请改 `Dockerfile` 重建。
 
 引导逻辑本身有一组不依赖宿主的单测:
 

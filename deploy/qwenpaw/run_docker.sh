@@ -14,13 +14,14 @@ set -eu
 
 # 镜像引用:标签要和 build-docker-image.sh 产出的 tag 保持一致
 image=${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-amd64}
-# 容器名:同名容器已存在时 docker run 会失败,需改名或先 docker rm -f
+# 容器名:同名容器(含已停止的)在启动前由下方统一停掉并删除,本脚本可重复执行
 name=${QWENPAW_CONTAINER_NAME:-qwenpaw}
 # 宿主机发布端口:容器内固定监听 8088
 port=${QWENPAW_PORT:-8088}
-# 宿主机绑定地址:默认仅 127.0.0.1(不对局域网/公网暴露)。需要外部直连时
-# export QWENPAW_BIND=0.0.0.0 再跑本脚本;暴露后请自行用防火墙/反代限制来源。
-bind_addr=${QWENPAW_BIND:-127.0.0.1}
+# 宿主机绑定地址:默认 0.0.0.0,局域网内可直接访问控制台(http://<服务器IP>:8088)。
+# 控制台默认不做鉴权,对外暴露时请自行用防火墙/反向代理限制来源;需要收回只给
+# 本机访问时 export QWENPAW_BIND=127.0.0.1 再跑本脚本,访问改用端口转发。
+bind_addr=${QWENPAW_BIND:-0.0.0.0}
 # 容器运行用户 uid:决定容器内进程能读到哪些密钥文件,镜像内置默认 10001
 runtime_uid=${QWENPAW_UID:-10001}
 # 容器运行用户 gid:同上;密钥文件属主可以是别的账号(如 cron 的导出账号),
@@ -76,6 +77,13 @@ proxy=${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}
 if [ -n "${proxy}" ]; then
   proxy=$(printf '%s' "${proxy}" |
     sed -E 's#^(https?://)?(127\.0\.0\.1|localhost)([/:]|$)#\1host.docker.internal\3#')
+fi
+
+# 同名容器(含运行中的)先停掉再删除,让"改参数 → 重跑本脚本"一步到位。
+# 配置与数据都在命名卷里,删容器不影响持久化。
+if docker ps -a --format '{{.Names}}' | grep -qxF "${name}"; then
+  echo "removing existing container: ${name}" >&2
+  docker rm -f "${name}" >/dev/null
 fi
 
 set -- docker run -d --name "${name}" \
