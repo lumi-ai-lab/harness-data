@@ -43,6 +43,10 @@ harness-data qwenpaw setup \
   --secret-dir <敏感目录, channel-auth.json 所在, 默认 /run/secrets>
 ```
 
+> `--secret-dir` 里的 `channel-auth.json` 只要求对宿主上运行 QwenPaw 的 UID/GID 可读
+> (`0644`, 或同组 `0640`), 不要求属主一致: 由导出任务每天重写该文件的场景, 可以把该目录
+> 直接指向任务的产出目录, 不需要改属主。Docker 部署见 `deploy/qwenpaw/README.md` 步骤③。
+
 完成后插件通过引用模型 `plugin-config.json` 指向 Root Context(instanceRoot), 工作区不再存放
 任何 Harness 资源。
 
@@ -71,6 +75,21 @@ chmod +x ~/.qwenpaw/plugins/qdm-harness-qwenpaw/scripts/data-harness-cli
 ~/.qdm/harness-data/data/state/...               ← dataRoot, 跨版本
 ~/.qwenpaw/workspaces/<agent>/agent.json         ← 仅宿主注册指针
 ```
+
+`<agent>` 由 `plugin-config.json` 的 `enabled_agents` 作用域决定(精确 id 或
+`harness-data-*` 这类通配; 缺省只有 `harness-data-*`, **不含**宿主内置的 `default`)。
+宿主把插件的钩子与工具注册进**每一个** Agent 的 workspace, 所以这层作用域同时决定
+"钩子跑不跑"和"`qdm_query` 在哪个 Agent 上可见"——未命中的 Agent 连工具都不注册。
+
+两条运维上会踩到的点:
+
+- **控制台里要先切 Agent 再配渠道/工具。** 侧边栏顶部的 "Current Agent" 初值由前端固定在
+  字面量 `default`(优先级:本标签页记忆 → 上次使用 → `default`), **不读** `active_agent`;
+  整个侧边栏(渠道、工具、技能)都是按当前选中的 Agent 生效的, 渠道必须绑在作用域命中的那个
+  Agent 上, 否则企微里回"当前会话不支持 QDM 数据查询"。
+- 作用域配错是**静默**的: 插件照常加载、健康检查照常通过, 只是谁都不服务。装完用
+  `harness-data qwenpaw doctor --qwenpaw-working-dir <QWENPAW 工作目录> --json` 看
+  `agent-scope` 一项的 `matched=`; 为 `none` 就说明没有任何 Agent 命中。
 
 ## 生命周期
 

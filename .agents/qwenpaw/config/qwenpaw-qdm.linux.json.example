@@ -2,6 +2,7 @@
   "schema_version": 1,
   "runtime_dir": "/opt/qdm/harness-data-runtime",
   "qdm_agent_id": "qdmDataAgent",
+  "enabled_agents": ["harness-data-*", "qdmDataAgent"],
   "user_id_display_mode": "off",
   "auth_file_max_bytes": null,
   "context_cli_timeout_seconds": 60,

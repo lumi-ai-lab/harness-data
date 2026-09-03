@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -38,6 +39,18 @@ test("stage + verify QwenPaw plugin artifact", () => {
     assert.ok(!existsSync(path.join(root, "tests")));
     assert.ok(!existsSync(path.join(root, "install-qwenpaw-plugin.py")));
     assert.ok(!existsSync(path.join(root, "__pycache__")));
+    const coreShim = spawnSync(path.join(root, "scripts", "data-harness-cli"), ["help"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(coreShim.status, 0, coreShim.stderr || coreShim.stdout);
+    assert.match(coreShim.stdout, /usage: data-harness-cli/);
+    const lifecycleShim = spawnSync(path.join(root, "scripts", "harness-data"), [], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(lifecycleShim.status, 0, lifecycleShim.stderr || lifecycleShim.stdout);
+    assert.match(lifecycleShim.stdout, /Usage: harness-data/);
   } finally {
     rmSync(path.dirname(root), { recursive: true, force: true });
   }

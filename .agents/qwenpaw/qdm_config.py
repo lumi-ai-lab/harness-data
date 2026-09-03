@@ -5,24 +5,70 @@ Schema 2 (reference model) holds plugin identity, a Root Context file
 reference and a secret reference; the metric CLI path comes from the Root
 Context (instanceRoot/config/settings.json), so the plugin stops trusting a
 single global runtime directory.  A broken Root Context fails closed.
+
+Both schemas carry an ``enabled_agents`` activation scope.  The host registers
+this plugin's runtime hooks and tools in *every* workspace, so the plugin
+decides per request whether the current agent is one it was told to serve.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 
 PROGRAM_DATA = Path("C:/ProgramData/QDM/qwenpaw") if os.name == "nt" else Path("/etc/qdm/qwenpaw")
 DEFAULT_PLUGIN_CONFIG_FILE = PROGRAM_DATA / "plugin-config.json"
 DEFAULT_QDM_AGENT_ID = "qdmDataAgent"
+# QwenPaw installs this plugin once per process but its runtime hooks and tools
+# reach every workspace, so activation is narrowed by agent id pattern here.
+# The built-in shared ``default`` agent is deliberately absent: opting it in
+# means listing it explicitly in ``enabled_agents``.
+DEFAULT_AGENT_SCOPE_PATTERNS: tuple[str, ...] = ("harness-data-*",)
+# Host agent ids are alphanumeric plus ``-``/``_``; ``*`` and ``?`` are the only
+# additions, and a bare ``*`` is the explicit "serve every agent" opt-out.
+AGENT_SCOPE_PATTERN_CHARS = re.compile(r"^(\*|[A-Za-z0-9][A-Za-z0-9_.*?-]*)$")
+MAX_AGENT_SCOPE_PATTERNS = 32
+MAX_AGENT_SCOPE_PATTERN_CHARS = 64
 SENSITIVE_CONFIG_RELATIVE_DIR = Path("config") / "qwenpaw"
 TOOL_POLICIES = frozenset({"preserve", "strict"})
 LEGACY_SCHEMA = 1
 REFERENCE_SCHEMA = 2
+
+
+@dataclass(frozen=True)
+class AgentScope:
+    """The agent ids this plugin is allowed to activate on.
+
+    An entry is either an exact agent id or a wildcard pattern (``*`` and
+    ``?``).  Matching is case-sensitive on every platform, so a Windows host
+    cannot widen the scope by casing.  ``matched_pattern`` reports *which*
+    entry selected an agent, letting callers distinguish a deliberately named
+    agent from one swept in by a wildcard.
+    """
+
+    patterns: tuple[str, ...] = DEFAULT_AGENT_SCOPE_PATTERNS
+
+    def matched_pattern(self, agent_id: Any) -> str:
+        name = str(agent_id or "").strip()
+        if not name:
+            return ""
+        for pattern in self.patterns:
+            if pattern == name or fnmatchcase(name, pattern):
+                return pattern
+        return ""
+
+    def allows(self, agent_id: Any) -> bool:
+        return bool(self.matched_pattern(agent_id))
+
+    def allows_by_exact_name(self, agent_id: Any) -> bool:
+        name = str(agent_id or "").strip()
+        return bool(name) and name in self.patterns
 
 
 @dataclass(frozen=True)
@@ -59,13 +105,17 @@ class PluginConfig:
     plugin_version: str = ""
     root_context_path: Path | None = None
     secret_ref: str | None = None
-    enabled_agents: tuple[str, ...] = ()
+    agent_scope: AgentScope = AgentScope()
     # 兼容模型字段 (schema 1): runtime_dir 派生
     runtime_dir: Path | None = None
     _metric_cli_path: str | None = None
     _sensitive_config_dir: str | None = None
     # schema 2: 从 Root Context 的 pluginRoot 解析的 harness CLI 路径
     _harness_cli_path: str | None = None
+
+    @property
+    def enabled_agents(self) -> tuple[str, ...]:
+        return self.agent_scope.patterns
 
     @property
     def sensitive_config_dir(self) -> Path:
@@ -116,9 +166,10 @@ def load_config(path: Path = DEFAULT_PLUGIN_CONFIG_FILE) -> PluginConfig:
 
 
 def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
-    required = {"schema_version", "plugin_id", "qdm_agent_id", "user_id_display_mode"}
+    required = {"schema_version", "plugin_id", "user_id_display_mode"}
     allowed = required | {
         "plugin_version", "root_context_path", "secret_ref", "enabled_agents",
+        "qdm_agent_id",
         "tool_policy", "context_limits", "query_limits", "report_limits",
         "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds",
     }
@@ -129,7 +180,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
     display = raw.get("user_id_display_mode")
     if not isinstance(plugin_id, str) or not plugin_id.strip():
         raise ConfigError("plugin_id is invalid")
-    if not isinstance(agent_id, str) or not agent_id.strip():
+    if agent_id is not None and (not isinstance(agent_id, str) or not agent_id.strip()):
         raise ConfigError("qdm_agent_id is invalid")
     if display not in {"off", "command"}:
         raise ConfigError("user_id_display_mode must be off or command")
@@ -143,11 +194,9 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
     harness_cli_path = _harness_cli_from_context(context)
     sensitive_dir = _sensitive_dir_from_reference(raw.get("secret_ref"), context)
 
-    enabled = raw.get("enabled_agents") or []
-    if not isinstance(enabled, list) or not all(isinstance(item, str) and item.strip() for item in enabled):
-        raise ConfigError("enabled_agents must be a list of agent ids")
+    scope = parse_agent_scope(raw.get("enabled_agents"), str(agent_id or "").strip())
     return PluginConfig(
-        agent_id.strip(), display, tool_policy,
+        str(agent_id or "").strip(), display, tool_policy,
         parse_context_limits(raw.get("context_limits")),
         parse_query_limits(raw.get("query_limits")),
         parse_report_limits(raw.get("report_limits")),
@@ -158,7 +207,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         plugin_version=str(raw.get("plugin_version") or "").strip(),
         root_context_path=context_path,
         secret_ref=str(raw.get("secret_ref") or "").strip() or None,
-        enabled_agents=tuple(enabled),
+        agent_scope=scope,
         _metric_cli_path=str(metric_cli_path),
         _sensitive_config_dir=str(sensitive_dir),
         _harness_cli_path=str(harness_cli_path),
@@ -167,7 +216,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
 
 def _load_legacy(raw: dict[str, Any]) -> PluginConfig:
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
+    allowed = required | {"enabled_agents", "context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
     runtime = raw.get("runtime_dir")
@@ -185,7 +234,36 @@ def _load_legacy(raw: dict[str, Any]) -> PluginConfig:
     runtime_path = Path(runtime).expanduser()
     if not runtime_path.is_absolute() or runtime_path.is_symlink() or not runtime_path.is_dir():
         raise ConfigError("runtime_dir must be absolute")
-    return PluginConfig(agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"), runtime_dir=runtime_path.resolve())
+    scope = parse_agent_scope(raw.get("enabled_agents"), agent_id.strip())
+    return PluginConfig(agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"), agent_scope=scope, runtime_dir=runtime_path.resolve())
+
+
+def parse_agent_scope(value: Any, legacy_agent_id: str = "") -> AgentScope:
+    """Build the activation scope from ``enabled_agents`` plus the legacy id.
+
+    Absent ``enabled_agents`` keeps a single-agent install working verbatim;
+    an explicit list is authoritative, and the legacy id is only merged in so
+    an operator widening the scope never has to delete their own agent name.
+    """
+    patterns: list[str] = []
+    if value is None:
+        if not legacy_agent_id:
+            return AgentScope(DEFAULT_AGENT_SCOPE_PATTERNS)
+    elif not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ConfigError("enabled_agents must be a list of agent id patterns")
+    else:
+        for item in value:
+            pattern = item.strip()
+            if (not pattern or len(pattern) > MAX_AGENT_SCOPE_PATTERN_CHARS
+                    or not AGENT_SCOPE_PATTERN_CHARS.match(pattern)):
+                raise ConfigError("enabled_agents contains an invalid agent id pattern")
+            if pattern not in patterns:
+                patterns.append(pattern)
+        if len(patterns) > MAX_AGENT_SCOPE_PATTERNS:
+            raise ConfigError("enabled_agents contains too many patterns")
+    if legacy_agent_id and legacy_agent_id not in patterns:
+        patterns.append(legacy_agent_id)
+    return AgentScope(tuple(patterns))
 
 
 def parse_timeout(value: Any, field: str, default: int = 60, maximum: int = 300) -> int:

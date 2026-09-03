@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import subprocess
 import os
 import stat
@@ -18,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 from .qdm_config import ContextLimits
+
+
+logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
 
 
 class HarnessContextError(RuntimeError):
@@ -97,11 +101,13 @@ def request_context(
         raise HarnessContextError(_context_cli_failure_reason(result.stderr, result.stdout))
     try:
         output: Any = json.loads(result.stdout)
-        content = output["hookSpecificOutput"]["additionalContext"]
+        envelope = output["hookSpecificOutput"]
+        content = envelope["additionalContext"]
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise HarnessContextError("context_protocol_invalid") from exc
     if not isinstance(content, str) or not content.strip():
         raise HarnessContextError("context_empty")
+    _warn_on_embedded_manuals(envelope)
     # The generic Harness prompt historically told agents to read contextFiles
     # with their host file tool. QwenPaw has no such tool; the CLI has already
     # embedded those files, so rewrite the instruction accordingly.
@@ -110,6 +116,28 @@ def request_context(
     if _exceeds_limit(len(content.encode("utf-8")), limits.base_context_bytes):
         raise HarnessContextError("context_base_too_large")
     return content + "\n\n" + QWENPAW_TOOL_POLICY + "\n"
+
+
+def _warn_on_embedded_manuals(envelope: Any) -> None:
+    """Check the CLI's embedded-manifest declaration against the selection it made.
+
+    The CLI either embeds every selected manual or exits non-zero, so a mismatch
+    means CLI/adapter skew rather than a partial context. Logged only until a
+    release confirms no skew remains, then it becomes a HarnessContextError.
+    """
+    if not isinstance(envelope, dict):
+        return
+    selected = envelope.get("contextFiles")
+    paths = [str(ref.get("path", "")) for ref in selected if isinstance(ref, dict)] if isinstance(selected, list) else []
+    embedded = envelope.get("embeddedContextFiles")
+    if not isinstance(embedded, list):
+        logger.warning("qdm_embedded_manuals_mismatch kind=missing_manifest selected=%d", len(paths))
+        return
+    if sorted(paths) != sorted(str(item) for item in embedded):
+        logger.warning(
+            "qdm_embedded_manuals_mismatch kind=set_mismatch selected=%d embedded=%d",
+            len(paths), len(embedded),
+        )
 
 
 def _sanitize_embedded_context_instruction(content: str) -> str:
@@ -131,6 +159,8 @@ def _exceeds_limit(actual: int, limit: int | None) -> bool:
 def _context_cli_failure_reason(stderr: str, stdout: str) -> str:
     """Classify a known setup error without recording untrusted CLI text."""
     text = f"{stderr}\n{stdout}".casefold()
+    if "failed to embed selected manuals" in text:
+        return "missing_selected_manual"
     if "wikis-index.json" in text or "wikis-runtime-index.json" in text:
         return "missing_wiki_index"
     return "context_cli_failed"

@@ -16,6 +16,7 @@ from qdm_config import (
     ConfigError,
     DEFAULT_PLUGIN_CONFIG_FILE,
     DEFAULT_QDM_AGENT_ID,
+    parse_agent_scope,
     parse_context_limits,
     parse_query_limits,
     parse_report_limits,
@@ -53,10 +54,14 @@ def install(args: argparse.Namespace) -> None:
     _validate_channel_auth(auth_file)
     _validate_regular(secret_file, "会话 HMAC Secret", minimum=32)
     _validate_runtime_binaries(runtime)
+    scope = parse_agent_scope(getattr(args, "enabled_agents", None), args.agent_id)
+    if not scope.allows(args.agent_id):
+        raise RuntimeError("--enabled-agents 未覆盖本次要治理的 --agent-id")
     config = {
         "schema_version": 1,
         "runtime_dir": str(runtime),
         "qdm_agent_id": args.agent_id,
+        "enabled_agents": list(scope.patterns),
         "user_id_display_mode": args.user_id_display_mode,
         "tool_policy": getattr(args, "tool_policy", "preserve"),
         "auth_file_max_bytes": None,
@@ -153,6 +158,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--qwenpaw-python", dest="python", default=sys.executable)
     parser.add_argument("--qwenpaw-working-dir", dest="working_dir", default="")
     parser.add_argument("--agent-id", default=DEFAULT_QDM_AGENT_ID)
+    parser.add_argument("--enabled-agents", dest="enabled_agents", action="append", default=None,
+                        help="允许激活插件的 agent id 或通配（可重复）；默认仅覆盖 --agent-id")
     parser.add_argument("--agent-config", default="")
     parser.add_argument("--user-id-display-mode", default="off", choices=("off", "command"))
     parser.add_argument("--tool-policy", default="preserve", choices=tuple(sorted(TOOL_POLICIES)))
@@ -217,8 +224,8 @@ def _validate_regular(path: Path, label: str, minimum: int = 1) -> None:
         raise RuntimeError(f"{label}不可用")
     if os.name == "nt":
         _validate_windows_acl(path, label)
-    else:
-        _validate_linux_material(path, label)
+    elif not os.access(path, os.R_OK):
+        raise RuntimeError(f"{label}对当前进程不可读: {path}")
 
 
 def _validate_channel_auth(path: Path) -> None:
@@ -288,46 +295,6 @@ def _has_read_permission(value: str) -> bool:
     """Recognize icacls read-capable shorthand permissions on one ACE line."""
     permissions = value.upper()
     return any(marker in permissions for marker in ("(R)", "(RX)", "(M)", "(F)"))
-
-
-def _validate_linux_material(path: Path, label: str) -> None:
-    try:
-        info = path.stat()
-        parent_info = path.parent.stat()
-    except OSError as exc:
-        raise RuntimeError(f"{label}权限或状态不可用") from exc
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_gid != os.getegid():
-        raise RuntimeError(f"{label}必须由当前 QwenPaw UID/GID 拥有")
-    if info.st_mode & 0o077:
-        raise RuntimeError(f"{label}权限必须不超过 0600")
-    if parent_info.st_mode & 0o022:
-        raise RuntimeError(f"{label}父目录不可被其他用户写入")
-    if not _linux_mount_is_read_only(path.parent):
-        raise RuntimeError(f"{label}必须来自只读挂载")
-
-
-def _linux_mount_is_read_only(path: Path) -> bool:
-    """Return whether the longest matching mount in Linux mountinfo is ro."""
-    if os.name == "nt":
-        return True
-    try:
-        target = str(path.resolve())
-        best: tuple[int, bool] | None = None
-        for line in Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines():
-            fields = line.split(" - ", 1)
-            left = fields[0].split()
-            if len(left) < 6:
-                continue
-            mountpoint = left[4].replace("\\040", " ").replace("\\011", "\t")
-            if target == mountpoint or target.startswith(mountpoint.rstrip("/") + "/"):
-                options = left[5].split(",")
-                super_options = fields[1].split()[2].split(",") if len(fields) > 1 and len(fields[1].split()) >= 3 else []
-                candidate = (len(mountpoint), "ro" in options or "ro" in super_options)
-                if best is None or candidate[0] > best[0]:
-                    best = candidate
-        return bool(best and best[1])
-    except (OSError, ValueError):
-        return False
 
 
 def _runtime(value: str | None) -> Path:
@@ -425,7 +392,7 @@ def _verify_allowlist(agent: Path, policy: str = "preserve") -> None:
 def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
     config = _read_json(DEFAULT_PLUGIN_CONFIG_FILE)
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
+    allowed = required | {"enabled_agents", "context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
     if not required.issubset(config) or not set(config).issubset(allowed):
         raise RuntimeError("插件配置包含不支持字段")
     if config.get("schema_version") != 1:
@@ -434,6 +401,12 @@ def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
         raise RuntimeError("runtime_dir 与本次 --runtime 不一致")
     if config.get("qdm_agent_id") != agent_id:
         raise RuntimeError("qdm_agent_id 与本次 --agent-id 不一致")
+    try:
+        scope = parse_agent_scope(config.get("enabled_agents"), agent_id)
+    except ConfigError as exc:
+        raise RuntimeError("enabled_agents 无效") from exc
+    if not scope.allows(agent_id):
+        raise RuntimeError("enabled_agents 未覆盖 qdm_agent_id，该 Agent 上的插件不会激活")
     if config.get("user_id_display_mode") not in {"off", "command"}:
         raise RuntimeError("user_id_display_mode 无效")
     if config.get("tool_policy", "preserve") not in TOOL_POLICIES:

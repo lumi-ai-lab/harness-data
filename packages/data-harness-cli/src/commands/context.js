@@ -73,22 +73,31 @@ function toHookJSON(output, { includeContextFiles = false } = {}) {
 
 // QwenPaw has no file tools, so the CLI embeds the selected wiki manuals
 // directly into the additional context instead of exposing paths to read.
+// Embedding is all-or-nothing: a partial set would let the agent query without
+// the metric contract while the injected text still claimed completeness.
 function toQwenPawHookJSON(root, output, context) {
   const hook = toHookJSON(output, { includeContextFiles: true });
   const selected = output.hookSpecificOutput.contextFiles || [];
   const resolver = newPathResolver(context || root);
   const manuals = [];
+  const embedded = [];
+  const failed = [];
   for (const ref of selected) {
     try {
       const body = readFileSync(resolver.resolve(ref.path), "utf8");
+      embedded.push(ref.path);
       manuals.push(`\n--- ${ref.path} ---\n${body}\n`);
-    } catch {
-      // A missing manual must not fail the context; the path list stays available.
+    } catch (error) {
+      failed.push(`${ref.path} (${error.code || error.message})`);
     }
+  }
+  if (failed.length) {
+    throw new ExitError(`qwenpaw-hook: failed to embed selected manuals: ${failed.join("; ")}`, { code: 2 });
   }
   if (manuals.length) {
     hook.hookSpecificOutput.additionalContext += `\n\n# QDM Harness selected manuals\n${manuals.join("")}`;
   }
+  hook.hookSpecificOutput.embeddedContextFiles = embedded;
   return { hookSpecificOutput: hook.hookSpecificOutput };
 }
 

@@ -49,4 +49,30 @@ jobs:
           node --test plugins/harness-data/mcp/server.test.mjs
           node --test plugins/harness-data/test/clean-room-setup.test.mjs
           node --test scripts/plugin-dev-init.test.mjs
-          node --test scripts/verify-pinned-wikis.test.mjs scripts/verify-wikis-relocation.test.mjs
+          # verify-wikis-relocation.test.mjs needs plugins/harness-data/resources/wikis;
+          # private Wikis ship as an encrypted release ZIP now, so the repo has no such
+          # directory and the relocation check can only run where it is materialized.
+          node --test scripts/verify-pinned-wikis.test.mjs
+
+  qwenpaw-plugin:
+    name: Run QwenPaw plugin unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The plugin imports the host's HookBase/Phase, so the real host package is
+      # the test dependency. Only tests.test_core runs here: tests.test_golden_path
+      # drives the packaged CLI against a materialized instance, which exists just
+      # inside the deployment image.
+      - name: Install QwenPaw host
+        run: pip install --disable-pip-version-check "qwenpaw==2.1.0"
+
+      - name: Run plugin tests
+        working-directory: .agents/qwenpaw
+        run: python -m unittest tests.test_core
