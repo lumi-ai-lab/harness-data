@@ -61,14 +61,22 @@ namei -l "$QDM_CHANNEL_SECRET_DIR"   # 每一级目录都要有 o+x, 否则容�
 > (或 `0640` 且容器 GID 能组读)。`run_docker.sh` 会在启动前以容器 UID 实测一次可读性, 读不到就直接报错退出。
 > `session-hmac.secret` 不需要准备, 首次运行由 `run_docker.sh` 生成并 chown 给容器 UID。
 
-> 导出任务通常把文件生成在别处(如 `/data/qdm-auth-center/channel-auth.json`), **拷进密钥目录这一步
-> 得单独安排**, 否则密钥目录里永远是首次部署那天的旧数据。要改属主就得用 root crontab, 排在导出之后:
+> 导出任务通常把文件生成在别处(如 `/data/qdm-auth-center/channel-auth.json`), 有两种接法, 属主都
+> **不需要**是容器 UID(实测 `--user 10001:10001` 读 `0644 ztadmin:ztadmin` 和 `0640 ztadmin:10001`
+> 都成功, 读 `0600` 失败):
 >
-> ```cron
-> 10 8 * * * install -o 10001 -g 10001 -m 600 /data/qdm-auth-center/channel-auth.json "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
-> ```
+> - **直接把密钥目录指向导出目录**: `QDM_CHANNEL_SECRET_DIR=/data/qdm-auth-center`, 零拷贝, 但要求
+>   导出产物本身可读(该文件现在是 `0600 ztadmin`, 得在导出脚本末尾补 `chmod 644 "$OUT"` 或改组
+>   `0640`)。代价是整个目录都只读挂进容器 `/run/secrets`(日志、CLI 二进制、脚本一起进去), 且
+>   `session-hmac.secret` 会落在导出账号可写的目录里。
+> - **专用密钥目录 + 每日落地一步**(推荐, 挂载面最小):
 >
-> `install` 会整体替换文件(cron 的覆盖写同样如此), 容器读到的是新的 inode, 不影响运行中的进程。
+>   ```cron
+>   10 8 * * * install -m 644 /data/qdm-auth-center/channel-auth.json "$QDM_CHANNEL_SECRET_DIR/channel-auth.json"
+>   ```
+>
+>   `install` 是"写临时文件再 rename"的原子替换; 导出任务若原地重写, 容器正好在导出那几分钟里读
+>   就可能读到半截 JSON —— 这一步顺带避开。别用 `chown` 把文件改走, 那会夺掉导出账号自己的写权限。
 
 > 该文件**已存在时脚本不会改动它的属主**(重新生成或改派生材料会让所有企微会话 key 漂移),
 > 而旧版脚本是按 `channel-auth.json` 的属主来 chown 它的。老机器升级后先核一次:
