@@ -6,7 +6,6 @@
       "args": ["./mcp/server.mjs"],
       "env_vars": [
         "CODEX_HOME",
-        "PWD",
         "HARNESS_PLUGIN_ROOT",
         "HARNESS_CONTEXT_FILE",
         "CHATGPT_CONTEXT_FILE",

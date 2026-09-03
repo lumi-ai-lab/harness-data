@@ -177,7 +177,7 @@ function startMcp(t, pluginRoot, env) {
   return async (name, args) => {
     const id = nextId++;
     const response = new Promise((resolveResponse) => pending.set(id, resolveResponse));
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: { workspaceRoot: env.HARNESS_WORKSPACE_ROOT, ...args } } })}\n`);
     const message = await response;
     assert.equal(message.error, undefined, message.error?.message);
     return JSON.parse(message.result.content[0].text);
