@@ -214,6 +214,14 @@ function normalizeQwenPawFilters(filters, scope) {
     }
     const entries = scope.dataScope[dimension];
     if (!entries || !entries.length) {
+      // qdm-metric-cli carries store authorization as sapArea2Id /
+      // manageAreaId and rejects store-chain queries when the user lacks
+      // that scope, so the concrete store filter is passed through and the
+      // CLI enforces the final constraint after this preflight.
+      if (dimension === "storeId") {
+        normalized[dimension] = values.map(String);
+        continue;
+      }
       throw new QwenPawDeny(contract.code, contract.message);
     }
     const result = [];
