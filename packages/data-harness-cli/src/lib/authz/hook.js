@@ -59,14 +59,12 @@ function adapterEnvelope(status, output) {
   return { schemaVersion: ADAPTER_SCHEMA_VERSION, status, hookOutput: output };
 }
 
+// authz-v2 携带授权的维度, 预检校验请求值是否在授权范围内。
+// 不在契约里的维度(如 storeId) 原样透传, 门店链约束由 qdm-metric-cli 兜底。
 const QWENPAW_SCOPE_DIMENSIONS = Object.freeze({
-  manageAreaId: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
-  manageAreaIds: { code: "QDM_AREA_AUTH_SCOPE_EMPTY", message: "当前用户的管理区域授权范围为空或未配置完整" },
   categoryLevel1Id: { code: "QDM_CATEGORY_OUTSIDE_DATA_SCOPE", message: "请求的商品分类不在当前用户授权范围内" },
-  categoryLevel1Ids: { code: "QDM_CATEGORY_AUTH_SCOPE_EMPTY", message: "当前用户的商品分类授权范围为空或未配置完整" },
   sapArea2Id: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
   dcSapArea2Id: { code: "QDM_AREA_OUTSIDE_DATA_SCOPE", message: "请求的管理区域不在当前用户授权范围内" },
-  storeId: { code: "QDM_STORE_OUTSIDE_DATA_SCOPE", message: "请求的门店不在当前用户授权范围内" },
 });
 
 /**
@@ -214,14 +212,6 @@ function normalizeQwenPawFilters(filters, scope) {
     }
     const entries = scope.dataScope[dimension];
     if (!entries || !entries.length) {
-      // qdm-metric-cli carries store authorization as sapArea2Id /
-      // manageAreaId and rejects store-chain queries when the user lacks
-      // that scope, so the concrete store filter is passed through and the
-      // CLI enforces the final constraint after this preflight.
-      if (dimension === "storeId") {
-        normalized[dimension] = values.map(String);
-        continue;
-      }
       throw new QwenPawDeny(contract.code, contract.message);
     }
     const result = [];

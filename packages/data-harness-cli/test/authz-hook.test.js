@@ -197,7 +197,7 @@ const QWENPAW_SCOPE = JSON.stringify({
   enabled: true,
   capabilities: ["qdm.metric.query"],
   labelsResolved: true,
-  dataScope: { manageAreaId: [{ id: "CN01", name: "华南区" }] },
+  dataScope: { sapArea2Id: [{ id: "CN01", name: "华南区" }] },
 });
 
 function qwenpawHarnessRoot(scope = QWENPAW_SCOPE) {
@@ -234,16 +234,16 @@ async function runQwenPawEnvelope(root, input) {
 
 test("authz-hook --agent qwenpaw allows and normalizes filters against the scope", async () => {
   const root = qwenpawHarnessRoot();
-  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["华南区"] }));
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ sapArea2Id: ["华南区"] }));
   assert.equal(envelope.status, "allow");
   assert.equal(envelope.hookOutput.permissionDecision, "allow");
-  assert.deepEqual(envelope.hookOutput.normalizedFilters, { manageAreaId: ["CN01"] });
+  assert.deepEqual(envelope.hookOutput.normalizedFilters, { sapArea2Id: ["CN01"] });
   assert.ok(envelope.hookOutput.scope.capabilities.includes("qdm.metric.query"));
 });
 
 test("authz-hook --agent qwenpaw denies out-of-scope filters without executing", async () => {
   const root = qwenpawHarnessRoot();
-  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["其他区"] }));
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ sapArea2Id: ["其他区"] }));
   assert.equal(envelope.status, "deny");
   assert.match(envelope.hookOutput.permissionDecisionReason, /QDM_AREA_OUTSIDE_DATA_SCOPE/);
 });
