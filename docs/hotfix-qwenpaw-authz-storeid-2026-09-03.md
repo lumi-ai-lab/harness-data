@@ -70,6 +70,12 @@ Harness `authz-hook` 预检（`packages/data-harness-cli/src/lib/authz/hook.js`
 > 注：`qdm-metric-cli/docs/qwenpaw-authz-hook-store-scope.md` 中引用的
 > harness 提交号 `1fdfc4a` 已 amend 为 `8889719`，内容一致。
 
+> **后续重构（2026-09-04）**：提交 `756123a` 将 `QWENPAW_SCOPE_DIMENSIONS`
+> 收敛为 authz-v2 实际在用的三个维度（`categoryLevel1Id` / `sapArea2Id` /
+> `dcSapArea2Id`），并删除上方的 `storeId` 特判——`storeId` 不在契约表时
+> 走通用透传分支，行为与本节方案完全一致。已部署容器文件仍为旧版
+> （功能等价），待下次插件镜像部署后收敛。
+
 ## 5. 构建
 
 ```bash
@@ -203,10 +209,10 @@ QDM_SSH_PASSWORD=xxx ./deploy/qwenpaw/hotfix-authz-hook.sh rollback
 ## 10. 注意事项
 
 1. **热补丁是临时的**：容器重启、`run_docker.sh` 重跑或镜像重新部署都会
-   还原成镜像内旧文件。正式修复需随插件镜像发布（源码已就绪，提交
-   `8889719` 本地待推）。
-2. **提交未推送**：`8889719` 目前只在本地（master 领先 origin 1），
-   部署脚本与本文档均为未跟踪文件，按用户要求暂不入库。
+   还原成镜像内旧文件。正式修复需随插件镜像发布（源码已就绪：`8889719`
+   已推送 `yaw0110:fix/authz-storeid-passthrough`，PR #83）。
+2. **提交已随 PR 入库**：`8889719` 与部署脚本、本文档均已推送至 fork 分支
+   `yaw0110:fix/authz-storeid-passthrough`（PR #83）。
 3. **文件上传不用 scp**：macOS 自带 scp 与本地 `HTTP_PROXY` 冲突
    （`Connection closed by 127.0.0.1 port 7890`），脚本改用 ssh stdin 管道。
 4. **verify 必须带 `--context-file`**：早期版本漏传导致预检返回
