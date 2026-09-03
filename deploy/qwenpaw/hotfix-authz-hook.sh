@@ -25,7 +25,8 @@ TARGET="/app/working/plugins/qdm-harness-qwenpaw/dist/data-harness-cli/src/lib/a
 LOCAL_HOOK="$REPO_ROOT/dist/qdm-harness-qwenpaw/dist/data-harness-cli/src/lib/authz/hook.js"
 SRC_HOOK="$REPO_ROOT/packages/data-harness-cli/src/lib/authz/hook.js"
 # 透传标记: 用注释里的短语避免引号干扰远端 grep 引用
-MARKER='rejects store-chain queries'
+# 契约表收敛后, 新注释为 "不在契约里的维度(如 storeId) 原样透传, 门店链约束由 qdm-metric-cli 兜底"
+MARKER='门店链约束由 qdm-metric-cli 兜底'
 MODE="${1:-deploy}"
 
 if [[ -z "${QDM_SSH_PASSWORD:-}" ]]; then
