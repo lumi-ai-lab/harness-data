@@ -73,8 +73,9 @@ Harness `authz-hook` 预检（`packages/data-harness-cli/src/lib/authz/hook.js`
 > **后续重构（2026-09-04）**：提交 `756123a` 将 `QWENPAW_SCOPE_DIMENSIONS`
 > 收敛为 authz-v2 实际在用的三个维度（`categoryLevel1Id` / `sapArea2Id` /
 > `dcSapArea2Id`），并删除上方的 `storeId` 特判——`storeId` 不在契约表时
-> 走通用透传分支，行为与本节方案完全一致。已部署容器文件仍为旧版
-> （功能等价），待下次插件镜像部署后收敛。
+> 走通用透传分支，行为与本节方案完全一致。同日已热部署到生产容器：
+> 提交 `74d9711` 更新部署脚本透传标记，容器内文件与源码 md5 一致
+> （`0dbd3f09...`），生产预检验证 `status=allow`、`storeId=101001` 透传。
 
 ## 5. 构建
 
