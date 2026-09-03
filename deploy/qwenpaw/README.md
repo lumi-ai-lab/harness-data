@@ -11,8 +11,9 @@
  (本机)               (本机 → 服务器)            (服务器)           (服务器)               (服务器/浏览器)
 ```
 
-> 第 ⑤ 步不能跳:QDM 渠道必须绑在专用 Agent **`harness-data-default`** 上,绑到内置
-> `default` 时插件不激活,企微里会回"当前会话不支持 QDM 数据查询"。操作见「⑤ 绑定渠道」,
+> 第 ⑤ 步的**核对**不能跳:QDM 渠道必须落在专用 Agent **`harness-data-default`** 上,绑在内置
+> `default` 时插件不激活,企微里会回"当前会话不支持 QDM 数据查询"。全新安装要在控制台切一次 Agent
+> 再配渠道; 复用旧持久卷升级时渠道会被自动搬过去(见 ⑤/⑥), 那种情况核一次就行。
 > 原理与排查见「⑥ QDM Agent 与作用域」。
 
 ## ① 本机构建镜像
@@ -32,14 +33,31 @@ deploy/qwenpaw/build-docker-image.sh
 # 本机:导出并压缩
 docker save harness-data-qwenpaw:0.0.56-amd64 | gzip > harness-data-qwenpaw-0.0.56-amd64.tar.gz
 
-# 本机:上传到服务器(换成实际的服务器地址与登录用户)
-scp harness-data-qwenpaw-0.0.56-amd64.tar.gz root@<服务器IP>:/tmp/
+# 本机:上传到服务器(换成实际的登录用户; SSH 端口非 22 时加 -P <端口>)
+scp harness-data-qwenpaw-0.0.56-amd64.tar.gz <服务器用户>@<服务器IP>:/tmp/
 
 # 服务器:加载镜像, tag 与构建时保持一致
 docker load -i /tmp/harness-data-qwenpaw-0.0.56-amd64.tar.gz
 ```
 
 > 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py`、`ensure_qdm_agent.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
+
+> 配置与数据落在 4 个**命名卷**里, 与在哪个目录执行脚本无关:
+>
+> ```text
+> qwenpaw-working   → /app/working          配置.json / 各 Agent workspace / 渠道凭证 / 会话
+> qwenpaw-secret    → /app/working.secret   provider 凭据(含 .master_key)
+> qwenpaw-backups   → /app/working.backups
+> qdm-data          → /app/qdm-data         报告等产物
+> ```
+>
+> **这些卷还在, 重跑 `run_docker.sh` 就是"升级"而不是"全新安装"**: `config.json` 已存在时不会再
+> 从镜像里的 seed 复制, 旧卷 `default` 上启用的渠道会被自动搬进专用 Agent(见 ⑤/⑥)。想要一个真正
+> 空白的实例, 先停掉容器再把卷删掉:
+>
+> ```bash
+> docker rm -f qwenpaw && docker volume rm qwenpaw-working qwenpaw-secret qwenpaw-backups qdm-data
+> ```
 
 ## ③ 准备密钥(服务器)
 
@@ -108,7 +126,7 @@ docker logs --since 10m qwenpaw 2>&1 | grep -E 'qdm_query_failed|qdm_harness_con
 密钥可读、`reason` 却不是授权类的失败, 先核 Root Context 的 `surface`:
 
 ```bash
-docker exec qwenpaw python -c 'import json;print(json.load(open("/opt/qdm/harness-data/instance/0.0.56/context.json"))["surface"])'
+docker exec qwenpaw python -c 'import glob,json;print(json.load(open(glob.glob("/opt/qdm/harness-data/instance/*/context.json")[0]))["surface"])'
 ```
 
 必须落在 `chat` / `codex` / `desktop` / `work` 里。`unknown` 或字段缺失会让整次上下文注入
@@ -150,9 +168,14 @@ docker exec qwenpaw date
 
 容器 healthy 之后,企微/飞书还没接上:渠道要绑到专用 Agent 上才算配置完成。**这一步最容易踩空**。
 
+> 只有**全新安装**才需要在这里配渠道。复用旧持久卷升级时, `default` 上已启用的 wecom/feishu 会
+> 被启动期的 `ensure_qdm_agent.py` 连同凭证搬进专用 Agent, 日志里能看到
+> `qdm agent bootstrap: moved wecom from default to harness-data-default` —— 这种情况跳过
+> 下面的 1–3 步, 只做第 4 步的核对即可。
+
 1. 打开控制台。默认监听 `0.0.0.0:8088`, 浏览器直接访问 `http://<服务器IP>:8088`;
    若按 ④ 把监听收回过仅本机(`QWENPAW_BIND=127.0.0.1`), 从 workstation 访问要先做端口
-   转发(`ssh -L 8088:127.0.0.1:8088 root@<服务器IP>`)。
+   转发(`ssh -p <SSH端口> -L 8088:127.0.0.1:8088 <服务器用户>@<服务器IP>`)。
 2. **先把左侧栏顶部的 "Current Agent" 切到「QDM 数据助手」。** 下拉项第二行会显示
    `ID: harness-data-default`,以这个 ID 为准,别按显示名认。
 3. 进 Channels 页(路由 `/channels`)配置 wecom 或 feishu,保存。
