@@ -197,15 +197,15 @@ const QWENPAW_SCOPE = JSON.stringify({
   enabled: true,
   capabilities: ["qdm.metric.query"],
   labelsResolved: true,
-  dataScope: { manageAreaId: [{ id: "CN01", name: "华南区" }] },
+  dataScope: { sapArea2Id: [{ id: "CN01", name: "华南区" }] },
 });
 
-function qwenpawHarnessRoot() {
+function qwenpawHarnessRoot(scope = QWENPAW_SCOPE) {
   const root = mkdtempSync(path.join(tmpdir(), "authz-qwenpaw-"));
   mkdirSync(path.join(root, "bin"), { recursive: true });
   mkdirSync(path.join(root, "config"), { recursive: true });
   const metricPath = path.join(root, "bin", "qdm-metric-cli");
-  const script = `#!/bin/sh\ncase "$1" in\n  auth) printf '%s\\n' '${QWENPAW_SCOPE}';;\n  *) printf '%s\\n' '{}';;\nesac\n`;
+  const script = `#!/bin/sh\ncase "$1" in\n  auth) printf '%s\\n' '${scope}';;\n  *) printf '%s\\n' '{}';;\nesac\n`;
   writeFileSync(metricPath, script, { mode: 0o755 });
   chmodSync(metricPath, 0o755);
   writeFileSync(
@@ -234,18 +234,30 @@ async function runQwenPawEnvelope(root, input) {
 
 test("authz-hook --agent qwenpaw allows and normalizes filters against the scope", async () => {
   const root = qwenpawHarnessRoot();
-  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["华南区"] }));
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ sapArea2Id: ["华南区"] }));
   assert.equal(envelope.status, "allow");
   assert.equal(envelope.hookOutput.permissionDecision, "allow");
-  assert.deepEqual(envelope.hookOutput.normalizedFilters, { manageAreaId: ["CN01"] });
+  assert.deepEqual(envelope.hookOutput.normalizedFilters, { sapArea2Id: ["CN01"] });
   assert.ok(envelope.hookOutput.scope.capabilities.includes("qdm.metric.query"));
 });
 
 test("authz-hook --agent qwenpaw denies out-of-scope filters without executing", async () => {
   const root = qwenpawHarnessRoot();
-  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ manageAreaId: ["其他区"] }));
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ sapArea2Id: ["其他区"] }));
   assert.equal(envelope.status, "deny");
   assert.match(envelope.hookOutput.permissionDecisionReason, /QDM_AREA_OUTSIDE_DATA_SCOPE/);
+});
+
+test("authz-hook --agent qwenpaw passes store filters through to the CLI", async () => {
+  const root = qwenpawHarnessRoot(JSON.stringify({
+    enabled: true,
+    capabilities: ["qdm.metric.query"],
+    labelsResolved: true,
+    dataScope: { categoryLevel1Id: [{ id: "10", name: "饮料" }] },
+  }));
+  const envelope = await runQwenPawEnvelope(root, qwenpawPayload({ storeId: ["101001"] }));
+  assert.equal(envelope.status, "allow");
+  assert.deepEqual(envelope.hookOutput.normalizedFilters, { storeId: ["101001"] });
 });
 
 test("authz-hook --agent qwenpaw is disabled when authz mode is off", async () => {
