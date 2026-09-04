@@ -474,12 +474,16 @@ class QdmHarnessQwenPawPlugin:
                 callback=lambda: _apply_agent_scope_to_existing_workspaces(tool_specs),
                 priority=90,
             )
-            register_startup_hook(
-                hook_name="qdm_harness_install_reload_bridge",
-                callback=_install_legacy_reload_bridge,
-                priority=95,
-            )
-        else:
+            # Hosts exposing workspace_created already replay workspace state
+            # during reload; installing the legacy manager wrapper there would
+            # replay the same hooks a second time and create ordering cycles.
+            if not callable(register_ws_hook):
+                register_startup_hook(
+                    hook_name="qdm_harness_install_reload_bridge",
+                    callback=_install_legacy_reload_bridge,
+                    priority=95,
+                )
+        elif not callable(register_ws_hook):
             _install_legacy_reload_bridge()
         logger.info("QDM Harness runtime hooks and constrained tools registered")
 
