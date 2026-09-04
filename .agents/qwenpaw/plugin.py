@@ -35,6 +35,7 @@ from agentscope.tool import ToolChunk
 from qwenpaw.plugins.api import PluginApi
 
 from .qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
+from .qdm_runtime_mcp import RuntimeMcpAuthProvider
 from .qdm_cli import QdmCliError, QdmCliExecutor, QueryScope
 from .qdm_config import ConfigError, load_config
 from .qdm_debug_identity import record_reload_bridge_state
@@ -514,13 +515,27 @@ def _require_qwenpaw_21() -> None:
         raise RuntimeError(f"QDM Harness requires QwenPaw 2.1.x or 2.2.x (found {installed})")
 
 
-def _build_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
+def _build_components() -> tuple[Any, QdmCliExecutor, Any]:
     """Build the auth provider and CLI executor for one call (no subprocess)."""
     try:
         config = load_config()
     except ConfigError as exc:
         raise QdmCliError("QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝") from exc
-    provider = ChannelAuthProvider(config.auth_file, max_bytes=config.auth_file_max_bytes)
+    try:
+        runtime_mcp = getattr(config, "runtime_mcp", None)
+        if runtime_mcp is not None and runtime_mcp.enabled:
+            if not runtime_mcp.endpoint or runtime_mcp.token_file is None:
+                raise ValueError("runtime MCP configuration is incomplete")
+            provider = RuntimeMcpAuthProvider(
+                runtime_mcp.endpoint,
+                runtime_mcp.token_file,
+                timeout_seconds=runtime_mcp.timeout_seconds,
+                max_response_bytes=runtime_mcp.max_response_bytes,
+            )
+        else:
+            provider = ChannelAuthProvider(config.auth_file, max_bytes=config.auth_file_max_bytes)
+    except Exception as exc:
+        raise QdmCliError("QDM_CHANNEL_AUTH_DENIED", "QDM 渠道授权不可用或被拒绝") from exc
     executor = QdmCliExecutor(
         config.qdm_metric_cli,
         harness_cli=Path(__file__).resolve().parent / "scripts" / "data-harness-cli",
@@ -531,7 +546,7 @@ def _build_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
     return provider, executor, config
 
 
-def _trusted_components() -> tuple[ChannelAuthProvider, QdmCliExecutor, Any]:
+def _trusted_components() -> tuple[Any, QdmCliExecutor, Any]:
     requester = requester_context.get()
     if requester is None:
         # The PRE_EXECUTE hook never bound an identity, i.e. this plugin's runtime

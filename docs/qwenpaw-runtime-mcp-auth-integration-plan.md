@@ -1,6 +1,6 @@
 # QwenPaw runtime MCP 授权接入详细开发方案
 
-> 文档状态：开发方案（本轮仅整理方案，不修改插件代码）  
+> 文档状态：开发方案与实现基线（已按方案开始实现）
 > 适用分支：`feat/qwenpaw-runtime-mcp`  
 > 目标工作区：`D:\Repos\harness-data-qwenpaw-runtime-mcp`  
 > 最后更新：2026-09-04
@@ -373,10 +373,13 @@ setup 的 CLI 参数建议：
 --runtime-mcp-timeout-seconds <n>
 --runtime-mcp-max-response-bytes <n>
 --runtime-mcp-disabled       # 仅用于显式回滚/离线开发
+--skip-runtime-mcp-check     # 仅用于离线 staging，生产 setup 不建议使用
 ```
 
 参数优先级沿用现有约定：显式 CLI > 配置文件 > 默认值。生产 setup 不应再
 要求 `--auth-blob-file` 或 `--auth-user-id` 才能启用 QwenPaw runtime MCP。
+重复执行 setup/update 且未重新指定 runtime MCP 参数时，应沿用已有
+`runtime_mcp` 配置，避免更新插件时意外退回旧授权来源。
 
 ## 7. 错误处理与可观测性
 
@@ -610,4 +613,3 @@ docs: 设计 QwenPaw runtime MCP 授权接入方案
 - 明确仅改 QwenPaw，其他 agent 与 qdm-auth-center 服务端不变
 - 补充测试、部署、灰度和显式回滚步骤
 ```
-
