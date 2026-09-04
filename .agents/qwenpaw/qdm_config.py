@@ -415,7 +415,11 @@ def _harness_cli_from_context(context: dict[str, Any]) -> Path:
     base = Path(plugin_root).expanduser()
     if not base.is_absolute() or base.is_symlink() or not base.is_dir():
         raise ConfigError("root context pluginRoot must be an absolute, non-symlink directory")
-    return base / "scripts" / ("data-harness-cli.exe" if os.name == "nt" else "data-harness-cli")
+    script = base / "scripts" / "data-harness-cli"
+    native = script.with_name("data-harness-cli.exe")
+    if os.name == "nt" and native.is_file() and not native.is_symlink():
+        return native
+    return script
 
 
 def _sensitive_dir_from_reference(secret_ref: Any, context: dict[str, Any]) -> Path:

@@ -29,6 +29,7 @@ from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _c
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
 from qdm_harness_qwenpaw_test.qdm_config import AgentScope, ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config, parse_agent_scope, DEFAULT_AGENT_SCOPE_PATTERNS
 from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
+from qdm_harness_qwenpaw_test.qdm_subprocess import cli_command
 from qdm_harness_qwenpaw_test.plugin import QdmHarnessQwenPawPlugin
 from qdm_harness_qwenpaw_test.qdm_runtime_hooks import QdmRequesterContextHook, QdmRequesterIdentityHook, QwenPawHarnessContextHook, UNAUTHORIZED_SESSION_CONSTRAINT, hook_factories, requester_context
 from qwenpaw.runtime.hooks import HookAction, HookBase, HookRegistry
@@ -1165,6 +1166,32 @@ class ToolBoundaryTests(unittest.TestCase):
 
 
 class HarnessContextTests(unittest.TestCase):
+    def test_cli_command_uses_node_for_windows_extensionless_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            shim = Path(temp) / "data-harness-cli"
+            shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.shutil.which", return_value="node.exe"):
+                command = cli_command(shim, ["context", "--format", "qwenpaw-hook"])
+            self.assertEqual(command, ["node.exe", str(shim), "context", "--format", "qwenpaw-hook"])
+
+    def test_cli_command_prefers_windows_native_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            shim = Path(temp) / "data-harness-cli"
+            native = Path(temp) / "data-harness-cli.exe"
+            shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+            native.write_bytes(b"placeholder")
+            command = cli_command(shim, ["context"])
+            self.assertEqual(command, [str(native), "context"])
+
+    def test_cli_command_keeps_direct_execution_on_posix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            shim = Path(temp) / "data-harness-cli"
+            shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "posix"):
+                command = cli_command(shim, ["context"])
+            self.assertEqual(Path(command[0]), shim)
+            self.assertEqual(command[1], "context")
+
     def test_qwenpaw_context_replaces_file_read_instructions(self) -> None:
         sanitized = _sanitize_embedded_context_instruction("必须先读取以下 contextFiles：\nAll modes: read all contextFiles before running data CLI.")
         self.assertIn("禁止再次使用 Read", sanitized)
