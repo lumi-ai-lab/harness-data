@@ -1,6 +1,6 @@
 # QwenPaw Runtime MCP Linux/Docker 部署调整方案
 
-> 状态：评审建议已补充，待按本文实施。
+> 状态：已实施，待 Linux/Docker 发布环境验收。
 
 ## 1. 背景与结论
 
@@ -355,3 +355,12 @@ feat(qwenpaw): enable runtime MCP auth in Linux Docker deployment
 ```
 
 提交内容应明确包括：runtime MCP 配置写入、Token/HMAC secret 挂载、Docker network、启动前连通性检查和部署文档更新。
+
+## 9. 实施记录（2026-09-07）
+
+- Dockerfile 使用受限的 `QWENPAW_AUTH_MODE` 构建参数生成独立 legacy 与 Runtime MCP 插件配置；Runtime 构建仅创建空的非生产 Token 占位文件。
+- `build-docker-image.sh` 要求显式 `--mode legacy|runtime-mcp`，为两种镜像生成不同标签并提示记录 digest。
+- `run_docker.sh` 成为 Runtime MCP 主入口：使用 `QDM_RUNTIME_SECRET_DIR`、共享 external network、只读 Token/HMAC 挂载和启动前 MCP preflight。
+- 新增 `run_docker_rollback.sh`，仅使用 `QDM_CHANNEL_SECRET_DIR` 与固定 legacy 镜像，不读取 Runtime Token 或执行 Runtime MCP 探测。
+- 新增 `docker-compose.runtime-mcp.yml` 与镜像内 `check_runtime_mcp.py`；preflight 验证 `initialize`、`tools/list` 和 `qdm_auth_lookup_blob`，不执行真实用户查询。
+- 已完成 Python 单元测试与静态差异检查；完整 Docker 构建、Compose 启动及真实 MCP 连通性需在 Linux/Docker 发布主机完成。

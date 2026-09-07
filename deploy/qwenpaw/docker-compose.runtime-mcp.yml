@@ -1,0 +1,48 @@
+services:
+  runtime-mcp-preflight:
+    image: ${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-mcp-amd64}
+    platform: linux/amd64
+    user: "${QWENPAW_UID:-10001}:${QWENPAW_GID:-10001}"
+    restart: "no"
+    entrypoint: ["/usr/local/bin/python", "/opt/qdm/bin/check_runtime_mcp.py"]
+    command: []
+    volumes:
+      - ${QDM_RUNTIME_SECRET_DIR:?set QDM_RUNTIME_SECRET_DIR}:/run/secrets:ro
+    networks:
+      - qdm-auth-network
+
+  qwenpaw:
+    image: ${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-mcp-amd64}
+    platform: linux/amd64
+    user: "${QWENPAW_UID:-10001}:${QWENPAW_GID:-10001}"
+    restart: unless-stopped
+    depends_on:
+      runtime-mcp-preflight:
+        condition: service_completed_successfully
+    ports:
+      - "${QWENPAW_BIND:-127.0.0.1}:${QWENPAW_PORT:-8088}:8088"
+    environment:
+      QWENPAW_MODEL_API_KEY: ${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
+      QWENPAW_MODEL_REQUIRED: "1"
+      TZ: ${QWENPAW_TZ:-Asia/Shanghai}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - qwenpaw-working:/app/working
+      - qwenpaw-secret:/app/working.secret
+      - qwenpaw-backups:/app/working.backups
+      - qdm-data:/app/qdm-data
+      - ${QDM_RUNTIME_SECRET_DIR:?set QDM_RUNTIME_SECRET_DIR}:/run/secrets:ro
+    networks:
+      - qdm-auth-network
+
+volumes:
+  qwenpaw-working:
+  qwenpaw-secret:
+  qwenpaw-backups:
+  qdm-data:
+
+networks:
+  qdm-auth-network:
+    external: true
+    name: ${QDM_AUTH_NETWORK:-qdm-auth-network}
