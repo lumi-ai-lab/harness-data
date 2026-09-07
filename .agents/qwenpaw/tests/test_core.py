@@ -26,7 +26,7 @@ from qdm_harness_qwenpaw_test.qdm_channel_auth import ChannelAuthorizationError,
 from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query_args, _truncate_success
 from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result, record_reload_bridge_state
 from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _sanitize_embedded_context_instruction, request_context, session_key
-from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester
+from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester, resolve_requester_for_request
 from qdm_harness_qwenpaw_test.qdm_config import AgentScope, ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config, parse_agent_scope, DEFAULT_AGENT_SCOPE_PATTERNS
 from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
 from qdm_harness_qwenpaw_test.qdm_subprocess import cli_command
@@ -121,10 +121,12 @@ class _Context:
 
 
 class _Request:
-    def __init__(self, channel: str, channel_meta: dict[str, object]) -> None:
+    def __init__(self, channel: str, channel_meta: dict[str, object], *, user_id: str = "", session_id: str = "", request_context: dict[str, object] | None = None) -> None:
         self.channel = channel
         self.channel_meta = channel_meta
-        self.request_context: dict[str, object] = {}
+        self.user_id = user_id
+        self.session_id = session_id
+        self.request_context = request_context or {}
 
 
 class _AgentContext(_Context):
@@ -203,6 +205,59 @@ class IdentityTests(unittest.TestCase):
         for sender in ("group", "thread:abc", ""):
             actual = resolve_requester("feishu", {"is_group": True, "bot_mentioned": True, "feishu_sender_id": sender})
             self.assertEqual(actual.status, "unavailable")
+
+    def test_wecom_cron_resolves_only_when_the_current_workspace_job_matches(self) -> None:
+        job_id = "db65dc57-8bd0-4057-8991-48e5b368f651"
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            workspace.joinpath("jobs.json").write_text(json.dumps({
+                "version": 2,
+                "jobs": [{
+                    "id": job_id,
+                    "task_type": "agent",
+                    "dispatch": {"channel": "wecom", "target": {"user_id": "13719423749"}},
+                }],
+            }), encoding="utf-8")
+            request = _Request(
+                "wecom", {}, user_id="13719423749", session_id="wecom:13719423749:cron:" + job_id,
+                request_context={"source": "cron", "cron_job_id": job_id},
+            )
+            self.assertEqual(
+                resolve_requester_for_request(request, workspace),
+                Requester(1, "resolved", "wecom", "13719423749", "single"),
+            )
+            request.user_id = "group"
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
+            request.user_id = "13719423749"
+            request.request_context["cron_job_id"] = "9cf70ea8-6dbd-4454-b87f-d9545619ee6c"
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
+            request.request_context = {"source": "cron", "cron_job_id": job_id}
+            request.channel = "feishu"
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
+            request.channel = "wecom"
+            jobs = json.loads(workspace.joinpath("jobs.json").read_text(encoding="utf-8"))
+            jobs["jobs"][0]["enabled"] = False
+            workspace.joinpath("jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
+
+    def test_cron_identity_rejects_mismatched_job_and_non_cron_request(self) -> None:
+        job_id = "db65dc57-8bd0-4057-8991-48e5b368f651"
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            workspace.joinpath("jobs.json").write_text(json.dumps({
+                "jobs": [{
+                    "id": job_id,
+                    "task_type": "agent",
+                    "dispatch": {"channel": "wecom", "target": {"user_id": "other-user"}},
+                }],
+            }), encoding="utf-8")
+            request = _Request(
+                "wecom", {}, user_id="13719423749",
+                request_context={"source": "cron", "cron_job_id": job_id},
+            )
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
+            request.request_context = {}
+            self.assertEqual(resolve_requester_for_request(request, workspace).status, "unavailable")
 
 
 class AuthorizationTests(unittest.TestCase):
@@ -1298,6 +1353,37 @@ class HarnessContextTests(unittest.TestCase):
 
 
 class ConsoleChannelTests(unittest.TestCase):
+    def test_cron_identity_and_pre_execute_bind_the_same_verified_requester(self) -> None:
+        job_id = "db65dc57-8bd0-4057-8991-48e5b368f651"
+        config = _scoped_config(("qdmDataAgent",), session_secret_file=Path("missing.secret"))
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            workspace.joinpath("jobs.json").write_text(json.dumps({
+                "jobs": [{
+                    "id": job_id,
+                    "task_type": "agent",
+                    "dispatch": {"channel": "wecom", "target": {"user_id": "13719423749"}},
+                }],
+            }), encoding="utf-8")
+            ctx = _AgentContext("wecom", {})
+            ctx.workspace_dir = workspace
+            ctx.request.user_id = "13719423749"
+            ctx.request.session_id = "wecom:13719423749:cron:" + job_id
+            ctx.request.request_context = {"source": "cron", "cron_job_id": job_id}
+            with patch.object(RUNTIME_HOOKS_MODULE, "load_config", return_value=config):
+                async def exercise():
+                    await QdmRequesterIdentityHook().run(ctx)
+                    pre_build = ctx.request.request_context["qdm_requester"]
+                    await QdmRequesterContextHook().run(ctx)
+                    bound = requester_context.get()
+                    token = ctx.extras.pop("qdm_harness_requester_token")
+                    requester_context.reset(token)
+                    return pre_build, bound
+                pre_build, bound = asyncio.run(exercise())
+        self.assertEqual(pre_build["user_id"], "13719423749")
+        self.assertIsNotNone(bound)
+        self.assertEqual(bound.user_id, pre_build["user_id"])
+
     def test_plugin_manifest_version_is_incremented(self) -> None:
         manifest = Path(__file__).parents[1] / "plugin.json"
         payload = json.loads(manifest.read_text(encoding="utf-8"))
