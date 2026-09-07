@@ -98,8 +98,9 @@ runtime MCP 配置。
 
 建议增加受限的构建参数（仅允许 `legacy`、`runtime-mcp`），由 Dockerfile 在构建期
 选择对应的 `qwenpaw setup` 参数；`build-docker-image.sh` 必须同时提供明确模式参数并
-分别输出两类不可变标签。不得由环境变量隐式决定模式，也不得用同一可变标签覆盖 legacy
-镜像。推荐标签约定：
+分别输出两类不同标签。不得由环境变量隐式决定模式，也不得用同一可变标签覆盖 legacy
+镜像。Docker 标签本身并非技术上不可变：生产发布单必须同时记录两张镜像的完整 digest，
+回滚应按已记录 digest（或受保护、禁止覆盖的发布标签）拉起镜像。推荐标签约定：
 
 ```text
 harness-data-qwenpaw:<version>-amd64
@@ -114,7 +115,7 @@ harness-data-qwenpaw:<version>-mcp-amd64
 --skip-runtime-mcp-check
 ```
 
-由于 setup 当前要求 Token 文件存在，MCP 镜像构建阶段可创建空的占位文件，仅用于通过路径校验；该文件不得包含真实 Token，并应在最终运行时由 `/run/secrets` 只读挂载覆盖。占位文件必须在 Dockerfile 切换为非 root 的 `qwenpaw` 用户之前创建，并设置为普通、非符号链接文件；当前 `/run/secrets` 是 root 创建的只读目录，不能在 setup 阶段由非 root 用户临时创建。legacy 镜像保持当前 `--channel-auth-only` 的配置生成方式。
+由于 setup 当前要求 Token 文件存在，MCP 镜像构建阶段可创建空的占位文件，仅用于通过路径校验；该文件不得包含真实 Token，并应在最终运行时由 `/run/secrets` 只读挂载覆盖。占位文件必须在 Dockerfile 切换为非 root 的 `qwenpaw` 用户之前创建，并设置为普通、非符号链接文件；当前镜像会把 `/run/secrets` 设为只读目录，setup 阶段的 `qwenpaw` 用户无法临时创建该文件，因此由此前的 root 构建步骤预创建即可。legacy 镜像保持当前 `--channel-auth-only` 的配置生成方式。
 
 更灵活的替代方案是在 entrypoint 启动时渲染 endpoint 配置，适用于 qdm-auth-center 不固定使用 `qdm-auth-center` 服务名的环境。
 
@@ -137,13 +138,17 @@ session-hmac.secret
 6. 不要求或读取 `channel-auth.json`；
 7. 将 QwenPaw 容器加入 qdm-auth-center 所在的共享 Docker network。
 
+`session-hmac.secret` 必须以最小权限创建并保持可由运行 UID/GID 读取。若脚本无法完成
+安全的 owner/group 或 ACL 设置，应失败退出；不得为兼容性降级为 `0644`。Runtime Token 同样
+必须为普通非符号链接文件，且不得对组外或其他用户可读。
+
 原有 legacy 启动逻辑调整为 `deploy/qwenpaw/run_docker_rollback.sh`。该脚本是唯一的 legacy 回滚入口，继续要求并使用 `channel-auth.json` 与 `session-hmac.secret`，使用固定 legacy 镜像，且不读取 runtime MCP Token 或加入 runtime MCP 启动前检查。
 
 `run_docker.sh` 使用 `QDM_RUNTIME_SECRET_DIR` 作为 MCP 主启动的密钥目录变量；`run_docker_rollback.sh` 继续使用 `QDM_CHANNEL_SECRET_DIR`，避免 legacy 导出任务的环境变量和运维习惯变化。
 
 `QDM_RUNTIME_SECRET_DIR` 应为仅存放 runtime Token 与 session HMAC 的专用宿主机目录，并整体只读挂载到 `/run/secrets`；避免将整个 qdm-auth-center 配置或数据目录暴露给 QwenPaw。若 qdm-auth-center 使用 Docker Secret 注入 Token，轮换后仍必须重建其容器；QwenPaw 不得假设 Docker Secret 文件会在运行中的容器内自动更新。
 
-连通性检查必须以正式容器相同的运行 UID/GID、只读密钥挂载和共享 Docker network 执行，不能在宿主机直接探测后就视为通过。检查命令不得回显 Token、Blob 或 HTTP 请求正文；应使用一次性容器或启动前的等价探测过程，依次验证 `initialize` 与 `tools/list`，并在失败时阻止 QwenPaw 容器启动。
+连通性检查必须以正式容器相同的运行 UID/GID、只读密钥挂载和共享 Docker network 执行，不能在宿主机直接探测后就视为通过。应在镜像中提供专用、无敏感输出的 MCP preflight helper，并由一次性容器调用；不得用临时 `curl` 拼装请求。helper 读取挂载 Token 后依次发送 `initialize` 与 `tools/list`，确认 HTTP/Bearer 认证成功且工具列表包含 `qdm_auth_lookup_blob`。它不得执行真实用户查询，不得回显 Token、Blob 或 HTTP 请求正文；任一步失败均阻止 QwenPaw 容器启动。
 
 共享网络使用固定名称（例如 `qdm-auth-network`），由部署前置步骤显式创建并检查存在；qdm-auth-center Compose 与 QwenPaw runtime 脚本均加入该 external network，并为 qdm-auth-center 声明 `qdm-auth-center` 网络别名。这样 `runtime_mcp.endpoint` 中固定的容器 DNS 名称才具有可验证的含义。
 
@@ -168,7 +173,8 @@ session-hmac.secret
 
 MCP 镜像构建时写入 `runtime_mcp.enabled=true`；legacy 镜像保持
 `runtime_mcp` 字段缺失或显式禁用。两个镜像可基于同一代码版本构建，但必须
-以不同标签保留，不能用同一可变标签覆盖 legacy 镜像。
+以不同标签保留，不能用同一可变标签覆盖 legacy 镜像。发布记录还必须保存两者 digest，
+使回滚不依赖可能被后续构建覆盖的普通标签。
 
 #### 4.2.2 持久卷与回滚边界
 
@@ -264,13 +270,15 @@ Docker 内部网络访问，默认不发布宿主机端口；`8766` 默认发布
 
 ### 5.1 代码与测试
 
-合并到 `master` 后执行：
+合并到 `master` 后执行本仓库的 Node/npm 测试，而不是 Go 测试：
 
 ```bash
-go test ./...
+(cd npm && npm test)
+python3 -m unittest discover -s deploy/qwenpaw -p 'test_*.py'
 ```
 
-并执行 QwenPaw 插件测试、插件产物校验和 Linux 构建校验。
+并执行 Runtime MCP 相关 QwenPaw 插件测试、插件产物校验和 Linux Docker 构建校验；
+qdm-auth-center 的 `go test ./...` 应在其独立仓库中执行。
 
 ### 5.2 准备 qdm-auth-center
 
@@ -325,6 +333,8 @@ go test ./...
   legacy 授权链路。
 - runtime Token 轮换按 4.2.3 步骤执行后，qdm-auth-center 与 QwenPaw 均使用新 Token，日志中不出现 Token；
 - legacy `channel-auth.json` 导出任务在观察期内持续成功，且可由 legacy 容器运行 UID/GID 读取。
+- Runtime 启动前的临时容器在共享 network、正式运行 UID/GID 和只读密钥挂载下通过 preflight，且 `tools/list` 明确包含 `qdm_auth_lookup_blob`；错误 Token、错误 network 或缺失工具均阻止启动。
+- 发布单记录 runtime MCP 与 legacy 两张镜像的 tag 和 digest；使用已记录 digest 能完成 legacy 回滚。
 
 ## 7. 兼容性与非目标
 
