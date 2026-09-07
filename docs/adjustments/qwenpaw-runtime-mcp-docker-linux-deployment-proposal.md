@@ -35,14 +35,14 @@ channel-auth.json
 session-hmac.secret
 ```
 
-runtime MCP 模式应改为检查：
+调整后，`run_docker.sh` 作为 runtime MCP 主启动入口，应改为检查：
 
 ```text
 qdm-auth-runtime.token
 session-hmac.secret
 ```
 
-`channel-auth.json` 只保留给显式 legacy/回滚模式。
+原有 `channel-auth.json` 检查逻辑应迁移至 `deploy/qwenpaw/run_docker_rollback.sh`，该脚本只保留给显式 legacy/回滚模式。
 
 ### 2.3 qdm-auth-center 尚未纳入 QwenPaw 网络拓扑
 
@@ -120,16 +120,14 @@ harness-data-qwenpaw:<version>-mcp-amd64
 
 ### 4.2 双脚本部署与回滚策略（调整后）
 
-短期内**不修改**现有 `deploy/qwenpaw/run_docker.sh`。该脚本冻结为
-legacy 启动和回滚入口，继续要求并使用：
+`deploy/qwenpaw/run_docker.sh` 调整为 runtime MCP 的唯一主启动入口。该脚本应：
 
 ```text
-channel-auth.json
+qdm-auth-runtime.token
 session-hmac.secret
 ```
 
-新增 `deploy/qwenpaw/run_docker_runtime_mcp.sh`，专门启动 runtime MCP
-模式。新脚本应：
+它应：
 
 1. 要求 `qdm-auth-runtime.token` 存在；
 2. 首次启动时生成 `session-hmac.secret`，已有文件不得覆盖；
@@ -139,8 +137,9 @@ session-hmac.secret
 6. 不要求或读取 `channel-auth.json`；
 7. 将 QwenPaw 容器加入 qdm-auth-center 所在的共享 Docker network。
 
-建议新增 `QDM_RUNTIME_SECRET_DIR` 作为 MCP 脚本的密钥目录变量；旧脚本
-继续使用 `QDM_CHANNEL_SECRET_DIR`，避免既有部署的环境变量和运维习惯变化。
+原有 legacy 启动逻辑调整为 `deploy/qwenpaw/run_docker_rollback.sh`。该脚本是唯一的 legacy 回滚入口，继续要求并使用 `channel-auth.json` 与 `session-hmac.secret`，使用固定 legacy 镜像，且不读取 runtime MCP Token 或加入 runtime MCP 启动前检查。
+
+`run_docker.sh` 使用 `QDM_RUNTIME_SECRET_DIR` 作为 MCP 主启动的密钥目录变量；`run_docker_rollback.sh` 继续使用 `QDM_CHANNEL_SECRET_DIR`，避免 legacy 导出任务的环境变量和运维习惯变化。
 
 `QDM_RUNTIME_SECRET_DIR` 应为仅存放 runtime Token 与 session HMAC 的专用宿主机目录，并整体只读挂载到 `/run/secrets`；避免将整个 qdm-auth-center 配置或数据目录暴露给 QwenPaw。若 qdm-auth-center 使用 Docker Secret 注入 Token，轮换后仍必须重建其容器；QwenPaw 不得假设 Docker Secret 文件会在运行中的容器内自动更新。
 
@@ -164,8 +163,8 @@ session-hmac.secret
 
 | 模式 | 脚本 | 默认镜像 | 授权来源 |
 | --- | --- | --- | --- |
-| legacy / 回滚 | `run_docker.sh` | `harness-data-qwenpaw:<legacy-version>-amd64` | `channel-auth.json` |
-| runtime MCP | `run_docker_runtime_mcp.sh` | `harness-data-qwenpaw:<mcp-version>-mcp-amd64` | qdm-auth-center runtime MCP |
+| runtime MCP（主启动） | `run_docker.sh` | `harness-data-qwenpaw:<mcp-version>-mcp-amd64` | qdm-auth-center runtime MCP |
+| legacy（仅回滚） | `run_docker_rollback.sh` | `harness-data-qwenpaw:<legacy-version>-amd64` | `channel-auth.json` |
 
 MCP 镜像构建时写入 `runtime_mcp.enabled=true`；legacy 镜像保持
 `runtime_mcp` 字段缺失或显式禁用。两个镜像可基于同一代码版本构建，但必须
@@ -183,7 +182,7 @@ qwenpaw-backups
 qdm-data
 ```
 
-MCP 观察期内，仍必须保留并持续更新 legacy `channel-auth.json`。否则旧脚本
+MCP 观察期内，仍必须保留并持续更新 legacy `channel-auth.json`。否则回滚脚本
 即使仍可启动，也无法恢复用户授权查询。
 
 发布方案必须同时定义 legacy 文件的维护责任：由指定的 qdm-auth-center 导出任务按既有
@@ -196,7 +195,7 @@ MCP 异常时的回滚步骤为：
 ```text
 1. 停止并删除当前 qwenpaw 容器（不删除命名卷）；
 2. 确认 channel-auth.json 对 legacy 容器运行 UID/GID 可读；
-3. 执行未修改的 deploy/qwenpaw/run_docker.sh；
+3. 执行 deploy/qwenpaw/run_docker_rollback.sh；
 4. 使用固定 legacy 镜像启动；
 5. 验证企微/飞书请求重新通过 ChannelAuthProvider 获取 Blob。
 ```
@@ -234,7 +233,7 @@ QwenPaw 插件在每次查询时读取 Token 文件，而 qdm-auth-center 在启
 
 不建议将 runtime Token 通过普通环境变量传入 QwenPaw，避免出现在容器 inspect、进程环境或诊断输出中。
 
-部署实现还必须同步更新 `.agents/qwenpaw/DOCKER-LINUX-VALIDATION.md`：该文件当前把 runtime MCP 的文件检查归属到 `run_docker.sh`，实施后应明确 legacy 脚本只检查 `channel-auth.json`，runtime MCP 脚本才检查 `qdm-auth-runtime.token` 与 `session-hmac.secret`。
+部署实现还必须同步更新 `.agents/qwenpaw/DOCKER-LINUX-VALIDATION.md` 与 `config/qwenpaw/README.md`：`run_docker.sh` 只检查 `qdm-auth-runtime.token` 与 `session-hmac.secret`；`run_docker_rollback.sh` 才检查 `channel-auth.json` 与 `session-hmac.secret`。
 
 ### 4.4 qdm-auth-center Compose
 
@@ -298,7 +297,7 @@ go test ./...
 2. 准备 runtime Token 和 session HMAC 文件，并确认 Token 与 qdm-auth-center 启动时读取的内容一致；
 3. 以 `0600` 或等效 ACL 设置权限，并确认 UID/GID 可读；
 4. 启动 qdm-auth-center；
-5. 使用 `run_docker_runtime_mcp.sh` 启动 MCP QwenPaw；
+5. 使用 `run_docker.sh` 启动 MCP QwenPaw；
 6. 由 runtime 脚本在同一 network 内执行 MCP `initialize`、`tools/list` 启动前检查；
 7. 执行 QwenPaw doctor 和 health check；
 8. 确认 QwenPaw 容器能解析 `qdm-auth-center` 并访问 `8765/mcp`。
@@ -322,7 +321,7 @@ go test ./...
 - qdm-auth-center 不可达时返回明确授权不可用提示；
 - 旧 `channel-auth.json` 不存在时，runtime MCP 模式仍可工作；
 - 未启用 runtime MCP 的 legacy 回滚模式仍可工作。
-- runtime MCP 异常后，不删除命名卷即可通过未修改的 `run_docker.sh` 恢复
+- runtime MCP 异常后，不删除命名卷即可通过 `run_docker_rollback.sh` 恢复
   legacy 授权链路。
 - runtime Token 轮换按 4.2.3 步骤执行后，qdm-auth-center 与 QwenPaw 均使用新 Token，日志中不出现 Token；
 - legacy `channel-auth.json` 导出任务在观察期内持续成功，且可由 legacy 容器运行 UID/GID 读取。
@@ -334,7 +333,7 @@ go test ./...
 - 不要求反向代理；
 - 不将 runtime MCP Token 作为普通环境变量传入 QwenPaw；
 - 不改变 admin MCP 的工具权限模型；
-- 不删除 legacy `channel-auth.json` 代码、文件产出和旧启动脚本，保留显式回滚能力；
+- 不删除 legacy `channel-auth.json` 代码、文件产出和 `run_docker_rollback.sh`，保留显式回滚能力；
 - 不在 Docker build 阶段依赖运行中的 qdm-auth-center。
 
 ## 8. 建议提交说明
