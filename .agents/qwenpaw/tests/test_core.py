@@ -1228,7 +1228,7 @@ class HarnessContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             shim = Path(temp) / "data-harness-cli"
             shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "nt"), \
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess._is_windows", return_value=True), \
                     patch("qdm_harness_qwenpaw_test.qdm_subprocess.shutil.which", return_value="node.exe"):
                 command = cli_command(shim, ["context", "--format", "qwenpaw-hook"])
             self.assertEqual(command, ["node.exe", str(shim), "context", "--format", "qwenpaw-hook"])
@@ -1239,7 +1239,7 @@ class HarnessContextTests(unittest.TestCase):
             native = Path(temp) / "data-harness-cli.exe"
             shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
             native.write_bytes(b"placeholder")
-            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "nt"):
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess._is_windows", return_value=True):
                 command = cli_command(shim, ["context"])
             self.assertEqual(command, [str(native), "context"])
 
@@ -1247,7 +1247,7 @@ class HarnessContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             shim = Path(temp) / "data-harness-cli"
             shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "posix"):
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess._is_windows", return_value=False):
                 command = cli_command(shim, ["context"])
             self.assertEqual(Path(command[0]), shim)
             self.assertEqual(command[1], "context")

@@ -7,10 +7,15 @@ from pathlib import Path
 import shutil
 
 
+def _is_windows() -> bool:
+    """Keep platform selection independently testable without mutating ``os.name``."""
+    return os.name == "nt"
+
+
 def cli_command(path: Path, args: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Use a native executable or invoke an extensionless Node shim explicitly."""
     candidate = Path(path)
-    if os.name == "nt":
+    if _is_windows():
         native = candidate if candidate.suffix.lower() == ".exe" else candidate.with_name(candidate.name + ".exe")
         if native.is_file() and not native.is_symlink():
             candidate = native
