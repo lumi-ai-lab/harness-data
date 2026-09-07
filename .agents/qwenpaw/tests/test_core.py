@@ -1038,7 +1038,7 @@ class ToolBoundaryTests(unittest.TestCase):
                 target.plugins.hook_registry.register(factory())  # type: ignore[union-attr]
 
         def restore_tools(workspace_info: dict[str, object]) -> None:
-            PLUGIN_MODULE._reinject_tools_into_workspace(workspace_info, tool_specs)
+            PLUGIN_MODULE._apply_agent_scope_to_workspace(workspace_info, tool_specs)
 
         unrelated_called: list[bool] = []
         registry = LegacyRegistry(manager, [
@@ -1049,7 +1049,7 @@ class ToolBoundaryTests(unittest.TestCase):
             ),
             types.SimpleNamespace(
                 plugin_id="qdm-harness-qwenpaw",
-                hook_name="qdm_harness_reinject_tools",
+                hook_name="qdm_harness_apply_agent_scope",
                 callback=restore_tools,
             ),
             types.SimpleNamespace(
@@ -1061,7 +1061,8 @@ class ToolBoundaryTests(unittest.TestCase):
 
         self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
         self.assertTrue(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
-        self.assertTrue(asyncio.run(manager.reload_agent("default")))
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("default",))):
+            self.assertTrue(asyncio.run(manager.reload_agent("default")))
         self.assertEqual(manager.reload_calls, 1)
         self.assertEqual(unrelated_called, [])
         pre_build_names = {
@@ -1227,7 +1228,8 @@ class HarnessContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             shim = Path(temp) / "data-harness-cli"
             shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.shutil.which", return_value="node.exe"):
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "nt"), \
+                    patch("qdm_harness_qwenpaw_test.qdm_subprocess.shutil.which", return_value="node.exe"):
                 command = cli_command(shim, ["context", "--format", "qwenpaw-hook"])
             self.assertEqual(command, ["node.exe", str(shim), "context", "--format", "qwenpaw-hook"])
 
@@ -1237,7 +1239,8 @@ class HarnessContextTests(unittest.TestCase):
             native = Path(temp) / "data-harness-cli.exe"
             shim.write_text("#!/usr/bin/env node\n", encoding="utf-8")
             native.write_bytes(b"placeholder")
-            command = cli_command(shim, ["context"])
+            with patch("qdm_harness_qwenpaw_test.qdm_subprocess.os.name", "nt"):
+                command = cli_command(shim, ["context"])
             self.assertEqual(command, [str(native), "context"])
 
     def test_cli_command_keeps_direct_execution_on_posix(self) -> None:
