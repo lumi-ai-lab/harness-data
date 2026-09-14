@@ -23,7 +23,7 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly", "runtimeMcpDisabled", "skipRuntimeMcpCheck"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       const value = inline ?? args[++i];
@@ -97,7 +97,13 @@ Root Context options (setup/doctor/paths/report):
   --download-metric-cli              Download metric-cli from the plugin manifest
   --wikis-source PATH                Local wikis directory (Codex setup copies it into the Plugin)
   --skip-wikis                       Skip wikis validation/index build during setup
-  --channel-auth-only                QwenPaw only: authorize via channel-auth.json; skip auth.blob and --auth-user-id
+  --channel-auth-only                QwenPaw only: skip auth.blob and --auth-user-id (legacy or runtime MCP mode)
+  --runtime-mcp-endpoint URL          QwenPaw runtime MCP endpoint (/mcp)
+  --runtime-mcp-token-file PATH       QwenPaw runtime MCP Bearer token file
+  --runtime-mcp-timeout-seconds N     Runtime MCP timeout (1..60, default 10)
+  --runtime-mcp-max-response-bytes N  Runtime MCP response limit (default 1048576)
+  --runtime-mcp-disabled              Explicitly use legacy channel-auth.json mode
+  --skip-runtime-mcp-check            Skip setup connectivity probe (offline staging only)
   --enabled-agents PATTERN           QwenPaw only: agent id or wildcard (harness-data-*, *) allowed to activate the plugin; repeatable (default: harness-data-*)
   --tool-policy POLICY               QwenPaw only: preserve (default, host tools untouched) or strict (in-scope agents keep only qdm_query, qdm_scope_summary, get_current_time)
 

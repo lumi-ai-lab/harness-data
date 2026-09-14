@@ -247,8 +247,8 @@ export async function qwenpawCommand(options = {}) {
  *  5. record the enabled agent; setup owns staging and snapshot rollback
  *
  * --channel-auth-only (QwenPaw channel authorization, e.g. WeCom/Feishu)
- * keeps authz enabled but skips the auth.blob / --auth-user-id contract: the
- * runtime resolves each requester's blob from channel-auth.json instead.
+ * keeps authz enabled but skips the auth.blob / --auth-user-id contract.  In
+ * runtime MCP mode, each requester's Blob is resolved by qdm-auth-center.
  */
 export async function setupQwenPaw(options = {}) {
   const source = resolvePluginSource(options);
@@ -263,6 +263,10 @@ export async function setupQwenPaw(options = {}) {
   const dataRoot = path.resolve(String(options.dataRoot || path.join(defaultInstanceBase(), "data")).trim());
   const workspaceRoot = path.resolve(String(options.workspaceRoot || firstWorkspaceAllowlist(options) || process.cwd()).trim());
   const secretRoot = path.resolve(String(options.secretDir || defaultSensitiveDir()).trim());
+  const runtimeMcp = resolveRuntimeMcpConfig(options);
+  if (runtimeMcp?.enabled && options.skipRuntimeMcpCheck !== true) {
+    await checkRuntimeMcpEndpoint(runtimeMcp);
+  }
 
   const setupReport = await setupCommand({
     ...options,
@@ -272,6 +276,9 @@ export async function setupQwenPaw(options = {}) {
     dataRoot,
     workspaceRoot,
     secretRoot,
+    // Runtime MCP owns authorization; skip the legacy auth.blob contract while
+    // keeping authz enabled for the QwenPaw query hooks.
+    ...(runtimeMcp?.enabled ? { channelAuthOnly: true } : {}),
     json: true,
   });
 
@@ -283,6 +290,7 @@ export async function setupQwenPaw(options = {}) {
     setupReport,
     patterns: resolveAgentScopePatterns(options),
     toolPolicy: resolveToolPolicy(options, readReferenceConfig(options)),
+    runtimeMcp,
   });
   const written = readReferenceConfig(options) || {};
   const allowlistedAgents = String(written.tool_policy || "") === "strict"
@@ -359,6 +367,17 @@ export async function doctorQwenPaw(options = {}) {
       ok: !reference.secret_ref || fs.existsSync(reference.secret_ref),
       detail: secretDir,
     });
+    if (reference.runtime_mcp) {
+      const runtime = reference.runtime_mcp;
+      const tokenOk = runtime.token_file && isRegularFile(runtime.token_file);
+      let endpointOk = false;
+      try {
+        const parsed = new URL(runtime.endpoint);
+        endpointOk = ["http:", "https:"].includes(parsed.protocol) && !parsed.search && !parsed.hash && parsed.pathname.replace(/\/+$/, "") === "/mcp";
+      } catch { /* invalid endpoint is reported below */ }
+      checks.push({ name: "runtime-mcp-endpoint", ok: endpointOk, detail: runtime.endpoint || "missing" });
+      checks.push({ name: "runtime-mcp-token-file", ok: Boolean(tokenOk), detail: runtime.token_file || "missing" });
+    }
   }
   if (reference) {
     checks.push(agentScopeCheck(reference, options));
@@ -465,7 +484,7 @@ function resolveAgentScopePatterns(options) {
   return [...DEFAULT_AGENT_SCOPE_PATTERNS];
 }
 
-function writeReferenceConfig({ installedRoot, instanceRoot, version, options, setupReport, patterns, toolPolicy }) {
+function writeReferenceConfig({ installedRoot, instanceRoot, version, options, setupReport, patterns, toolPolicy, runtimeMcp }) {
   const config = {
     schema_version: 2,
     plugin_id: PLUGIN_ID,
@@ -479,11 +498,52 @@ function writeReferenceConfig({ installedRoot, instanceRoot, version, options, s
     query_limits: { success_bytes: null, timeout_seconds: 120 },
     report_limits: { additional_context_bytes: null },
   };
+  if (runtimeMcp) config.runtime_mcp = runtimeMcp;
   const file = options.pluginConfigFile ? path.resolve(String(options.pluginConfigFile).trim()) : pluginConfigFile();
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   if (process.platform !== "win32") fs.chmodSync(file, 0o600);
   return file;
+}
+
+function resolveRuntimeMcpConfig(options) {
+  if (options.runtimeMcpDisabled === true) return { enabled: false, endpoint: "http://127.0.0.1:8765/mcp", token_file: path.join(defaultSensitiveDir(), "qdm-auth-runtime.token"), timeout_seconds: 10, max_response_bytes: 1048576 };
+  const endpoint = String(options.runtimeMcpEndpoint || "").trim();
+  const tokenFile = String(options.runtimeMcpTokenFile || "").trim();
+  if (!endpoint && !tokenFile) return readReferenceConfig(options)?.runtime_mcp || null;
+  if (!endpoint || !tokenFile) throw new Error("runtime MCP setup requires --runtime-mcp-endpoint and --runtime-mcp-token-file");
+  let parsed;
+  try { parsed = new URL(endpoint); } catch { throw new Error("--runtime-mcp-endpoint must be a valid http(s) URL"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.search || parsed.hash || parsed.pathname.replace(/\/+$/, "") !== "/mcp") {
+    throw new Error("--runtime-mcp-endpoint must use http(s) and the /mcp path");
+  }
+  const resolvedToken = path.resolve(tokenFile);
+  if (!fs.existsSync(resolvedToken) || !isRegularFile(resolvedToken)) throw new Error(`runtime MCP token file is unavailable: ${resolvedToken}`);
+  const timeout = options.runtimeMcpTimeoutSeconds === undefined ? 10 : Number(options.runtimeMcpTimeoutSeconds);
+  const maxBytes = options.runtimeMcpMaxResponseBytes === undefined ? 1048576 : Number(options.runtimeMcpMaxResponseBytes);
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60) throw new Error("--runtime-mcp-timeout-seconds must be 1..60");
+  if (!Number.isInteger(maxBytes) || maxBytes < 4096 || maxBytes > 8 * 1024 * 1024) throw new Error("--runtime-mcp-max-response-bytes must be 4096..8388608");
+  return { enabled: true, endpoint, token_file: resolvedToken, timeout_seconds: timeout, max_response_bytes: maxBytes };
+}
+
+async function checkRuntimeMcpEndpoint(runtime) {
+  let token;
+  try { token = fs.readFileSync(runtime.token_file, "utf8").trim(); } catch { throw new Error("runtime MCP token file is unreadable"); }
+  if (!token || Buffer.byteLength(token, "utf8") > 4096) throw new Error("runtime MCP token file is invalid");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), runtime.timeout_seconds * 1000);
+  try {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: PLUGIN_ID, version: packageVersion() } } });
+    const response = await fetch(runtime.endpoint, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}` }, body, signal: controller.signal });
+    if (!response.ok) throw new Error(`runtime MCP connectivity check failed (HTTP ${response.status})`);
+    const text = await response.text();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { const data = text.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).pop(); parsed = data ? JSON.parse(data) : null; }
+    if (!parsed || parsed.jsonrpc !== "2.0" || !parsed.result || parsed.error) throw new Error("runtime MCP connectivity check returned an invalid response");
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("runtime MCP connectivity check timed out");
+    throw error;
+  } finally { clearTimeout(timer); }
 }
 
 function readReferenceConfig(options) {
@@ -499,6 +559,7 @@ function readReferenceConfig(options) {
       enabled_agents: Array.isArray(parsed.enabled_agents) ? parsed.enabled_agents : [],
       qdm_agent_id: String(parsed.qdm_agent_id || ""),
       tool_policy: String(parsed.tool_policy || ""),
+      runtime_mcp: parsed.runtime_mcp && typeof parsed.runtime_mcp === "object" ? parsed.runtime_mcp : null,
     };
   } catch {
     return null;

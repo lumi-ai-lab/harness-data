@@ -1,5 +1,33 @@
 # QwenPaw Docker 部署
 
+## Runtime MCP 主启动（生产默认）
+
+Runtime MCP 不再读取 `channel-auth.json`。先创建并启动 qdm-auth-center 所在的
+external Docker network，然后以独立 MCP 镜像启动：
+
+```bash
+docker network create qdm-auth-network   # 已存在时无需重复创建
+deploy/qwenpaw/build-docker-image.sh --mode runtime-mcp
+export QDM_RUNTIME_SECRET_DIR=/srv/qdm/qwenpaw-runtime-secrets
+export QDM_AUTH_NETWORK=qdm-auth-network
+export QWENPAW_MODEL_API_KEY=<model-api-key>
+deploy/qwenpaw/run_docker.sh
+```
+
+`QDM_RUNTIME_SECRET_DIR` 只能包含 `qdm-auth-runtime.token` 和
+`session-hmac.secret`；两者必须是非符号链接普通文件、权限 `0600`，且可由容器
+UID/GID（默认 `10001:10001`）读取。主脚本会在相同 network、UID/GID 和只读挂载下
+执行 MCP preflight，检查 `initialize`、`tools/list` 与 `qdm_auth_lookup_blob`；失败时
+不会启动 QwenPaw。发布时记录 MCP 和 legacy 两张镜像的 digest。
+
+本文其余基于 `channel-auth.json` 的步骤仅适用于显式回滚。Runtime MCP 异常时，不删除
+命名卷，改用 `deploy/qwenpaw/run_docker_rollback.sh` 与固定 legacy 镜像启动。
+
+## Legacy 回滚部署参考
+
+以下内容描述基于 `channel-auth.json` 的 legacy 回滚链路；构建时必须显式指定
+`--mode legacy`，启动时使用 `run_docker_rollback.sh`，不要作为 Runtime MCP 的日常部署步骤。
+
 镜像固定 QwenPaw 2.1.0 + Harness Data 插件, 不含任何密钥。镜像在开发机(本机)构建, 导出压缩后上传服务器加载, 共 5 步:
 
 ```text
@@ -19,7 +47,7 @@
 ## ① 本机构建镜像
 
 ```bash
-deploy/qwenpaw/build-docker-image.sh
+deploy/qwenpaw/build-docker-image.sh --mode legacy
 ```
 
 - 直接运行即用脚本内固定版本; 或加 `--latest-release`, 自动按 Gitee 最新 Release 解析版本(脚本会打印解析出的版本号与镜像 tag)。
@@ -40,7 +68,7 @@ scp harness-data-qwenpaw-0.0.56-amd64.tar.gz <服务器用户>@<服务器IP>:/tm
 docker load -i /tmp/harness-data-qwenpaw-0.0.56-amd64.tar.gz
 ```
 
-> 服务器上只需镜像 + `run_docker.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py`、`ensure_qdm_agent.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
+> 服务器上只需 legacy 镜像 + `run_docker_rollback.sh` + 密钥文件。`entrypoint.sh`、`configure_model.py`、`align_timezone.py`、`ensure_qdm_agent.py` 在构建镜像时已 COPY 进容器 `/opt/qdm/bin/`, 无需单独上传; `Dockerfile`、`build-docker-image.sh` 只在本机构建时使用。
 
 > 配置与数据落在 4 个**命名卷**里, 与在哪个目录执行脚本无关:
 >
@@ -111,7 +139,7 @@ namei -l "$QDM_CHANNEL_SECRET_DIR"   # 每一级目录都要有 o+x, 否则容�
 ## ④ 运行并验证(服务器)
 
 ```bash
-deploy/qwenpaw/run_docker.sh
+deploy/qwenpaw/run_docker_rollback.sh
 docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即成功
 ```
 

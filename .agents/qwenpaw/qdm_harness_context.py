@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .qdm_config import ContextLimits
+from .qdm_subprocess import cli_command
 
 
 logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
@@ -81,7 +82,7 @@ def request_context(
     if workspace:
         payload["cwd"] = workspace
     payload_json = json.dumps(payload, ensure_ascii=False)
-    argv = [str(cli_path)]
+    argv = cli_command(cli_path)
     if context_file is not None:
         if context_file.is_symlink() or not context_file.is_file():
             raise HarnessContextError("context_file_unavailable")

@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .qdm_subprocess import cli_command
+
 
 SENSITIVE_ENVIRONMENT = frozenset({"HARNESS_AUTH_BLOB", "HARNESS_AUTH_BLOB_FILE", "HARNESS_AUTH_USER_ID", "LUMI_REQUESTER_CONTEXT_DIR", "QDM_AUTH_BLOB", "QDM_AUTH_BLOB_FILE"})
 _BLOB_PATTERN = re.compile(r"qdm1enc\.[^\s\"']+", re.IGNORECASE)
@@ -117,7 +119,7 @@ class QdmCliExecutor:
             raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")
         payload = {"tool_name": "qdm_query", "tool_input": dict(query), "blob": blob}
         env = {key: value for key, value in os.environ.items() if key not in SENSITIVE_ENVIRONMENT}
-        argv = [str(harness)]
+        argv = cli_command(harness)
         if self._context_file is not None:
             if self._context_file.is_symlink() or not self._context_file.is_file():
                 raise QdmCliError("QDM_CONTEXT_UNAVAILABLE", "Root Context 不可用")

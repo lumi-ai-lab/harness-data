@@ -13,7 +13,7 @@ set -eu
 # 回环地址改写成 host.docker.internal(配合下面的 --add-host 使用)。
 
 # 镜像引用:标签要和 build-docker-image.sh 产出的 tag 保持一致
-image=${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-amd64}
+image=${QWENPAW_IMAGE:-harness-data-qwenpaw:0.0.56-mcp-amd64}
 # 容器名:同名容器(含已停止的)在启动前由下方统一停掉并删除,本脚本可重复执行
 name=${QWENPAW_CONTAINER_NAME:-qwenpaw}
 # 宿主机发布端口:容器内固定监听 8088
@@ -27,8 +27,8 @@ runtime_uid=${QWENPAW_UID:-10001}
 # 容器运行用户 gid:同上;密钥文件属主可以是别的账号(如 cron 的导出账号),
 # 只要权限让该 UID/GID 可读即可,下方会实测一次
 runtime_gid=${QWENPAW_GID:-10001}
-# 渠道密钥目录:只读挂载到容器 /run/secrets,必须存放 channel-auth.json
-secret_dir=${QDM_CHANNEL_SECRET_DIR:?set QDM_CHANNEL_SECRET_DIR}
+# Runtime MCP 密钥目录：只读挂载到容器 /run/secrets，必须存放 Runtime Token。
+secret_dir=${QDM_RUNTIME_SECRET_DIR:?set QDM_RUNTIME_SECRET_DIR}
 # 模型网关 API Key:启动时由 QwenPaw 加密写入可写 secret 卷,不进镜像层
 model_key=${QWENPAW_MODEL_API_KEY:?set QWENPAW_MODEL_API_KEY}
 # 容器内存上限:默认 8GB,仅限制内存,不做其他资源限制
@@ -36,9 +36,8 @@ mem_limit=${QWENPAW_MEM_LIMIT:-8g}
 # 容器时区:IANA 名称,同时用于修正持久卷里 config.json 的 user_timezone
 container_tz=${QWENPAW_TZ:-Asia/Shanghai}
 
-# 渠道授权文件:由导出任务(可能是另一个账号)每日重写,属主不限,
-# 但必须对上面的容器运行 UID/GID 可读(推荐 0644),缺失即报错退出
-auth_file="$secret_dir/channel-auth.json"
+# Runtime MCP Token：由 qdm-auth-center 侧管理，必须是容器运行 UID 所有的 0600 普通文件。
+auth_file="$secret_dir/qdm-auth-runtime.token"
 # 会话 HMAC 密钥文件:派生企微会话 key 的长期签名密钥,不存在时由下方生成
 hmac_file="$secret_dir/session-hmac.secret"
 
@@ -51,25 +50,43 @@ if [ ! -f "$hmac_file" ]; then
   head -c 48 /dev/urandom > "$hmac_file"
   chmod 600 "$hmac_file"
   # 该文件没有第二个写者,保持 0600 独占即可,只需让容器运行 UID/GID 成为属主。
-  # 无 chown 权限时放宽到 0644:保证容器读得到优先于收紧权限位。
+  # 无法安全设置属主时终止，避免放宽敏感文件权限。
   if ! chown "${runtime_uid}:${runtime_gid}" "$hmac_file" 2>/dev/null; then
-    chmod 644 "$hmac_file"
-    echo "warning: cannot chown $hmac_file to ${runtime_uid}:${runtime_gid}; relaxed to 0644" >&2
+    echo "cannot securely assign $hmac_file to ${runtime_uid}:${runtime_gid}" >&2
+    exit 1
   fi
 fi
 
-# 部署期以容器视角实测一次可读性。channel-auth.json 的属主现在可以是导出账号,
-# 单看权限位猜不到目录遍历位、UID 不匹配这类问题,直接以运行 UID 读一次最可靠。
+test ! -L "$auth_file" && test ! -L "$hmac_file" || { echo "secret files must not be symlinks" >&2; exit 1; }
+[ "$(stat -c '%a' "$auth_file")" = "600" ] || { echo "runtime token must have mode 0600" >&2; exit 1; }
+[ "$(stat -c '%a' "$hmac_file")" = "600" ] || { echo "session HMAC must have mode 0600" >&2; exit 1; }
+[ "$(stat -c '%u' "$auth_file")" = "${runtime_uid}" ] || { echo "runtime token must be owned by UID ${runtime_uid}" >&2; exit 1; }
+[ "$(stat -c '%u' "$hmac_file")" = "${runtime_uid}" ] || { echo "session HMAC must be owned by UID ${runtime_uid}" >&2; exit 1; }
+
+# 部署期以容器视角实测 Runtime Token 和 HMAC 是否可读，目录遍历位或 UID/GID 不匹配都会失败。
 docker image inspect "${image}" >/dev/null 2>&1 \
   || { echo "本地没有镜像 ${image},请先 docker load -i <镜像包>" >&2; exit 1; }
 if ! docker run --rm --platform linux/amd64 \
     --entrypoint /bin/sh \
     --user "${runtime_uid}:${runtime_gid}" \
     -v "${secret_dir}:/run/secrets:ro" "${image}" \
-    -c 'test -r /run/secrets/channel-auth.json && test -r /run/secrets/session-hmac.secret' >/dev/null 2>&1; then
+    -c 'test -r /run/secrets/qdm-auth-runtime.token && test -r /run/secrets/session-hmac.secret' >/dev/null 2>&1; then
   echo "密钥对容器运行 UID/GID ${runtime_uid}:${runtime_gid} 不可读: ${secret_dir}" >&2
-  echo "  channel-auth.json 属主不限,但需 chmod 644(或 0640 且容器 GID 能组读)" >&2
-  echo "  并确认 ${secret_dir} 每一级目录都有其他用户的遍历位 o+x" >&2
+  echo "  两个密钥文件均须为 UID ${runtime_uid} 所有、模式 0600 的普通文件" >&2
+  echo "  并确认 ${secret_dir} 每一级目录允许容器运行 UID 遍历" >&2
+  exit 1
+fi
+
+network=${QDM_AUTH_NETWORK:-qdm-auth-network}
+docker network inspect "${network}" >/dev/null 2>&1 \
+  || { echo "missing Docker network: ${network}" >&2; exit 1; }
+if ! docker run --rm --platform linux/amd64 \
+    --network "${network}" \
+    --entrypoint /usr/local/bin/python \
+    --user "${runtime_uid}:${runtime_gid}" \
+    -v "${secret_dir}:/run/secrets:ro" "${image}" \
+    /opt/qdm/bin/check_runtime_mcp.py >/dev/null; then
+  echo "Runtime MCP preflight failed; QwenPaw was not started" >&2
   exit 1
 fi
 
@@ -89,6 +106,7 @@ fi
 set -- docker run -d --name "${name}" \
   --platform linux/amd64 \
   --user "${runtime_uid}:${runtime_gid}" \
+  --network "${network}" \
   --restart unless-stopped \
   --memory "${mem_limit}" \
   --add-host host.docker.internal:host-gateway \

@@ -90,6 +90,15 @@ class ReportLimits:
 
 
 @dataclass(frozen=True)
+class RuntimeMcpConfig:
+    enabled: bool = False
+    endpoint: str | None = None
+    token_file: Path | None = None
+    timeout_seconds: int = 10
+    max_response_bytes: int = 1024 * 1024
+
+
+@dataclass(frozen=True)
 class PluginConfig:
     qdm_agent_id: str
     user_id_display_mode: str
@@ -112,6 +121,7 @@ class PluginConfig:
     _sensitive_config_dir: str | None = None
     # schema 2: 从 Root Context 的 pluginRoot 解析的 harness CLI 路径
     _harness_cli_path: str | None = None
+    runtime_mcp: RuntimeMcpConfig = RuntimeMcpConfig()
 
     @property
     def enabled_agents(self) -> tuple[str, ...]:
@@ -171,7 +181,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         "plugin_version", "root_context_path", "secret_ref", "enabled_agents",
         "qdm_agent_id",
         "tool_policy", "context_limits", "query_limits", "report_limits",
-        "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds",
+        "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds", "runtime_mcp",
     }
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
@@ -211,6 +221,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         _metric_cli_path=str(metric_cli_path),
         _sensitive_config_dir=str(sensitive_dir),
         _harness_cli_path=str(harness_cli_path),
+        runtime_mcp=parse_runtime_mcp(raw.get("runtime_mcp")),
     )
 
 
@@ -279,6 +290,42 @@ def parse_auth_file_max_bytes(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError("auth_file_max_bytes is invalid")
     return value
+
+
+def parse_runtime_mcp(value: Any) -> RuntimeMcpConfig:
+    if value is None:
+        return RuntimeMcpConfig()
+    if not isinstance(value, dict) or not {"enabled", "endpoint", "token_file"}.issubset(value):
+        raise ConfigError("runtime_mcp is invalid")
+    allowed = {"enabled", "endpoint", "token_file", "timeout_seconds", "max_response_bytes"}
+    if not set(value).issubset(allowed):
+        raise ConfigError("runtime_mcp contains unsupported fields")
+    enabled = value.get("enabled")
+    endpoint = value.get("endpoint")
+    token_file = value.get("token_file")
+    if not isinstance(enabled, bool):
+        raise ConfigError("runtime_mcp.enabled is invalid")
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise ConfigError("runtime_mcp.endpoint is invalid")
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(endpoint.strip())
+    except ValueError as exc:
+        raise ConfigError("runtime_mcp.endpoint is invalid") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment or parsed.path.rstrip("/") != "/mcp":
+        raise ConfigError("runtime_mcp.endpoint is invalid")
+    if not isinstance(token_file, str) or not token_file.strip():
+        raise ConfigError("runtime_mcp.token_file is invalid")
+    token_path = Path(token_file).expanduser()
+    if not token_path.is_absolute() or token_path.is_symlink():
+        raise ConfigError("runtime_mcp.token_file must be an absolute, non-symlink path")
+    timeout = value.get("timeout_seconds", 10)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
+        raise ConfigError("runtime_mcp.timeout_seconds is invalid")
+    limit = value.get("max_response_bytes", 1024 * 1024)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 4096 <= limit <= 8 * 1024 * 1024:
+        raise ConfigError("runtime_mcp.max_response_bytes is invalid")
+    return RuntimeMcpConfig(enabled, endpoint.strip(), token_path, timeout, limit)
 
 
 def parse_context_limits(value: Any) -> ContextLimits:
@@ -368,7 +415,11 @@ def _harness_cli_from_context(context: dict[str, Any]) -> Path:
     base = Path(plugin_root).expanduser()
     if not base.is_absolute() or base.is_symlink() or not base.is_dir():
         raise ConfigError("root context pluginRoot must be an absolute, non-symlink directory")
-    return base / "scripts" / ("data-harness-cli.exe" if os.name == "nt" else "data-harness-cli")
+    script = base / "scripts" / "data-harness-cli"
+    native = script.with_name("data-harness-cli.exe")
+    if os.name == "nt" and native.is_file() and not native.is_symlink():
+        return native
+    return script
 
 
 def _sensitive_dir_from_reference(secret_ref: Any, context: dict[str, Any]) -> Path:

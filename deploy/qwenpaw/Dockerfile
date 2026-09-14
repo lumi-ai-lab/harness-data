@@ -107,6 +107,8 @@ ARG HARNESS_VERSION=0.0.56
 ARG QWENPAW_VERSION=2.1.0
 ARG QWENPAW_UID=10001
 ARG QWENPAW_GID=10001
+ARG QWENPAW_AUTH_MODE=legacy
+ARG RUNTIME_MCP_ENDPOINT=http://qdm-auth-center:8765/mcp
 # QDM 专用 Agent 的 id。必须落在插件默认作用域 `harness-data-*` 里，且要与下面
 # --workspace-root/--workspace-allowlist 使用的目录同名（宿主按 id 建 workspace 目录）。
 ARG QWENPAW_QDM_AGENT_ID=harness-data-default
@@ -185,17 +187,34 @@ COPY --chmod=0755 deploy/qwenpaw/configure_model.py /opt/qdm/bin/configure_model
 COPY --chmod=0755 deploy/qwenpaw/align_timezone.py /opt/qdm/bin/align_timezone.py
 COPY --chmod=0755 deploy/qwenpaw/ensure_qdm_agent.py /opt/qdm/bin/ensure_qdm_agent.py
 COPY --chmod=0755 deploy/qwenpaw/seed_image_skills.py /opt/qdm/bin/seed_image_skills.py
+COPY --chmod=0755 deploy/qwenpaw/check_runtime_mcp.py /opt/qdm/bin/check_runtime_mcp.py
 
 RUN chown -R qwenpaw:qwenpaw /opt/qdm/harness-data /opt/qdm/qwenpaw-seed \
   && chmod -R a-w /opt/qdm/plugin-source \
   && chmod 0755 /tmp/qdm-metric-cli
+
+# Runtime MCP setup validates that the token path is a regular file. The empty
+# placeholder is only for build-time path validation and is hidden by the
+# read-only runtime secret mount; it never contains a production token.
+RUN set -eu; \
+  case "${QWENPAW_AUTH_MODE}" in \
+    legacy) ;; \
+    runtime-mcp) install -o root -g root -m 0644 /dev/null /run/secrets/qdm-auth-runtime.token ;; \
+    *) echo "unsupported QWENPAW_AUTH_MODE: ${QWENPAW_AUTH_MODE}" >&2; exit 1 ;; \
+  esac
 
 USER qwenpaw
 WORKDIR /app/working
 
 # setup 会把 surface 写进 ${HARNESS_INSTANCE_ROOT}/context.json, 而 CLI 每次读取都重新
 # 校验它: 这里显式固定为 chat(企微/飞书是消息渠道宿主), 与 host=qwenpaw 的派生值一致。
-RUN python -m qwenpaw init --defaults --accept-security \
+RUN set -eu; \
+  case "${QWENPAW_AUTH_MODE}" in \
+    legacy) auth_args='--channel-auth-only' ;; \
+    runtime-mcp) auth_args="--runtime-mcp-endpoint ${RUNTIME_MCP_ENDPOINT} --runtime-mcp-token-file /run/secrets/qdm-auth-runtime.token --skip-runtime-mcp-check" ;; \
+    *) echo "unsupported QWENPAW_AUTH_MODE: ${QWENPAW_AUTH_MODE}" >&2; exit 1 ;; \
+  esac; \
+  python -m qwenpaw init --defaults --accept-security \
   && python /opt/qdm/bin/ensure_qdm_agent.py \
   && /opt/qdm/plugin-source/scripts/harness-data qwenpaw setup \
   --source /opt/qdm/plugin-source \
@@ -209,7 +228,7 @@ RUN python -m qwenpaw init --defaults --accept-security \
   --plugin-config-file "${HARNESS_PLUGIN_CONFIG}" \
   --metric-cli /tmp/qdm-metric-cli \
   --wikis-source /tmp/harness-wikis \
-  --channel-auth-only \
+  ${auth_args} \
   --enabled-agents 'harness-data-*' \
   --tool-policy preserve \
   --surface chat \

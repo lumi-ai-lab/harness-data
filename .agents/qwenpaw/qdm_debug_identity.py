@@ -34,7 +34,10 @@ def debug_result(ctx: Any, requester: Requester | None, display_mode: str) -> Ho
     if input_text(ctx) != DEBUG_COMMAND:
         return None
     if display_mode != "command":
-        return HookResult(action=HookAction.SHORT_CIRCUIT)
+        # SHORT_CIRCUIT envelopes are always passed through the runtime message
+        # adapter.  Supply a valid, non-sensitive reply even when diagnostics
+        # are disabled, rather than violating the payload contract with None.
+        return _reply("身份调试命令未启用")
     bridge = f"热重载兼容桥：{_RELOAD_BRIDGE_LABELS[_reload_bridge_state]}"
     if requester is None:
         # The identity hook writes request_context unconditionally, so a missing

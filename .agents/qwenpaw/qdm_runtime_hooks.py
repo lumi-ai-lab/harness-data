@@ -13,7 +13,7 @@ from qwenpaw.runtime.phases import Phase
 from .qdm_config import ConfigError, PluginConfig, load_config
 from .qdm_debug_identity import debug_result
 from .qdm_harness_context import HarnessContextError, input_text, request_context, session_key
-from .qdm_identity import CONTEXT_KEY, Requester, requester_from_context, resolve_requester
+from .qdm_identity import CONTEXT_KEY, Requester, requester_from_context, resolve_requester_for_request
 
 
 logger = logging.getLogger("qwenpaw.plugins.qdm_harness")
@@ -52,7 +52,7 @@ class QdmRequesterIdentityHook(HookBase):
         request = getattr(ctx, "request", None)
         if request is None:
             return HookResult(action=HookAction.SHORT_CIRCUIT, payload=_error_message("QDM 请求身份不可用"))
-        requester = resolve_requester(getattr(request, "channel", ""), getattr(request, "channel_meta", None))
+        requester = resolve_requester_for_request(request, getattr(ctx, "workspace_dir", None))
         current = getattr(request, "request_context", None)
         context = dict(current) if isinstance(current, dict) else {}
         context[CONTEXT_KEY] = requester.to_context()
@@ -114,10 +114,7 @@ class QdmRequesterContextHook(HookBase):
         # request_context may contain a value written by an earlier hook (or
         # stale session state), so it is never an authority for PRE_EXECUTE.
         request = getattr(ctx, "request", None)
-        requester = resolve_requester(
-            getattr(request, "channel", "") if request is not None else "",
-            getattr(request, "channel_meta", None) if request is not None else None,
-        )
+        requester = resolve_requester_for_request(request, getattr(ctx, "workspace_dir", None))
         if request is not None:
             current = getattr(request, "request_context", None)
             context = dict(current) if isinstance(current, dict) else {}

@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Mapping
 
+from .qdm_subprocess import cli_command
+
 
 
 
@@ -51,7 +53,7 @@ def complete_qdm_query(
         return LifecycleResult(diagnostic_code="QDM_REPORT_LIFECYCLE_UNAVAILABLE")
     try:
         result = subprocess.run(
-            [str(cli_path), "posttool", "--format", "qwenpaw-hook"],
+            cli_command(cli_path, ["posttool", "--format", "qwenpaw-hook"]),
             cwd=str(cli_path.parent.parent),
             input=payload,
             shell=False,
