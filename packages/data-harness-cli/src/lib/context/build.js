@@ -530,10 +530,10 @@ function instructionForPlan(plan) {
       return `${common} Harness mode: multi_single. Read every selected playbook in contextFiles. Apply the same user-specified filters to each metric unless a playbook says otherwise. For each metric, default to current-value collection unless the question explicitly asks for a supported non-default entry such as trend or area performance. Answer with those per-metric results and shared口径. Do not run bin/data-harness-cli inject-template, do not use template files, and do not turn this into a report-style analysis.`;
     case MODE_REPORT: {
       let templateInstruction =
-        "After report playbook data collection and evidence preparation, run bin/data-harness-cli stage template. Do not read, open, guess, or use template files before stage template. Only after the PostToolUse hook injects selectedTemplate may you generate the final report body.";
+        "After report playbook data collection and evidence preparation, call the QwenPaw tool qdm_report_stage without arguments. Do not pass report names, modules, stage names, template paths, workspace paths, or authorization values. Do not call execute_shell_command for data-harness-cli stage template or inject-template, do not read, open, guess, or use template files before qdm_report_stage, and only after that tool returns selectedTemplate may you generate the final report body.";
       if (!plan.selectedTemplate) {
         templateInstruction =
-          "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not read, open, guess, or use template files.";
+          "No selectedTemplate is available; after report playbook data collection, answer directly with CLI evidence and do not call qdm_report_stage or read, open, guess, or use template files.";
       }
       return `${common} Harness mode: report. selectedPlaybook=${plan.selectedPlaybook} selectedTemplate=${plan.selectedTemplate || ""}. Read the report index when present, the matched report spec, and the selected report playbook in contextFiles. Use the report index as the Agent knowledge directory, the report playbook for data collection and JSON handling, and the report spec for business reasoning. Do not run single-metric playbooks unless the selected report playbook explicitly asks for a drilldown. ${templateInstruction}`;
     }

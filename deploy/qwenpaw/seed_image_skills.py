@@ -40,7 +40,10 @@ PLUGIN_ID = "qdm-harness-qwenpaw"
 
 
 def _qdm_skill_source(working: Path) -> str:
-    return str(working / "plugins" / PLUGIN_ID / "skills" / QDM_SKILL)
+    # The deployment target is the Linux QwenPaw image. Keep the persisted
+    # skill reference POSIX-shaped even when this helper is unit-tested from
+    # Windows.
+    return (working / "plugins" / PLUGIN_ID / "skills" / QDM_SKILL).as_posix()
 
 
 def skills_for_agent(agent_id: str, working: Path) -> dict[str, str]:

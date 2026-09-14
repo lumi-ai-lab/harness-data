@@ -148,8 +148,13 @@ docker inspect --format '{{json .State.Health}}' qwenpaw   # 输出 healthy 即�
 
 ```bash
 docker exec qwenpaw python -c 'import os;print([os.access("/run/secrets/"+f, os.R_OK) for f in ("channel-auth.json","session-hmac.secret")])'
-docker logs --since 10m qwenpaw 2>&1 | grep -E 'qdm_query_failed|qdm_harness_context_failed' || echo "无授权/上下文失败"
+docker logs --since 10m qwenpaw 2>&1 \
+  | grep -E 'qdm_harness_context_failed|qdm_report_stage_failed|qdm_identity_hook_missing|qdm_reload_tools_missing' \
+  || echo "未发现 QDM Hook/报告/重载异常"
 ```
+
+Shell Hook 的授权拒绝通常直接作为工具调用结果返回,不一定会产生独立的失败日志;
+因此不能再用历史 `qdm_query_failed` 日志判断 Shell Hook 查询是否失败。
 
 密钥可读、`reason` 却不是授权类的失败, 先核 Root Context 的 `surface`:
 
@@ -222,7 +227,8 @@ docker exec qwenpaw python -c 'import json;c=json.load(open("/app/working/worksp
 > 切换一次后浏览器会记住(存在 localStorage),后续新标签页会直接落在专用 Agent 上。
 >
 > 配错的典型症状:企微里提问后回"当前会话不支持 QDM 数据查询",或该 Agent 的工具列表里
-> 根本没有 `qdm_query`——那是作用域没命中,见下一节。
+> 根本没有 `qdm_scope_summary`——那是作用域没命中,见下一节。指标查询入口是宿主内置
+> `execute_shell_command`，由 Shell Hook 在执行前授权，不会以 `qdm_query` 形式暴露。
 
 ## ⑥ QDM Agent 与作用域
 
@@ -281,15 +287,16 @@ docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-dat
   --qwenpaw-working-dir /app/working --json | grep -A3 '"agent-scope"'
 ```
 
-未命中时 `qdm_query` 不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
+未命中时 `qdm_scope_summary` 不会出现在该 Agent 的工具列表里(不会留下一个必然报错的工具);
 若配置里的作用域不可用,插件按 fail-closed 处理,同样不注册工具、不注入上下文。
 
 工具面口径由 `Dockerfile` 里 setup 的 `--tool-policy` 决定,写进插件配置的 `tool_policy`,
 **当前镜像是 `preserve`**:作用域内的 Agent 保留宿主默认的全量工具(shell/文件都在),
 这样企微里发来的 xlsx、截图才能交给 `officecli-*` / `charts-cli` 技能处理。
 
-改成 `--tool-policy strict` 会把作用域内 Agent 的工具面收窄到 `qdm_query` /
-`qdm_scope_summary` / `get_current_time` 三个,同时关掉工具结果裁剪。这是更强的一层:
+改成 `--tool-policy strict` 会把作用域内 Agent 的工具面收窄到
+`execute_shell_command` / `qdm_scope_summary` / `qdm_report_stage` / `get_current_time`
+四项,同时关掉工具结果裁剪。这是更强的一层:
 `/run/secrets/channel-auth.json` 与 `session-hmac.secret` 必须对容器运行 UID 可读(插件
 进程内要按渠道用户解出 blob),0600 不是隔离手段,`preserve` 下渠道用户能让模型跑 shell,
 `strict` 才把这条路关掉。代价是模型不能再自己 grep wikis 或用 shell 分析上传的文件,
@@ -299,7 +306,7 @@ docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-dat
 核对与回退:
 
 ```bash
-# 打印当前口径; strict 下 detail 里的 offenders=none 才表示确实只剩 QDM 三个
+# 打印当前口径; strict 下 detail 里的 offenders=none,且启用工具仅包含 strict 白名单中的四项
 docker exec qwenpaw /app/working/plugins/qdm-harness-qwenpaw/scripts/harness-data \
   qwenpaw doctor --plugin-config-file /etc/qdm/qwenpaw/plugin-config.json \
   --qwenpaw-working-dir /app/working --json | grep -A3 '"tool-allowlist"'

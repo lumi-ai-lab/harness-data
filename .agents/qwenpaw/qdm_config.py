@@ -37,8 +37,18 @@ MAX_AGENT_SCOPE_PATTERNS = 32
 MAX_AGENT_SCOPE_PATTERN_CHARS = 64
 SENSITIVE_CONFIG_RELATIVE_DIR = Path("config") / "qwenpaw"
 TOOL_POLICIES = frozenset({"preserve", "strict"})
+QDM_QUERY_MODES = frozenset({"legacy", "shell_hook"})
+QDM_SHELL_DIALECTS = frozenset({"bash", "powershell", "cmd"})
 LEGACY_SCHEMA = 1
 REFERENCE_SCHEMA = 2
+
+
+def default_shell_dialects() -> tuple[str, ...]:
+    return ("bash", "powershell", "cmd") if os.name == "nt" else ("bash", "powershell")
+
+
+def default_shell_cmd_enabled() -> bool:
+    return os.name == "nt"
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,10 @@ class PluginConfig:
     # schema 2: 从 Root Context 的 pluginRoot 解析的 harness CLI 路径
     _harness_cli_path: str | None = None
     runtime_mcp: RuntimeMcpConfig = RuntimeMcpConfig()
+    qdm_query_mode: str = "shell_hook"
+    qdm_shell_hook_enabled: bool = True
+    qdm_shell_dialects: tuple[str, ...] = default_shell_dialects()
+    qdm_shell_cmd_enabled: bool = default_shell_cmd_enabled()
 
     @property
     def enabled_agents(self) -> tuple[str, ...]:
@@ -182,6 +196,7 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         "qdm_agent_id",
         "tool_policy", "context_limits", "query_limits", "report_limits",
         "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds", "runtime_mcp",
+        "qdm_query_mode", "qdm_shell_hook_enabled", "qdm_shell_dialects", "qdm_shell_cmd_enabled",
     }
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
@@ -197,6 +212,18 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
     tool_policy = raw.get("tool_policy", "preserve")
     if tool_policy not in TOOL_POLICIES:
         raise ConfigError("tool_policy must be preserve or strict")
+    query_mode = parse_query_mode(raw.get("qdm_query_mode", "shell_hook"))
+    shell_hook_enabled = parse_bool(
+        raw.get("qdm_shell_hook_enabled", query_mode == "shell_hook"),
+        "qdm_shell_hook_enabled",
+    )
+    shell_dialects = parse_shell_dialects(raw.get("qdm_shell_dialects"))
+    shell_cmd_enabled = parse_bool(
+        raw.get("qdm_shell_cmd_enabled", default_shell_cmd_enabled()),
+        "qdm_shell_cmd_enabled",
+    )
+    if (query_mode == "shell_hook") != shell_hook_enabled:
+        raise ConfigError("qdm_query_mode and qdm_shell_hook_enabled are inconsistent")
 
     context_path = _reference_path(raw.get("root_context_path"), "root_context_path", require_file=True)
     context = _load_root_context(context_path)
@@ -222,12 +249,16 @@ def _load_reference(raw: dict[str, Any], config_file: Path) -> PluginConfig:
         _sensitive_config_dir=str(sensitive_dir),
         _harness_cli_path=str(harness_cli_path),
         runtime_mcp=parse_runtime_mcp(raw.get("runtime_mcp")),
+        qdm_query_mode=query_mode,
+        qdm_shell_hook_enabled=shell_hook_enabled,
+        qdm_shell_dialects=shell_dialects,
+        qdm_shell_cmd_enabled=shell_cmd_enabled,
     )
 
 
 def _load_legacy(raw: dict[str, Any]) -> PluginConfig:
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"enabled_agents", "context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
+    allowed = required | {"enabled_agents", "context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds", "qdm_query_mode", "qdm_shell_hook_enabled", "qdm_shell_dialects", "qdm_shell_cmd_enabled"}
     if not required.issubset(raw) or not set(raw).issubset(allowed):
         raise ConfigError("plugin config contains unsupported fields")
     runtime = raw.get("runtime_dir")
@@ -246,7 +277,29 @@ def _load_legacy(raw: dict[str, Any]) -> PluginConfig:
     if not runtime_path.is_absolute() or runtime_path.is_symlink() or not runtime_path.is_dir():
         raise ConfigError("runtime_dir must be absolute")
     scope = parse_agent_scope(raw.get("enabled_agents"), agent_id.strip())
-    return PluginConfig(agent_id.strip(), display, tool_policy, parse_context_limits(raw.get("context_limits")), parse_query_limits(raw.get("query_limits")), parse_report_limits(raw.get("report_limits")), parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")), parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"), parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"), agent_scope=scope, runtime_dir=runtime_path.resolve())
+    query_mode = parse_query_mode(raw.get("qdm_query_mode", "legacy"))
+    shell_hook_enabled = parse_bool(raw.get("qdm_shell_hook_enabled", False), "qdm_shell_hook_enabled")
+    shell_dialects = parse_shell_dialects(raw.get("qdm_shell_dialects", ["bash", "powershell"]))
+    shell_cmd_enabled = parse_bool(raw.get("qdm_shell_cmd_enabled", False), "qdm_shell_cmd_enabled")
+    if query_mode != "legacy" or shell_hook_enabled:
+        raise ConfigError("schema 1 supports legacy qdm_query only")
+    return PluginConfig(
+        agent_id.strip(),
+        display,
+        tool_policy,
+        parse_context_limits(raw.get("context_limits")),
+        parse_query_limits(raw.get("query_limits")),
+        parse_report_limits(raw.get("report_limits")),
+        parse_auth_file_max_bytes(raw.get("auth_file_max_bytes")),
+        parse_timeout(raw.get("context_cli_timeout_seconds"), "context_cli_timeout_seconds"),
+        parse_timeout(raw.get("report_hook_timeout_seconds"), "report_hook_timeout_seconds"),
+        agent_scope=scope,
+        runtime_dir=runtime_path.resolve(),
+        qdm_query_mode=query_mode,
+        qdm_shell_hook_enabled=shell_hook_enabled,
+        qdm_shell_dialects=shell_dialects,
+        qdm_shell_cmd_enabled=shell_cmd_enabled,
+    )
 
 
 def parse_agent_scope(value: Any, legacy_agent_id: str = "") -> AgentScope:
@@ -275,6 +328,32 @@ def parse_agent_scope(value: Any, legacy_agent_id: str = "") -> AgentScope:
     if legacy_agent_id and legacy_agent_id not in patterns:
         patterns.append(legacy_agent_id)
     return AgentScope(tuple(patterns))
+
+
+def parse_query_mode(value: Any) -> str:
+    if value not in QDM_QUERY_MODES:
+        raise ConfigError("qdm_query_mode must be legacy or shell_hook")
+    return str(value)
+
+
+def parse_bool(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{field} is invalid")
+    return value
+
+
+def parse_shell_dialects(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return default_shell_dialects()
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        raise ConfigError("qdm_shell_dialects is invalid")
+    values: list[str] = []
+    for item in value:
+        dialect = item.strip().casefold()
+        if dialect not in QDM_SHELL_DIALECTS or dialect in values:
+            raise ConfigError("qdm_shell_dialects is invalid")
+        values.append(dialect)
+    return tuple(values)
 
 
 def parse_timeout(value: Any, field: str, default: int = 60, maximum: int = 300) -> int:
@@ -388,7 +467,31 @@ def _load_root_context(path: Path) -> dict[str, Any]:
         raise ConfigError("root context is unavailable") from exc
     if not isinstance(value, dict):
         raise ConfigError("root context must be a JSON object")
+    data_root = _required_context_directory(value, "dataRoot")
+    state_root = _required_context_directory(value, "stateRoot")
+    try:
+        common = os.path.commonpath([
+            os.path.normcase(str(data_root)),
+            os.path.normcase(str(state_root)),
+        ])
+    except ValueError as exc:
+        raise ConfigError("root context stateRoot is invalid") from exc
+    if common != os.path.normcase(str(data_root)):
+        raise ConfigError("root context stateRoot must be inside dataRoot")
     return value
+
+
+def _required_context_directory(context: dict[str, Any], name: str) -> Path:
+    raw = context.get(name)
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError(f"root context {name} is invalid")
+    value = Path(raw).expanduser()
+    if not value.is_absolute() or value.is_symlink():
+        raise ConfigError(f"root context {name} is invalid")
+    try:
+        return value.resolve()
+    except OSError as exc:
+        raise ConfigError(f"root context {name} is invalid") from exc
 
 
 def _metric_cli_from_context(context: dict[str, Any], config_file: Path) -> Path:

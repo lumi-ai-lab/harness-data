@@ -1011,7 +1011,7 @@ function writePersistedContext(context, options = {}) {
 }
 
 function persistedContextValue(context, options = {}) {
-  return {
+  const persisted = {
     schemaVersion: context.schemaVersion,
     host: context.host,
     surface: context.surface,
@@ -1030,6 +1030,13 @@ function persistedContextValue(context, options = {}) {
       supportsSecretReference: options.noAuth === true || options.channelAuthOnly === true ? false : Boolean(context.secretRef),
     },
   };
+  if (String(context.host || "").toLowerCase() === "qwenpaw") {
+    // QwenPaw's context, stage, and posttool processes must share one
+    // workspace-bound state root. The request session id is supplied per hook.
+    persisted.workspaceRoot = context.workspaceRoot;
+    persisted.stateRoot = context.stateRoot;
+  }
+  return persisted;
 }
 
 function writeOutput(report, options, io) {

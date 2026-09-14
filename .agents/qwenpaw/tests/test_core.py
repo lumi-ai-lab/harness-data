@@ -4,7 +4,6 @@ import json
 import importlib.util
 import importlib
 import asyncio
-import inspect
 import os
 import stat
 from pathlib import Path
@@ -27,11 +26,23 @@ from qdm_harness_qwenpaw_test.qdm_cli import QdmCliError, QdmCliExecutor, _query
 from qdm_harness_qwenpaw_test.qdm_debug_identity import DEBUG_COMMAND, debug_result, record_reload_bridge_state
 from qdm_harness_qwenpaw_test.qdm_harness_context import HarnessContextError, _context_cli_failure_reason, _sanitize_embedded_context_instruction, request_context, session_key
 from qdm_harness_qwenpaw_test.qdm_identity import Requester, resolve_requester, resolve_requester_for_request
-from qdm_harness_qwenpaw_test.qdm_config import AgentScope, ConfigError, ContextLimits, QueryLimits, ReportLimits, load_config, parse_agent_scope, DEFAULT_AGENT_SCOPE_PATTERNS
-from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query
+from qdm_harness_qwenpaw_test.qdm_config import (
+    AgentScope,
+    ConfigError,
+    ContextLimits,
+    QueryLimits,
+    ReportLimits,
+    default_shell_cmd_enabled,
+    default_shell_dialects,
+    load_config,
+    parse_agent_scope,
+    parse_shell_dialects,
+    DEFAULT_AGENT_SCOPE_PATTERNS,
+)
+from qdm_harness_qwenpaw_test.qdm_report_lifecycle import LifecycleResult, complete_qdm_query, complete_qdm_report
 from qdm_harness_qwenpaw_test.qdm_subprocess import cli_command
 from qdm_harness_qwenpaw_test.plugin import QdmHarnessQwenPawPlugin
-from qdm_harness_qwenpaw_test.qdm_runtime_hooks import QdmRequesterContextHook, QdmRequesterIdentityHook, QwenPawHarnessContextHook, UNAUTHORIZED_SESSION_CONSTRAINT, hook_factories, requester_context
+from qdm_harness_qwenpaw_test.qdm_runtime_hooks import QdmRequesterContextHook, QdmRequesterIdentityHook, QwenPawHarnessContextHook, UNAUTHORIZED_SESSION_CONSTRAINT, hook_factories, requester_context, session_key_context
 from qwenpaw.runtime.hooks import HookAction, HookBase, HookRegistry
 from qwenpaw.runtime.phases import Phase
 from qwenpaw.runtime.tool_registry import ToolDescriptor, ToolRegistry
@@ -300,6 +311,8 @@ class AuthorizationTests(unittest.TestCase):
                 "schemaVersion": 1, "host": "qwenpaw",
                 "pluginRoot": str(plugin_root),
                 "resourceRoot": str(instance), "dataRoot": str(root / "data"),
+                "workspaceRoot": str(root / "workspace"),
+                "stateRoot": str(root / "data" / "state" / "workspaces" / "fixture"),
                 "secretRoot": str(secret_dir), "configPath": str(config_dir / "settings.json"),
             }), encoding="utf-8")
             config = root / "plugin-config.json"
@@ -321,6 +334,25 @@ class AuthorizationTests(unittest.TestCase):
             self.assertEqual(loaded.qdm_metric_cli, metric)
             self.assertEqual(loaded.auth_file, secret_dir / "channel-auth.json")
             self.assertEqual(loaded.session_secret_file, secret_dir / "session-hmac.secret")
+            self.assertEqual(loaded.qdm_shell_dialects, default_shell_dialects())
+            self.assertEqual(loaded.qdm_shell_cmd_enabled, default_shell_cmd_enabled())
+
+            config.write_text(json.dumps({
+                "schema_version": 2,
+                "plugin_id": "qdm-harness-qwenpaw",
+                "root_context_path": str(context_file),
+                "secret_ref": str(secret_dir),
+                "user_id_display_mode": "off",
+                "qdm_shell_dialects": ["bash", "powershell", "cmd"],
+                "qdm_shell_cmd_enabled": False,
+            }), encoding="utf-8")
+            overridden = load_config(config)
+            self.assertEqual(overridden.qdm_shell_dialects, ("bash", "powershell", "cmd"))
+            self.assertFalse(overridden.qdm_shell_cmd_enabled)
+
+    def test_shell_dialect_defaults_follow_the_host_platform(self) -> None:
+        self.assertEqual(parse_shell_dialects(None), default_shell_dialects())
+        self.assertIn("cmd", parse_shell_dialects(["bash", "powershell", "cmd"]))
 
     def test_reference_config_fails_closed_on_broken_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -335,6 +367,18 @@ class AuthorizationTests(unittest.TestCase):
             }
             config.write_text(json.dumps(base), encoding="utf-8")
             with self.assertRaises(ConfigError):
+                load_config(config)
+            context_file = root / "context.json"
+            context_file.write_text(json.dumps({
+                "schemaVersion": 1,
+                "host": "qwenpaw",
+                "pluginRoot": str(root / "plugin"),
+                "resourceRoot": str(root / "instance"),
+                "dataRoot": str(root / "data"),
+                "configPath": str(root / "instance" / "config" / "settings.json"),
+            }), encoding="utf-8")
+            config.write_text(json.dumps(base | {"root_context_path": str(context_file)}), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "stateRoot"):
                 load_config(config)
             config.write_text(json.dumps({k: v for k, v in base.items() if k != "root_context_path"}), encoding="utf-8")
             with self.assertRaises(ConfigError):
@@ -494,6 +538,23 @@ class AgentScopeTests(unittest.TestCase):
             self.assertTrue(loaded.agent_scope.allows("harness-data-east"))
             self.assertTrue(loaded.agent_scope.allows("qdmDataAgent"))
 
+    def test_schema_one_rejects_shell_hook_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp) / "runtime"
+            runtime.mkdir()
+            config = Path(temp) / "plugin-config.json"
+            base = {
+                "schema_version": 1,
+                "runtime_dir": str(runtime),
+                "qdm_agent_id": "qdmDataAgent",
+                "user_id_display_mode": "off",
+                "qdm_query_mode": "shell_hook",
+                "qdm_shell_hook_enabled": True,
+            }
+            config.write_text(json.dumps(base), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "schema 1 supports legacy"):
+                load_config(config)
+
     def test_reference_config_without_legacy_agent_id_loads(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -508,6 +569,8 @@ class AgentScopeTests(unittest.TestCase):
             context_file.write_text(json.dumps({
                 "schemaVersion": 1, "host": "qwenpaw", "pluginRoot": str(root / "plugin"),
                 "resourceRoot": str(root / "instance"), "dataRoot": str(root / "data"),
+                "workspaceRoot": str(root / "workspace"),
+                "stateRoot": str(root / "data" / "state" / "workspaces" / "fixture"),
                 "secretRoot": str(root / "secrets"), "configPath": str(settings),
             }), encoding="utf-8")
             config = root / "plugin-config.json"
@@ -543,38 +606,44 @@ class AgentScopeTests(unittest.TestCase):
         registry = ToolRegistry()
         workspace = types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=registry))
         info = {"agent_id": "default", "workspace": workspace}
-        specs = (("qdm_query", lambda: None, True, "d", ""),)
+        specs = (("qdm_scope_summary", lambda: None, True, "d", ""),)
         PLUGIN_MODULE._SHARED_AGENT_WARNINGS.clear()
         try:
             with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("*",))):
                 with self.assertLogs("qwenpaw.plugins.qdm_harness", level="WARNING") as logs:
                     PLUGIN_MODULE._apply_agent_scope_to_workspace(info, specs)
                     PLUGIN_MODULE._apply_agent_scope_to_workspace(info, specs)
-            self.assertIn("qdm_query", registry.names())
+            self.assertIn("qdm_scope_summary", registry.names())
             self.assertEqual(sum("built-in 'default' agent" in line for line in logs.output), 1)
         finally:
             PLUGIN_MODULE._SHARED_AGENT_WARNINGS.clear()
 
-    def test_out_of_scope_agent_has_its_stale_tool_entry_disabled(self) -> None:
+    def test_out_of_scope_agent_has_its_stale_qdm_entries_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp)
             agent_file = workspace / "agent.json"
             agent_file.write_text(json.dumps({"name": "Default", "tools": {"builtin_tools": {
                 "qdm_query": {"name": "qdm_query", "enabled": True},
+                "qdm_query_guide": {"name": "qdm_query_guide", "enabled": True},
                 "web_search": {"name": "web_search", "enabled": True},
             }}}), encoding="utf-8")
             before = agent_file.stat().st_mode
 
-            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "default", workspace, (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
             data = json.loads(agent_file.read_text(encoding="utf-8"))
-            self.assertFalse(data["tools"]["builtin_tools"]["qdm_query"]["enabled"])
+            self.assertNotIn("qdm_query", data["tools"]["builtin_tools"])
+            self.assertNotIn("qdm_query_guide", data["tools"]["builtin_tools"])
             self.assertTrue(data["tools"]["builtin_tools"]["web_search"]["enabled"], "must not touch other tools")
             self.assertTrue(data["name"] == "Default", "must preserve the rest of agent.json")
             self.assertEqual(agent_file.stat().st_mode, before, "must preserve the file mode")
 
             # Already correct: the file is left untouched, so no rewrite churn.
             agent_file.write_text(agent_file.read_text(encoding="utf-8") + "  \n", encoding="utf-8")
-            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "default", workspace, (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
             self.assertTrue(agent_file.read_text(encoding="utf-8").endswith("  \n"))
 
             # An entry that omits ``enabled`` reads as enabled, matching the host gate.
@@ -586,10 +655,16 @@ class AgentScopeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             missing = Path(temp) / "nope"
             missing.mkdir()
-            PLUGIN_MODULE._sync_registered_tool_entries("coding", missing, ("qdm_query",), False)
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "coding", missing, (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
             self.assertFalse((missing / "agent.json").exists())
-            PLUGIN_MODULE._sync_registered_tool_entries("coding", "", ("qdm_query",), False)
-            PLUGIN_MODULE._sync_registered_tool_entries("coding", None, ("qdm_query",), False)
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "coding", "", (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "coding", None, (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
 
     def test_a_symlinked_agent_file_is_not_written_through(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -598,8 +673,10 @@ class AgentScopeTests(unittest.TestCase):
             workspace = Path(temp) / "ws"
             workspace.mkdir()
             (workspace / "agent.json").symlink_to(outside)
-            PLUGIN_MODULE._sync_registered_tool_entries("default", workspace, ("qdm_query",), False)
-            self.assertTrue(json.loads(outside.read_text(encoding="utf-8"))["tools"]["builtin_tools"]["qdm_query"]["enabled"])
+            PLUGIN_MODULE._sync_registered_tool_entries(
+                "default", workspace, (), False, remove_names=("qdm_query", "qdm_query_guide"),
+            )
+            self.assertTrue("qdm_query" in json.loads(outside.read_text(encoding="utf-8"))["tools"]["builtin_tools"])
 
     def test_an_unusable_config_hides_the_tools(self) -> None:
         registry = ToolRegistry()
@@ -608,6 +685,35 @@ class AgentScopeTests(unittest.TestCase):
         with patch.object(PLUGIN_MODULE, "load_config", side_effect=ConfigError("plugin config is unavailable")):
             PLUGIN_MODULE._apply_agent_scope_to_workspace({"agent_id": "harness-data-east", "workspace": workspace}, (("qdm_query", lambda: None, True, "d", ""),))
         self.assertEqual(registry.names(), [])
+
+    def test_scope_removes_retired_query_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace_dir = Path(temp)
+            agent_file = workspace_dir / "agent.json"
+            agent_file.write_text(json.dumps({"tools": {"builtin_tools": {
+                "qdm_query_guide": {"enabled": True},
+                "qdm_query": {"enabled": True},
+                "qdm_scope_summary": {"enabled": False},
+            }}}), encoding="utf-8")
+            registry = ToolRegistry()
+            registry.register(ToolDescriptor(name="qdm_query", func=lambda: None, description=""))
+            registry.register(ToolDescriptor(name="qdm_query_guide", func=lambda: None, description=""))
+            workspace = types.SimpleNamespace(
+                workspace_dir=str(workspace_dir),
+                plugins=types.SimpleNamespace(tool_registry=registry),
+            )
+            config = _scoped_config(("harness-data-*",), qdm_query_mode="shell_hook")
+            with patch.object(PLUGIN_MODULE, "load_config", return_value=config):
+                PLUGIN_MODULE._apply_agent_scope_to_workspace({
+                    "agent_id": "harness-data-east",
+                    "workspace_dir": str(workspace_dir),
+                    "workspace": workspace,
+                }, (("qdm_scope_summary", lambda: None, True, "scope", ""),))
+            data = json.loads(agent_file.read_text(encoding="utf-8"))
+            entries = data["tools"]["builtin_tools"]
+            self.assertNotIn("qdm_query_guide", entries)
+            self.assertNotIn("qdm_query", entries)
+            self.assertTrue(registry.names() == ["qdm_scope_summary"])
 
 
 class ToolBoundaryTests(unittest.TestCase):
@@ -785,7 +891,46 @@ class ToolBoundaryTests(unittest.TestCase):
                     result = complete_qdm_query(cli, "qwenpaw:" + "b" * 64, report_name=None, report_module=None, additional_context_bytes=limit)
                 self.assertIn(result.diagnostic_code, {"QDM_REPORT_LIFECYCLE_UNAVAILABLE", "QDM_REPORT_CONTEXT_INVALID", "QDM_REPORT_CONTEXT_TOO_LARGE", "bad"})
 
-    def test_query_tool_returns_qwenpaw_error_state_for_a_rejected_request(self) -> None:
+    def test_report_stage_runs_stage_then_qwenpaw_posttool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "scripts" / "data-harness-cli"
+            cli.parent.mkdir()
+            _write_placeholder_cli(cli)
+            context_file = Path(temp) / "context.json"
+            context_file.write_text("{}", encoding="utf-8")
+            stage = types.SimpleNamespace(returncode=0, stdout="QDM_STAGE_TEMPLATE_SIGNAL emitted\n", stderr="")
+            posttool = types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({
+                    "ok": True,
+                    "additional_context": "template body",
+                    "mode": "report",
+                    "selected_template": "reports/经营综合分析报告/template.md",
+                    "diagnostic_code": "template_injected",
+                }),
+                stderr="",
+            )
+            with patch(
+                "qdm_harness_qwenpaw_test.qdm_report_lifecycle.subprocess.run",
+                side_effect=[stage, posttool],
+            ) as run:
+                result = complete_qdm_report(
+                    cli,
+                    "qwenpaw:" + "c" * 64,
+                    context_file=context_file,
+                )
+            self.assertEqual(result, LifecycleResult("template body", "template_injected", True))
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0].args[0][-2:], ["stage", "template"])
+            payload = json.loads(run.call_args_list[1].kwargs["input"])
+            self.assertEqual(payload["tool_name"], "qdm_report_stage")
+            self.assertEqual(payload["safe_command_args"], {})
+            for call in run.call_args_list:
+                assert_context = call.args[0]
+                context_index = assert_context.index("--context-file")
+                self.assertEqual(assert_context[context_index + 1], str(context_file))
+
+    def test_legacy_mode_does_not_register_the_retired_query_tool(self) -> None:
         class Api:
             def __init__(self) -> None:
                 self.tools: dict[str, object] = {}
@@ -797,12 +942,15 @@ class ToolBoundaryTests(unittest.TestCase):
                 self.tools[str(kwargs["tool_name"])] = kwargs["tool_func"]
 
         api = Api()
-        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
-        query = api.tools["qdm_query"]
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("default",), qdm_query_mode="legacy")):
+            QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+        self.assertNotIn("qdm_query", api.tools)
+        self.assertIn("qdm_scope_summary", api.tools)
+        query = PLUGIN_MODULE._query
         token = requester_context.set(Requester(1, "resolved", "wecom", "zhangsan", "single"))
         try:
             with patch.object(PLUGIN_MODULE, "_trusted_components", side_effect=QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")):
-                result = asyncio.run(query(metric="profitRate", start_date="2026-08-24", end_date="2026-08-24"))  # type: ignore[operator]
+                result = query(metric="profitRate", start_date="2026-08-24", end_date="2026-08-24")
         finally:
             requester_context.reset(token)
         self.assertEqual(result.state, ToolResultState.ERROR)
@@ -826,21 +974,20 @@ class ToolBoundaryTests(unittest.TestCase):
                 self.workspace_hooks.append(kwargs)
 
         api = Api()
-        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("harness-data-*",), qdm_query_mode="legacy")):
+            QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
         self.assertEqual(len(api.workspace_hooks), 1)
         self.assertTrue(api.workspace_hooks[0]["reload_safe"])
 
         # A replacement workspace (zero-downtime reload) starts with an empty
         # ToolRegistry; the reload-safe hook must restore the qdm tools, but only
         # for an agent inside the configured scope.
-        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("harness-data-*",))):
+        with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("harness-data-*",), qdm_query_mode="legacy")):
             served = ToolRegistry()
             api.workspace_hooks[0]["callback"](  # type: ignore[operator]
                 {"agent_id": "harness-data-east", "workspace_dir": "/tmp", "workspace": types.SimpleNamespace(plugins=types.SimpleNamespace(tool_registry=served))},
             )
-            self.assertIn("qdm_query", served.names())
             self.assertIn("qdm_scope_summary", served.names())
-            self.assertTrue(served.get("qdm_query").async_execution)
 
             other = ToolRegistry()
             other.register(ToolDescriptor(name="qdm_query", func=lambda: None, description=""))
@@ -884,18 +1031,12 @@ class ToolBoundaryTests(unittest.TestCase):
             def get_workspace_created_hooks(self) -> list[object]:
                 return self.registrations
 
-        async def qdm_query() -> None:
-            return None
-
         async def qdm_scope_summary() -> None:
             return None
 
         manager = Manager()
         hook_specs = hook_factories()
-        tool_specs = (
-            ("qdm_query", qdm_query, True, "query", ""),
-            ("qdm_scope_summary", qdm_scope_summary, True, "scope", ""),
-        )
+        tool_specs = (("qdm_scope_summary", qdm_scope_summary, True, "scope", ""),)
 
         def restore_hooks(workspace_info: dict[str, object]) -> None:
             target = workspace_info["workspace"]
@@ -938,7 +1079,6 @@ class ToolBoundaryTests(unittest.TestCase):
         }
         self.assertIn("qdm_harness.requester_identity", pre_build_names)
         self.assertIn("qdm_harness.requester_bind", pre_execute_names)
-        self.assertIn("qdm_query", workspace.plugins.tool_registry.names())
         self.assertIn("qdm_scope_summary", workspace.plugins.tool_registry.names())
 
     def test_reload_bridge_reports_when_the_host_renames_its_bridges(self) -> None:
@@ -1019,18 +1159,12 @@ class ToolBoundaryTests(unittest.TestCase):
             def get_workspace_created_hooks(self) -> list[object]:
                 return self.registrations
 
-        async def qdm_query() -> None:
-            return None
-
         async def qdm_scope_summary() -> None:
             return None
 
         manager = Manager()
         hook_specs = hook_factories()
-        tool_specs = (
-            ("qdm_query", qdm_query, True, "query", ""),
-            ("qdm_scope_summary", qdm_scope_summary, True, "scope", ""),
-        )
+        tool_specs = (("qdm_scope_summary", qdm_scope_summary, True, "scope", ""),)
 
         def restore_hooks(workspace_info: dict[str, object]) -> None:
             target = workspace_info["workspace"]
@@ -1073,7 +1207,6 @@ class ToolBoundaryTests(unittest.TestCase):
         }
         self.assertIn("qdm_harness.requester_identity", pre_build_names)
         self.assertIn("qdm_harness.requester_bind", pre_execute_names)
-        self.assertIn("qdm_query", workspace.plugins.tool_registry.names())
         self.assertIn("qdm_scope_summary", workspace.plugins.tool_registry.names())
 
     def test_reload_safe_hook_skips_when_no_workspace_is_resolvable(self) -> None:
@@ -1269,7 +1402,7 @@ class HarnessContextTests(unittest.TestCase):
                 context = request_context(cli, "session", "prompt")
                 self.assertIn("base context", context)
                 self.assertIn("qdm_scope_summary", context)
-                self.assertIn("never ask the user to run `qdm-metric-cli auth describe`", context)
+                self.assertIn("Never generate or request Blob", context)
                 with self.assertRaisesRegex(HarnessContextError, "Harness 上下文不可用") as error:
                     request_context(cli, "session", "prompt", context_limits=ContextLimits(base_context_bytes=4))
             self.assertEqual(error.exception.reason, "context_base_too_large")
@@ -1489,7 +1622,49 @@ class HookLifecycleTests(unittest.TestCase):
             self.assertTrue(callable(getattr(hook, "run", None)))
             self.assertTrue(getattr(hook, "phase", None) is not None)
             self.assertTrue(getattr(hook, "name", None))
-        self.assertEqual(api.tools, ["qdm_query", "qdm_scope_summary"])
+        self.assertEqual(api.tools, ["qdm_scope_summary", "qdm_report_stage"])
+
+    def test_report_stage_tool_uses_current_session_and_returns_injected_context(self) -> None:
+        class Api:
+            def __init__(self) -> None:
+                self.tools: dict[str, object] = {}
+
+            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
+                pass
+
+            def register_tool(self, **kwargs: object) -> None:
+                self.tools[str(kwargs["tool_name"])] = kwargs["tool_func"]
+
+        config = _scoped_config(
+            ("default",),
+            qdm_query_mode="shell_hook",
+            qdm_shell_hook_enabled=True,
+            data_harness_cli=Path("/plugin/scripts/data-harness-cli"),
+            root_context_path=None,
+            report_limits=ReportLimits(),
+            report_hook_timeout_seconds=60,
+        )
+        api = Api()
+        with (
+            patch.object(PLUGIN_MODULE, "load_config", return_value=config),
+            patch.object(
+                PLUGIN_MODULE,
+                "complete_qdm_report",
+                return_value=LifecycleResult("selected template", "template_injected", True),
+            ) as complete,
+        ):
+            QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
+            session = "qwenpaw:" + "d" * 64
+            token = session_key_context.set(session)
+            try:
+                result = asyncio.run(api.tools["qdm_report_stage"]())  # type: ignore[index,operator]
+            finally:
+                session_key_context.reset(token)
+        self.assertEqual(result.state, ToolResultState.SUCCESS)
+        self.assertIn("selected template", result.content[0].text)
+        self.assertEqual(complete.call_args.args[1], session)
+        self.assertNotIn("report_name", complete.call_args.kwargs)
+        self.assertNotIn("report_module", complete.call_args.kwargs)
 
     def test_plugin_restores_cli_exec_bits_for_zip_installed_layouts(self) -> None:
         if os.name == "nt":
@@ -1507,20 +1682,6 @@ class HookLifecycleTests(unittest.TestCase):
             for shim in shims:
                 self.assertTrue(shim.stat().st_mode & stat.S_IXUSR)
                 self.assertFalse(shim.is_symlink())
-
-    def test_qdm_query_public_contract_has_no_report_arguments(self) -> None:
-        class Api:
-            def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
-                pass
-
-            def register_tool(self, **kwargs: object) -> None:
-                if kwargs["tool_name"] == "qdm_query":
-                    self.query = kwargs["tool_func"]
-
-        api = Api()
-        QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
-        self.assertNotIn("report_name", inspect.signature(api.query).parameters)  # type: ignore[attr-defined]
-        self.assertNotIn("report_module", inspect.signature(api.query).parameters)  # type: ignore[attr-defined]
 
     def test_plugin_startup_rejects_an_unsupported_qwenpaw_version(self) -> None:
         class Api:
@@ -1578,6 +1739,8 @@ class InstallerTests(unittest.TestCase):
                 "tools": {
                     "builtin_tools": {
                         "execute_shell_command": {"enabled": True},
+                        "qdm_query": {"enabled": True},
+                        "qdm_query_guide": {"enabled": True},
                         "get_current_time": {"enabled": False},
                     },
                 },
@@ -1620,7 +1783,9 @@ class InstallerTests(unittest.TestCase):
 
             tools = json.loads(agent.read_text(encoding="utf-8"))["tools"]["builtin_tools"]
             enabled = {name for name, value in tools.items() if value.get("enabled") is True}
-            self.assertEqual(enabled, set(INSTALLER.ALLOWED_TOOLS))
+            self.assertEqual(enabled, set(INSTALLER.LEGACY_ALLOWED_TOOLS))
+            self.assertNotIn("qdm_query", tools)
+            self.assertNotIn("qdm_query_guide", tools)
             installed_agent = json.loads(agent.read_text(encoding="utf-8"))
             self.assertFalse(installed_agent["light_context_config"]["tool_result_pruning_config"]["enabled"])
             self.assertEqual(json.loads(auth.read_text(encoding="utf-8")), {"credentials": {}, "channelUserIndex": {}})
@@ -1628,6 +1793,8 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual([command[:2] for command in calls], [["plugin", "validate"], ["plugin", "install"]])
             written = json.loads(config.read_text(encoding="utf-8"))
             self.assertEqual(written["runtime_dir"], str(Path(args.runtime).resolve()))
+            self.assertEqual(written["qdm_query_mode"], "legacy")
+            self.assertFalse(written["qdm_shell_hook_enabled"])
             self.assertEqual(written["context_limits"], {"base_context_bytes": None, "wiki_file_bytes": None, "wiki_total_bytes": None})
         finally:
             import shutil

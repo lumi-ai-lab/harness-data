@@ -17,9 +17,12 @@ from qdm_config import (
     DEFAULT_PLUGIN_CONFIG_FILE,
     DEFAULT_QDM_AGENT_ID,
     parse_agent_scope,
+    parse_bool,
     parse_context_limits,
+    parse_query_mode,
     parse_query_limits,
     parse_report_limits,
+    parse_shell_dialects,
     parse_timeout,
     sensitive_material_paths,
     TOOL_POLICIES,
@@ -28,9 +31,20 @@ from qdm_config import (
 
 PLUGIN_ID = "qdm-harness-qwenpaw"
 ALLOWED_TOOLS = {
-    "qdm_query": "执行受限的 QDM 指标查询；只接受 analysis execute 之后的业务参数。",
+    "execute_shell_command": "执行受 QDM Shell Hook 保护的命令。",
     "qdm_scope_summary": "返回当前渠道用户的脱敏 QDM 数据权限摘要。",
+    "qdm_report_stage": "完成当前 QwenPaw 报告模板阶段，仅使用当前会话已选模板。",
     "get_current_time": "获取当前时间，用于相对日期计算。",
+}
+SHELL_ALLOWED_TOOLS = {
+    "execute_shell_command": ALLOWED_TOOLS["execute_shell_command"],
+    "qdm_scope_summary": ALLOWED_TOOLS["qdm_scope_summary"],
+    "qdm_report_stage": ALLOWED_TOOLS["qdm_report_stage"],
+    "get_current_time": ALLOWED_TOOLS["get_current_time"],
+}
+LEGACY_ALLOWED_TOOLS = {
+    "qdm_scope_summary": ALLOWED_TOOLS["qdm_scope_summary"],
+    "get_current_time": ALLOWED_TOOLS["get_current_time"],
 }
 
 
@@ -64,6 +78,13 @@ def install(args: argparse.Namespace) -> None:
         "enabled_agents": list(scope.patterns),
         "user_id_display_mode": args.user_id_display_mode,
         "tool_policy": getattr(args, "tool_policy", "preserve"),
+        # This installer writes the schema 1 legacy contract.  Shell Hook
+        # requires the schema 2 Runtime MCP reference written by the unified
+        # Node setup command.
+        "qdm_query_mode": "legacy",
+        "qdm_shell_hook_enabled": False,
+        "qdm_shell_dialects": ["bash", "powershell"],
+        "qdm_shell_cmd_enabled": False,
         "auth_file_max_bytes": None,
         "context_cli_timeout_seconds": 60,
         "report_hook_timeout_seconds": 60,
@@ -85,7 +106,7 @@ def install(args: argparse.Namespace) -> None:
     )
     try:
         _write_json(DEFAULT_PLUGIN_CONFIG_FILE, config)
-        _configure_allowlist(agent, getattr(args, "tool_policy", "preserve"))
+        _configure_allowlist(agent, getattr(args, "tool_policy", "preserve"), "legacy")
         _run_qwenpaw(args.python, args.working_dir, ["plugin", "validate", str(source)])
         _run_qwenpaw(args.python, args.working_dir, ["plugin", "install", str(source), "--force"])
     except Exception:
@@ -110,7 +131,7 @@ def doctor(args: argparse.Namespace) -> None:
         ("Harness / QDM CLI", lambda: _validate_runtime_binaries(runtime)),
         ("渠道授权文件", lambda: _validate_channel_auth(_sensitive_material_paths(runtime)[0])),
         ("会话 HMAC Secret", lambda: _validate_regular(_sensitive_material_paths(runtime)[1], "会话 HMAC Secret", minimum=32)),
-        ("QDM Agent 工具白名单", lambda: _verify_allowlist(agent, _configured_tool_policy())),
+        ("QDM Agent 工具白名单", lambda: _verify_allowlist(agent, _configured_tool_policy(), _configured_query_mode())),
         ("插件配置", lambda: _verify_plugin_config(runtime, args.agent_id)),
     )
     for label, check in checks:
@@ -134,6 +155,7 @@ def doctor(args: argparse.Namespace) -> None:
 
 def uninstall(args: argparse.Namespace) -> None:
     _validate_qwenpaw(args.python, args.working_dir)
+    agent = _agent_file(args.working_dir, args.agent_id, args.agent_config)
     result = subprocess.run(
         [args.python, "-m", "qwenpaw", "plugin", "uninstall", PLUGIN_ID],
         input="y\n",
@@ -148,7 +170,8 @@ def uninstall(args: argparse.Namespace) -> None:
     if result.returncode:
         raise RuntimeError("QwenPaw 插件卸载失败")
     print(f"QwenPaw QDM 插件已卸载：{PLUGIN_ID}")
-
+    for name in ("qdm_query", "qdm_query_guide"):
+        _remove_agent_tool_entry(agent, name)
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -174,17 +197,20 @@ def _validate_source(source: Path) -> None:
 def _validate_qwenpaw(python: str, working_dir: str) -> None:
     code = (
         "import importlib.metadata, re; from qwenpaw.plugins.api import PluginApi; "
+        "from qwenpaw.agents.tools.shell import execute_shell_command; "
         "v=importlib.metadata.version('qwenpaw'); "
         "base=re.split(r'rc|b|a|dev', v.split('+',1)[0], 1)[0]; "
         "parts=base.split('.'); "
         "assert (int(parts[0]), int(parts[1]) if len(parts)>1 else 0) in {(2,1),(2,2)}, v; "
-        "assert callable(getattr(PluginApi,'register_runtime_hook',None))"
+        "assert callable(getattr(PluginApi,'register_runtime_hook',None)); "
+        "assert callable(getattr(PluginApi,'register_middleware',None)); "
+        "assert callable(execute_shell_command)"
     )
     result = subprocess.run(
         [python, "-c", code], shell=False, env=_env(working_dir), capture_output=True,
     )
     if result.returncode:
-        raise RuntimeError("需要具备 register_runtime_hook_now() 的 QwenPaw 2.1.x 或 2.2.x")
+        raise RuntimeError("需要具备 execute_shell_command、register_runtime_hook() 和 register_middleware() 的 QwenPaw 2.1.x 或 2.2.x")
 
 
 def _resolve_working_dir(python: str, explicit: str) -> Path:
@@ -325,9 +351,18 @@ def _agent_file(working_dir: str, agent_id: str, explicit: str) -> Path:
     return path
 
 
-def _configure_allowlist(agent: Path, policy: str = "preserve") -> None:
+def _tool_definitions(query_mode: str) -> dict[str, str]:
+    if query_mode == "shell_hook":
+        return SHELL_ALLOWED_TOOLS
+    if query_mode == "legacy":
+        return LEGACY_ALLOWED_TOOLS
+    raise RuntimeError("qdm_query_mode must be legacy or shell_hook")
+
+
+def _configure_allowlist(agent: Path, policy: str = "preserve", query_mode: str = "shell_hook") -> None:
     if policy not in TOOL_POLICIES:
         raise RuntimeError("tool_policy must be preserve or strict")
+    allowed_tools = _tool_definitions(query_mode)
     data = _read_json(agent)
     light_context = data.setdefault("light_context_config", {})
     if not isinstance(light_context, dict):
@@ -339,13 +374,18 @@ def _configure_allowlist(agent: Path, policy: str = "preserve") -> None:
     # host feature explicitly if the model/context policy requires it.
     pruning["enabled"] = False
     tools = data.setdefault("tools", {}).setdefault("builtin_tools", {})
+    # These entries belonged to the retired structured-query tool and must not
+    # survive either legacy or Shell Hook installation.
+    if isinstance(tools, dict):
+        tools.pop("qdm_query", None)
+        tools.pop("qdm_query_guide", None)
     if not isinstance(tools, dict):
         raise RuntimeError("agent.json tools 配置无效")
     if policy == "strict":
         for name, value in tools.items():
             if isinstance(value, dict):
-                value["enabled"] = name in ALLOWED_TOOLS
-    for name, description in ALLOWED_TOOLS.items():
+                value["enabled"] = name in allowed_tools
+    for name, description in allowed_tools.items():
         existing = tools.get(name)
         if policy == "preserve" and isinstance(existing, dict):
             existing["enabled"] = True
@@ -353,7 +393,7 @@ def _configure_allowlist(agent: Path, policy: str = "preserve") -> None:
             existing.setdefault("description", description)
             existing.setdefault("display_to_user", True)
             existing.setdefault("async_execution", False)
-            existing.setdefault("icon", "📊" if name == "qdm_query" else "🔐")
+            existing.setdefault("icon", "🛠️" if name == "execute_shell_command" else "🔐")
             existing.setdefault("config", {})
             continue
         tools[name] = {
@@ -362,13 +402,16 @@ def _configure_allowlist(agent: Path, policy: str = "preserve") -> None:
             "description": description,
             "display_to_user": True,
             "async_execution": False,
-            "icon": "📊" if name == "qdm_query" else "🔐",
+            "icon": "🛠️" if name == "execute_shell_command" else "🔐",
             "config": {},
         }
     _write_json(agent, data)
 
 
-def _verify_allowlist(agent: Path, policy: str = "preserve") -> None:
+def _verify_allowlist(agent: Path, policy: str = "preserve", query_mode: str = "shell_hook") -> None:
+    if policy not in TOOL_POLICIES:
+        raise RuntimeError("tool_policy must be preserve or strict")
+    allowed_tools = _tool_definitions(query_mode)
     data = _read_json(agent)
     pruning = data.get("light_context_config", {}).get("tool_result_pruning_config", {})
     if not isinstance(pruning, dict) or pruning.get("enabled") is not False:
@@ -383,16 +426,25 @@ def _verify_allowlist(agent: Path, policy: str = "preserve") -> None:
         if isinstance(tools, dict)
         else set()
     )
-    if not set(ALLOWED_TOOLS).issubset(enabled):
+    if not set(allowed_tools).issubset(enabled):
         raise RuntimeError("QDM tools must be enabled")
-    if policy == "strict" and enabled != set(ALLOWED_TOOLS):
-        raise RuntimeError("仅允许 qdm_query、qdm_scope_summary、get_current_time")
+    if isinstance(tools, dict):
+        retired = [name for name in ("qdm_query", "qdm_query_guide") if name in tools]
+        if retired:
+            raise RuntimeError(f"QDM Agent must not retain {', '.join(retired)}")
+    if policy == "strict" and enabled != set(allowed_tools):
+        raise RuntimeError("严格模式仅允许当前 QDM 查询方案所需工具")
 
 
 def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
     config = _read_json(DEFAULT_PLUGIN_CONFIG_FILE)
     required = {"schema_version", "runtime_dir", "qdm_agent_id", "user_id_display_mode"}
-    allowed = required | {"enabled_agents", "context_limits", "query_limits", "report_limits", "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds", "report_hook_timeout_seconds"}
+    allowed = required | {
+        "enabled_agents", "context_limits", "query_limits", "report_limits",
+        "tool_policy", "auth_file_max_bytes", "context_cli_timeout_seconds",
+        "report_hook_timeout_seconds", "qdm_query_mode", "qdm_shell_hook_enabled",
+        "qdm_shell_dialects", "qdm_shell_cmd_enabled",
+    }
     if not required.issubset(config) or not set(config).issubset(allowed):
         raise RuntimeError("插件配置包含不支持字段")
     if config.get("schema_version") != 1:
@@ -412,6 +464,15 @@ def _verify_plugin_config(runtime: Path, agent_id: str) -> None:
     if config.get("tool_policy", "preserve") not in TOOL_POLICIES:
         raise RuntimeError("tool_policy invalid")
     try:
+        query_mode = parse_query_mode(config.get("qdm_query_mode", "legacy"))
+        shell_hook_enabled = parse_bool(config.get("qdm_shell_hook_enabled", False), "qdm_shell_hook_enabled")
+        parse_shell_dialects(config.get("qdm_shell_dialects"))
+        parse_bool(config.get("qdm_shell_cmd_enabled", False), "qdm_shell_cmd_enabled")
+        if query_mode != "legacy" or shell_hook_enabled:
+            raise ConfigError("schema 1 supports the legacy configuration contract only")
+    except ConfigError as exc:
+        raise RuntimeError("Shell Hook 配置无效") from exc
+    try:
         parse_context_limits(config.get("context_limits"))
     except ConfigError as exc:
         raise RuntimeError("context_limits 无效") from exc
@@ -430,6 +491,19 @@ def _configured_tool_policy() -> str:
     except RuntimeError:
         return "preserve"
     return value if value in TOOL_POLICIES else "preserve"
+
+
+def _configured_query_mode() -> str:
+    try:
+        config = _read_json(DEFAULT_PLUGIN_CONFIG_FILE)
+    except RuntimeError:
+        return "shell_hook"
+    value = config.get("qdm_query_mode")
+    if value in {"legacy", "shell_hook"}:
+        return value
+    # Existing schema 1 installations predate Shell Hook and remain legacy
+    # unless the operator explicitly opts them in.
+    return "legacy" if config.get("schema_version") == 1 else "shell_hook"
 
 
 def _run_qwenpaw(python: str, working_dir: str, args: list[str]) -> None:
@@ -477,6 +551,15 @@ def _write_bytes(path: Path, content: bytes) -> None:
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _remove_agent_tool_entry(agent: Path, name: str) -> None:
+    data = _read_json(agent)
+    tools = data.get("tools", {}).get("builtin_tools", {})
+    if not isinstance(tools, dict) or name not in tools:
+        return
+    del tools[name]
+    _write_json(agent, data)
 
 
 if __name__ == "__main__": raise SystemExit(main())

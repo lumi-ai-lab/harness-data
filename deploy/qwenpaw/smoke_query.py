@@ -153,7 +153,7 @@ async def _run(question: str, timeout: int) -> dict[str, Any]:
         deadline = time.monotonic() + 120
         while True:
             registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
-            if registry is not None and "qdm_query" in registry and "qdm_scope_summary" in registry:
+            if registry is not None and "qdm_scope_summary" in registry:
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError("QDM plugin tools were not registered before the startup deadline")

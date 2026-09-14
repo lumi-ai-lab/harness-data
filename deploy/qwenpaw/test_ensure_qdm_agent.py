@@ -120,15 +120,19 @@ class ToolPolicyTests(unittest.TestCase):
     def test_strict_policy_disables_host_tools_and_keeps_the_allowlist(self) -> None:
         path = self._write_agent({
             "qdm_query": {"name": "qdm_query", "enabled": True},
+            "qdm_query_guide": {"name": "qdm_query_guide", "enabled": True},
             "qdm_scope_summary": {"name": "qdm_scope_summary", "enabled": True},
             "get_current_time": {"name": "get_current_time", "enabled": True},
+            "execute_shell_command": {"name": "execute_shell_command", "enabled": True},
             "read_file": {"name": "read_file", "enabled": True},
             "web_search": {"name": "web_search", "enabled": True},
         })
         try:
             self.assertTrue(MODULE.apply_strict_tool_policy(path))
             tools = self._read(path)["tools"]["builtin_tools"]
-            self.assertTrue(tools["qdm_query"]["enabled"])
+            self.assertNotIn("qdm_query", tools)
+            self.assertNotIn("qdm_query_guide", tools)
+            self.assertTrue(tools["execute_shell_command"]["enabled"])
             self.assertTrue(tools["qdm_scope_summary"]["enabled"])
             self.assertTrue(tools["get_current_time"]["enabled"])
             self.assertFalse(tools["read_file"]["enabled"])
@@ -138,8 +142,9 @@ class ToolPolicyTests(unittest.TestCase):
 
     def test_strict_policy_is_idempotent_and_does_not_rewrite_when_clean(self) -> None:
         path = self._write_agent({
-            "qdm_query": {"name": "qdm_query", "enabled": True},
+            "execute_shell_command": {"name": "execute_shell_command", "enabled": True},
             "qdm_scope_summary": {"name": "qdm_scope_summary", "enabled": True},
+            "qdm_report_stage": {"name": "qdm_report_stage", "enabled": True},
             "get_current_time": {"name": "get_current_time", "enabled": True},
             "read_file": {"name": "read_file", "enabled": False},
         }, extra={"light_context_config": {"tool_result_pruning_config": {"enabled": False}}})
@@ -152,10 +157,12 @@ class ToolPolicyTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    @unittest.skipUnless(os.name != "nt", "Windows ACL 不用 POSIX mode bits 表示")
     def test_strict_policy_preserves_other_config_and_file_mode(self) -> None:
         channels = {"channels": {"wecom": {"enabled": True}, "console": {"enabled": True}}}
         path = self._write_agent({
             "qdm_query": {"name": "qdm_query", "enabled": True},
+            "qdm_query_guide": {"name": "qdm_query_guide", "enabled": True},
             "execute_shell_command": {"name": "execute_shell_command", "enabled": True},
         }, extra=channels, mode=0o640)
         try:
@@ -167,7 +174,7 @@ class ToolPolicyTests(unittest.TestCase):
             os.unlink(path)
 
     def test_strict_policy_turns_off_tool_result_pruning(self) -> None:
-        path = self._write_agent({"qdm_query": {"name": "qdm_query", "enabled": True}})
+        path = self._write_agent({"execute_shell_command": {"name": "execute_shell_command", "enabled": True}})
         try:
             self.assertTrue(MODULE.apply_strict_tool_policy(path))
             pruning = self._read(path)["light_context_config"]["tool_result_pruning_config"]
@@ -184,23 +191,62 @@ class ToolPolicyTests(unittest.TestCase):
             self.assertTrue(MODULE.apply_strict_tool_policy(path))
             tools = self._read(path)["tools"]["builtin_tools"]
             self.assertFalse(tools["read_file"]["enabled"], "缺省 enabled 视作启用, 必须被关掉")
-            self.assertTrue(tools["qdm_query"]["enabled"])
+            self.assertNotIn("qdm_query", tools)
+            self.assertNotIn("qdm_query_guide", tools)
+            self.assertTrue(tools["execute_shell_command"]["enabled"])
         finally:
             os.unlink(path)
 
-    def test_strict_policy_tolerates_a_missing_tools_section(self) -> None:
+    def test_strict_policy_fills_a_missing_tools_section(self) -> None:
         path = self._write_agent(extra={"active_model": {"provider_id": "qdm-market"}})
         try:
             self.assertTrue(MODULE.apply_strict_tool_policy(path))
             data = self._read(path)
             self.assertIs(data["light_context_config"]["tool_result_pruning_config"]["enabled"], False)
-            self.assertEqual(data["tools"]["builtin_tools"], {})
+            self.assertEqual(
+                set(data["tools"]["builtin_tools"]),
+                {"execute_shell_command", "qdm_scope_summary", "qdm_report_stage", "get_current_time"},
+            )
             self.assertEqual(data["active_model"]["provider_id"], "qdm-market")
         finally:
             os.unlink(path)
 
-    def test_the_allowlist_is_exactly_the_qdm_trio(self) -> None:
-        self.assertEqual(set(MODULE.STRICT_ALLOWED_TOOLS), {"qdm_query", "qdm_scope_summary", "get_current_time"})
+    def test_the_default_allowlist_is_the_shell_hook_trio(self) -> None:
+        self.assertEqual(
+            set(MODULE.STRICT_ALLOWED_TOOLS),
+            {"execute_shell_command", "qdm_scope_summary", "qdm_report_stage", "get_current_time"},
+        )
+
+    def test_open_policy_removes_retired_query_entries_in_shell_mode(self) -> None:
+        path = self._write_agent({
+            "qdm_query_guide": {"name": "qdm_query_guide", "enabled": True},
+            "qdm_query": {"name": "qdm_query", "enabled": True},
+            "qdm_scope_summary": {"name": "qdm_scope_summary", "enabled": False},
+        })
+        try:
+            self.assertTrue(MODULE.apply_open_tool_policy(path, "shell_hook"))
+            tools = self._read(path)["tools"]["builtin_tools"]
+            self.assertNotIn("qdm_query_guide", tools)
+            self.assertNotIn("qdm_query", tools)
+            self.assertTrue(tools["qdm_scope_summary"]["enabled"])
+            self.assertTrue(tools["qdm_report_stage"]["enabled"])
+        finally:
+            os.unlink(path)
+
+    def test_legacy_query_mode_does_not_restore_the_structured_query_tool(self) -> None:
+        path = self._write_agent({
+            "qdm_query": {"name": "qdm_query"},
+            "execute_shell_command": {"name": "execute_shell_command"},
+            "read_file": {"name": "read_file"},
+        })
+        try:
+            self.assertTrue(MODULE.apply_strict_tool_policy(path, "legacy"))
+            tools = self._read(path)["tools"]["builtin_tools"]
+            self.assertNotIn("qdm_query", tools)
+            self.assertFalse(tools["execute_shell_command"]["enabled"])
+            self.assertFalse(tools["read_file"]["enabled"])
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

@@ -79,7 +79,22 @@ chmod +x ~/.qwenpaw/plugins/qdm-harness-qwenpaw/scripts/data-harness-cli
 `<agent>` 由 `plugin-config.json` 的 `enabled_agents` 作用域决定(精确 id 或
 `harness-data-*` 这类通配; 缺省只有 `harness-data-*`, **不含**宿主内置的 `default`)。
 宿主把插件的钩子与工具注册进**每一个** Agent 的 workspace, 所以这层作用域同时决定
-"钩子跑不跑"和"`qdm_query` 在哪个 Agent 上可见"——未命中的 Agent 连工具都不注册。
+“钩子是否生效”和插件自有工具 `qdm_scope_summary`、`qdm_report_stage` 在哪个 Agent
+上可见。指标查询不再通过插件 `qdm_query`,而是由宿主内置
+`execute_shell_command` 触发,并由 Shell Hook 在执行前完成授权。未命中的 Agent 不执行
+QDM Hook,也不会注册 QDM 插件工具。
+
+Shell Hook 模式下的工具职责如下:
+
+- `execute_shell_command` 是宿主内置工具,QDM 查询通过该工具进入 Shell Hook;
+- `qdm_scope_summary` 用于查看当前渠道用户的脱敏权限摘要;
+- `qdm_report_stage` 用于完成当前会话的报告模板阶段;
+- 旧 `qdm_query` 与 `qdm_query_guide` 不再作为 QwenPaw 公共工具注册,仅保留必要的
+  配置读取兼容。
+
+如启用 `strict` 工具策略,作用域内 Agent 的工具白名单为
+`execute_shell_command`、`qdm_scope_summary`、`qdm_report_stage`、
+`get_current_time` 四项。
 
 两条运维上会踩到的点:
 

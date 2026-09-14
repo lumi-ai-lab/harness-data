@@ -16,9 +16,14 @@ const DEFAULT_AGENT_SCOPE_PATTERNS = ["harness-data-*"];
 const TOOL_POLICIES = new Set(["preserve", "strict"]);
 // What a strictly governed QDM agent may keep enabled. The host reads a missing
 // ``enabled`` as enabled, so this list is an allow-list, not a deny-list.
-const QDM_ALLOWED_TOOLS = {
+const SHELL_ALLOWED_TOOLS = {
   get_current_time: "获取当前时间，用于相对日期计算。",
-  qdm_query: "执行受限的 QDM 指标查询；只接受已注入 QDM 手册中的指标代码和参数。",
+  execute_shell_command: "执行受 QDM Shell Hook 保护的命令。",
+  qdm_scope_summary: "返回当前渠道用户的脱敏 QDM 数据权限摘要。",
+  qdm_report_stage: "完成当前 QwenPaw 报告模板阶段，仅使用当前会话已选模板。",
+};
+const LEGACY_ALLOWED_TOOLS = {
+  get_current_time: "获取当前时间，用于相对日期计算。",
   qdm_scope_summary: "返回当前渠道用户的脱敏 QDM 数据权限摘要。",
 };
 const AGENT_SCOPE_PATTERN = /^(\*|[A-Za-z0-9][A-Za-z0-9_.*?-]*)$/;
@@ -118,11 +123,80 @@ function inScopeAgents(options, patterns) {
   return (agents || []).filter((agentId) => agentScopeAllows(patterns, agentId));
 }
 
+function cleanupQdmToolEntries(options, patterns, queryMode) {
+  if (!Array.isArray(patterns)) return [];
+  const touched = [];
+  for (const agentId of inScopeAgents(options, patterns)) {
+    const configFile = agentConfigFile(options, agentId);
+    if (!isRegularFile(configFile)) continue;
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    } catch (error) {
+      throw new Error(`Shell Hook cannot clean ${configFile}: ${error.message}`);
+    }
+    const tools = data.tools && typeof data.tools === "object" ? data.tools : (data.tools = {});
+    const entries = tools.builtin_tools && typeof tools.builtin_tools === "object"
+      ? tools.builtin_tools : (tools.builtin_tools = {});
+    let changed = false;
+    for (const name of ["qdm_query", "qdm_query_guide"]) {
+      if (Object.hasOwn(entries, name)) {
+        delete entries[name];
+        changed = true;
+      }
+    }
+    const summary = entries.qdm_scope_summary;
+    if (summary && typeof summary === "object" && summary.enabled !== true) {
+      summary.enabled = true;
+      changed = true;
+    }
+    if (!summary) {
+      entries.qdm_scope_summary = {
+        name: "qdm_scope_summary",
+        enabled: true,
+        description: SHELL_ALLOWED_TOOLS.qdm_scope_summary,
+        display_to_user: true,
+        async_execution: false,
+        icon: "🔐",
+        config: {},
+      };
+      changed = true;
+    }
+    if (queryMode === "shell_hook") {
+      const reportStage = entries.qdm_report_stage;
+      if (reportStage && typeof reportStage === "object" && reportStage.enabled !== true) {
+        reportStage.enabled = true;
+        changed = true;
+      }
+      if (!reportStage) {
+        entries.qdm_report_stage = {
+          name: "qdm_report_stage",
+          enabled: true,
+          description: SHELL_ALLOWED_TOOLS.qdm_report_stage,
+          display_to_user: true,
+          async_execution: false,
+          icon: "📄",
+          config: {},
+        };
+        changed = true;
+      }
+    }
+    if (changed) {
+      fs.writeFileSync(configFile, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+      touched.push(agentId);
+    }
+  }
+  return touched;
+}
+
 /**
  * Narrow every in-scope agent to the QDM tools. ``preserve`` never calls this, so
  * an opt-out policy leaves the host's own agent configuration untouched.
  */
-function applyStrictToolAllowlist(options, patterns) {
+function applyStrictToolAllowlist(options, patterns, queryMode = "shell_hook") {
+  const allowedTools = queryMode === "legacy"
+    ? LEGACY_ALLOWED_TOOLS
+    : SHELL_ALLOWED_TOOLS;
   const { agents, file } = listQwenPawAgentIds(options);
   if (agents === null) {
     throw new Error(`--tool-policy strict needs the host agent list, but ${file} is unreadable`);
@@ -146,10 +220,13 @@ function applyStrictToolAllowlist(options, patterns) {
     const tools = data.tools && typeof data.tools === "object" ? data.tools : (data.tools = {});
     const entries = tools.builtin_tools && typeof tools.builtin_tools === "object"
       ? tools.builtin_tools : (tools.builtin_tools = {});
-    for (const [name, value] of Object.entries(entries)) {
-      if (value && typeof value === "object") value.enabled = Object.hasOwn(QDM_ALLOWED_TOOLS, name);
+    for (const name of ["qdm_query", "qdm_query_guide"]) {
+      if (Object.hasOwn(entries, name)) delete entries[name];
     }
-    for (const [name, description] of Object.entries(QDM_ALLOWED_TOOLS)) {
+    for (const [name, value] of Object.entries(entries)) {
+      if (value && typeof value === "object") value.enabled = Object.hasOwn(allowedTools, name);
+    }
+    for (const [name, description] of Object.entries(allowedTools)) {
       const existing = entries[name];
       if (existing && typeof existing === "object") {
         existing.enabled = true;
@@ -174,7 +251,8 @@ function applyStrictToolAllowlist(options, patterns) {
 function toolAllowlistCheck(reference, options) {
   const policy = TOOL_POLICIES.has(String(reference.tool_policy || "").trim())
     ? String(reference.tool_policy).trim() : "preserve";
-  if (policy !== "strict") return { name: "tool-allowlist", ok: true, detail: `policy=${policy}` };
+  const queryMode = queryModeFor(reference);
+  const allowedTools = queryMode === "legacy" ? LEGACY_ALLOWED_TOOLS : SHELL_ALLOWED_TOOLS;
   let patterns;
   try {
     patterns = normalizeAgentScope([reference.enabled_agents ?? [], reference.qdm_agent_id ?? []]);
@@ -186,25 +264,74 @@ function toolAllowlistCheck(reference, options) {
   for (const agentId of inScopeAgents(options, scope)) {
     const file = agentConfigFile(options, agentId);
     if (!isRegularFile(file)) continue;
-    let enabled;
+    let parsed;
     try {
-      enabled = enabledBuiltinTools(JSON.parse(fs.readFileSync(file, "utf8")));
+      parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
       offenders.push(`${agentId}:unparsable`);
       continue;
     }
+    const enabled = enabledBuiltinTools(parsed);
     if (enabled === null) {
       offenders.push(`${agentId}:no-tool-section`);
       continue;
     }
-    const extra = enabled.filter((name) => !Object.hasOwn(QDM_ALLOWED_TOOLS, name));
+    const entries = parsed?.tools?.builtin_tools || {};
+    if (Object.hasOwn(entries, "qdm_query_guide")) offenders.push(`${agentId}(qdm_query_guide)`);
+    if (Object.hasOwn(entries, "qdm_query")) offenders.push(`${agentId}(qdm_query)`);
+    if (!entries.qdm_scope_summary || typeof entries.qdm_scope_summary !== "object" || entries.qdm_scope_summary.enabled !== true) {
+      offenders.push(`${agentId}(qdm_scope_summary)`);
+    }
+    if (queryMode === "shell_hook") {
+      if (!entries.qdm_report_stage || typeof entries.qdm_report_stage !== "object" || entries.qdm_report_stage.enabled !== true) {
+        offenders.push(`${agentId}(qdm_report_stage)`);
+      }
+    }
+    if (policy !== "strict") continue;
+    const extra = enabled.filter((name) => !Object.hasOwn(allowedTools, name));
     if (extra.length) offenders.push(`${agentId}(${extra.join(",")})`);
   }
   return {
     name: "tool-allowlist",
     ok: offenders.length === 0,
-    detail: `policy=strict offenders=${offenders.join(" ") || "none"}`,
+    detail: `policy=${policy} mode=${queryMode} offenders=${offenders.join(" ") || "none"}`,
   };
+}
+
+function queryModeFor(reference) {
+  return String(reference?.qdm_query_mode || "").trim() === "legacy" ? "legacy" : "shell_hook";
+}
+
+function resolveQueryMode(options, reference) {
+  const requested = String(options.qdmQueryMode || "").trim();
+  if (requested && requested !== "legacy" && requested !== "shell_hook") {
+    throw new Error("--qdm-query-mode must be legacy or shell_hook");
+  }
+  if (!requested && options.runtimeMcpDisabled === true) return "legacy";
+  return requested || queryModeFor(reference);
+}
+
+function defaultShellDialects() {
+  return process.platform === "win32"
+    ? ["bash", "powershell", "cmd"]
+    : ["bash", "powershell"];
+}
+
+function defaultShellCmdEnabled() {
+  return process.platform === "win32";
+}
+
+function resolveShellDialects(options, reference) {
+  const raw = options.qdmShellDialects ?? reference?.qdm_shell_dialects ?? defaultShellDialects();
+  const values = (Array.isArray(raw) ? raw : [raw])
+    .flatMap((value) => String(value ?? "").split(","))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const unique = [...new Set(values)];
+  if (!unique.length || unique.some((value) => !["bash", "powershell", "cmd"].includes(value))) {
+    throw new Error("--qdm-shell-dialects must contain bash, powershell, or cmd");
+  }
+  return unique;
 }
 
 function pluginConfigFile() {
@@ -264,6 +391,19 @@ export async function setupQwenPaw(options = {}) {
   const workspaceRoot = path.resolve(String(options.workspaceRoot || firstWorkspaceAllowlist(options) || process.cwd()).trim());
   const secretRoot = path.resolve(String(options.secretDir || defaultSensitiveDir()).trim());
   const runtimeMcp = resolveRuntimeMcpConfig(options);
+  const previousReference = readReferenceConfig(options);
+  const queryMode = resolveQueryMode(options, previousReference);
+  const shellDialects = resolveShellDialects(options, previousReference);
+  const shellHookEnabled = options.qdmShellHookEnabled === undefined ? queryMode === "shell_hook" : options.qdmShellHookEnabled;
+  const shellCmdEnabled = options.qdmShellCmdEnabled === undefined
+    ? (previousReference?.qdm_shell_cmd_enabled ?? defaultShellCmdEnabled())
+    : options.qdmShellCmdEnabled === true;
+  if (queryMode === "shell_hook" && !shellHookEnabled) {
+    throw new Error("shell_hook mode requires --qdm-shell-hook-enabled=true");
+  }
+  if (queryMode === "shell_hook" && runtimeMcp?.enabled !== true) {
+    throw new Error("shell_hook mode requires an enabled runtime MCP; pass --runtime-mcp-endpoint and --runtime-mcp-token-file");
+  }
   if (runtimeMcp?.enabled && options.skipRuntimeMcpCheck !== true) {
     await checkRuntimeMcpEndpoint(runtimeMcp);
   }
@@ -289,12 +429,17 @@ export async function setupQwenPaw(options = {}) {
     options,
     setupReport,
     patterns: resolveAgentScopePatterns(options),
-    toolPolicy: resolveToolPolicy(options, readReferenceConfig(options)),
+    toolPolicy: resolveToolPolicy(options, previousReference),
+    queryMode,
+    shellHookEnabled,
+    shellDialects,
+    shellCmdEnabled,
     runtimeMcp,
   });
   const written = readReferenceConfig(options) || {};
+  cleanupQdmToolEntries(options, written.enabled_agents || [], queryModeFor(written));
   const allowlistedAgents = String(written.tool_policy || "") === "strict"
-    ? applyStrictToolAllowlist(options, written.enabled_agents || [])
+    ? applyStrictToolAllowlist(options, written.enabled_agents || [], queryModeFor(written))
     : [];
   return {
     ok: true,
@@ -305,6 +450,7 @@ export async function setupQwenPaw(options = {}) {
     configPath,
     version,
     toolPolicy: written.tool_policy || "preserve",
+    queryMode: queryModeFor(written),
     allowlistedAgents,
     setup: setupReport,
   };
@@ -332,6 +478,14 @@ export async function doctorQwenPaw(options = {}) {
   const instanceRoot = contextPath ? path.dirname(contextPath) : "";
 
   const checks = [];
+  if (pluginRoot) {
+    try {
+      const version = await probeQwenPaw(String(options.qwenpawPython || "python").trim(), pluginRoot, options);
+      checks.push({ name: "qwenpaw-host", ok: true, detail: `version=${version || "unknown"} register_middleware=available` });
+    } catch (error) {
+      checks.push({ name: "qwenpaw-host", ok: false, detail: error.message });
+    }
+  }
   if (pluginRoot) {
     checks.push({
       name: "plugin-source",
@@ -361,6 +515,18 @@ export async function doctorQwenPaw(options = {}) {
   }
   if (reference) {
     checks.push({ name: "reference-config", ok: true, detail: reference.plugin_id });
+    checks.push({
+      name: "qdm-query-mode",
+      ok: ["legacy", "shell_hook"].includes(queryModeFor(reference)),
+      detail: `mode=${queryModeFor(reference)}${queryModeFor(reference) === "shell_hook" ? ` dialects=${(reference.qdm_shell_dialects || []).join(",") || "default"}` : ""}`,
+    });
+    if (queryModeFor(reference) === "shell_hook") {
+      checks.push({
+        name: "shell-hook-runtime-mcp",
+        ok: reference.runtime_mcp?.enabled === true,
+        detail: reference.runtime_mcp?.enabled === true ? "ready" : "runtime_mcp disabled or missing",
+      });
+    }
     const secretDir = reference.secret_ref || defaultSensitiveDir();
     checks.push({
       name: "secret-ref",
@@ -447,10 +613,10 @@ function discoverPluginVersion(source) {
 }
 
 async function probeQwenPaw(python, source, options) {
-  const code = "import importlib.metadata; from qwenpaw.plugins.api import PluginApi; v=importlib.metadata.version('qwenpaw'); assert callable(getattr(PluginApi,'register_runtime_hook',None)), 'register_runtime_hook missing'; print(v)";
+  const code = "import importlib.metadata; from qwenpaw.plugins.api import PluginApi; from qwenpaw.agents.tools.shell import execute_shell_command; v=importlib.metadata.version('qwenpaw'); assert callable(getattr(PluginApi,'register_runtime_hook',None)), 'register_runtime_hook missing'; assert callable(getattr(PluginApi,'register_middleware',None)), 'register_middleware missing'; assert callable(execute_shell_command), 'execute_shell_command missing'; print(v)";
   const result = await run(python, ["-c", code], { allowFailure: true, env: { ...process.env, QWENPAW_WORKING_DIR: String(options.qwenpawWorkingDir || "").trim() || undefined } });
   if (result.code !== 0) {
-    throw new Error("QwenPaw 2.1.x with register_runtime_hook_now() is required (probe failed)");
+    throw new Error("QwenPaw 2.1.x/2.2.x with execute_shell_command, register_runtime_hook(), and register_middleware() is required (probe failed)");
   }
   const version = result.stdout.trim();
   if (version && !version.startsWith("2.1.") && !version.startsWith("2.2.")) {
@@ -484,7 +650,7 @@ function resolveAgentScopePatterns(options) {
   return [...DEFAULT_AGENT_SCOPE_PATTERNS];
 }
 
-function writeReferenceConfig({ installedRoot, instanceRoot, version, options, setupReport, patterns, toolPolicy, runtimeMcp }) {
+function writeReferenceConfig({ installedRoot, instanceRoot, version, options, setupReport, patterns, toolPolicy, queryMode, shellHookEnabled, shellDialects, shellCmdEnabled, runtimeMcp }) {
   const config = {
     schema_version: 2,
     plugin_id: PLUGIN_ID,
@@ -494,6 +660,10 @@ function writeReferenceConfig({ installedRoot, instanceRoot, version, options, s
     enabled_agents: patterns,
     user_id_display_mode: String(options.userIdDisplayMode || "off").trim(),
     tool_policy: toolPolicy,
+    qdm_query_mode: queryMode,
+    qdm_shell_hook_enabled: shellHookEnabled,
+    qdm_shell_dialects: shellDialects,
+    qdm_shell_cmd_enabled: shellCmdEnabled,
     context_limits: { base_context_bytes: null, wiki_file_bytes: null, wiki_total_bytes: null },
     query_limits: { success_bytes: null, timeout_seconds: 120 },
     report_limits: { additional_context_bytes: null },
@@ -559,6 +729,12 @@ function readReferenceConfig(options) {
       enabled_agents: Array.isArray(parsed.enabled_agents) ? parsed.enabled_agents : [],
       qdm_agent_id: String(parsed.qdm_agent_id || ""),
       tool_policy: String(parsed.tool_policy || ""),
+      qdm_query_mode: String(parsed.qdm_query_mode || "shell_hook"),
+      qdm_shell_hook_enabled: parsed.qdm_shell_hook_enabled !== false,
+      qdm_shell_dialects: Array.isArray(parsed.qdm_shell_dialects) ? parsed.qdm_shell_dialects : defaultShellDialects(),
+      qdm_shell_cmd_enabled: parsed.qdm_shell_cmd_enabled === undefined
+        ? defaultShellCmdEnabled()
+        : parsed.qdm_shell_cmd_enabled === true,
       runtime_mcp: parsed.runtime_mcp && typeof parsed.runtime_mcp === "object" ? parsed.runtime_mcp : null,
     };
   } catch {

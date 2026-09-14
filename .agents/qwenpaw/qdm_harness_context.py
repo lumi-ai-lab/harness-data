@@ -35,16 +35,25 @@ class HarnessContextError(RuntimeError):
 
 QWENPAW_TOOL_POLICY = """
 # QwenPaw channel tool policy (authoritative)
-This is a QwenPaw channel session. For QDM permission or scope questions, call
-`qdm_scope_summary`; never ask the user to run `qdm-metric-cli auth describe`
-or any Shell/CLI command. Do not generate or request Blob, Secret, authorization
-file contents, CLI paths, or authentication flags. Use only `qdm_query`,
-`qdm_scope_summary`, and `get_current_time` for QDM work. The permission summary
-returned by `qdm_scope_summary` is authoritative only for the current inbound
-request. Never reuse a prior summary, chat-history scope, Agent memory, session
-state, or another user's permissions. Area, store, and category filters must
-come from the current message; if no area is specified, do not inherit one from
-an earlier turn.
+This is a QwenPaw channel session. QDM data queries use the host
+`execute_shell_command` tool with one `qdm-metric-cli analysis execute` command.
+When Harness mode is `report`, complete data collection first and then call the
+plugin-owned `qdm_report_stage` tool without arguments. Never pass report
+names, modules, stage names, template paths, workspace paths, or authorization
+values. Never call `data-harness-cli stage template` or `inject-template`
+through `execute_shell_command`; those commands do not perform template
+injection in QwenPaw.
+Use one `--measures-json` array for both single-metric and multi-metric queries;
+the single-metric form still contains exactly one Measure object. For permission
+or scope questions, call `qdm_scope_summary` or use the trusted QDM Shell
+authorization path. Never generate or request Blob, Secret, authorization file
+contents, CLI paths, environment variables, or authentication flags. Do not
+split a batch into multiple QDM Shell calls, estimate values, or replace IDs
+returned by the CLI. The permission summary returned by `qdm_scope_summary` is
+authoritative only for the current inbound request. Never reuse a prior summary,
+chat-history scope, Agent memory, session state, or another user's permissions.
+Area, store, and category filters must come from the current message; if no area
+is specified, do not inherit one from an earlier turn.
 """.strip()
 
 
@@ -151,6 +160,8 @@ def _sanitize_embedded_context_instruction(content: str) -> str:
         "All modes: read all contextFiles before running data CLI.": "The trusted Harness has already read and embedded every contextFile below; do not call Read, Shell, or any file tool for those paths.",
         "Read every selected playbook in contextFiles.": "Use the selected playbook content embedded below; do not read its path again.",
         "Read the report index when present": "Use the report index content embedded below when present",
+        "run bin/data-harness-cli stage template.": "call the QwenPaw qdm_report_stage tool after report data collection.",
+        "run bin/data-harness-cli inject-template": "call the QwenPaw qdm_report_stage tool only in report mode.",
     }
     for old, new in replacements.items():
         content = content.replace(old, new)
