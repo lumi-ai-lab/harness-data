@@ -297,7 +297,7 @@ function hookSessionID(payload) {
 }
 
 function writeWikiPlanState(root, sessionID, prompt, plan, context = null) {
-  if (context && (!context.capabilities?.hasStableSessionId || !context.stateRoot)) return;
+  if (context && !canPersistSessionState(context, sessionID)) return;
   const state = loadState(root, sessionID);
   state.mode = plan.mode;
   if (context) {
@@ -334,6 +334,17 @@ function writeWikiPlanState(root, sessionID, prompt, plan, context = null) {
       break;
   }
   saveState(root, sessionID, state);
+}
+
+function canPersistSessionState(context, sessionID) {
+  if (!context?.stateRoot) return false;
+  if (context.capabilities?.hasStableSessionId) return true;
+  // QwenPaw supplies a stable, HMAC-derived session key in the hook payload;
+  // the persisted Root Context intentionally cannot carry that request value.
+  return (
+    String(context.host || "").trim().toLowerCase() === "qwenpaw" &&
+    /^qwenpaw:[0-9a-f]{64}$/.test(String(sessionID || "").trim())
+  );
 }
 
 function recordDiagnostic(root, sessionID, prompt, context, tc, response) {

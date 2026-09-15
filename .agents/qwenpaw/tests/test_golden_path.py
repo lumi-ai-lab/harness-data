@@ -203,12 +203,18 @@ def _run_setup(fixture: _Fixture) -> subprocess.CompletedProcess[str]:
     env = {key: value for key, value in os.environ.items() if key != "HARNESS_CONTEXT_FILE"}
     env.update(fixture.env)
     env.pop("HARNESS_CONTEXT_FILE", None)
-    return subprocess.run(args, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    command = list(args)
+    if os.name == "nt":
+        command = ["node", *args]
+    return subprocess.run(command, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
 
 def _run_cli(fixture: _Fixture, *args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    command = [str(fixture.shim), *args]
+    if os.name == "nt":
+        command = ["node", *command]
     return subprocess.run(
-        [str(fixture.shim), *args],
+        command,
         input=input_text,
         capture_output=True,
         text=True,

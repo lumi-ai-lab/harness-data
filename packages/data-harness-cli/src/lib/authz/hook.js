@@ -141,6 +141,105 @@ export function runQwenPawAdapterEnvelope(rootOrContext, input) {
   });
 }
 
+/**
+ * Authorize the real QwenPaw execute_shell_command payload.  This adapter is
+ * intentionally separate from the structured qdm_query adapter above: the
+ * Shell path must return an updated command, while qdm_query returns scope
+ * and normalized filters.
+ */
+export function runQwenPawShellAdapterEnvelope(rootOrContext, input) {
+  const cfg = loadConfig(rootOrContext);
+  if (!authzEnabled(cfg.authz)) {
+    return adapterEnvelope(ADAPTER_DISABLED, {});
+  }
+  const payload = parseQwenPawShellPayload(input);
+  if (!payload.ok) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_INPUT_INVALID: QwenPaw Shell provided invalid JSON"));
+  }
+  if (payload.toolName !== "execute_shell_command") {
+    return adapterEnvelope(
+      ADAPTER_DENY,
+      denyOutput("QDM_AUTHZ_TOOL_UNSUPPORTED: only execute_shell_command is authorized through the QwenPaw Shell adapter"),
+    );
+  }
+  if (!payload.toolInput || typeof payload.toolInput !== "object" || Array.isArray(payload.toolInput)) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_INPUT_INVALID: QwenPaw Shell tool_input must be an object"));
+  }
+  const command = payload.toolInput.command;
+  if (typeof command !== "string" || !command.trim()) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_INPUT_INVALID: QwenPaw Shell command is required"));
+  }
+  const dialect = String(payload.dialect || "").trim().toLowerCase();
+  if (![SHELL_BASH, SHELL_POWERSHELL, SHELL_CMD].includes(dialect)) {
+    return adapterEnvelope(
+      ADAPTER_DENY,
+      denyOutput("QDM_SHELL_DIALECT_UNAVAILABLE: the QwenPaw Shell dialect cannot be authorized safely"),
+    );
+  }
+
+  if (!isMetricAuthzGatedCommandFor(dialect, command)) {
+    if (looksLikeGatedMetricCommand(command)) {
+      return adapterEnvelope(
+        ADAPTER_DENY,
+        denyOutput("QDM_AUTHZ_COMMAND_UNSUPPORTED: the QDM data command shape cannot be authorized safely"),
+      );
+    }
+    return adapterEnvelope(ADAPTER_NOOP, {});
+  }
+  if (metricInvocationCountFor(dialect, command) !== 1) {
+    return adapterEnvelope(
+      ADAPTER_DENY,
+      denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple or ambiguous QDM data invocations into separate tool calls"),
+    );
+  }
+
+  const blob = String(payload.blob || "").trim();
+  if (!/^qdm1enc\.[A-Za-z0-9_-]+$/.test(blob)) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_BLOB_INVALID: the QwenPaw Shell adapter requires a valid per-requester auth blob"));
+  }
+
+  let metricCliPath;
+  try {
+    metricCliPath = resolveMetricCLIPath(rootOrContext, cfg);
+  } catch {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTHZ_CLI_UNAVAILABLE: authz mode is on but no trusted qdm-metric-cli is available"));
+  }
+
+  let scope;
+  try {
+    scope = describeScope(metricCliPath, blob);
+  } catch (error) {
+    if (error?.qdmCode) {
+      return adapterEnvelope(ADAPTER_DENY, denyOutput(`${error.qdmCode}: ${error.qdmMessage}`));
+    }
+    const code = /AUTH_BLOB|DECRYPT/i.test(String(error?.message || "")) ? "QDM_CHANNEL_AUTH_DENIED" : "QDM_AUTHZ_DESCRIBE_FAILED";
+    return adapterEnvelope(ADAPTER_DENY, denyOutput(`${code}: ${safeDiagnostic(error)}`));
+  }
+  if (!scope.enabled || !scope.capabilities.includes("qdm.metric.query")) {
+    return adapterEnvelope(ADAPTER_DENY, denyOutput("QDM_AUTH_CAPABILITY_DENIED: 褰撳墠鐢ㄦ埛娌℃湁 QDM 鏁版嵁鏌ヨ鏉冮檺"));
+  }
+
+  let rewritten;
+  try {
+    rewritten = rewriteGatedMetricCommands(command, blob, metricCliPath, dialect);
+  } catch {
+    rewritten = "";
+  }
+  if (!rewritten.trim()) {
+    return adapterEnvelope(
+      ADAPTER_DENY,
+      denyOutput("QDM_AUTHZ_REWRITE_FAILED: refusing to execute a QDM data command whose authorization could not be rewritten safely"),
+    );
+  }
+  if (authSourceEnvPresent()) {
+    rewritten = scrubAuthSourceEnvCommandFor(dialect, rewritten);
+  }
+  return adapterEnvelope(
+    ADAPTER_ALLOW,
+    allowOutput(replaceCommand(payload.toolInput, rewritten), "Configured authorization is bound to this QDM data command"),
+  );
+}
+
 function parseQwenPawPayload(input) {
   const text = Buffer.isBuffer(input) ? input.toString("utf8") : String(input || "");
   try {
@@ -149,6 +248,23 @@ function parseQwenPawPayload(input) {
     return {
       ok: true,
       toolName: String(raw.tool_name || raw.toolName || "").trim(),
+      blob: String(raw.blob || raw.auth_blob || "").trim(),
+      toolInput: raw.tool_input || raw.toolInput,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function parseQwenPawShellPayload(input) {
+  const text = Buffer.isBuffer(input) ? input.toString("utf8") : String(input || "");
+  try {
+    const raw = JSON.parse(text);
+    if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return { ok: false };
+    return {
+      ok: true,
+      toolName: String(raw.tool_name || raw.toolName || "").trim().toLowerCase(),
+      dialect: String(raw.dialect || "").trim().toLowerCase(),
       blob: String(raw.blob || raw.auth_blob || "").trim(),
       toolInput: raw.tool_input || raw.toolInput,
     };

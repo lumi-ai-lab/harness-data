@@ -286,6 +286,71 @@ test("runQwenPawHook injects template after successful qdm_query", () => {
   assert.ok(state.reports["financial-overview"].recorded_modules.includes("indicators"));
 });
 
+test("runQwenPawHook injects template through qdm_report_stage only in report mode", () => {
+  const root = testInjectRoot();
+  const sessionID = `qwenpaw:${"c".repeat(64)}`;
+  writeState(root, sessionID, {
+    mode: "report",
+    selected_playbook: "playbooks/idx/business/r-business-analysis-report.md",
+    selected_template: "templates/idx/business/s-sale-amt.md",
+  });
+  const output = runQwenPawHook(
+    root,
+    JSON.stringify({
+      session_id: sessionID,
+      tool_name: "qdm_report_stage",
+      status: "success",
+      safe_command_args: {},
+    }),
+  );
+  assert.equal(output.ok, true);
+  assert.equal(output.diagnostic_code, "template_injected");
+  assert.ok(output.additional_context.includes("QDM_DELIVERY_MODE=chat"));
+});
+
+test("runQwenPawHook rejects report staging outside report mode", () => {
+  const root = testInjectRoot();
+  const sessionID = `qwenpaw:${"d".repeat(64)}`;
+  writeState(root, sessionID, {
+    mode: "single",
+    selected_playbook: "playbooks/idx/business/s-sale-amt.md",
+    selected_template: "templates/idx/business/s-sale-amt.md",
+  });
+  const output = runQwenPawHook(
+    root,
+    JSON.stringify({
+      session_id: sessionID,
+      tool_name: "qdm_report_stage",
+      status: "success",
+      safe_command_args: {},
+    }),
+  );
+  assert.equal(output.ok, false);
+  assert.equal(output.diagnostic_code, "report_mode_required");
+});
+
+test("runQwenPawHook rejects report-stage arguments", () => {
+  const root = testInjectRoot();
+  const sessionID = `qwenpaw:${"e".repeat(64)}`;
+  writeState(root, sessionID, {
+    mode: "report",
+    selected_playbook: "playbooks/idx/business/r-business-analysis-report.md",
+    selected_template: "templates/idx/business/s-sale-amt.md",
+  });
+  assert.throws(
+    () => runQwenPawHook(
+      root,
+      JSON.stringify({
+        session_id: sessionID,
+        tool_name: "qdm_report_stage",
+        status: "success",
+        safe_command_args: { report_name: "financial-overview" },
+      }),
+    ),
+    /does not accept safe command arguments/,
+  );
+});
+
 test("runQwenPawHook rejects untrusted payload fields", () => {
   const sessionID = `qwenpaw:${"b".repeat(64)}`;
   assert.throws(

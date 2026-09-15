@@ -1,7 +1,14 @@
 import { ExitError } from "../lib/exit.js";
 import { parseFlags } from "../lib/flags.js";
 import { printCompactJSON } from "../lib/json-out.js";
-import { run, runAdapterEnvelope, runQwenPawAdapterEnvelope, toGoEnvelopeJSON, toGoHookJSON } from "../lib/authz/hook.js";
+import {
+  run,
+  runAdapterEnvelope,
+  runQwenPawAdapterEnvelope,
+  runQwenPawShellAdapterEnvelope,
+  toGoEnvelopeJSON,
+  toGoHookJSON,
+} from "../lib/authz/hook.js";
 
 export async function runAuthzHook(root, args, io = process, context = null) {
   const rootOrContext = context || root;
@@ -23,8 +30,12 @@ export async function runAuthzHook(root, args, io = process, context = null) {
   const input = await readStdin(io);
 
   if (format === "adapter-envelope") {
-    if (agent.trim().toLowerCase() === "qwenpaw") {
-      const envelope = runQwenPawAdapterEnvelope(rootOrContext, input);
+    const normalizedAgent = agent.trim().toLowerCase();
+    if (normalizedAgent === "qwenpaw" || normalizedAgent === "qwenpaw-shell") {
+      const envelope =
+        normalizedAgent === "qwenpaw"
+          ? runQwenPawAdapterEnvelope(rootOrContext, input)
+          : runQwenPawShellAdapterEnvelope(rootOrContext, input);
       // The qwenpaw envelope carries the scope and normalized filters, so
       // print the hook output verbatim instead of the Go hook projection.
       printCompactJSON({
@@ -34,8 +45,11 @@ export async function runAuthzHook(root, args, io = process, context = null) {
       }, io.stdout);
       return;
     }
-    if (agent.trim().toLowerCase() !== "workbuddy") {
-      throw new ExitError("adapter-envelope format requires --agent workbuddy or --agent qwenpaw", { code: 2 });
+    if (normalizedAgent !== "workbuddy") {
+      throw new ExitError(
+        "adapter-envelope format requires --agent workbuddy, --agent qwenpaw, or --agent qwenpaw-shell",
+        { code: 2 },
+      );
     }
     const envelope = runAdapterEnvelope(rootOrContext, agent, input);
     printCompactJSON(toGoEnvelopeJSON(envelope), io.stdout);

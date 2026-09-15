@@ -37,19 +37,30 @@ QDM_AGENT_NAME = "QDM 数据助手"
 # 插件只从这两个渠道解析请求身份，所以只搬这两个；`console` 尤其要留在原处，
 # 否则运维在 Web 控制台里连自己的 Agent 都聊不了。
 MANAGED_CHANNEL_NAMES = ("wecom", "feishu")
-# strict 策略下 QDM Agent 允许保留的内置工具。与插件侧 ALLOWED_TOOLS
-# (.agents/qwenpaw/install-qwenpaw-plugin.py) 保持一致; doctor 按同一份清单
-# 校验, 漂移会直接报 offenders。
-STRICT_ALLOWED_TOOLS = ("qdm_query", "qdm_scope_summary", "get_current_time")
+# strict 策略下 QDM Agent 允许保留的内置工具。Shell Hook 是新安装默认值；
+# legacy 配置仅作为读取兼容，不再恢复结构化 qdm_query。
+SHELL_STRICT_ALLOWED_TOOLS = ("execute_shell_command", "qdm_scope_summary", "qdm_report_stage", "get_current_time")
+LEGACY_STRICT_ALLOWED_TOOLS = ("qdm_scope_summary", "get_current_time")
+STRICT_ALLOWED_TOOLS = SHELL_STRICT_ALLOWED_TOOLS
+TOOL_DESCRIPTIONS = {
+    "execute_shell_command": "执行受 QDM Shell Hook 保护的命令。",
+    "qdm_scope_summary": "返回当前渠道用户的脱敏 QDM 数据权限摘要。",
+    "qdm_report_stage": "完成当前 QwenPaw 报告模板阶段，仅使用当前会话已选模板。",
+    "get_current_time": "获取当前时间，用于相对日期计算。",
+}
 
 
-def apply_strict_tool_policy(agent_json_path: str) -> bool:
+def strict_allowed_tools(query_mode: str = "shell_hook") -> tuple[str, ...]:
+    return LEGACY_STRICT_ALLOWED_TOOLS if query_mode == "legacy" else SHELL_STRICT_ALLOWED_TOOLS
+
+
+def apply_strict_tool_policy(agent_json_path: str, query_mode: str = "shell_hook") -> bool:
     """把某 Agent 的工具面收窄到 strict 白名单, 有改动返回 True。
 
     副作用与插件 `_configure_allowlist` 一致: 关掉工具结果裁剪
     (light_context_config.tool_result_pruning_config), 并且 builtin_tools 里
-    只有白名单内的工具允许启用。只改 enabled 位与裁剪开关, 不增删工具条目、
-    不动其他配置; 幂等, 无改动时不重写文件(避免每次启动的写放大)。
+    只有白名单内的工具允许启用, 并补齐白名单工具条目。不动其他配置;
+    幂等, 无改动时不重写文件(避免每次启动的写放大)。
     """
     with open(agent_json_path, encoding="utf-8") as handle:
         data = json.load(handle)
@@ -71,16 +82,39 @@ def apply_strict_tool_policy(agent_json_path: str) -> bool:
         raise RuntimeError("agent.json tools.builtin_tools 配置无效")
 
     changed = False
+    for name in ("qdm_query", "qdm_query_guide"):
+        if name in builtin:
+            del builtin[name]
+            changed = True
     if pruning.get("enabled") is not False:
         pruning["enabled"] = False
         changed = True
-    allow = set(STRICT_ALLOWED_TOOLS)
+    allow = set(strict_allowed_tools(query_mode))
     for name, entry in builtin.items():
         # 与插件 _configure_allowlist 一致: 显式归一化每个条目的 enabled 位
         # (含补全缺省键), 而不是只改写有差异的条目。
         if isinstance(entry, dict):
-            entry["enabled"] = name in allow
-            changed = True
+            desired = name in allow
+            if entry.get("enabled", True) is not desired:
+                entry["enabled"] = desired
+                changed = True
+    for name in strict_allowed_tools(query_mode):
+        entry = builtin.get(name)
+        if isinstance(entry, dict):
+            if "enabled" not in entry or entry.get("enabled") is not True:
+                entry["enabled"] = True
+                changed = True
+            continue
+        builtin[name] = {
+            "name": name,
+            "enabled": True,
+            "description": TOOL_DESCRIPTIONS[name],
+            "display_to_user": True,
+            "async_execution": False,
+            "icon": "🛠️" if name == "execute_shell_command" else "🔐",
+            "config": {},
+        }
+        changed = True
 
     if not changed:
         return False
@@ -104,11 +138,11 @@ def apply_strict_tool_policy(agent_json_path: str) -> bool:
     return True
 
 
-def apply_open_tool_policy(agent_json_path: str) -> bool:
+def apply_open_tool_policy(agent_json_path: str, query_mode: str = "shell_hook") -> bool:
     """把某 Agent 的工具面放开为 QwenPaw 默认全量（所有内置工具启用）。
 
     与 strict 互为反向，同样只改 enabled 位与结果裁剪开关，幂等，
-    无差异时不落盘。工具结果裁剪维持关闭：qdm_query 的长结果必须完整
+    无差异时不落盘。工具结果裁剪维持关闭：QDM 查询结果必须完整
     （与插件 preserve 语义一致）。
     """
     with open(agent_json_path, encoding="utf-8") as handle:
@@ -131,13 +165,40 @@ def apply_open_tool_policy(agent_json_path: str) -> bool:
         raise RuntimeError("agent.json tools.builtin_tools 配置无效")
 
     changed = False
+    for name in ("qdm_query", "qdm_query_guide"):
+        if name in builtin:
+            del builtin[name]
+            changed = True
     if pruning.get("enabled") is not False:
         pruning["enabled"] = False
         changed = True
     for name, entry in builtin.items():
-        if isinstance(entry, dict) and entry.get("enabled") is not True:
-            entry["enabled"] = True
-            changed = True
+        if isinstance(entry, dict):
+            if entry.get("enabled") is not True:
+                entry["enabled"] = True
+                changed = True
+    if "qdm_scope_summary" not in builtin:
+        builtin["qdm_scope_summary"] = {
+            "name": "qdm_scope_summary",
+            "enabled": True,
+            "description": TOOL_DESCRIPTIONS["qdm_scope_summary"],
+            "display_to_user": True,
+            "async_execution": False,
+            "icon": "🔐",
+            "config": {},
+        }
+        changed = True
+    if query_mode == "shell_hook" and "qdm_report_stage" not in builtin:
+        builtin["qdm_report_stage"] = {
+            "name": "qdm_report_stage",
+            "enabled": True,
+            "description": TOOL_DESCRIPTIONS["qdm_report_stage"],
+            "display_to_user": True,
+            "async_execution": False,
+            "icon": "📄",
+            "config": {},
+        }
+        changed = True
 
     if not changed:
         return False
@@ -179,6 +240,23 @@ def configured_tool_policy() -> str:
     except Exception:
         return "preserve"
     return policy if policy in {"preserve", "strict"} else "preserve"
+
+
+def configured_query_mode() -> str:
+    """Return shell_hook by default, with legacy preserved only by config/env."""
+    override = os.environ.get("QWENPAW_QDM_QUERY_MODE", "").strip().lower()
+    if override in {"shell_hook", "legacy"}:
+        return override
+    plugin_config_path = os.environ.get(
+        "HARNESS_PLUGIN_CONFIG",
+        "/etc/qdm/qwenpaw/plugin-config.json",
+    )
+    try:
+        with open(plugin_config_path, encoding="utf-8") as handle:
+            mode = str(json.load(handle).get("qdm_query_mode", "shell_hook")).strip().lower()
+    except Exception:
+        return "shell_hook"
+    return mode if mode in {"shell_hook", "legacy"} else "shell_hook"
 
 
 def qdm_agent_id() -> str:
@@ -279,16 +357,17 @@ def ensure() -> list[str]:
     # 放开 QwenPaw 默认全量工具(officecli 等通用工具依赖 shell/文件工具);
     # 显式配置 strict 才收窄到 QDM 白名单。
     policy = configured_tool_policy()
+    query_mode = configured_query_mode()
     agent_json = os.path.join(
         os.environ.get("QWENPAW_WORKING_DIR", ""), "workspaces", agent_id, "agent.json",
     )
     if os.path.isfile(agent_json):
         if policy == "strict":
-            if apply_strict_tool_policy(agent_json):
+            if apply_strict_tool_policy(agent_json, query_mode):
                 actions.append(
                     f"narrowed tools of {agent_id} to the QDM strict allowlist",
                 )
-        elif apply_open_tool_policy(agent_json):
+        elif apply_open_tool_policy(agent_json, query_mode):
             actions.append(
                 f"opened tools of {agent_id} to the QwenPaw default allowlist",
             )

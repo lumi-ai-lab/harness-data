@@ -163,6 +163,7 @@ def hook_factories() -> tuple[tuple[str, Any, int], ...]:
         (QdmRequesterContextHook.name, QdmRequesterContextHook, 10),
         ("qdm_harness.requester_cleanup.post_response", lambda: QdmRequesterCleanupHook(Phase.POST_RESPONSE), 10),
         ("qdm_harness.requester_cleanup.on_error", lambda: QdmRequesterCleanupHook(Phase.ON_ERROR), 10),
+        ("qdm_harness.requester_cleanup.finally", lambda: QdmRequesterCleanupHook(Phase.FINALLY), 10),
     )
 
 

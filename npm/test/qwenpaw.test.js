@@ -15,9 +15,9 @@ function runCli(args, cwd) {
 }
 
 function writeFakePython(root) {
-  const file = path.join(root, "fake-qwenpaw.py");
+  const script = path.join(root, "fake-qwenpaw.py");
   writeFileSync(
-    file,
+    script,
     "#!/usr/bin/env python3\n"
     + "import os, shutil, sys\n"
     + "if len(sys.argv) > 1 and sys.argv[1] == '-c':\n"
@@ -34,8 +34,11 @@ function writeFakePython(root) {
     + "    sys.exit(0)\n"
     + "sys.exit(1)\n",
   );
-  chmodSync(file, 0o755);
-  return file;
+  chmodSync(script, 0o755);
+  if (process.platform !== "win32") return script;
+  const wrapper = path.join(root, "fake-qwenpaw.cmd");
+  writeFileSync(wrapper, `@echo off\r\npython "${script}" %*\r\n`);
+  return wrapper;
 }
 
 function writeMetricStub(root) {
@@ -103,6 +106,7 @@ test("qwenpaw setup installs the native plugin and builds the reference config",
 
     const result = runCli([
       "qwenpaw", "setup",
+      "--qdm-query-mode", "legacy",
       "--source", source,
       "--qwenpaw-python", python,
       "--qwenpaw-working-dir", path.join(root, "qwenpaw-home"),
@@ -123,6 +127,12 @@ test("qwenpaw setup installs the native plugin and builds the reference config",
     assert.ok(existsSync(path.join(instance, "context.json")), "instanceRoot context.json missing");
     assert.ok(existsSync(path.join(instance, "resources", "wikis", "index.md")), "instanceRoot wikis missing");
     assert.ok(existsSync(path.join(instance, "config", "settings.json")), "instanceRoot settings missing");
+    const persisted = JSON.parse(readFileSync(path.join(instance, "context.json"), "utf8"));
+    assert.equal(persisted.workspaceRoot, project, "qwenpaw context.json must retain the workspace binding");
+    assert.ok(
+      String(persisted.stateRoot || "").startsWith(path.join(data, "state")),
+      "qwenpaw context.json must retain a dataRoot-bound stateRoot",
+    );
 
     const config = JSON.parse(readFileSync(configFile, "utf8"));
     assert.equal(config.schema_version, 2);
@@ -155,6 +165,7 @@ test("qwenpaw setup --channel-auth-only authorizes via channel-auth.json without
 
     const result = runCli([
       "qwenpaw", "setup",
+      "--qdm-query-mode", "legacy",
       "--source", source,
       "--qwenpaw-python", python,
       "--qwenpaw-working-dir", path.join(root, "qwenpaw-home"),
@@ -214,6 +225,7 @@ test("qwenpaw setup writes the agent scope from --enabled-agents patterns", () =
     // tree in and refuses to overwrite an existing target.
     const baseArgs = (home) => [
       "qwenpaw", "setup",
+      "--qdm-query-mode", "legacy",
       "--source", source,
       "--qwenpaw-python", python,
       "--qwenpaw-working-dir", path.join(root, home),
@@ -257,6 +269,9 @@ function strictSetupFixture(root, home) {
     const wide = {
       read_file: { name: "read_file", enabled: true },
       execute_shell_command: { name: "execute_shell_command", enabled: true },
+      qdm_query_guide: { name: "qdm_query_guide", enabled: true },
+      qdm_query: { name: "qdm_query", enabled: true },
+      qdm_scope_summary: { name: "qdm_scope_summary", enabled: false },
       // The host writes some entries without ``enabled``; those read as enabled.
       web_search: { name: "web_search" },
     };
@@ -279,7 +294,7 @@ function enabledTools(file) {
     .sort();
 }
 
-test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tools", () => {
+test("qwenpaw setup --tool-policy strict removes the retired query from legacy-compatible agents", () => {
   const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-tool-policy-"));
   try {
     const source = stagePluginSource(root);
@@ -294,6 +309,7 @@ test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tool
     const configFile = path.join(root, "plugin-config.json");
     const args = (working, extra) => [
       "qwenpaw", "setup",
+      "--qdm-query-mode", "legacy",
       "--source", source,
       "--qwenpaw-python", python,
       "--qwenpaw-working-dir", working,
@@ -316,7 +332,7 @@ test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tool
     assert.equal(strict.status, 0, strict.stderr || strict.stdout);
     const narrowed = JSON.parse(readFileSync(path.join(working, "workspaces", "harness-data-east", "agent.json"), "utf8"));
     assert.deepEqual(enabledTools(path.join(working, "workspaces", "harness-data-east", "agent.json")),
-      ["get_current_time", "qdm_query", "qdm_scope_summary"]);
+      ["get_current_time", "qdm_scope_summary"]);
     assert.equal(narrowed.tools.builtin_tools.web_search.enabled, false, "an entry without ``enabled`` reads as enabled and must be switched off");
     assert.deepEqual(
       { id: narrowed.id, channels: narrowed.channels },
@@ -336,7 +352,7 @@ test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tool
     );
     assert.deepEqual(
       enabledTools(path.join(working, "workspaces", "default", "agent.json")),
-      ["execute_shell_command", "read_file", "web_search"],
+      ["execute_shell_command", "qdm_query", "qdm_query_guide", "read_file", "web_search"],
       "out-of-scope agents stay as the host left them",
     );
     assert.equal(JSON.parse(readFileSync(configFile, "utf8")).tool_policy, "strict");
@@ -346,7 +362,7 @@ test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tool
     const again = runCli(args(carried, []), repoRoot);
     assert.equal(again.status, 0, again.stderr || again.stdout);
     assert.deepEqual(enabledTools(path.join(carried, "workspaces", "harness-data-east", "agent.json")),
-      ["get_current_time", "qdm_query", "qdm_scope_summary"]);
+      ["get_current_time", "qdm_scope_summary"]);
 
     const rejected = runCli(args(strictSetupFixture(root, "home-bad"), ["--tool-policy", "loose"]), repoRoot);
     assert.notEqual(rejected.status, 0, "an unknown policy must fail setup");
@@ -357,6 +373,95 @@ test("qwenpaw setup --tool-policy strict narrows in-scope agents to the QDM tool
     const unenforceable = runCli(args(noList, ["--tool-policy", "strict"]), repoRoot);
     assert.notEqual(unenforceable.status, 0, "strict must fail when there is no host agent list");
     assert.match(unenforceable.stderr, /needs the host agent list/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("qwenpaw setup defaults strict mode to the Shell Hook tool surface", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-shell-policy-"));
+  try {
+    const source = stagePluginSource(root);
+    const python = writeFakePython(root);
+    const metric = writeMetricStub(root);
+    const wikis = path.join(root, "wikis");
+    seedWikis(wikis);
+    const project = path.join(root, "project");
+    const secrets = path.join(root, "secrets");
+    const working = strictSetupFixture(root, "home-shell");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(secrets, { recursive: true });
+    const configFile = path.join(root, "plugin-config.json");
+    const tokenFile = path.join(root, "runtime.token");
+    writeFileSync(tokenFile, "runtime-test-token\n");
+    const result = runCli([
+      "qwenpaw", "setup",
+      "--source", source,
+      "--qwenpaw-python", python,
+      "--qwenpaw-working-dir", working,
+      "--instance-root", path.join(root, "instance"),
+      "--data-root", path.join(root, "data"),
+      "--workspace-root", project,
+      "--workspace-allowlist", project,
+      "--wikis-source", wikis,
+      "--metric-cli", metric,
+      "--channel-auth-only",
+      "--runtime-mcp-endpoint", "http://127.0.0.1:8765/mcp",
+      "--runtime-mcp-token-file", tokenFile,
+      "--skip-runtime-mcp-check",
+      "--plugin-config-file", configFile,
+      "--secret-dir", secrets,
+      "--enabled-agents", "harness-data-*",
+      "--tool-policy", "strict",
+      "--json",
+    ], repoRoot);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    assert.equal(config.qdm_query_mode, "shell_hook");
+    assert.equal(config.qdm_shell_hook_enabled, true);
+    assert.deepEqual(
+      config.qdm_shell_dialects,
+      process.platform === "win32"
+        ? ["bash", "powershell", "cmd"]
+        : ["bash", "powershell"],
+    );
+    assert.equal(config.qdm_shell_cmd_enabled, process.platform === "win32");
+    assert.equal(config.runtime_mcp.enabled, true);
+    assert.deepEqual(
+      enabledTools(path.join(working, "workspaces", "harness-data-east", "agent.json")),
+      ["execute_shell_command", "get_current_time", "qdm_report_stage", "qdm_scope_summary"],
+    );
+    const shellTools = JSON.parse(readFileSync(path.join(working, "workspaces", "harness-data-east", "agent.json"), "utf8")).tools.builtin_tools;
+    assert.equal("qdm_query_guide" in shellTools, false);
+    assert.equal("qdm_query" in shellTools, false);
+    assert.equal(shellTools.qdm_scope_summary.enabled, true);
+
+    const disabledConfigFile = path.join(root, "plugin-config-disabled.json");
+    const disabledWorking = strictSetupFixture(root, "home-shell-disabled");
+    const disabled = runCli([
+      "qwenpaw", "setup",
+      "--source", source,
+      "--qwenpaw-python", python,
+      "--qwenpaw-working-dir", disabledWorking,
+      "--instance-root", path.join(root, "instance-disabled"),
+      "--data-root", path.join(root, "data-disabled"),
+      "--workspace-root", project,
+      "--workspace-allowlist", project,
+      "--wikis-source", wikis,
+      "--metric-cli", metric,
+      "--channel-auth-only",
+      "--runtime-mcp-endpoint", "http://127.0.0.1:8765/mcp",
+      "--runtime-mcp-token-file", tokenFile,
+      "--skip-runtime-mcp-check",
+      "--plugin-config-file", disabledConfigFile,
+      "--secret-dir", secrets,
+      "--enabled-agents", "harness-data-*",
+      "--tool-policy", "strict",
+      "--qdm-shell-cmd-enabled=false",
+      "--json",
+    ], repoRoot);
+    assert.equal(disabled.status, 0, disabled.stderr || disabled.stdout);
+    assert.equal(JSON.parse(readFileSync(disabledConfigFile, "utf8")).qdm_shell_cmd_enabled, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -411,7 +516,7 @@ test("qwenpaw doctor tool-allowlist reports tools beyond the QDM set under stric
     const writeConfig = (policy) => writeFileSync(configFile, JSON.stringify({
       schema_version: 2, plugin_id: "qdm-harness-qwenpaw", plugin_version: "0.1.6",
       root_context_path: path.join(root, "missing", "context.json"),
-      enabled_agents: ["harness-data-*"], user_id_display_mode: "off", tool_policy: policy,
+      enabled_agents: ["harness-data-*"], user_id_display_mode: "off", tool_policy: policy, qdm_query_mode: "legacy",
     }, null, 2) + "\n");
     const allowlistOf = () => JSON.parse(
       runCli(["qwenpaw", "doctor", "--plugin-config-file", configFile, "--qwenpaw-working-dir", working, "--json"], repoRoot).stdout,
@@ -426,11 +531,46 @@ test("qwenpaw doctor tool-allowlist reports tools beyond the QDM set under stric
     writeAgent("harness-data-east", { read_file: { enabled: true }, qdm_query: { enabled: true } });
     const wide = allowlistOf();
     assert.equal(wide.ok, false, "an in-scope agent with file tools still enabled must fail the check");
-    assert.match(wide.detail, /harness-data-east\(read_file\)/);
+    assert.match(wide.detail, /harness-data-east.*read_file/);
+    assert.match(wide.detail, /harness-data-east\(qdm_query\)/);
     assert.doesNotMatch(wide.detail, /default/, "out-of-scope agents are not the QDM boundary");
 
-    writeAgent("harness-data-east", { get_current_time: { enabled: true }, qdm_query: {}, qdm_scope_summary: { enabled: true } });
+    writeAgent("harness-data-east", { get_current_time: { enabled: true }, qdm_scope_summary: { enabled: true } });
     assert.equal(allowlistOf().ok, true, "a missing enabled flag reads as enabled and stays allowed here");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("qwenpaw doctor rejects retired QDM guide entries in Shell Hook mode", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "qdm-qwenpaw-guide-doctor-"));
+  try {
+    const working = seedQwenPawHome(root, { "harness-data-east": { id: "harness-data-east" } });
+    const agentDir = path.join(working, "workspaces", "harness-data-east");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(path.join(agentDir, "agent.json"), JSON.stringify({
+      tools: { builtin_tools: {
+        qdm_query_guide: { enabled: true },
+        qdm_query: { enabled: false },
+        qdm_scope_summary: { enabled: true },
+      } },
+    }), "utf8");
+    const configFile = path.join(root, "plugin-config.json");
+    writeFileSync(configFile, JSON.stringify({
+      schema_version: 2,
+      plugin_id: "qdm-harness-qwenpaw",
+      plugin_version: "0.1.6",
+      root_context_path: path.join(root, "missing", "context.json"),
+      enabled_agents: ["harness-data-*"],
+      user_id_display_mode: "off",
+      tool_policy: "preserve",
+      qdm_query_mode: "shell_hook",
+      qdm_shell_hook_enabled: true,
+    }, null, 2) + "\n");
+    const result = runCli(["qwenpaw", "doctor", "--plugin-config-file", configFile, "--qwenpaw-working-dir", working, "--json"], repoRoot);
+    const check = JSON.parse(result.stdout).checks.find((entry) => entry.name === "tool-allowlist");
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /qdm_query_guide/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

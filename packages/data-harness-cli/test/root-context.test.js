@@ -289,6 +289,46 @@ test("structured prompt hooks auto-inject project context and do not persist ord
   }
 });
 
+test("QwenPaw hook persists report session state with its stable session key", () => {
+  const roots = makeRoots();
+  mkdirSync(path.join(roots.dataRoot, ".harness", "index"), { recursive: true });
+  const runtimeIndex = {
+    meta: {
+      resourceId: "qdm-harness-wiki",
+      resourceSchemaVersion: 1,
+      wikiContentVersion: createHash("sha256").update("qwenpaw-session-fixture").digest("hex"),
+      resourceVersion: createHash("sha256").update("qwenpaw-session-fixture").digest("hex"),
+      paths: { knowledge: ".", spec: "spec", playbooks: "playbooks", templates: "templates" },
+    },
+    docsByPath: {},
+    recall: [],
+    templateSelection: [],
+  };
+  writeFileSync(path.join(roots.dataRoot, ".harness", "index", "wikis-index.json"), `${JSON.stringify(runtimeIndex)}\n`);
+  writeFileSync(path.join(roots.dataRoot, ".harness", "index", "wikis-runtime-index.json"), `${JSON.stringify(runtimeIndex)}\n`);
+  writeRuntimeResourceManifest(roots.dataRoot, runtimeIndex);
+  const context = normalizeRootContext({
+    ...fixtureContext(roots),
+    host: "qwenpaw",
+    surface: "chat",
+    capabilities: {
+      canWriteWorkspace: false,
+      canWriteData: true,
+      hasStableSessionId: false,
+      supportsSecretReference: true,
+    },
+  });
+  const sessionID = `qwenpaw:${"f".repeat(64)}`;
+  const result = runClaudeHook(
+    context.pluginRoot,
+    JSON.stringify({ session_id: sessionID, prompt: "<skill name=\"qdm-harness\">鐢熸垚鎶ュ憡</skill>" }),
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(loadState(context, sessionID).session_id, sessionID);
+  assert.equal(existsSync(statePath(context, sessionID)), true);
+});
+
 test("Codex structured prompt hooks materialize trusted resource paths", () => {
   const roots = makeRoots();
   mkdirSync(path.join(roots.dataRoot, "config"), { recursive: true });

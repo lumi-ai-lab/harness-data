@@ -12,10 +12,11 @@ function redactSensitiveValues(value, values) {
 
 export function run(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
+    const isWindowsScript = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(String(command));
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: { ...process.env, GH_NO_UPDATE_NOTIFIER: "1", ...(options.env || {}) },
-      shell: options.shell || false,
+      shell: options.shell || isWindowsScript,
       stdio: options.stdio || "pipe"
     });
     let stdout = "";

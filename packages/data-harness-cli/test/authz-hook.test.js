@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,6 +11,8 @@ import { shellQuote } from "../src/lib/authz/metric-command.js";
 import { ExitError } from "../src/lib/exit.js";
 
 const testBlob = "qdm1enc.testblob";
+let originalWindowsAuthFixture;
+let windowsAuthFixtureInstalled = false;
 
 function writeHarnessConfig(body) {
   const root = mkdtempSync(path.join(tmpdir(), "authz-hook-"));
@@ -204,15 +206,40 @@ function qwenpawHarnessRoot() {
   const root = mkdtempSync(path.join(tmpdir(), "authz-qwenpaw-"));
   mkdirSync(path.join(root, "bin"), { recursive: true });
   mkdirSync(path.join(root, "config"), { recursive: true });
-  const metricPath = path.join(root, "bin", "qdm-metric-cli");
-  const script = `#!/bin/sh\ncase "$1" in\n  auth) printf '%s\\n' '${QWENPAW_SCOPE}';;\n  *) printf '%s\\n' '{}';;\nesac\n`;
-  writeFileSync(metricPath, script, { mode: 0o755 });
-  chmodSync(metricPath, 0o755);
+  let metricPath = path.join(root, "bin", "qdm-metric-cli");
+  if (process.platform === "win32") {
+    installWindowsAuthFixture();
+    metricPath += ".exe";
+    cpSync(process.execPath, metricPath);
+  } else {
+    const script = `#!/bin/sh\ncase "$1" in\n  auth) printf '%s\\n' '${QWENPAW_SCOPE}';;\n  *) printf '%s\\n' '{}';;\nesac\n`;
+    writeFileSync(metricPath, script, { mode: 0o755 });
+    chmodSync(metricPath, 0o755);
+  }
   writeFileSync(
     path.join(root, "config", "harness-config.yaml"),
     `paths:\n  knowledge: wikis\n\ncli:\n  qdm_metric_cli: ${metricPath}\n\nauthz:\n  mode: on\n  allow_local_blob: true\n`,
   );
   return root;
+}
+
+function installWindowsAuthFixture() {
+  if (windowsAuthFixtureInstalled) return;
+  const fixturePath = path.join(process.cwd(), "auth");
+  originalWindowsAuthFixture = existsSync(fixturePath) ? readFileSync(fixturePath) : null;
+  writeFileSync(fixturePath, `process.stdout.write(${JSON.stringify(`${QWENPAW_SCOPE}\n`)});\n`);
+  windowsAuthFixtureInstalled = true;
+  process.on("exit", () => {
+    if (originalWindowsAuthFixture == null) {
+      try {
+        unlinkSync(fixturePath);
+      } catch {
+        // The test runner may already have removed the temporary fixture.
+      }
+    } else {
+      writeFileSync(fixturePath, originalWindowsAuthFixture);
+    }
+  });
 }
 
 function qwenpawPayload(filters) {
@@ -223,13 +250,30 @@ function qwenpawPayload(filters) {
   });
 }
 
-async function runQwenPawEnvelope(root, input) {
+function qwenpawShellPayload(command, extra = {}) {
+  return JSON.stringify({
+    tool_name: "execute_shell_command",
+    dialect: extra.dialect || "bash",
+    blob: extra.blob || testBlob,
+    tool_input: { command, ...(extra.tool_input || {}) },
+  });
+}
+
+async function runAdapterEnvelopeFor(root, agent, input) {
   let out = "";
-  await runAuthzHook(root, ["--agent", "qwenpaw", "--format", "adapter-envelope"], {
+  await runAuthzHook(root, ["--agent", agent, "--format", "adapter-envelope"], {
     stdin: input,
     stdout: { write(chunk) { out += String(chunk); } },
   });
   return JSON.parse(out);
+}
+
+async function runQwenPawEnvelope(root, input) {
+  return runAdapterEnvelopeFor(root, "qwenpaw", input);
+}
+
+async function runQwenPawShellEnvelope(root, input) {
+  return runAdapterEnvelopeFor(root, "qwenpaw-shell", input);
 }
 
 test("authz-hook --agent qwenpaw allows and normalizes filters against the scope", async () => {
@@ -260,4 +304,94 @@ authz:
 `);
   const envelope = await runQwenPawEnvelope(root, qwenpawPayload(null));
   assert.equal(envelope.status, "disabled");
+});
+
+test("authz-hook --agent qwenpaw-shell allows analysis execute with updatedInput", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("qdm-metric-cli analysis execute --measures-json '[{\"metric\":\"saleAmt\"}]'"),
+  );
+  assert.equal(envelope.status, "allow");
+  assert.equal(envelope.hookOutput.permissionDecision, "allow");
+  assert.match(envelope.hookOutput.updatedInput.command, /analysis execute/);
+  assert.match(envelope.hookOutput.updatedInput.command, /--data-auth/);
+  assert.match(envelope.hookOutput.updatedInput.command, /--auth-blob ['"]?qdm1enc\.testblob/);
+});
+
+test("authz-hook --agent qwenpaw-shell replaces model-supplied authorization flags", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("qdm-metric-cli analysis execute --auth-blob 'qdm1enc.fake' --auth-json '{}' --metric saleAmt"),
+  );
+  assert.equal(envelope.status, "allow");
+  const command = envelope.hookOutput.updatedInput.command;
+  assert.doesNotMatch(command, /qdm1enc\.fake/);
+  assert.doesNotMatch(command, /--auth-json/);
+  assert.equal((command.match(/--auth-blob/g) || []).length, 1);
+  assert.match(command, /qdm1enc\.testblob/);
+});
+
+test("authz-hook --agent qwenpaw-shell allows an already authorized command unchanged", async () => {
+  const root = qwenpawHarnessRoot();
+  const dialect = process.platform === "win32" ? "cmd" : "bash";
+  const metricCli = path.join(root, "bin", process.platform === "win32" ? "qdm-metric-cli.exe" : "qdm-metric-cli");
+  const command = `${shellQuote(metricCli, dialect)} analysis execute --measures-json '[{"metric":"saleAmt"}]' --data-auth --auth-blob ${shellQuote(testBlob, dialect)}`;
+  const envelope = await runQwenPawShellEnvelope(root, qwenpawShellPayload(command, { dialect }));
+  assert.equal(envelope.status, "allow");
+  assert.equal(envelope.hookOutput.permissionDecision, "allow");
+  assert.equal(envelope.hookOutput.updatedInput.command, command);
+});
+
+test("authz-hook --agent qwenpaw-shell injects auth blob for auth describe without data-auth", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawShellEnvelope(root, qwenpawShellPayload("qdm-metric-cli auth describe"));
+  assert.equal(envelope.status, "allow");
+  assert.match(envelope.hookOutput.updatedInput.command, /auth describe/);
+  assert.match(envelope.hookOutput.updatedInput.command, /--auth-blob ['"]?qdm1enc\.testblob/);
+  assert.doesNotMatch(envelope.hookOutput.updatedInput.command, /--data-auth/);
+});
+
+test("authz-hook --agent qwenpaw-shell noops non-QDM commands without Blob validation", async () => {
+  const root = qwenpawHarnessRoot();
+  const envelope = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("echo hello", { blob: "not-a-blob" }),
+  );
+  assert.equal(envelope.status, "noop");
+});
+
+test("authz-hook --agent qwenpaw-shell denies malformed tool and dialect input", async () => {
+  const root = qwenpawHarnessRoot();
+  const unsupportedTool = await runQwenPawShellEnvelope(
+    root,
+    JSON.stringify({ tool_name: "bash", dialect: "bash", blob: testBlob, tool_input: { command: "echo hello" } }),
+  );
+  assert.equal(unsupportedTool.status, "deny");
+  assert.match(unsupportedTool.hookOutput.permissionDecisionReason, /QDM_AUTHZ_TOOL_UNSUPPORTED/);
+
+  const unsupportedDialect = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("qdm-metric-cli auth describe", { dialect: "zsh" }),
+  );
+  assert.equal(unsupportedDialect.status, "deny");
+  assert.match(unsupportedDialect.hookOutput.permissionDecisionReason, /QDM_SHELL_DIALECT_UNAVAILABLE/);
+});
+
+test("authz-hook --agent qwenpaw-shell denies invalid Blob and ambiguous commands", async () => {
+  const root = qwenpawHarnessRoot();
+  const invalidBlob = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("qdm-metric-cli auth describe", { blob: "not-a-blob" }),
+  );
+  assert.equal(invalidBlob.status, "deny");
+  assert.match(invalidBlob.hookOutput.permissionDecisionReason, /QDM_AUTHZ_BLOB_INVALID/);
+
+  const ambiguous = await runQwenPawShellEnvelope(
+    root,
+    qwenpawShellPayload("qdm-metric-cli auth describe; qdm-metric-cli auth describe"),
+  );
+  assert.equal(ambiguous.status, "deny");
+  assert.match(ambiguous.hookOutput.permissionDecisionReason, /QDM_AUTHZ_COMMAND_AMBIGUOUS/);
 });

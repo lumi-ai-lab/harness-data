@@ -1,14 +1,14 @@
 """QDM Harness 的 QwenPaw 插件入口。
 
 作用:
-- 注册 qdm_query / qdm_scope_summary 两个受限工具,只允许查询当前渠道用户
-  (企微/飞书)授权范围内的 QDM 指标;
+- Shell Hook 模式下保留 qdm_scope_summary，并通过宿主的
+  execute_shell_command 执行受授权的 QDM CLI 查询；legacy 配置仅保留读取兼容，不再注册 qdm_query;
 - 借助 qdm_runtime_hooks 注入请求身份与授权快照上下文,保证查询身份和
   授权状态一致,钩子未绑定时返回 QDM_HARNESS_HOOK_NOT_BOUND,渠道身份
   不可用时返回 QDM_CHANNEL_IDENTITY_UNAVAILABLE;
 - 宿主会把插件的钩子和工具注入到每一个 workspace,因此 enabled_agents
   作用域同时门控这两侧:命中的 Agent 拿到工具,未命中的 Agent 连工具
-  都不注册,避免留下可见但必然报错的 qdm_query;
+  都不注册,避免留下可见但必然报错的 QDM 工具;
 - 通过 workspace_created / startup 钩子及旧版重载兼容桥,在 QwenPaw 工作区
   重建或插件热重载后恢复工具与运行时状态。
 
@@ -18,6 +18,7 @@ qdm_config.py(配置加载)、qdm_runtime_hooks.py(身份/授权钩子)。
 
 from __future__ import annotations
 
+import asyncio
 from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
@@ -37,12 +38,15 @@ from qwenpaw.plugins.api import PluginApi
 from .qdm_channel_auth import ChannelAuthorizationError, ChannelAuthProvider
 from .qdm_runtime_mcp import RuntimeMcpAuthProvider
 from .qdm_cli import QdmCliError, QdmCliExecutor, QueryScope
+from .qdm_report_lifecycle import complete_qdm_report
 from .qdm_config import ConfigError, load_config
 from .qdm_debug_identity import record_reload_bridge_state
+from .qdm_shell_hook import QdmShellHookMiddleware
 from .qdm_runtime_hooks import (
     authorization_snapshot_context,
     hook_factories,
     requester_context,
+    session_key_context,
 )
 
 
@@ -166,12 +170,19 @@ def _warn_on_shared_agent(name: str) -> None:
     )
 
 
-def _sync_registered_tool_entries(agent_id: Any, workspace_dir: Any, tool_names: tuple[str, ...], enabled: bool) -> None:
+def _sync_registered_tool_entries(
+    agent_id: Any,
+    workspace_dir: Any,
+    tool_names: tuple[str, ...],
+    enabled: bool,
+    *,
+    remove_names: tuple[str, ...] = (),
+) -> None:
     """Flip host-written tool entries in an agent's own ``agent.json``.
 
     The host persists a ``builtin_tools`` entry for a plugin tool under
     whichever agent happened to be current when the plugin started, so an agent
-    that never opted in can still list ``qdm_query`` on its settings page. Only
+    that never opted in can still list a QDM tool on its settings page. Only
     workspaces that already carry our entries are rewritten — an agent without
     them is never created, read-modified or touched — and a failed write does
     not affect the runtime gating the caller already performed.
@@ -191,16 +202,19 @@ def _sync_registered_tool_entries(agent_id: Any, workspace_dir: Any, tool_names:
         entries = (data.get("tools") or {}).get("builtin_tools") if isinstance(data, dict) else None
         if not isinstance(entries, dict):
             return
-        stale = []
+        changed = False
+        for name in remove_names:
+            if name in entries:
+                del entries[name]
+                changed = True
         for name in tool_names:
             entry = entries.get(name)
             # Mirror the host's gate: a missing ``enabled`` reads as enabled.
             if isinstance(entry, dict) and bool(entry.get("enabled", True)) is not enabled:
-                stale.append(entry)
-        if not stale:
+                entry["enabled"] = enabled
+                changed = True
+        if not changed:
             return
-        for entry in stale:
-            entry["enabled"] = enabled
         content = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         with tempfile.NamedTemporaryFile(dir=agent_file.parent, delete=False) as handle:
             handle.write(content)
@@ -219,18 +233,31 @@ def _apply_agent_scope_to_workspace(workspace_info: dict[str, Any], tool_specs: 
     """Show the QDM tools on a served agent's workspace, hide them everywhere else.
 
     The host bridges plugin tools into every workspace, so hiding them here is
-    what stops the runtime-hook gate from leaving a visible-but-broken
-    ``qdm_query`` in an unrelated agent's menu.
+    what stops the runtime-hook gate from leaving a visible-but-broken QDM
+    tool in an unrelated agent's menu.
     """
     workspace = _workspace_from_info(workspace_info)
+    agent_id = workspace_info.get("agent_id")
+    names = tuple(str(spec[0]) for spec in tool_specs)
+    workspace_dir = workspace_info.get("workspace_dir") or getattr(workspace, "workspace_dir", "")
+    _sync_registered_tool_entries(
+        agent_id,
+        workspace_dir,
+        (),
+        False,
+        remove_names=("qdm_query", "qdm_query_guide"),
+    )
     if workspace is None:
         return
     tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
     if tool_registry is None:
         return
-    agent_id = workspace_info.get("agent_id")
-    names = tuple(str(spec[0]) for spec in tool_specs)
-    workspace_dir = workspace_info.get("workspace_dir") or getattr(workspace, "workspace_dir", "")
+    try:
+        for tool_name in ("qdm_query", "qdm_query_guide"):
+            if tool_name in tool_registry and hasattr(tool_registry, "unregister"):
+                tool_registry.unregister(tool_name)
+    except (TypeError, ValueError):
+        pass
     if not _agent_scope_allows(agent_id):
         for tool_name, *_unused in tool_specs:
             try:
@@ -270,9 +297,6 @@ def _apply_agent_scope_to_existing_workspaces(tool_specs: tuple) -> None:
 _LEGACY_RELOAD_BRIDGE_STATE = "_qdm_harness_reload_bridge_state"
 _PLUGIN_ID = "qdm-harness-qwenpaw"
 _AGENT_SCOPE_HOOK_NAME = "qdm_harness_apply_agent_scope"
-_QDM_TOOL_NAMES = ("qdm_query", "qdm_scope_summary")
-
-
 def _qdm_hook_names() -> set[str]:
     return {str(getattr(factory(), "name", "")) for _, factory, _ in hook_factories()}
 
@@ -294,9 +318,83 @@ def _warn_on_missing_tools(workspace: Any, agent_id: Any) -> None:
     tool_registry = getattr(getattr(workspace, "plugins", None), "tool_registry", None)
     if tool_registry is None or not _agent_scope_allows(agent_id):
         return
-    absent = [tool for tool in _QDM_TOOL_NAMES if tool not in set(tool_registry.names())]
+    absent = [tool for tool in _qdm_tool_names() if tool not in set(tool_registry.names())]
     if absent:
         logger.warning("qdm_reload_tools_missing agent=%s names=%s", agent_id, ",".join(absent))
+
+
+def _qdm_tool_names() -> tuple[str, ...]:
+    try:
+        return (
+            ("qdm_scope_summary",)
+            if _query_mode_for_registration() == "legacy"
+            else ("qdm_scope_summary", "qdm_report_stage")
+        )
+    except Exception:
+        return ("qdm_scope_summary", "qdm_report_stage")
+
+
+def _query_mode_for_registration() -> str:
+    try:
+        return getattr(load_config(), "qdm_query_mode", "legacy")
+    except ConfigError:
+        # Configuration failure must never expose the legacy public query tool.
+        return "shell_hook"
+
+
+def _qdm_shell_middleware_factory(ctx: Any, agent_config: Any) -> QdmShellHookMiddleware | None:
+    try:
+        config = load_config()
+    except ConfigError:
+        return QdmShellHookMiddleware(None, None, initialization_error="QDM_CONFIG_INVALID")
+    if not config.agent_scope.allows(getattr(ctx, "agent_id", "")):
+        return None
+    if config.qdm_query_mode != "shell_hook" or not config.qdm_shell_hook_enabled:
+        return None
+
+    dialects = set(config.qdm_shell_dialects)
+    if not config.qdm_shell_cmd_enabled:
+        dialects.discard("cmd")
+    try:
+        provider, executor = _build_shell_components(config)
+    except QdmCliError as exc:
+        provider, executor = None, None
+        initialization_error = exc.code
+    except Exception:
+        provider, executor = None, None
+        initialization_error = "QDM_RUNTIME_MCP_UNAVAILABLE"
+    else:
+        initialization_error = None
+    return QdmShellHookMiddleware(
+        provider,
+        executor,
+        session_id=str(getattr(ctx, "session_id", "")),
+        agent_id=str(getattr(ctx, "agent_id", "")),
+        allowed_dialects=dialects,
+        initialization_error=initialization_error,
+    )
+
+
+def _build_shell_components(config: Any) -> tuple[Any, QdmCliExecutor]:
+    runtime_mcp = getattr(config, "runtime_mcp", None)
+    if runtime_mcp is None or not runtime_mcp.enabled:
+        raise QdmCliError("QDM_RUNTIME_MCP_UNAVAILABLE", "Runtime MCP 未启用")
+    if not runtime_mcp.endpoint or runtime_mcp.token_file is None:
+        raise QdmCliError("QDM_RUNTIME_MCP_UNAVAILABLE", "Runtime MCP 配置不完整")
+    provider = RuntimeMcpAuthProvider(
+        runtime_mcp.endpoint,
+        runtime_mcp.token_file,
+        timeout_seconds=runtime_mcp.timeout_seconds,
+        max_response_bytes=runtime_mcp.max_response_bytes,
+    )
+    executor = QdmCliExecutor(
+        config.qdm_metric_cli,
+        harness_cli=Path(__file__).resolve().parent / "scripts" / "data-harness-cli",
+        context_file=config.root_context_path,
+        success_bytes=config.query_limits.success_bytes,
+        timeout_seconds=config.query_limits.timeout_seconds,
+    )
+    return provider, executor
 
 
 async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[str, Any]) -> set[str]:
@@ -408,43 +506,55 @@ class QdmHarnessQwenPawPlugin:
         for _hook_name, factory, _priority in runtime_hook_specs:
             register_hook(factory())
 
-        async def qdm_query(
-            metric: str,
-            start_date: str,
-            end_date: str,
-            statistic_policy: str = "SUMMARY",
-            agg_dims: list[str] | None = None,
-            filters: dict[str, list[str]] | None = None,
-            time_grain: str | None = None,
-            order_by: str | None = None,
-            page_size: int | None = None,
-            curr_page: int | None = None,
-            yoy: bool = False,
-            mom: bool = False,
-        ) -> ToolChunk:
-            """Query one handbook-defined QDM metric with structured parameters only."""
-            return _query(
-                metric=metric,
-                start_date=start_date,
-                end_date=end_date,
-                statistic_policy=statistic_policy,
-                agg_dims=agg_dims,
-                filters=filters,
-                time_grain=time_grain,
-                order_by=order_by,
-                page_size=page_size,
-                curr_page=curr_page,
-                yoy=yoy,
-                mom=mom,
-            )
+        register_middleware = getattr(api, "register_middleware", None)
+        if callable(register_middleware):
+            register_middleware(_qdm_shell_middleware_factory, priority=80)
+        else:
+            logger.warning("QwenPaw host lacks register_middleware(); Shell Hook is unavailable")
 
         async def qdm_scope_summary() -> ToolChunk:
             return _scope_summary()
 
-        tool_specs = (
-            ("qdm_query", qdm_query, True, "执行受限的 QDM 指标查询。必须使用已注入的 QDM 手册中的指标代码和参数契约；filters 是维度代码到值 ID 列表的映射。权限拒绝或参数/上游错误后不得使用完全相同参数重试；成功但无数据须与权限拒绝区分。", "📊"),
+        async def qdm_report_stage() -> ToolChunk:
+            """Complete the selected report template lifecycle for this session."""
+            if _query_mode_for_registration() != "shell_hook":
+                return _failure(QdmCliError("QDM_REPORT_MODE_UNAVAILABLE", "report stage requires Shell Hook mode"))
+            session_id = session_key_context.get()
+            if not session_id:
+                return _failure(QdmCliError("QDM_REPORT_LIFECYCLE_UNAVAILABLE", "current QwenPaw session is unavailable"))
+            try:
+                config = load_config()
+                result = await asyncio.to_thread(
+                    complete_qdm_report,
+                    config.data_harness_cli,
+                    session_id,
+                    context_file=config.root_context_path,
+                    additional_context_bytes=config.report_limits.additional_context_bytes,
+                    timeout_seconds=config.report_hook_timeout_seconds,
+                )
+            except ConfigError:
+                return _failure(QdmCliError("QDM_CONFIG_INVALID", "QDM plugin configuration is invalid"))
+            except Exception:
+                logger.exception("qdm_report_stage_failed")
+                return _failure(QdmCliError("QDM_REPORT_LIFECYCLE_UNAVAILABLE", "QDM report lifecycle is unavailable"))
+            if not result.ok:
+                return _failure(QdmCliError(result.diagnostic_code or "QDM_REPORT_LIFECYCLE_UNAVAILABLE", "QDM report lifecycle did not complete"))
+            return _success(result.additional_context)
+
+        tool_specs = [
             ("qdm_scope_summary", qdm_scope_summary, True, "返回当前渠道用户的脱敏 QDM 数据权限摘要。后续查询必须原样使用摘要中的维度代码（例如 authz-v2 的 sapArea2Id），不得擅自替换为旧维度名。", "🔐"),
-        )
+        ]
+        if _query_mode_for_registration() == "shell_hook":
+            tool_specs.append(
+                (
+                    "qdm_report_stage",
+                    qdm_report_stage,
+                    True,
+                    "完成当前 QwenPaw 报告模式的模板阶段；仅使用当前会话已选择的模板，不接受授权参数或模板路径。",
+                    "📄",
+                )
+            )
+        tool_specs = tuple(tool_specs)
         for tool_name, tool_func, enabled, description, icon in tool_specs:
             api.register_tool(tool_name=tool_name, tool_func=tool_func, description=description, icon=icon, enabled=enabled, tool_type="internal")
         register_ws_hook = getattr(api, "register_workspace_created_hook", None)
@@ -485,7 +595,7 @@ class QdmHarnessQwenPawPlugin:
                 )
         elif not callable(register_ws_hook):
             _install_legacy_reload_bridge()
-        logger.info("QDM Harness runtime hooks and constrained tools registered")
+        logger.info("QDM Harness runtime hooks, Shell middleware and constrained tools registered")
 
 
 _SUPPORTED_QWENPAW_MAJOR_MINOR = frozenset({(2, 1), (2, 2)})

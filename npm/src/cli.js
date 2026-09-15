@@ -23,11 +23,11 @@ function parse(argv) {
     }
     const [rawKey, inline] = arg.slice(2).split("=", 2);
     const key = rawKey.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly", "runtimeMcpDisabled", "skipRuntimeMcpCheck"].includes(key)) {
+    if (["yes", "skipWikisCheck", "check", "json", "dataAuth", "noAuth", "skipMetricCli", "downloadMetricCli", "skipWikis", "channelAuthOnly", "runtimeMcpDisabled", "skipRuntimeMcpCheck", "qdmShellHookEnabled", "qdmShellCmdEnabled"].includes(key)) {
       options[key] = inline === undefined ? true : inline !== "false";
     } else {
       const value = inline ?? args[++i];
-      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace", "enabledAgents"].includes(key)) {
+      if (["workspaceAllowlist", "allowedWorkspace", "enableWorkspace", "enabledAgents", "qdmShellDialects"].includes(key)) {
         options[key] = Array.isArray(options[key]) ? [...options[key], value] : [value];
       } else {
         options[key] = value;
@@ -105,7 +105,7 @@ Root Context options (setup/doctor/paths/report):
   --runtime-mcp-disabled              Explicitly use legacy channel-auth.json mode
   --skip-runtime-mcp-check            Skip setup connectivity probe (offline staging only)
   --enabled-agents PATTERN           QwenPaw only: agent id or wildcard (harness-data-*, *) allowed to activate the plugin; repeatable (default: harness-data-*)
-  --tool-policy POLICY               QwenPaw only: preserve (default, host tools untouched) or strict (in-scope agents keep only qdm_query, qdm_scope_summary, get_current_time)
+  --tool-policy POLICY               QwenPaw only: preserve (default, host tools untouched) or strict (in-scope agents keep the query-mode tool set)
 
 Report options:
   report <start|status|advance|approve|retry|cancel|stop> --session ID

@@ -112,33 +112,50 @@ class QdmCliExecutor:
         scope, _ = self.authorize(blob, {})
         return scope
 
+    def authorize_shell(
+        self,
+        *,
+        dialect: str,
+        command: str,
+        blob: str,
+        request: Mapping[str, Any] | None = None,
+    ) -> str | None:
+        """Authorize a QwenPaw Shell command without executing it.
+
+        ``None`` means the command is not a QDM authorization target and must
+        be passed back to the host unchanged.  A returned string is the only
+        command the host may execute.
+        """
+        payload: dict[str, Any] = {
+            "tool_name": "execute_shell_command",
+            "dialect": dialect,
+            "tool_input": {"command": command},
+            "blob": blob,
+        }
+        if request:
+            payload["request"] = dict(request)
+        status, hook_output = self._run_adapter(payload, "qwenpaw-shell")
+        if status == "disabled":
+            raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "当前用户没有 QDM 数据查询权限")
+        if status == "noop":
+            return None
+        if status == "deny":
+            reason = str(hook_output.get("permissionDecisionReason") or "QDM_AUTHZ_DENIED: 请求被拒绝")
+            code, _, message = reason.partition(": ")
+            raise QdmCliError(code or "QDM_AUTHZ_DENIED", message or reason)
+        if status != "allow" or hook_output.get("permissionDecision") != "allow":
+            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效")
+        updated_input = hook_output.get("updatedInput")
+        if not isinstance(updated_input, Mapping) or not isinstance(updated_input.get("command"), str):
+            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务未返回改写后的命令")
+        return str(updated_input["command"])
+
     def authorize(self, blob: str, query: Mapping[str, Any], *, scope: QueryScope | None = None) -> tuple[QueryScope, dict[str, list[str]] | None]:
         """Ask the JS authz-hook for the decision, scope and normalized filters."""
-        harness = self._harness_cli
-        if harness is None or harness.is_symlink() or not harness.is_file() or (os.name != "nt" and not harness.stat().st_mode & stat.S_IXUSR):
-            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")
-        payload = {"tool_name": "qdm_query", "tool_input": dict(query), "blob": blob}
-        env = {key: value for key, value in os.environ.items() if key not in SENSITIVE_ENVIRONMENT}
-        argv = cli_command(harness)
-        if self._context_file is not None:
-            if self._context_file.is_symlink() or not self._context_file.is_file():
-                raise QdmCliError("QDM_CONTEXT_UNAVAILABLE", "Root Context 不可用")
-            argv += ["--context-file", str(self._context_file)]
-        argv += ["authz-hook", "--agent", "qwenpaw", "--format", "adapter-envelope"]
-        try:
-            result = subprocess.run(argv, input=json.dumps(payload), cwd=str(harness.parent.parent), shell=False, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self._timeout_seconds, env=env)
-        except subprocess.TimeoutExpired as exc:
-            raise QdmCliError("QDM_CLI_TIMEOUT", "QDM 查询超时") from exc
-        except OSError as exc:
-            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用") from exc
-        if result.returncode != 0:
-            raise QdmCliError("QDM_AUTHZ_UNAVAILABLE", "授权服务不可用")
-        try:
-            envelope: Any = json.loads(result.stdout)
-            status = envelope["status"]
-            hook_output = envelope.get("hookOutput") or {}
-        except (KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效") from exc
+        status, hook_output = self._run_adapter(
+            {"tool_name": "qdm_query", "tool_input": dict(query), "blob": blob},
+            "qwenpaw",
+        )
         if status == "disabled":
             raise QdmCliError("QDM_AUTH_CAPABILITY_DENIED", "当前用户没有 QDM 数据查询权限")
         if status == "deny":
@@ -153,6 +170,53 @@ class QdmCliExecutor:
         authorized_scope = _parse_scope(hook_output.get("scope") or {}, scope)
         normalized = _parse_normalized_filters(hook_output.get("normalizedFilters"))
         return authorized_scope, normalized
+
+    def _run_adapter(self, payload: Mapping[str, Any], agent: str) -> tuple[str, Mapping[str, Any]]:
+        harness = self._harness_cli
+        if harness is None or harness.is_symlink() or not harness.is_file() or (os.name != "nt" and not harness.stat().st_mode & stat.S_IXUSR):
+            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用")
+        env = {key: value for key, value in os.environ.items() if key not in SENSITIVE_ENVIRONMENT}
+        argv = cli_command(harness)
+        if self._context_file is not None:
+            if self._context_file.is_symlink() or not self._context_file.is_file():
+                raise QdmCliError("QDM_CONTEXT_UNAVAILABLE", "Root Context 不可用")
+            argv += ["--context-file", str(self._context_file)]
+        argv += ["authz-hook", "--agent", agent, "--format", "adapter-envelope"]
+        try:
+            result = subprocess.run(
+                argv,
+                input=json.dumps(payload, ensure_ascii=False),
+                cwd=str(harness.parent.parent),
+                shell=False,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self._timeout_seconds,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise QdmCliError("QDM_CLI_TIMEOUT", "QDM 查询超时") from exc
+        except OSError as exc:
+            raise QdmCliError("QDM_CLI_UNAVAILABLE", "QDM CLI 不可用") from exc
+        if result.returncode != 0:
+            raise QdmCliError("QDM_AUTHZ_UNAVAILABLE", "授权服务不可用")
+        try:
+            envelope: Any = json.loads(result.stdout)
+            if not isinstance(envelope, Mapping) or envelope.get("schemaVersion") != 1:
+                raise TypeError("unsupported adapter envelope schema")
+            status = str(envelope["status"])
+            if status not in {"disabled", "noop", "allow", "deny"}:
+                raise ValueError("unsupported adapter envelope status")
+            hook_output: Any = envelope.get("hookOutput") or {}
+            if isinstance(hook_output, Mapping) and isinstance(hook_output.get("hookSpecificOutput"), Mapping):
+                hook_output = hook_output["hookSpecificOutput"]
+            if not isinstance(hook_output, Mapping):
+                raise TypeError("hookOutput is not an object")
+        except (KeyError, TypeError, json.JSONDecodeError, ValueError) as exc:
+            raise QdmCliError("QDM_AUTHZ_PROTOCOL_INVALID", "授权服务响应无效") from exc
+        return status, hook_output
 
     def scope_summary(self, blob: str) -> dict[str, Any]:
         scope, _ = self.authorize(blob, {})
