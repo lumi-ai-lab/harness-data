@@ -95,6 +95,44 @@ class AgentIdContractTests(unittest.TestCase):
                 os.environ["QWENPAW_QDM_AGENT_ID"] = previous
 
 
+class ShellExecutableTests(unittest.TestCase):
+    def test_default_shell_fills_an_empty_agent_setting(self) -> None:
+        previous = os.environ.get(MODULE.DEFAULT_SHELL_ENV)
+        os.environ[MODULE.DEFAULT_SHELL_ENV] = "/bin/bash"
+        agent = SimpleNamespace(running=SimpleNamespace(shell_command_executable=""))
+        try:
+            self.assertTrue(MODULE.apply_default_shell_command_executable(agent))
+        finally:
+            if previous is None:
+                os.environ.pop(MODULE.DEFAULT_SHELL_ENV, None)
+            else:
+                os.environ[MODULE.DEFAULT_SHELL_ENV] = previous
+        self.assertEqual(agent.running.shell_command_executable, "/bin/bash")
+
+    def test_default_shell_does_not_override_an_explicit_agent_setting(self) -> None:
+        previous = os.environ.get(MODULE.DEFAULT_SHELL_ENV)
+        os.environ[MODULE.DEFAULT_SHELL_ENV] = "/bin/bash"
+        agent = SimpleNamespace(running=SimpleNamespace(shell_command_executable="/bin/zsh"))
+        try:
+            self.assertFalse(MODULE.apply_default_shell_command_executable(agent))
+        finally:
+            if previous is None:
+                os.environ.pop(MODULE.DEFAULT_SHELL_ENV, None)
+            else:
+                os.environ[MODULE.DEFAULT_SHELL_ENV] = previous
+        self.assertEqual(agent.running.shell_command_executable, "/bin/zsh")
+
+    def test_no_deployment_default_leaves_the_agent_unchanged(self) -> None:
+        previous = os.environ.pop(MODULE.DEFAULT_SHELL_ENV, None)
+        agent = SimpleNamespace(running=SimpleNamespace(shell_command_executable=""))
+        try:
+            self.assertFalse(MODULE.apply_default_shell_command_executable(agent))
+        finally:
+            if previous is not None:
+                os.environ[MODULE.DEFAULT_SHELL_ENV] = previous
+        self.assertEqual(agent.running.shell_command_executable, "")
+
+
 class ToolPolicyTests(unittest.TestCase):
     """apply_strict_tool_policy 的纯文件级行为, 与插件 _configure_allowlist 对齐。"""
 

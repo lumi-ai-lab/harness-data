@@ -22,6 +22,21 @@ from .qdm_runtime_hooks import authorization_snapshot_context, requester_context
 QDM_SHELL_TOOL_NAME = "execute_shell_command"
 _QDM_EXECUTABLE = re.compile(r"(?i)qdm-metric-cli(?:\.exe)?")
 _QDM_OPERATION = re.compile(r"(?is)\b(?:analysis\s+execute|auth\s+describe)\b")
+_QDM_CLI_TOKEN = re.compile(
+    r"""(?ix)
+    (?:
+        qdm-metric-cli(?:\.exe)?
+        | \${?QDM_METRIC_CLI(?::-[^}]*)?}?
+        | (?:
+            [A-Za-z]:[\\/]
+            | \.{1,2}[\\/]
+            | /
+            | (?:[^/\\;|&'"\r\n]+[\\/])+
+          )
+          [^;|&'"\r\n]*[\\/]qdm-metric-cli(?:\.exe)?
+    )
+    """
+)
 _DIALECTS = frozenset({"bash", "powershell", "cmd"})
 _SAFE_MESSAGES = {
     "QDM_CONFIG_INVALID": "QDM 插件配置无效",
@@ -181,10 +196,108 @@ def _normalize_tool_input(tool_call: Any) -> tuple[Mapping[str, Any], bool]:
 
 def looks_like_qdm_command(command: str) -> bool:
     """Conservatively identify the QDM command shapes handled by the adapter."""
-    # A broad positive match intentionally sends ambiguous command text to the
-    # adapter, which can reject it. Missing a path-qualified or quoted QDM
-    # executable would incorrectly let the original command bypass the hook.
-    return bool(_QDM_EXECUTABLE.search(command) and _QDM_OPERATION.search(command))
+    # Keep the Python prefilter aligned with the Node adapter: ordinary quoted
+    # text and HereDoc bodies are masked, while a quoted CLI token remains
+    # visible for the operation check.
+    masked = _mask_non_command_regions(command)
+    return bool(_QDM_EXECUTABLE.search(masked) and _QDM_OPERATION.search(masked))
+
+
+def _mask_non_command_regions(command: str) -> str:
+    chars = list(command)
+    length = len(chars)
+
+    def space_out(start: int, end: int) -> None:
+        for index in range(start, min(end, length)):
+            if chars[index] not in {"\n", "\r"}:
+                chars[index] = " "
+
+    def heredoc_at(index: int) -> tuple[int, str] | None:
+        match = re.match(r"<<-?\s*(?:(['\"])([A-Za-z_][A-Za-z0-9_]*)\1|([A-Za-z_][A-Za-z0-9_]*))", "".join(chars[index:]))
+        if not match:
+            return None
+        tag = match.group(2) or match.group(3)
+        body_start = index + match.end()
+        while body_start < length and chars[body_start] != "\n":
+            body_start += 1
+        if body_start < length:
+            body_start += 1
+        cursor = body_start
+        while cursor < length:
+            line_start = cursor
+            while line_start < length and chars[line_start] == "\t":
+                line_start += 1
+            if "".join(chars[line_start:line_start + len(tag)]) == tag:
+                after = line_start + len(tag)
+                if after >= length or chars[after] in {"\n", "\r"}:
+                    return body_start, line_start
+            while cursor < length and chars[cursor] != "\n":
+                cursor += 1
+            if cursor < length:
+                cursor += 1
+        return body_start, length
+
+    index = 0
+    while index < length:
+        if chars[index] == "<" and index + 1 < length and chars[index + 1] == "<":
+            region = heredoc_at(index)
+            if region is not None:
+                space_out(*region)
+                index = region[1]
+                continue
+
+        if chars[index] == "'":
+            end = index + 1
+            while end < length and chars[end] != "'":
+                end += 1
+            if end >= length:
+                space_out(index + 1, length)
+                break
+            inner = "".join(chars[index + 1:end])
+            if not _is_metric_cli_token(inner):
+                space_out(index + 1, end)
+            index = end + 1
+            continue
+
+        if chars[index] == "$" and index + 1 < length and chars[index + 1] == "'":
+            end = index + 2
+            while end < length:
+                if chars[end] == "\\" and end + 1 < length:
+                    end += 2
+                    continue
+                if chars[end] == "'":
+                    break
+                end += 1
+            if end >= length:
+                space_out(index + 2, length)
+                break
+            space_out(index + 2, end)
+            index = end + 1
+            continue
+
+        if chars[index] == '"':
+            end = index + 1
+            while end < length:
+                if chars[end] == "\\" and end + 1 < length:
+                    end += 2
+                    continue
+                if chars[end] == '"':
+                    break
+                end += 1
+            if end >= length:
+                space_out(index + 1, length)
+                break
+            inner = "".join(chars[index + 1:end])
+            if not _is_metric_cli_token(inner):
+                space_out(index + 1, end)
+            index = end + 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _is_metric_cli_token(value: str) -> bool:
+    return bool(_QDM_CLI_TOKEN.fullmatch(value.strip()))
 
 
 def shell_dialect() -> str | None:

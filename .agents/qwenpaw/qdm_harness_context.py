@@ -44,9 +44,13 @@ values. Never call `data-harness-cli stage template` or `inject-template`
 through `execute_shell_command`; those commands do not perform template
 injection in QwenPaw.
 Use one `--measures-json` array for both single-metric and multi-metric queries;
-the single-metric form still contains exactly one Measure object. For permission
-or scope questions, call `qdm_scope_summary` or use the trusted QDM Shell
-authorization path. Never generate or request Blob, Secret, authorization file
+the single-metric form still contains exactly one Measure object. When using
+`--measures-json`, do not also pass global `--statistic-policy`, `--metric`, or
+`--measure-filter`; put `statisticPolicy` on each Measure. Do not append output
+pipelines such as `| head` to `analysis execute`; let the command return its
+complete output and exit status. For permission or scope questions, call
+`qdm_scope_summary` or use the trusted QDM Shell authorization path.
+Never generate or request Blob, Secret, authorization file
 contents, CLI paths, environment variables, or authentication flags. Do not
 split a batch into multiple QDM Shell calls, estimate values, or replace IDs
 returned by the CLI. The permission summary returned by `qdm_scope_summary` is
