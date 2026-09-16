@@ -98,11 +98,6 @@ export function maskQuotedAndHeredocRegions(command) {
       if (chars[k] !== "\n" && chars[k] !== "\r") chars[k] = " ";
     }
   };
-  const isProtectedVarQuote = (inner) => /^\s*\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?\s*$/.test(inner);
-  const isWindowsMetricCLIPath = (inner) => {
-    if (!WINDOWS) return false;
-    return /^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|\/)[^\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$/i.test(inner.trim());
-  };
 
   let i = 0;
   while (i < n) {
@@ -153,7 +148,7 @@ export function maskQuotedAndHeredocRegions(command) {
       while (j < n && chars[j] !== "'") j += 1;
       if (j < n) {
         const inner = chars.slice(i + 1, j).join("");
-        if (!isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner)) spaceOut(i + 1, j);
+        if (!isMetricCLIToken(inner)) spaceOut(i + 1, j);
         i = j + 1;
         continue;
       }
@@ -192,7 +187,7 @@ export function maskQuotedAndHeredocRegions(command) {
       }
       if (j < n) {
         const inner = chars.slice(i + 1, j).join("");
-        if (!isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) && !isCMDWrapperCommandQuote(chars, i)) {
+        if (!isMetricCLIToken(inner) && !isCMDWrapperCommandQuote(chars, i)) {
           spaceOut(i + 1, j);
         }
         i = j + 1;
@@ -204,6 +199,17 @@ export function maskQuotedAndHeredocRegions(command) {
     i += 1;
   }
   return chars.join("");
+}
+
+function isMetricCLIToken(inner) {
+  const value = String(inner || "").trim();
+  if (isProtectedMetricCLIVariable(value)) return true;
+  if (/^qdm-metric-cli(?:\.exe)?$/i.test(value)) return true;
+  return /^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|\/|(?:[^/\\;|&'"\r\n]+[/\\])+)[^;|&'"\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$/i.test(value);
+}
+
+function isProtectedMetricCLIVariable(value) {
+  return /^\s*\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?\s*$/.test(value);
 }
 
 function isCMDWrapperCommandQuote(chars, quoteIndex) {
@@ -337,7 +343,11 @@ export function rewriteGatedMetricCommands(command, blob, metricCliPath, dialect
     if ((invocation.kind === "analysis" && dataAuthCount !== 1) || (invocation.kind === "describe" && dataAuthCount !== 0)) {
       throw new Error("gated invocation has invalid data-auth flags");
     }
-    rewritten = rewritten.slice(0, invocation.start) + replacement + rewritten.slice(invocation.end);
+    const tail = rewritten.slice(invocation.end);
+    // The replacement ends with a quoted blob; keep a following redirect or
+    // control operator in a separate shell token (for example, `2>&1`).
+    const boundary = tail && !/^\s/.test(tail) ? " " : "";
+    rewritten = rewritten.slice(0, invocation.start) + replacement + boundary + tail;
   }
   return rewritten;
 }
@@ -389,10 +399,33 @@ function findMetricInvocations(command) {
 }
 
 function metricInvocationEnd(skeleton, from) {
-  const tail = skeleton.slice(from);
-  const operator = /\s*(?:\|\||&&|[|;]|[0-9]*>|&>|\n)/m.exec(tail);
-  if (!operator) return skeleton.length;
-  return from + operator.index;
+  for (let index = from; index < skeleton.length; index += 1) {
+    const current = skeleton[index];
+    if (current === "\r" || current === "\n") {
+      if (isEscapedLineBreak(skeleton, index)) {
+        if (current === "\r" && skeleton[index + 1] === "\n") index += 1;
+        continue;
+      }
+      return index;
+    }
+    if (current === "|" || current === ";" || current === "&") {
+      if (current === "|" && skeleton[index + 1] === "|") return index;
+      if (current === "&" && (skeleton[index + 1] === "&" || skeleton[index + 1] === ">")) return index;
+      return index;
+    }
+    if (current === ">" || (current >= "0" && current <= "9" && skeleton[index + 1] === ">")) {
+      return index;
+    }
+  }
+  return skeleton.length;
+}
+
+function isEscapedLineBreak(text, index) {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
 }
 
 export function insertFlagsBeforeShellTail(command, flags, anchorWord) {

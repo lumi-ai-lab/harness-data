@@ -17,6 +17,8 @@
    shell/文件工具）；strict 时收窄到 3 个 QDM 工具（保留历史授权边界，需显式
    配置）。持久卷升级时本脚本运行期新建/已有的 Agent 每次启动幂等重放，保证
    与构建期 seed 的工具面一致。
+5. 在部署明确声明默认 Shell 时，为 QDM Agent 补齐空的
+   `running.shell_command_executable`。仅填充空值，不覆盖运维已经选择的 Shell。
 
 任何一步无法完成都返回退出码 78，在 QwenPaw 主进程启动前快速失败。
 """
@@ -34,6 +36,7 @@ import tempfile
 DEFAULT_QDM_AGENT_ID = "harness-data-default"
 LEGACY_SHARED_AGENT_ID = "default"
 QDM_AGENT_NAME = "QDM 数据助手"
+DEFAULT_SHELL_ENV = "QWENPAW_DEFAULT_SHELL_COMMAND_EXECUTABLE"
 # 插件只从这两个渠道解析请求身份，所以只搬这两个；`console` 尤其要留在原处，
 # 否则运维在 Web 控制台里连自己的 Agent 都聊不了。
 MANAGED_CHANNEL_NAMES = ("wecom", "feishu")
@@ -264,6 +267,26 @@ def qdm_agent_id() -> str:
     return value or DEFAULT_QDM_AGENT_ID
 
 
+def configured_default_shell_command_executable() -> str:
+    """Return the deployment-declared default Shell executable, if any."""
+    return os.environ.get(DEFAULT_SHELL_ENV, "").strip()
+
+
+def apply_default_shell_command_executable(agent: object) -> bool:
+    """Fill an empty Agent Shell executable without overriding explicit config."""
+    executable = configured_default_shell_command_executable()
+    if not executable:
+        return False
+    running = getattr(agent, "running", None)
+    if running is None:
+        raise RuntimeError("agent running config is unavailable")
+    current = getattr(running, "shell_command_executable", "")
+    if isinstance(current, str) and current.strip():
+        return False
+    running.shell_command_executable = executable
+    return True
+
+
 def channel_enabled(channels: object, name: str) -> bool:
     """Read ``channels.<name>.enabled``; absent config blocks read as disabled.
 
@@ -333,6 +356,12 @@ def ensure() -> list[str]:
         actions.append(f"created agent {agent_id}")
 
     target = load_agent_config(agent_id)
+    target_changed = False
+    if apply_default_shell_command_executable(target):
+        target_changed = True
+        actions.append(
+            f"default shell executable -> {configured_default_shell_command_executable()}",
+        )
     if LEGACY_SHARED_AGENT_ID in load_config().agents.profiles:
         legacy = load_agent_config(LEGACY_SHARED_AGENT_ID)
         moveable, conflicting = plan_channel_moves(legacy.channels, target.channels)
@@ -343,7 +372,10 @@ def ensure() -> list[str]:
             apply_channel_moves(legacy.channels, target.channels, moveable)
             save_agent_config(LEGACY_SHARED_AGENT_ID, legacy)
             save_agent_config(agent_id, target)
+            target_changed = False
             actions.append(f"moved {', '.join(moveable)} from {LEGACY_SHARED_AGENT_ID} to {agent_id}")
+    if target_changed:
+        save_agent_config(agent_id, target)
 
     config = load_config()
     if config.agents.active_agent == LEGACY_SHARED_AGENT_ID:

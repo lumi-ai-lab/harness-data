@@ -111,9 +111,14 @@ class ShellHookMiddlewareTests(unittest.TestCase):
 
     def test_path_qualified_qdm_commands_are_detected_conservatively(self) -> None:
         self.assertTrue(looks_like_qdm_command("/opt/qdm/bin/qdm-metric-cli analysis execute --measures-json []"))
+        self.assertTrue(looks_like_qdm_command("'/opt/qdm/bin/qdm-metric-cli' analysis execute --measures-json '[]'"))
+        self.assertTrue(looks_like_qdm_command('"/opt/qdm/bin/qdm-metric-cli" auth describe'))
         self.assertTrue(looks_like_qdm_command("& 'D:\\QDM\\bin\\qdm-metric-cli.exe' analysis execute --measures-json '[]'"))
         self.assertTrue(looks_like_qdm_command("D:\\QDM\\bin\\qdm-metric-cli.exe auth describe"))
         self.assertFalse(looks_like_qdm_command("echo qdm-metric-cli --help"))
+        self.assertFalse(looks_like_qdm_command('echo "qdm-metric-cli analysis execute"'))
+        self.assertFalse(looks_like_qdm_command("git commit -m 'qdm-metric-cli analysis execute'"))
+        self.assertFalse(looks_like_qdm_command("cat <<EOF\nqdm-metric-cli auth describe\nEOF"))
 
     def test_allow_rewrites_command_and_calls_next_handler_once(self) -> None:
         provider = _Provider()

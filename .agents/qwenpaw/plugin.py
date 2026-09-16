@@ -417,6 +417,26 @@ async def _run_legacy_workspace_callbacks(registry: Any, workspace_info: dict[st
     return replayed
 
 
+def _host_replays_workspace_created_hooks(registry: Any, manager: Any) -> bool:
+    """Return whether the host reliably replays workspace hooks after reload.
+
+    QwenPaw 2.1 exposes ``register_workspace_created_hook`` even in builds
+    whose ``reload_agent`` implementation does not replay those hooks.  The
+    registration API alone is therefore not a sufficient capability check.
+    Prefer an explicit host setup-hook API when available; otherwise recognize
+    the QwenPaw manager implementation that calls its workspace-hook dispatcher
+    from ``reload_agent``.  Unknown implementations fail closed and retain the
+    compatibility bridge.
+    """
+    if callable(getattr(registry, "get_workspace_setup_hooks", None)):
+        return True
+
+    reload_agent = getattr(manager, "reload_agent", None)
+    implementation = getattr(reload_agent, "__func__", reload_agent)
+    code = getattr(implementation, "__code__", None)
+    return "_fire_workspace_created_hooks" in getattr(code, "co_names", ())
+
+
 def _install_legacy_reload_bridge(
     *,
     registry: Any | None = None,
@@ -424,11 +444,11 @@ def _install_legacy_reload_bridge(
     """Backport plugin-state reinjection for QwenPaw 2.1 zero-downtime reloads.
 
     QwenPaw 2.1 rebuilds a Workspace after channel/agent configuration changes
-    but does not run workspace-created plugin hooks for that replacement.  The
-    globally exported tool functions remain visible while the request identity
-    hooks disappear, causing every real channel query to fail with
-    QDM_HARNESS_HOOK_NOT_BOUND.  Newer hosts expose workspace setup hooks and do
-    not need this compatibility bridge.
+    but some builds do not run workspace-created plugin hooks for that
+    replacement.  The globally exported tool functions remain visible while
+    the request identity hooks disappear, causing every real channel query to
+    fail with QDM_HARNESS_HOOK_NOT_BOUND.  Hosts that explicitly provide a
+    reliable reload replay path do not need this compatibility bridge.
     """
     if registry is None:
         try:
@@ -438,13 +458,14 @@ def _install_legacy_reload_bridge(
         except Exception:
             record_reload_bridge_state("unavailable")
             return False
-    if callable(getattr(registry, "get_workspace_setup_hooks", None)):
-        record_reload_bridge_state("not_needed")
-        return False
     manager = getattr(registry, "get_workspace_manager", lambda: None)()
     if manager is None or not callable(getattr(manager, "reload_agent", None)):
         logger.warning("QwenPaw 2.1 reload bridge unavailable: workspace manager not ready")
         record_reload_bridge_state("unavailable")
+        return False
+    if _host_replays_workspace_created_hooks(registry, manager):
+        logger.info("QDM reload bridge not needed: host replays workspace-created hooks")
+        record_reload_bridge_state("not_needed")
         return False
 
     existing = getattr(manager, _LEGACY_RELOAD_BRIDGE_STATE, None)
@@ -584,16 +605,18 @@ class QdmHarnessQwenPawPlugin:
                 callback=lambda: _apply_agent_scope_to_existing_workspaces(tool_specs),
                 priority=90,
             )
-            # Hosts exposing workspace_created already replay workspace state
-            # during reload; installing the legacy manager wrapper there would
-            # replay the same hooks a second time and create ordering cycles.
-            if not callable(register_ws_hook):
-                register_startup_hook(
-                    hook_name="qdm_harness_install_reload_bridge",
-                    callback=_install_legacy_reload_bridge,
-                    priority=95,
-                )
-        elif not callable(register_ws_hook):
+            # The workspace-created registration API is present in QwenPaw
+            # 2.1.x even when reload_agent does not replay its callbacks.
+            # Let the bridge inspect the actual host lifecycle and skip itself
+            # only when native replay is verified.
+            register_startup_hook(
+                hook_name="qdm_harness_install_reload_bridge",
+                callback=_install_legacy_reload_bridge,
+                priority=95,
+            )
+        else:
+            # There is no later startup phase in older hosts.  Try the bridge
+            # immediately; it remains a no-op when the manager is unavailable.
             _install_legacy_reload_bridge()
         logger.info("QDM Harness runtime hooks, Shell middleware and constrained tools registered")
 

@@ -18,6 +18,11 @@ generate multiple QDM Shell calls for one batch. Keep the Measure order,
 measure-level filters, shared date range, output dimensions, and top-level
 filters exactly as requested and supported by the handbook.
 
+When using `--measures-json`, do not also pass global `--statistic-policy`,
+`--metric`, or `--measure-filter`; put `statisticPolicy` on each Measure.
+Do not append output pipelines such as `| head`; let the command return its
+complete output and exit status.
+
 Do not pass or probe Blob values, secret files, CLI paths, environment variables,
 or authentication flags. Do not use the old `--metric` form for Shell Hook
 queries. Do not estimate data, perform a second calculation across metrics, or

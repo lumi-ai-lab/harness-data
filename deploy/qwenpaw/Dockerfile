@@ -125,6 +125,7 @@ ENV TZ=Asia/Shanghai \
   LC_ALL=C.UTF-8 \
   PYTHONUNBUFFERED=1 \
   PIP_DISABLE_PIP_VERSION_CHECK=1 \
+  QWENPAW_DEFAULT_SHELL_COMMAND_EXECUTABLE=/bin/bash \
   QWENPAW_WORKING_DIR=/app/working \
   QWENPAW_SECRET_DIR=/app/working.secret \
   QWENPAW_BACKUP_DIR=/app/working.backups \
@@ -143,6 +144,7 @@ ENV TZ=Asia/Shanghai \
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
   ca-certificates \
+  bash \
   curl \
   fontconfig \
   fonts-dejavu-core \

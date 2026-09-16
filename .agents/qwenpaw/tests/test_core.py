@@ -963,6 +963,7 @@ class ToolBoundaryTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.tools: dict[str, object] = {}
                 self.workspace_hooks: list = []
+                self.startup_hooks: list = []
 
             def register_runtime_hook(self, _hook: object = None, **_kwargs: object) -> None:
                 pass
@@ -973,11 +974,18 @@ class ToolBoundaryTests(unittest.TestCase):
             def register_workspace_created_hook(self, **kwargs: object) -> None:
                 self.workspace_hooks.append(kwargs)
 
+            def register_startup_hook(self, **kwargs: object) -> None:
+                self.startup_hooks.append(kwargs)
+
         api = Api()
         with patch.object(PLUGIN_MODULE, "load_config", return_value=_scoped_config(("harness-data-*",), qdm_query_mode="legacy")):
             QdmHarnessQwenPawPlugin().register(api)  # type: ignore[arg-type]
         self.assertEqual(len(api.workspace_hooks), 1)
         self.assertTrue(api.workspace_hooks[0]["reload_safe"])
+        self.assertEqual(
+            [hook["hook_name"] for hook in api.startup_hooks],
+            ["qdm_harness_apply_agent_scope_startup", "qdm_harness_install_reload_bridge"],
+        )
 
         # A replacement workspace (zero-downtime reload) starts with an empty
         # ToolRegistry; the reload-safe hook must restore the qdm tools, but only
@@ -1252,6 +1260,23 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertEqual(len(api.workspace_hooks), 1)
         self.assertNotIn("reload_safe", api.workspace_hooks[0])
         self.assertEqual(api.workspace_hooks[0]["hook_name"], "qdm_harness_apply_agent_scope")
+
+    def test_reload_bridge_skips_when_host_replays_workspace_hooks_natively(self) -> None:
+        class NativeManager:
+            async def reload_agent(self, agent_id: str) -> bool:
+                await self._fire_workspace_created_hooks({"agent_id": agent_id})
+                return True
+
+        class Registry:
+            def __init__(self) -> None:
+                self.manager = NativeManager()
+
+            def get_workspace_manager(self) -> NativeManager:
+                return self.manager
+
+        registry = Registry()
+        self.assertFalse(PLUGIN_MODULE._install_legacy_reload_bridge(registry=registry))
+        self.assertFalse(hasattr(registry.manager, PLUGIN_MODULE._LEGACY_RELOAD_BRIDGE_STATE))
 
     def test_authorization_snapshot_reuse_keeps_the_executor_available(self) -> None:
         """A reused scope must never come back without live components."""
