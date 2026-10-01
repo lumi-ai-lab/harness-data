@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   injectAuthDescribeBlob,
   injectDataAuth,
+  insertFlagsBeforeShellTail,
   isMetricAuthzGatedCommand,
   metricInvocationCount,
   rewriteGatedMetricCommands,
@@ -93,6 +98,8 @@ test("rewriteGatedMetricCommands keeps Bash continuation lines in one invocation
   assert.match(got, /--start-date 2026-09-14/);
   assert.match(got, /--end-date 2026-09-14/);
   assert.match(got, /--measures-json '\[\]'/);
+  assert.doesNotMatch(got, /\\ --data-auth/);
+  assert.doesNotMatch(got, /\\ --auth-blob/);
   assert.doesNotMatch(got, /--start-date:\s+command not found/);
 });
 
@@ -110,8 +117,121 @@ test("rewriteGatedMetricCommands keeps Bash redirect outside the auth blob", () 
   const got = rewriteGatedMetricCommands(command, "qdm1enc.runtime", "/trusted/qdm-metric-cli", "bash");
   assert.ok(got.includes("--auth-blob 'qdm1enc.runtime' 2>&1 | head -60"));
   assert.doesNotMatch(got, /--auth-blob 'qdm1enc\.runtime'2>&1/);
+  assert.doesNotMatch(got, /\\ --data-auth/);
+  assert.doesNotMatch(got, /\\ --auth-blob/);
   assert.equal((got.match(/--data-auth/g) || []).length, 1);
   assert.equal((got.match(/--auth-blob/g) || []).length, 1);
+});
+
+test("rewriteGatedMetricCommands strips only Bash line continuations by backslash parity", () => {
+  const prefix = "qdm-metric-cli analysis execute --page-size 20000 ";
+  const single = rewriteGatedMetricCommands(
+    prefix + "\\",
+    "qdm1enc.runtime",
+    "/trusted/qdm-metric-cli",
+    "bash",
+  );
+  const double = rewriteGatedMetricCommands(
+    prefix + "\\\\",
+    "qdm1enc.runtime",
+    "/trusted/qdm-metric-cli",
+    "bash",
+  );
+  const triple = rewriteGatedMetricCommands(
+    prefix + "\\\\\\",
+    "qdm1enc.runtime",
+    "/trusted/qdm-metric-cli",
+    "bash",
+  );
+
+  assert.ok(single.includes("--page-size 20000 --data-auth --auth-blob 'qdm1enc.runtime'"));
+  assert.ok(double.includes("--page-size 20000 \\\\ --data-auth --auth-blob 'qdm1enc.runtime'"));
+  assert.ok(triple.includes("--page-size 20000 \\\\ --data-auth --auth-blob 'qdm1enc.runtime'"));
+});
+
+test("rewriteGatedMetricCommands treats trailing whitespace after Bash continuation correctly", () => {
+  const command = "qdm-metric-cli auth describe --format json \\   ";
+  const got = rewriteGatedMetricCommands(command, "qdm1enc.runtime", "/trusted/qdm-metric-cli", "bash");
+
+  assert.match(got, /auth describe --format json --auth-blob 'qdm1enc\.runtime'$/);
+  assert.equal(got.includes("--data-auth"), false);
+  assert.doesNotMatch(got, /\\ --auth-blob/);
+});
+
+test("insertFlagsBeforeShellTail strips a trailing Bash continuation before flags", () => {
+  const flags = " --data-auth --auth-blob 'qdm1enc.runtime'";
+  const withoutTail = insertFlagsBeforeShellTail(
+    "qdm-metric-cli analysis execute --page-size 20000 \\",
+    flags,
+    "execute",
+  );
+  const withRedirect = insertFlagsBeforeShellTail(
+    "qdm-metric-cli analysis execute --page-size 20000 \\ > out",
+    flags,
+    "execute",
+  );
+
+  assert.ok(
+    withoutTail.includes("--page-size 20000 --data-auth --auth-blob 'qdm1enc.runtime'"),
+  );
+  assert.ok(
+    withRedirect.includes(
+      "--page-size 20000 --data-auth --auth-blob 'qdm1enc.runtime' > out",
+    ),
+  );
+  assert.doesNotMatch(withoutTail, /\\ --data-auth/);
+  assert.doesNotMatch(withRedirect, /\\ --data-auth/);
+});
+
+test("rewriteGatedMetricCommands keeps CMD and PowerShell backslashes", () => {
+  const cmd = rewriteGatedMetricCommands(
+    "qdm-metric-cli.exe auth describe \\",
+    "qdm1enc.runtime",
+    "C:\\bin\\qdm-metric-cli.exe",
+    SHELL_CMD,
+  );
+  const powershell = rewriteGatedMetricCommands(
+    "qdm-metric-cli.exe auth describe \\",
+    "qdm1enc.runtime",
+    "C:\\bin\\qdm-metric-cli.exe",
+    SHELL_POWERSHELL,
+  );
+
+  assert.ok(cmd.includes("\\ --auth-blob \"qdm1enc.runtime\""));
+  assert.ok(powershell.includes("\\ --auth-blob 'qdm1enc.runtime'"));
+});
+
+test("rewriteGatedMetricCommands passes independent Bash auth tokens", { skip: process.platform === "win32" }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), "metric-command-"));
+  const stub = path.join(root, "qdm-metric-cli");
+  const stdoutPath = path.join(root, "stdout.txt");
+  const stderrPath = path.join(root, "stderr.txt");
+  writeFileSync(
+    stub,
+    '#!/bin/sh\nfor arg in "$@"; do\n  printf \'%s\\n\' "$arg"\ndone\n',
+    { mode: 0o755 },
+  );
+  chmodSync(stub, 0o755);
+
+  const command = [
+    "qdm-metric-cli analysis execute \\",
+    "  --start-date 2026-09-01 --end-date 2026-09-16 \\",
+    "  --agg-dim articleId --page-size 20000 \\",
+    `> ${stdoutPath} 2> ${stderrPath}`,
+  ].join("\n");
+  const rewritten = rewriteGatedMetricCommands(command, "qdm1enc.runtime", stub, "bash");
+  const result = spawnSync("bash", ["-c", rewritten], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+
+  const args = readFileSync(stdoutPath, "utf8").trimEnd().split("\n");
+  const dataAuthIndex = args.indexOf("--data-auth");
+  const authBlobIndex = args.indexOf("--auth-blob");
+  assert.notEqual(dataAuthIndex, -1);
+  assert.equal(authBlobIndex, dataAuthIndex + 1);
+  assert.equal(args[authBlobIndex + 1], "qdm1enc.runtime");
+  assert.equal(args.includes(" --data-auth"), false);
+  assert.equal(args.includes(" --auth-blob"), false);
+  assert.equal(readFileSync(stderrPath, "utf8"), "");
 });
 
 test("rewriteGatedMetricCommands separates redirect and control tails", () => {

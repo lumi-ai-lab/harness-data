@@ -1,6 +1,7 @@
 import { SHELL_BASH, SHELL_CMD, SHELL_POWERSHELL } from "./constants.js";
 
 const WINDOWS = process.platform === "win32";
+export const QDM_AUTHZ_SHELL_MANGLED = "QDM_AUTHZ_SHELL_MANGLED";
 
 const windowsMetricBinPattern =
   String.raw`(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|/)[^;|&'"\r\n]*[/\\]qdm-metric-cli(?:\.exe)?`;
@@ -308,8 +309,9 @@ export function rewriteGatedMetricCommands(command, blob, metricCliPath, dialect
     }
     let flags = ` --auth-blob ${quotedBlob}`;
     if (invocation.kind === "analysis") flags = ` --data-auth${flags}`;
-    let replacement = segment.replace(/[ \t]+$/, "") + flags;
+    let replacement = normalizeMetricSegmentEnd(segment, activeDialect) + flags;
     if (wrappedCMD) replacement += '"';
+    if (activeDialect === SHELL_BASH) assertBashAuthBoundary(replacement, flags);
     let trustedCLIStart = replacement.trimStart().startsWith(`${quotedCLI} `);
     if (activeDialect === SHELL_POWERSHELL) {
       trustedCLIStart = trustedCLIStart || replacement.startsWith(`& ${quotedCLI} `);
@@ -428,7 +430,48 @@ function isEscapedLineBreak(text, index) {
   return backslashes % 2 === 1;
 }
 
-export function insertFlagsBeforeShellTail(command, flags, anchorWord) {
+function stripTrailingBashContinuation(segment) {
+  let value = segment.replace(/[ \t]+$/, "");
+  const trailingBackslashes = /\\+$/.exec(value);
+
+  if (trailingBackslashes && trailingBackslashes[0].length % 2 === 1) {
+    value = value.slice(0, -1).replace(/[ \t]+$/, "");
+  }
+
+  return value;
+}
+
+function normalizeMetricSegmentEnd(segment, dialect) {
+  const value = segment.replace(/[ \t]+$/, "");
+  if (firstDialect(dialect) !== SHELL_BASH) return value;
+  return stripTrailingBashContinuation(value);
+}
+
+function hasOddTrailingBackslashes(value) {
+  const trailingBackslashes = /\\+$/.exec(value);
+  return Boolean(trailingBackslashes && trailingBackslashes[0].length % 2 === 1);
+}
+
+function assertBashAuthBoundary(replacement, flags) {
+  const head = replacement.endsWith(flags)
+    ? replacement.slice(0, -flags.length)
+    : replacement;
+  if (hasOddTrailingBackslashes(head)) {
+    const error = new Error(
+      "refusing to append authorization flags after an unescaped Bash line continuation",
+    );
+    error.qdmCode = QDM_AUTHZ_SHELL_MANGLED;
+    error.qdmMessage = "authorization flags could not be separated safely from the QDM command";
+    throw error;
+  }
+}
+
+export function insertFlagsBeforeShellTail(
+  command,
+  flags,
+  anchorWord,
+  dialect = SHELL_BASH,
+) {
   const skeleton = maskQuotedAndHeredocRegions(command);
   let subcmd = String.raw`analysis\s+execute`;
   if (anchorWord === "describe") subcmd = String.raw`auth\s+describe`;
@@ -441,14 +484,24 @@ export function insertFlagsBeforeShellTail(command, flags, anchorWord) {
   }
   if (fromAnchor < 0) {
     const loc = new RegExp(`\\b${escapeRegExp(anchorWord)}\\b`, "i").exec(command);
-    if (!loc) return command + flags;
+    if (!loc) {
+      const head = normalizeMetricSegmentEnd(command, dialect);
+      if (firstDialect(dialect) === SHELL_BASH) assertBashAuthBoundary(head + flags, flags);
+      return head + flags;
+    }
     fromAnchor = loc.index;
   }
   const tail = command.slice(fromAnchor);
   const op = /\s(?:\||&&|;|2?>|1?>|&>)/.exec(tail);
-  if (!op) return command + flags;
+  if (!op) {
+    const head = normalizeMetricSegmentEnd(command, dialect);
+    if (firstDialect(dialect) === SHELL_BASH) assertBashAuthBoundary(head + flags, flags);
+    return head + flags;
+  }
   const abs = fromAnchor + op.index;
-  return command.slice(0, abs) + flags + command.slice(abs);
+  const head = normalizeMetricSegmentEnd(command.slice(0, abs), dialect);
+  if (firstDialect(dialect) === SHELL_BASH) assertBashAuthBoundary(head + flags, flags);
+  return head + flags + command.slice(abs);
 }
 
 export function shellQuote(value, dialect) {
