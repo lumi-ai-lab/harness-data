@@ -222,7 +222,13 @@ export function runQwenPawShellAdapterEnvelope(rootOrContext, input) {
   let rewritten;
   try {
     rewritten = rewriteGatedMetricCommands(command, blob, metricCliPath, dialect);
-  } catch {
+  } catch (error) {
+    if (error?.qdmCode) {
+      return adapterEnvelope(
+        ADAPTER_DENY,
+        denyOutput(`${error.qdmCode}: ${error.qdmMessage || "authorization command rewrite failed"}`),
+      );
+    }
     rewritten = "";
   }
   if (!rewritten.trim()) {
@@ -481,7 +487,15 @@ function runEnabled(cfg, root, agent, input, strictInput, rootContext = null) {
   try {
     const authArgument = process.platform === "win32" || !resolved.sourcePath ? resolved.blob : resolved.sourcePath;
     rewritten = rewriteGatedMetricCommands(command, authArgument, metricCliPath, dialect);
-  } catch {
+  } catch (error) {
+    if (error?.qdmCode) {
+      return {
+        ok: true,
+        output: denyOutput(
+          `${error.qdmCode}: ${error.qdmMessage || "authorization command rewrite failed"}`,
+        ),
+      };
+    }
     rewritten = "";
   }
   if (!rewritten.trim() || rewritten === command) {
