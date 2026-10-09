@@ -79,25 +79,20 @@ function buildFromWikisRuntimeIndex(resolver, index, question) {
   sortRuntimeDocsByPath(ordinarySpecs);
   sortRuntimeDocsByPath(conceptSpecs);
 
-  add("rules/qdm-metric-cli/spec.md", "default metric cli usage");
-  for (const timeRule of [
-    "rules/QDM 时间口径/spec.md",
-    "rules/QDM 鏃堕棴鍙ｅ緞/spec.md",
-    "rules/common/time-policy.md",
-    "spec/common/time-policy.md",
-  ]) {
-    const before = refs.length;
-    add(timeRule, "required time policy");
-    if (refs.length > before) break;
-  }
-
-  const addDefaultFreeFiles = () => {
-    add("index.md", "default knowledge index");
-    add("metrics/index.md", "default metrics index");
-    add("reports/index.md", "default reports index");
-    add("dims/index.md", "default dims index");
-    add("rules/index.md", "default rules index");
+  const addCoreFiles = () => {
+    add("rules/qdm-metric-cli/spec.md", "required metric cli usage");
+    for (const timeRule of [
+      "rules/QDM 时间口径/spec.md",
+      "rules/QDM 鏃堕棴鍙ｅ緞/spec.md",
+      "rules/common/time-policy.md",
+      "spec/common/time-policy.md",
+    ]) {
+      const before = refs.length;
+      add(timeRule, "required time policy");
+      if (refs.length > before) break;
+    }
   };
+  if (ordinarySpecs.length > 0 || conceptSpecs.length > 0) addCoreFiles();
   const selected = selectReportConcept(resolver, byPath, index.templateSelection || [], question, matches, conceptSpecs);
   const addSelectedReport = (item) => {
     plan = item.plan;
@@ -144,7 +139,7 @@ function buildFromWikisRuntimeIndex(resolver, index, question) {
         for (const candidate of exactMulti.candidates) add(candidate.path, "selected playbook");
       } else {
         plan.reason = multi.reason;
-        addDefaultFreeFiles();
+        // Keep free fallback minimal; core files were already selected for a Harness hit.
       }
     } else {
       plan.reason = "multi_metric_non_direct";
@@ -155,7 +150,7 @@ function buildFromWikisRuntimeIndex(resolver, index, question) {
     else if (conceptSpecs.length === 1 && isReportSpecPath(conceptSpecs[0].path)) {
       const spec = conceptSpecs[0];
       if (!isReportIntentQuestion(question) && !hasExactRecallMatch(matches, spec.path)) {
-        addDefaultFreeFiles();
+        // Keep free fallback minimal; core files were already selected for a Harness hit.
       } else {
         plan.reason = "report_spec_missing_playbook";
         addNearestIndex(add, byPath, spec.path, "spec index");
@@ -169,7 +164,7 @@ function buildFromWikisRuntimeIndex(resolver, index, question) {
       }
     }
   } else {
-    addDefaultFreeFiles();
+    plan.reason = "no_recall_hit";
   }
 
   plan.candidates = [...(plan.candidates || []), ...candidatesFromPlan(plan, byPath)];

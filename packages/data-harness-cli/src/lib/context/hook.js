@@ -202,10 +202,15 @@ function runPromptHook(root, prompt, sessionID, context = null, { persistState =
   const resolver = newPathResolver(rootOrContext);
   const tc = buildTimeContext(prompt, resolver, !context);
   const { response, plan } = buildWithPlan(rootOrContext, prompt);
-  const additionalContext = buildWikiAdditionalContext(tc, response, plan, resolver);
-  if (persistState) writeWikiPlanState(rootOrContext, sessionID, prompt, plan, context);
+  const priorState = persistState ? loadState(rootOrContext, sessionID) : null;
+  const filteredResponse = {
+    ...response,
+    contextFiles: filterAlreadyInjectedFiles(response.contextFiles, priorState),
+  };
+  const additionalContext = buildWikiAdditionalContext(tc, filteredResponse, plan, resolver, priorState);
+  if (persistState) writeWikiPlanState(rootOrContext, sessionID, prompt, plan, filteredResponse.contextFiles, context, priorState);
   if (process.env.QDM_HARNESS_DIAG === "1" && (!context || context.capabilities?.hasStableSessionId)) {
-    recordDiagnostic(rootOrContext, sessionID, prompt, additionalContext, tc, response);
+    recordDiagnostic(rootOrContext, sessionID, prompt, additionalContext, tc, filteredResponse);
   }
   return {
     ok: true,
@@ -213,13 +218,22 @@ function runPromptHook(root, prompt, sessionID, context = null, { persistState =
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext,
-        contextFiles: [...response.contextFiles],
+        // Hosts that embed manuals (QwenPaw) or hand paths to the agent
+        // (agent-hook / WorkBuddy) must see the same set the text describes.
+        // Publishing the unfiltered list here made a follow-up turn claim
+        // "no new wiki documents" while still re-embedding every manual.
+        contextFiles: [...filteredResponse.contextFiles],
       },
     },
   };
 }
 
-function buildWikiAdditionalContext(tc, response, plan, resolver) {
+function filterAlreadyInjectedFiles(contextFiles, priorState) {
+  const seen = new Set(priorState?.injected_context_files || []);
+  return contextFiles.filter((ref) => !seen.has(ref.path));
+}
+
+function buildWikiAdditionalContext(tc, response, plan, resolver, priorState = null) {
   let b = "# Data Harness Context\n\n";
   b += `时间解析 JSON：\`${JSON.stringify(tc)}\`\n`;
   b += `resourceRoot: \`${resolver.resourceRoot}\`\n\n`;
@@ -236,7 +250,15 @@ function buildWikiAdditionalContext(tc, response, plan, resolver) {
     for (const playbook of plan.selectedPlaybooks) b += `- ${playbook.path}\n`;
   }
   if (plan.mode === MODE_FREE) b += `reason: ${plan.reason || ""}\n`;
-  b += "\n必须先读取以下 contextFiles（可信绝对路径，不得按 workspaceRoot 解析）：\n";
+  const alreadyInjected = priorState?.injected_context_files || [];
+  if (response.contextFiles.length) {
+    b += "\n必须先读取以下 contextFiles（可信绝对路径，不得按 workspaceRoot 解析）：\n";
+  } else if (alreadyInjected.length) {
+    b += "\n本轮没有新增 wiki 文档；沿用本会话已注入的文档，不要重复读取。\n";
+  } else {
+    b += "\n本轮没有新增 wiki 文档需要读取；如需继续 Harness 查询，沿用已有会话计划。\n";
+    b += buildFreeModeRecovery(plan, resolver);
+  }
   for (const ref of response.contextFiles) {
     b += `- \`${resolver.resolve(ref.path)}\``;
     const annotations = [];
@@ -248,6 +270,34 @@ function buildWikiAdditionalContext(tc, response, plan, resolver) {
   b += "\n\nConstraints:\n";
   for (const constraint of response.constraints) b += `- ${constraint}\n`;
   return b;
+}
+
+/**
+ * Free mode injects no wiki documents by design. Without a pointer the agent
+ * has no way to discover metric codes, so hand it the discovery path instead of
+ * the 84KB handbook it used to receive every turn.
+ */
+function buildFreeModeRecovery(plan, resolver) {
+  if (plan.mode !== MODE_FREE) return "";
+  const spec = existingDocPath(resolver, "rules/qdm-metric-cli/spec.md");
+  const index = existingDocPath(resolver, "index.md");
+  let b = "\n本轮未命中 Harness 指标/报告召回。";
+  b += "若用户确为 QDM 取数请求但未指明指标，请先自行定位再取数，不要凭通用知识作答：\n";
+  b += "- 找指标：`qdm-metric-cli metric search --keyword <中文名>` 取 `code`，再用 `wikis --code <code>` 看口径与可用维度\n";
+  b += "- 找维度与过滤值：`dim search` / `dim values`\n";
+  if (spec) b += `- 完整 CLI 手册：\`${spec}\`\n`;
+  if (index) b += `- 知识库总索引：\`${index}\`\n`;
+  return b;
+}
+
+function existingDocPath(resolver, logical) {
+  try {
+    const file = resolver.resolveRel(logical);
+    if (statSync(file).isFile()) return file;
+  } catch {
+    // Optional pointer: skip when this install does not ship the document.
+  }
+  return "";
 }
 
 function parsePromptPayload(input) {
@@ -296,7 +346,7 @@ function hookSessionID(payload) {
   return process.env.CLAUDE_SESSION_ID || "unknown";
 }
 
-function writeWikiPlanState(root, sessionID, prompt, plan, context = null) {
+function writeWikiPlanState(root, sessionID, prompt, plan, injectedContextFiles, context = null, priorState = null) {
   if (context && !canPersistSessionState(context, sessionID)) return;
   const state = loadState(root, sessionID);
   state.mode = plan.mode;
@@ -315,6 +365,12 @@ function writeWikiPlanState(root, sessionID, prompt, plan, context = null) {
   state.reason = "";
   state.template_injected = false;
   state.reports = {};
+  state.injected_context_files = [
+    ...new Set([
+      ...(state.injected_context_files || []),
+      ...injectedContextFiles.map((ref) => ref.path),
+    ]),
+  ];
   switch (plan.mode) {
     case MODE_SINGLE:
       state.selected_playbook = plan.selectedPlaybook;
