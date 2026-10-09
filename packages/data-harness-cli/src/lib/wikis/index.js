@@ -47,33 +47,108 @@ export function validateResourceManifest(rootOrContext, { index = null } = {}) {
   const resourceRoot = owners.resourceRoot;
   const manifest = readResourceManifest(resourceRoot);
   validateManifestShape(manifest);
-  const seen = new Set();
-  for (const item of manifest.files) {
-    const relative = safeManifestPath(item?.path);
-    if (seen.has(relative)) throw resourceMismatch(`resource manifest contains duplicate file: ${relative}`);
-    seen.add(relative);
-    const expected = String(item?.sha256 || "").trim().toLowerCase();
-    if (!/^[a-f0-9]{64}$/.test(expected)) {
-      throw resourceMismatch(`resource manifest has invalid SHA-256 for ${relative}`);
-    }
-    const filePath = path.join(resourceRoot, ...relative.split("/"));
-    let info;
-    try {
-      info = lstatSync(filePath);
-    } catch {
-      throw resourceMismatch(`resource file is missing: ${relative}; reinstall plugin resources`);
-    }
-    if (!info.isFile() || info.isSymbolicLink()) {
-      throw resourceMismatch(`resource file must be a regular file: ${relative}`);
-    }
-    const actual = fileSha256(filePath);
-    if (actual !== expected) {
-      throw resourceMismatch(`resource hash mismatch: ${relative}; reinstall plugin resources`);
-    }
-  }
   if (index) validateIndexVersion(index, manifest);
   validatePluginManifestBinding(resourceRoot, manifest);
+
+  const files = manifest.files.map((item) => manifestFileEntry(item));
+  // Must run before the metadata fast path: a duplicate entry would otherwise be
+  // collapsed by the cache lookup and pass silently.
+  const seen = new Set();
+  for (const file of files) {
+    if (seen.has(file.relative)) {
+      throw resourceMismatch(`resource manifest contains duplicate file: ${file.relative}`);
+    }
+    seen.add(file.relative);
+  }
+  const cache = readValidationCache(rootOrContext, resourceRoot, manifest);
+  if (cache && cacheValid(cache, resourceRoot, files)) return manifest;
+
+  for (const file of files) {
+    const info = statManifestFile(resourceRoot, file.relative);
+    const actual = fileSha256(path.join(resourceRoot, ...file.relative.split("/")));
+    if (actual !== file.expected) {
+      throw resourceMismatch(`resource hash mismatch: ${file.relative}; reinstall plugin resources`);
+    }
+    file.mtimeMs = info.mtimeMs;
+    file.size = info.size;
+    // ctime is the inode change time (NTFS ChangeTime on Windows). Unlike mtime
+    // it cannot be set by userspace, so it closes the POSIX hole where content
+    // is swapped and only mtime is restored (`touch -r`, `cp -p`, `rsync -t`,
+    // tar extraction). Caches written without it simply miss once and refill.
+    file.ctimeMs = info.ctimeMs;
+  }
+  writeValidationCache(rootOrContext, resourceRoot, manifest, files);
   return manifest;
+}
+
+function manifestFileEntry(item) {
+  const relative = safeManifestPath(item?.path);
+  const expected = String(item?.sha256 || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(expected)) {
+    throw resourceMismatch(`resource manifest has invalid SHA-256 for ${relative}`);
+  }
+  return { relative, expected };
+}
+
+function statManifestFile(resourceRoot, relative) {
+  const filePath = path.join(resourceRoot, ...relative.split("/"));
+  let info;
+  try {
+    info = lstatSync(filePath);
+  } catch {
+    throw resourceMismatch(`resource file is missing: ${relative}; reinstall plugin resources`);
+  }
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw resourceMismatch(`resource file must be a regular file: ${relative}`);
+  }
+  return info;
+}
+
+function validationCachePath(rootOrContext, resourceRoot) {
+  const owners = normalizeResolverOwners(rootOrContext);
+  const cacheRoot = owners.dataRoot || resourceRoot;
+  const resourceKey = createHash("sha256").update(resourceRoot).digest("hex").slice(0, 16);
+  return path.join(cacheRoot, "cache", `resource-validation-${resourceKey}.json`);
+}
+
+function readValidationCache(rootOrContext, resourceRoot, manifest) {
+  try {
+    const cache = JSON.parse(readFileSync(validationCachePath(rootOrContext, resourceRoot), "utf8"));
+    if (cache.schemaVersion !== 1 || cache.wikiContentVersion !== manifest.wikiContentVersion) return null;
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function cacheValid(cache, resourceRoot, files) {
+  if (!Array.isArray(cache.files) || cache.files.length !== files.length) return false;
+  const cached = new Map(cache.files.map((file) => [file.relative, file]));
+  for (const file of files) {
+    const previous = cached.get(file.relative);
+    if (!previous || previous.expected !== file.expected) return false;
+    const info = statManifestFile(resourceRoot, file.relative);
+    if (Number(previous.mtimeMs) !== info.mtimeMs || Number(previous.size) !== info.size) return false;
+    if (Number(previous.ctimeMs) !== info.ctimeMs) return false;
+  }
+  return true;
+}
+
+function writeValidationCache(rootOrContext, resourceRoot, manifest, files) {
+  const cachePath = validationCachePath(rootOrContext, resourceRoot);
+  const dir = path.dirname(cachePath);
+  const temp = `${cachePath}.tmp.${process.pid}`;
+  // The cache is an optimization, never a requirement: a read-only or
+  // permission-restricted dataRoot (common on Linux installs) must degrade to
+  // full hashing instead of failing the hook. mkdirSync therefore stays inside
+  // the guard.
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(temp, JSON.stringify({ schemaVersion: 1, wikiContentVersion: manifest.wikiContentVersion, files }, null, 2));
+    renameSync(temp, cachePath);
+  } catch {
+    try { unlinkSync(temp); } catch { /* best effort */ }
+  }
 }
 
 export function loadResourceManifest(rootOrContext) {
