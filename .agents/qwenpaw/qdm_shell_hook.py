@@ -38,7 +38,7 @@ _SAFE_MESSAGES = {
     "QDM_AUTH_CAPABILITY_DENIED": "当前用户没有 QDM 数据查询权限",
     "QDM_CLI_UNAVAILABLE": "QDM CLI 不可用",
     "QDM_CLI_TIMEOUT": "QDM 授权请求超时",
-    "QDM_AUTHZ_COMMAND_AMBIGUOUS": "一次 Shell 调用只能包含一条 QDM 查询命令",
+    "QDM_AUTHZ_COMMAND_AMBIGUOUS": "一次 Shell 调用只能包含一条 QDM 查询命令，请拆成多次调用；鉴权参数由 Hook 注入，不要自行添加",
     "QDM_AUTHZ_COMMAND_UNSUPPORTED": "QDM Shell 命令形状不受支持",
     "QDM_AUTHZ_REWRITE_FAILED": "QDM Shell 命令无法安全改写",
     "QDM_AUTHZ_PROTOCOL_INVALID": "QDM 授权服务响应无效",

@@ -49,7 +49,13 @@ or scope questions, call `qdm_scope_summary` or use the trusted QDM Shell
 authorization path. Never generate or request Blob, Secret, authorization file
 contents, CLI paths, environment variables, or authentication flags. Do not
 split a batch into multiple QDM Shell calls, estimate values, or replace IDs
-returned by the CLI. The permission summary returned by `qdm_scope_summary` is
+returned by the CLI. Your own tool-call records may show `--data-auth`,
+`--auth-blob`, or an absolute `qdm-metric-cli` path: those are the Shell Hook's
+rewrite of your command, not text you wrote. Never copy them into a new command,
+never "repair" a command to include them, and never report them to the user as
+your own compliance defect. Keep exactly one QDM data invocation per shell call;
+if a request needs several queries, issue several shell calls.
+The permission summary returned by `qdm_scope_summary` is
 authoritative only for the current inbound request. Never reuse a prior summary,
 chat-history scope, Agent memory, session state, or another user's permissions.
 Area, store, and category filters must come from the current message; if no area

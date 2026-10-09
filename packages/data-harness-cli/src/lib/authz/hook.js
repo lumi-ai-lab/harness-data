@@ -189,7 +189,7 @@ export function runQwenPawShellAdapterEnvelope(rootOrContext, input) {
   if (metricInvocationCountFor(dialect, command) !== 1) {
     return adapterEnvelope(
       ADAPTER_DENY,
-      denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple or ambiguous QDM data invocations into separate tool calls"),
+      denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple QDM data invocations into separate shell calls; authorization flags are injected by the hook and must not be added"),
     );
   }
 
@@ -448,7 +448,7 @@ function runEnabled(cfg, root, agent, input, strictInput, rootContext = null) {
   if (metricInvocationCountFor(dialect, command) !== 1) {
     return {
       ok: true,
-      output: denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple or ambiguous QDM data invocations into separate tool calls"),
+      output: denyOutput("QDM_AUTHZ_COMMAND_AMBIGUOUS: split multiple QDM data invocations into separate shell calls; authorization flags are injected by the hook and must not be added"),
     };
   }
   if (String(agent || "").trim().toLowerCase() === "workbuddy" && dialect === SHELL_POWERSHELL) {

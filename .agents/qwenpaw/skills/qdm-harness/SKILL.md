@@ -11,6 +11,23 @@ user-provided authorization material to fetch QDM data or work around the Hook.
 Tools beyond this path exist for non-QDM work the user explicitly requests; they
 must never carry a QDM data request.
 
+## Discover a metric when no code is given
+
+If the injected Harness context is `mode: free`, or the question names no metric,
+resolve the code before querying:
+
+1. `qdm-metric-cli metric search --keyword <name>` returns candidate `code` values.
+2. `qdm-metric-cli wikis --code <code> --output envelope` returns the definition,
+   `supportedDimensions`, and `supportedStatisticPolicies`.
+3. `qdm-metric-cli dim search --metric <code> --keyword <dim>` and
+   `qdm-metric-cli dim values --code <dimCode> --keyword <value>` resolve the
+   `--agg-dim` codes and the `--filter` value IDs.
+
+These metadata commands carry no authorization and are not rewritten by the Shell
+Hook; `analysis execute` remains the only authorized query path. If the handbook
+is not in context, read `rules/qdm-metric-cli/spec.md` and `index.md` under the
+`resourceRoot` reported by the injected Harness context.
+
 Generate one `qdm-metric-cli analysis execute` command per user query. Always use
 `--measures-json`; a single metric is represented as an array containing one
 Measure, and a batch is represented as one array containing all Measures. Do not
@@ -22,6 +39,13 @@ Do not pass or probe Blob values, secret files, CLI paths, environment variables
 or authentication flags. Do not use the old `--metric` form for Shell Hook
 queries. Do not estimate data, perform a second calculation across metrics, or
 manually replace IDs returned by the CLI. The CLI result is authoritative.
+
+Your own tool-call records may show `--data-auth`, `--auth-blob`, or an absolute
+`qdm-metric-cli` path: those are the Shell Hook's rewrite of your command, not
+text you wrote. Never copy them into a new command, never "repair" a command to
+include them, and never report them to the user as your own compliance defect.
+Keep exactly one QDM data invocation per shell call; if a request needs several
+queries, issue several shell calls.
 
 For a permission or scope question, use `qdm_scope_summary` or the authorized
 `qdm-metric-cli auth describe` Shell command. The returned scope is authoritative
