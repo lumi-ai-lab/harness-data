@@ -273,6 +273,11 @@ test("structured prompt hooks auto-inject project context and do not persist ord
     );
     assert.equal(ordinary.ok, true);
     assert.match(ordinary.output.hookSpecificOutput.additionalContext, /Harness mode: free/);
+    assert.match(ordinary.output.hookSpecificOutput.additionalContext, /本轮没有新增 wiki 文档/);
+    assert.equal(ordinary.output.hookSpecificOutput.additionalContext.includes("metrics/index.md"), false);
+    // Free mode still has to tell the agent how to discover a metric code
+    // itself; otherwise dropping the default indexes leaves it with nothing.
+    assert.match(ordinary.output.hookSpecificOutput.additionalContext, /metric search --keyword/);
     assert.equal(existsSync(statePath(context, "auto-context-session")), false);
 
     process.env.QDM_HARNESS_HOOK_MODE = "on-demand";
@@ -487,7 +492,19 @@ function qdmSalesWikiFixture(seed) {
   }
   writeRuntimeResourceManifest(roots.dataRoot, runtimeIndex);
   const contextFile = path.join(roots.base, "context.json");
-  writeFileSync(contextFile, `${JSON.stringify(normalizeRootContext(fixtureContext(roots)))}\n`);
+  // Every consumer of this fixture exercises the QwenPaw hook, which persists
+  // session state (host !== "codex") so follow-up turns can dedupe manuals.
+  writeFileSync(contextFile, `${JSON.stringify(normalizeRootContext({
+    ...fixtureContext(roots),
+    host: "qwenpaw",
+    surface: "chat",
+    capabilities: {
+      canWriteWorkspace: false,
+      canWriteData: true,
+      hasStableSessionId: false,
+      supportsSecretReference: true,
+    },
+  }))}\n`);
   return { roots, contextFile };
 }
 
@@ -514,6 +531,27 @@ test("qwenpaw-hook embeds every selected manual and declares the embedded list",
   assert.deepEqual(hook.embeddedContextFiles, selected);
   assert.match(hook.additionalContext, /# QDM Harness selected manuals/);
   assert.match(hook.additionalContext, /可信销售额取数手册 qwenpaw-embed-all/);
+});
+
+test("qwenpaw-hook stops re-embedding manuals already injected in the same session", async () => {
+  const { roots, contextFile } = qdmSalesWikiFixture("qwenpaw-dedup");
+  const first = qwenpawHookIO(roots);
+  await run(["--context-file", contextFile, "context", "--format", "qwenpaw-hook"], first.io);
+  const firstHook = JSON.parse(first.chunks.join("")).hookSpecificOutput;
+  assert.ok(firstHook.embeddedContextFiles.includes("metrics/销售额/playbook.md"));
+  assert.match(firstHook.additionalContext, /可信销售额取数手册 qwenpaw-dedup/);
+
+  // Same session, same recall hit: the manual is already in the conversation,
+  // so the follow-up turn must not re-embed it or claim there is more to read.
+  const second = qwenpawHookIO(roots);
+  await run(["--context-file", contextFile, "context", "--format", "qwenpaw-hook"], second.io);
+  const secondHook = JSON.parse(second.chunks.join("")).hookSpecificOutput;
+  assert.deepEqual(secondHook.embeddedContextFiles, []);
+  assert.equal(secondHook.contextFiles?.length ?? 0, 0);
+  assert.equal(secondHook.additionalContext.includes("# QDM Harness selected manuals"), false);
+  assert.equal(secondHook.additionalContext.includes("可信销售额取数手册 qwenpaw-dedup"), false);
+  assert.match(secondHook.additionalContext, /本轮没有新增 wiki 文档/);
+  assert.match(secondHook.additionalContext, /沿用本会话已注入的文档/);
 });
 
 test("qwenpaw-hook fails closed when a selected manual cannot be embedded", { skip: process.platform === "win32" }, async () => {

@@ -333,6 +333,22 @@ test("authz-hook --agent qwenpaw-shell replaces model-supplied authorization fla
   assert.match(command, /qdm1enc\.testblob/);
 });
 
+test(
+  "authz-hook --agent qwenpaw-shell recognizes a quoted relative CLI path on POSIX",
+  { skip: process.platform === "win32" ? "the Windows fixture quotes an absolute path instead" : false },
+  async () => {
+    const root = qwenpawHarnessRoot();
+    const command = `'./bin/qdm-metric-cli' analysis execute --measures-json '[{"metric":"saleAmt"}]' --data-auth --auth-blob '${testBlob}'`;
+    const envelope = await runQwenPawShellEnvelope(root, qwenpawShellPayload(command, { dialect: "bash" }));
+    assert.equal(envelope.status, "allow");
+    assert.equal(envelope.hookOutput.permissionDecision, "allow");
+    assert.match(envelope.hookOutput.updatedInput.command, /analysis execute/);
+    assert.match(envelope.hookOutput.updatedInput.command, /--data-auth/);
+    assert.equal((envelope.hookOutput.updatedInput.command.match(/--auth-blob/g) || []).length, 1);
+    assert.match(envelope.hookOutput.updatedInput.command, /qdm1enc\.testblob/);
+  },
+);
+
 test("authz-hook --agent qwenpaw-shell allows an already authorized command unchanged", async () => {
   const root = qwenpawHarnessRoot();
   const dialect = process.platform === "win32" ? "cmd" : "bash";

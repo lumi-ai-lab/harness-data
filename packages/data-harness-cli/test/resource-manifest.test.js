@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -111,8 +111,91 @@ test("structured resource consumers validate manifest hashes and index versions"
   const f = fixture({ pluginManifest: embeddedPluginManifest });
   assert.equal(loadIndex(f.context).meta.wikiContentVersion.length, 64);
   assert.equal(loadRuntimeIndex(f.context).meta.resourceId, "qdm-harness-wiki");
-
   writeFileSync(f.wikiPath, "# 被篡改的销售额\n");
+  assert.throws(
+    () => loadRuntimeIndex(f.context),
+    (error) => error?.code === "QDM_RESOURCE_MISMATCH" && /resource hash mismatch/.test(error.message),
+  );
+});
+
+test("unchanged structured resources reuse validation metadata", () => {
+  const f = fixture({ pluginManifest: embeddedPluginManifest });
+  loadRuntimeIndex(f.context);
+  const cachePath = path.join(
+    f.context.dataRoot,
+    "cache",
+    `resource-validation-${sha256(f.context.resourceRoot).slice(0, 16)}.json`,
+  );
+  const cache = JSON.parse(readFileSync(cachePath, "utf8"));
+  assert.equal(cache.schemaVersion, 1);
+  assert.equal(cache.files.length, 3);
+  // The fast path only holds when every entry carries finite metadata; a
+  // filesystem reporting no ctime would otherwise compare NaN against NaN.
+  const wiki = cache.files.find((file) => file.relative === "metrics/sales.md");
+  assert.ok(Number.isFinite(wiki.mtimeMs), "mtimeMs must be a finite number");
+  assert.ok(Number.isFinite(wiki.size), "size must be a finite number");
+  assert.ok(Number.isFinite(wiki.ctimeMs), "ctimeMs must be a finite number");
+  const second = loadRuntimeIndex(f.context);
+  assert.equal(second.meta.resourceId, "qdm-harness-wiki");
+});
+
+// POSIX directory permissions model the hardened Linux install layout where the
+// shared dataRoot is owned by another user. Before the guard moved inside the
+// try, cache creation failure aborted the whole hook with a misleading
+// QDM_WORKSPACE_REQUIRED and every wiki manual went missing.
+test(
+  "a read-only dataRoot degrades to full hashing instead of failing the hook",
+  { skip: process.platform === "win32" ? "POSIX directory permissions only" : false },
+  () => {
+    const f = fixture({ pluginManifest: embeddedPluginManifest });
+    const cacheDir = path.join(f.context.dataRoot, "cache");
+    chmodSync(f.context.dataRoot, 0o555);
+    try {
+      assert.equal(loadRuntimeIndex(f.context).meta.resourceId, "qdm-harness-wiki");
+      assert.equal(existsSync(cacheDir), false, "an unwritable dataRoot must not grow a cache dir");
+      // Repeated turns must keep working, not only the first one.
+      assert.equal(loadRuntimeIndex(f.context).meta.resourceId, "qdm-harness-wiki");
+    } finally {
+      chmodSync(f.context.dataRoot, 0o755);
+    }
+  },
+);
+
+test("structured resources reject duplicate manifest entries even with a warm validation cache", () => {
+  const f = fixture({ pluginManifest: embeddedPluginManifest });
+  // Warm the metadata cache so the duplicate check cannot be reached only by
+  // falling through the fast path.
+  loadRuntimeIndex(f.context);
+  const manifestPath = path.join(f.pluginRoot, "resource-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.files = [...manifest.files, manifest.files[0]];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  assert.throws(
+    () => loadRuntimeIndex(f.context),
+    (error) => error?.code === "QDM_RESOURCE_MISMATCH" && /resource manifest contains duplicate file/.test(error.message),
+  );
+});
+
+test("validation cache keys on ctime so a restored mtime cannot hide tampering", () => {
+  const f = fixture({ pluginManifest: embeddedPluginManifest });
+  loadRuntimeIndex(f.context);
+  const cachePath = path.join(
+    f.context.dataRoot,
+    "cache",
+    `resource-validation-${sha256(f.context.resourceRoot).slice(0, 16)}.json`,
+  );
+  // Rewrite the wiki with different bytes but the same length, so size alone
+  // cannot notice, then forge the cached mtime/size to the current values.
+  // Only ctime still differs -- which is exactly the `touch -r` case on POSIX.
+  writeFileSync(f.wikiPath, "# 采购额\n");
+  const info = statSync(f.wikiPath);
+  const cache = JSON.parse(readFileSync(cachePath, "utf8"));
+  const entry = cache.files.find((file) => file.relative === "metrics/sales.md");
+  assert.equal(entry.size, info.size);
+  entry.mtimeMs = info.mtimeMs;
+  entry.size = info.size;
+  writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
+
   assert.throws(
     () => loadRuntimeIndex(f.context),
     (error) => error?.code === "QDM_RESOURCE_MISMATCH" && /resource hash mismatch/.test(error.message),
