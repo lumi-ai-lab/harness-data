@@ -99,9 +99,18 @@ export function maskQuotedAndHeredocRegions(command) {
     }
   };
   const isProtectedVarQuote = (inner) => /^\s*\$\{?QDM_METRIC_CLI(?::-[^}]*)?\}?\s*$/.test(inner);
-  const isWindowsMetricCLIPath = (inner) => {
-    if (!WINDOWS) return false;
-    return /^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|\/)[^\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$/i.test(inner.trim());
+  // A quoted program path is positional, not data: the invocation patterns must
+  // still be able to see it.  Windows and POSIX use different path shapes, and
+  // keeping the exemption platform-local also keeps it narrow (it only accepts a
+  // single space-free token that ends in the CLI name, so a quoted *data* string
+  // is still masked).
+  const isMetricCLIPathQuote = (inner) => {
+    const value = inner.trim();
+    if (!value) return false;
+    if (WINDOWS) {
+      return /^(?:(?:[A-Za-z]:[/\\])|(?:\.\.?[/\\])|\/)[^\r\n]*[/\\]qdm-metric-cli(?:\.exe)?$/i.test(value);
+    }
+    return /^\S*\/qdm-metric-cli$/.test(value);
   };
 
   let i = 0;
@@ -153,7 +162,7 @@ export function maskQuotedAndHeredocRegions(command) {
       while (j < n && chars[j] !== "'") j += 1;
       if (j < n) {
         const inner = chars.slice(i + 1, j).join("");
-        if (!isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner)) spaceOut(i + 1, j);
+        if (!isProtectedVarQuote(inner) && !isMetricCLIPathQuote(inner)) spaceOut(i + 1, j);
         i = j + 1;
         continue;
       }
@@ -192,7 +201,7 @@ export function maskQuotedAndHeredocRegions(command) {
       }
       if (j < n) {
         const inner = chars.slice(i + 1, j).join("");
-        if (!isProtectedVarQuote(inner) && !isWindowsMetricCLIPath(inner) && !isCMDWrapperCommandQuote(chars, i)) {
+        if (!isProtectedVarQuote(inner) && !isMetricCLIPathQuote(inner) && !isCMDWrapperCommandQuote(chars, i)) {
           spaceOut(i + 1, j);
         }
         i = j + 1;
